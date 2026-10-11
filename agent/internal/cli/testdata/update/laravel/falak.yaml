@@ -1,0 +1,28 @@
+# Our shop. Edited by hand: keep these comments.
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  # The storefront.
+  shop:
+    type: app
+    runtime: frankenphp
+    php: "8.2"   # pinned until the payment SDK supports 8.3
+
+    env:
+      APP_NAME: Shop
+      APP_ENV: production
+      # our own key, not in .env.example
+      FEATURE_FLAGS: checkout-v2
+      DB_CONNECTION: ${{ main-db.DB_CONNECTION }}
+    domains: [shop.example.com]
+
+  main-db:
+    type: database
+    engine: postgresql
+    version: "16"
+
+environments:
+  production:
+    branch: main
+    servers: [web-1]

@@ -34,6 +34,10 @@ type fakeConfig struct {
 	runPolls  []map[string]any
 	deployOut []api.OutputLine
 	export    map[string]any
+	runsList  []map[string]any
+	approveAs []string // successive answers of POST approve: ok, changed, forbidden, not_waiting
+	drift     map[string]any
+	unmanaged []map[string]any
 }
 
 func newFakeConfig(t *testing.T) *fakeConfig {
@@ -101,6 +105,36 @@ func (f *fakeConfig) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.json(w, 201, map[string]any{"data": f.run})
+	case p == api.Path(api.PathConfigRuns, "project", projectID) && r.Method == http.MethodGet:
+		f.json(w, 200, map[string]any{"data": f.runsList, "links": map[string]any{}, "meta": map[string]any{}})
+	case strings.HasSuffix(p, "/approve"):
+		answer := "ok"
+		if len(f.approveAs) > 0 {
+			answer, f.approveAs = f.approveAs[0], f.approveAs[1:]
+		}
+		switch answer {
+		case "forbidden":
+			f.json(w, 403, map[string]string{"message": "You requested this run: another approver must approve it."})
+		case "not_waiting":
+			f.json(w, 409, map[string]string{"message": "This run is not awaiting approval."})
+		case "changed":
+			changed := waitingRun(true)
+			changed["approval"].(map[string]any)["risky"] = []map[string]any{{"path": "/units/db/version", "rule": "database.version", "reason": "A major upgrade."}}
+			f.run = changed
+			f.json(w, 409, map[string]any{"message": "The plan changed since it was shown; review it again.", "data": changed})
+		default:
+			f.run = runData("applying")
+			f.json(w, 200, map[string]any{"data": f.run})
+		}
+	case strings.HasSuffix(p, "/reject"):
+		rejected := runData("cancelled")
+		rejected["cancel_reason"] = "rejected"
+		f.run = rejected
+		f.json(w, 200, map[string]any{"data": rejected})
+	case p == api.Path(api.PathConfigDrift, "project", projectID):
+		f.json(w, 200, map[string]any{"data": f.drift})
+	case p == api.Path(api.PathConfigUnmanaged, "project", projectID):
+		f.json(w, 200, map[string]any{"data": f.unmanaged})
 	case strings.HasPrefix(p, "/api/v1/config/runs/"):
 		next := f.run
 		if len(f.runPolls) > 0 {
@@ -212,7 +246,12 @@ func TestValidateOffline(t *testing.T) {
 	if err := json.Unmarshal(h.out.Bytes(), &v); err != nil || !v.Valid || len(v.Warnings) != 1 || v.Warnings[0].Code != "reference.external" || v.Warnings[0].Line == nil || *v.Warnings[0].Line != 1 {
 		t.Fatalf("json: %v %s", err, h.out.String())
 	}
-	if code := h.run("validate", "-e", "nope", "falak.json"); code != ExitInvalid || !strings.Contains(h.err.String(), "environment.unknown") {
+	// A file without environments deploys production only: -e is the control plane's to check.
+	if code := h.run("validate", "-e", "production", "falak.json"); code != 0 {
+		t.Fatalf("no environments: %d %s", code, h.err.String())
+	}
+	writeFile(t, h.wd, "falak.yaml", validFile)
+	if code := h.run("validate", "-e", "nope"); code != ExitInvalid || !strings.Contains(h.err.String(), "environment.unknown") {
 		t.Fatalf("unknown env: %d %s", code, h.err.String())
 	}
 	if code := h.run("validate", "missing.yaml"); code != ExitError {
@@ -337,6 +376,14 @@ func TestPlan(t *testing.T) {
 	if code := h.run("plan"); code != ExitInvalid || len(f.requests) != n {
 		t.Fatalf("invalid: %d %v", code, f.requests)
 	}
+
+	// A file without environments plans the project's production environment (asked from GET /projects).
+	writeFile(t, h.wd, "falak.yaml", "version: 1\nunits:\n  web: {type: app, runtime: node}\n")
+	h.branch = "feature/x"
+	if code := h.run("plan"); code != 0 || f.bodies[len(f.bodies)-1]["environment"] != "production" {
+		t.Fatalf("no environments: %d %s %v", code, h.err.String(), f.bodies[len(f.bodies)-1])
+	}
+	h.branch = "main"
 
 	// Empty plan.
 	writeFile(t, h.wd, "falak.yaml", validFile)
@@ -478,5 +525,185 @@ func TestConfigExport(t *testing.T) {
 	}
 	if code := h.run("config", "export"); code != ExitUsage {
 		t.Fatalf("no project: %d", code)
+	}
+}
+
+// waitingRun is a run awaiting an approval the caller may (or may not) give.
+func waitingRun(canApprove bool) map[string]any {
+	r := runData("awaiting_approval")
+	var blocked any
+	if !canApprove {
+		blocked = "You requested this run: another approver must approve it."
+	}
+	r["approval"] = map[string]any{"required": true, "risky": []map[string]any{{"path": "/units/web/deploy/strategy", "rule": "production.strategy",
+		"reason": "Changing the deploy strategy of a production environment needs an approval."}}, "expires_at": "2026-10-18T12:00:00Z",
+		"approved_by": nil, "approved_at": nil, "rejected_by": nil, "rejected_at": nil, "comment": nil, "can_approve": canApprove, "blocked_reason": blocked}
+	r["cancel_reason"] = nil
+	return r
+}
+
+func TestRunsListAndShow(t *testing.T) {
+	h, f := configHarness(t)
+	h.env["FALAK_PROJECT"] = projectID
+	cancelled := runData("cancelled")
+	cancelled["cancel_reason"] = "superseded"
+	f.runsList = []map[string]any{waitingRun(true), cancelled}
+	if code := h.run("runs"); code != 0 {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	if out := h.out.String(); !strings.Contains(out, "awaiting_approval") || !strings.Contains(out, "cancelled (superseded)") {
+		t.Fatalf("list:\n%s", out)
+	}
+	if code := h.run("runs", "list", "-e", "staging", "--limit", "1"); code != 0 || strings.Count(h.out.String(), "01jrun") != 1 {
+		t.Fatalf("limit: %d %s", code, h.out.String())
+	}
+	if q := f.queries[len(f.queries)-1]; q != "environment=staging" {
+		t.Fatalf("query %q", q)
+	}
+	f.run = waitingRun(false)
+	if code := h.run("runs", "show", "01jrun0000000000000000000a"); code != 0 {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	for _, want := range []string{"waiting (expires 2026-10-18T12:00:00Z)", "another approver must approve it", "! update /units/web/deploy/strategy"} {
+		if !strings.Contains(h.out.String(), want) {
+			t.Errorf("show: missing %q in\n%s", want, h.out.String())
+		}
+	}
+}
+
+func TestApproveAndReject(t *testing.T) {
+	h, f := configHarness(t)
+	const run = "01jrun0000000000000000000a"
+
+	// Not a terminal and no --yes: a usage error, nothing approved.
+	f.run = waitingRun(true)
+	if code := h.run("approve", run); code != ExitUsage || len(f.approveAs) != 0 {
+		t.Fatalf("no --yes: %d %s", code, h.err.String())
+	}
+	n := len(f.requests)
+	if code := h.run("approve", run, "--yes", "--comment", "ok by me"); code != 0 || !strings.Contains(h.out.String(), "Approved run "+run+": applying") {
+		t.Fatalf("approve: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	if f.requests[len(f.requests)-1] != "POST /api/v1/config/runs/"+run+"/approve" || f.bodies[len(f.bodies)-1]["comment"] != "ok by me" || len(f.requests) != n+2 {
+		t.Fatalf("requests %v %v", f.requests[n:], f.bodies[len(f.bodies)-1])
+	}
+	if !strings.Contains(h.out.String(), "! /units/web/deploy/strategy (production.strategy)") {
+		t.Fatalf("risky items not shown:\n%s", h.out.String())
+	}
+
+	// Blocked (self-approval refused by the project): exit 6 with the reason, no POST.
+	f.run = waitingRun(false)
+	n = len(f.requests)
+	if code := h.run("approve", run, "--yes"); code != ExitApproval || !strings.Contains(h.err.String(), "another approver") || len(f.requests) != n+1 {
+		t.Fatalf("blocked: %d %s", code, h.err.String())
+	}
+	// The server refuses anyway (403) → 1.
+	f.run, f.approveAs = waitingRun(true), []string{"forbidden"}
+	if code := h.run("approve", run, "--yes"); code != ExitError || !strings.Contains(h.err.String(), "another approver") {
+		t.Fatalf("403: %d %s", code, h.err.String())
+	}
+	// The plan changed: never approved blindly, even with --yes (not a terminal → 6).
+	f.run, f.approveAs = waitingRun(true), []string{"changed"}
+	if code := h.run("approve", run, "--yes"); code != ExitApproval || !strings.Contains(h.err.String(), "plan changed") {
+		t.Fatalf("changed: %d %s", code, h.err.String())
+	}
+	// Interactive: the new risky change is shown and confirmed again.
+	f.run, f.approveAs = waitingRun(true), []string{"changed", "ok"}
+	h.out.Reset()
+	h.err.Reset()
+	h.app = h.newApp("y\ny\n")
+	h.app.Interactive = true
+	if code := h.app.Run(t.Context(), []string{"approve", run}); code != 0 || !strings.Contains(h.out.String(), "/units/db/version (database.version)") {
+		t.Fatalf("interactive: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	// Not waiting.
+	f.run = runData("applied")
+	if code := h.run("approve", run, "--yes"); code != ExitError {
+		t.Fatalf("applied: %d", code)
+	}
+
+	// Reject.
+	f.run = waitingRun(true)
+	if code := h.run("reject", run, "--yes", "--comment", "not now", "--json"); code != 0 {
+		t.Fatalf("reject: %d %s", code, h.err.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil || got["cancel_reason"] != "rejected" || f.bodies[len(f.bodies)-1]["comment"] != "not now" {
+		t.Fatalf("reject json: %v %s", err, h.out.String())
+	}
+}
+
+func TestApplyApprove(t *testing.T) {
+	h, f := configHarness(t)
+	writeFile(t, h.wd, "falak.yaml", validFile)
+	h.env["FALAK_PROJECT"] = projectID
+
+	// --wait stops at the approval: exit 6 with how to approve.
+	f.run, f.runPolls = runData("planning"), []map[string]any{waitingRun(true)}
+	if code := h.run("apply", "--wait"); code != ExitApproval || !strings.Contains(h.err.String(), "falak approve 01jrun0000000000000000000a") || !strings.Contains(h.err.String(), "https://falak.test/") {
+		t.Fatalf("wait: %d %s", code, h.err.String())
+	}
+	// --approve --yes approves and goes on waiting until the run is applied.
+	f.run, f.runPolls = runData("planning"), []map[string]any{waitingRun(true), runData("applied")}
+	if code := h.run("apply", "--wait", "--approve", "--yes"); code != 0 || !strings.Contains(h.out.String(), "Approved run") {
+		t.Fatalf("approve: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	// A caller who may not approve: 6, with the reason.
+	f.run, f.runPolls = waitingRun(false), nil
+	if code := h.run("apply", "--wait", "--approve", "--yes"); code != ExitApproval || !strings.Contains(h.err.String(), "another approver") {
+		t.Fatalf("blocked: %d %s", code, h.err.String())
+	}
+	// Cancel reasons.
+	rejected := runData("cancelled")
+	rejected["cancel_reason"] = "expired"
+	f.run = rejected
+	if code := h.run("apply"); code != ExitError || !strings.Contains(h.err.String(), "nobody approved it in time") {
+		t.Fatalf("expired: %d %s", code, h.err.String())
+	}
+}
+
+func TestDriftAndUnmanaged(t *testing.T) {
+	h, f := configHarness(t)
+	h.env["FALAK_PROJECT"] = projectID
+	f.drift = map[string]any{"environment": "production", "status": "in_sync", "checked_at": "2026-10-11T12:00:00Z", "changes": []any{}}
+	if code := h.run("drift"); code != 0 || !strings.Contains(h.out.String(), "production matches") {
+		t.Fatalf("in sync: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	if f.requests[len(f.requests)-1] != "GET "+api.Path(api.PathConfigDrift, "project", projectID) || f.queries[len(f.queries)-1] != "environment=production" {
+		t.Fatalf("request %v %v", f.requests, f.queries)
+	}
+	f.drift = map[string]any{"environment": "staging", "status": "drifted", "since": "2026-10-11T10:00:00Z", "baseline_commit": "abcdef1234567",
+		"changes": []map[string]any{{"op": "update", "path": "/units/web/deploy/strategy", "before": "in-place", "after": "rolling", "risky": false}}}
+	code := h.run("drift", "-e", "staging", "--check")
+	if code != ExitDrift || !strings.Contains(h.out.String(), "staging drifted from falak.yaml @ abcdef1") || !strings.Contains(h.out.String(), "~ update /units/web/deploy/strategy: in-place → rolling") {
+		t.Fatalf("drifted: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	if f.requests[len(f.requests)-1] != "POST "+api.Path(api.PathConfigDrift, "project", projectID) || f.bodies[len(f.bodies)-1]["environment"] != "staging" {
+		t.Fatalf("check: %v %v", f.requests, f.bodies)
+	}
+	if code := h.run("drift", "--json"); code != ExitDrift || !strings.Contains(h.out.String(), `"status": "drifted"`) {
+		t.Fatalf("json: %d %s", code, h.out.String())
+	}
+	f.drift = map[string]any{"environment": "production", "status": "unknown", "changes": []any{}}
+	if code := h.run("drift"); code != 0 || !strings.Contains(h.out.String(), "drift unknown") {
+		t.Fatalf("unknown: %d %s", code, h.out.String())
+	}
+
+	f.unmanaged = []map[string]any{{"id": "01jx", "environment": "production", "unit": "old-db", "resource_type": "database_instance",
+		"resource_id": "01jdb", "label": "old-db (PostgreSQL 17)", "reason": "removed_from_file", "run_id": "01jrun", "detached_at": "2026-10-11T12:00:00Z"}}
+	if code := h.run("config", "unmanaged"); code != 0 || !strings.Contains(h.out.String(), "old-db (PostgreSQL 17)") || !strings.Contains(h.out.String(), "removed_from_file") {
+		t.Fatalf("unmanaged: %d %s", code, h.out.String())
+	}
+}
+
+func TestPlanForANewEnvironment(t *testing.T) {
+	h, f := configHarness(t)
+	writeFile(t, h.wd, "falak.yaml", validFile)
+	h.env["FALAK_PROJECT"] = projectID
+	plan := samplePlan()
+	plan["environment"], plan["environment_exists"], plan["preview_only"] = "staging", false, true
+	f.plan = plan
+	if code := h.run("plan", "-e", "staging"); code != 0 || !strings.Contains(h.out.String(), "staging doesn't exist yet: this plan is a preview") {
+		t.Fatalf("%d %s %s", code, h.out.String(), h.err.String())
 	}
 }

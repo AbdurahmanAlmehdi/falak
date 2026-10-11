@@ -1,0 +1,7 @@
+version: 1
+units:
+  api:
+    type: app
+    runtime: node
+    node: "18"
+    env: {NODE_ENV: production}

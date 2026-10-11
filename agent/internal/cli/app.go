@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -53,6 +54,7 @@ type App struct {
 	token   string
 	cfgDir  string
 	client  api.API
+	in      *bufio.Reader // Stdin, read line by line by prompts
 }
 
 // usageError makes Run exit with ExitUsage.
@@ -106,10 +108,15 @@ func (a *App) commands() []*command {
 		{name: "init", args: "[dir] [--yes] [--stdout] [--json] [--full] [--force] [--dockerfile] [-p PROJECT]", summary: "write a falak.yaml from the code", run: cmdInit},
 		{name: "validate", args: "[file] [-e ENV] [--format yaml|json] [--offline]", summary: "check a falak.yaml (offline; names too when logged in)", run: cmdValidate},
 		{name: "plan", args: "[file] [-e ENV] [-p PROJECT]", summary: "show what applying a falak.yaml would change", run: cmdPlan},
-		{name: "apply", args: "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait]", summary: "apply a falak.yaml (and deploy what changed)", run: cmdApply},
+		{name: "apply", args: "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait] [--approve [--yes]]", summary: "apply a falak.yaml (and deploy what changed)", run: cmdApply},
 		{name: "config", summary: "config as code", subs: []*command{
 			{name: "export", args: "[project] [-e ENV] [-o FILE] [--format yaml|json]", summary: "write a project's current state as a falak.yaml", run: cmdConfigExport},
+			{name: "unmanaged", args: "[-e ENV] [-p PROJECT]", summary: "list what runs detached (kept, no longer managed)", run: cmdConfigUnmanaged},
 		}},
+		runsCommands(),
+		{name: "approve", args: "<run> [--comment TEXT] [--yes]", summary: "approve a config run waiting for an approval", run: cmdApprove},
+		{name: "reject", args: "<run> [--comment TEXT] [--yes]", summary: "reject a config run waiting for an approval", run: cmdReject},
+		{name: "drift", args: "[-e ENV] [-p PROJECT] [--check]", summary: "compare an environment with its last applied falak.yaml", run: cmdDrift},
 		{name: "version", summary: "print the version", run: func(_ context.Context, a *App, _ []string) error {
 			fmt.Fprintln(a.Stdout, a.Version)
 			return nil
@@ -218,8 +225,8 @@ func (a *App) usage(w io.Writer, cmds []*command, _ string) {
 		fmt.Fprintf(tw, "  %s %s\t%s\n", c.name, c.args, c.summary)
 	}
 	tw.Flush()
-	fmt.Fprintln(w, "\nenvironment: FALAK_URL, FALAK_TOKEN (override stored credentials; for CI), FALAK_CONFIG_DIR, FALAK_PROJECT (plan, apply, export)")
-	fmt.Fprintln(w, "exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version (fn deploy), 5 invalid falak.yaml, 6 waits for an approval (apply)")
+	fmt.Fprintln(w, "\nenvironment: FALAK_URL, FALAK_TOKEN (override stored credentials; for CI), FALAK_CONFIG_DIR, FALAK_PROJECT (plan, apply, runs, drift, export)")
+	fmt.Fprintln(w, "exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version (fn deploy), 5 invalid falak.yaml, 6 waits for an approval (apply, approve), 7 drifted (drift)")
 }
 
 // flagSet returns a FlagSet with the global flags registered.

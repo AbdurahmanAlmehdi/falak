@@ -158,7 +158,33 @@ func (a *App) prepareRun(ctx context.Context, file, env, project string) (config
 	if err != nil {
 		return f, "", "", nil, err
 	}
+	if env == "" {
+		// A file without environments binds the project's production environment to the default branch.
+		if env, err = productionSlug(ctx, c, id); err != nil {
+			return f, "", "", nil, err
+		}
+	}
 	return f, env, id, c, nil
+}
+
+// productionSlug is the slug of the project's production environment.
+func productionSlug(ctx context.Context, c api.API, project string) (string, error) {
+	projects, err := c.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if p.ID != project {
+			continue
+		}
+		for _, e := range p.Environments {
+			if e.IsProduction {
+				return e.Slug, nil
+			}
+		}
+		return "", usagef("the project has no production environment: pass -e <environment>")
+	}
+	return "", fmt.Errorf("no project %s", project)
 }
 
 // configAPIError prints a 422's issues (exit 5); other errors pass through.
@@ -197,6 +223,9 @@ func cmdPlan(ctx context.Context, a *App, args []string) error {
 		return a.printRaw(res.Raw)
 	}
 	printIssues(a.Stderr, f.Display, res.Warnings)
+	if res.EnvironmentExists != nil && !*res.EnvironmentExists {
+		fmt.Fprintf(a.Stdout, "%s doesn't exist yet: this plan is a preview. A push to the production environment's branch creates it (or `falak apply -e %s` by someone who may manage projects).\n\n", res.Environment, res.Environment)
+	}
 	printPlan(a.Stdout, res.Environment, res.Plan)
 	return nil
 }
@@ -285,7 +314,10 @@ func cmdApply(ctx context.Context, a *App, args []string) error {
 	allowDestroy := fs.Bool("allow-destroy", false, "let the run delete what the file removed (databases and volumes included)")
 	wait := fs.Bool("wait", false, "wait for the run and stream its deployments")
 	timeout := fs.Duration("timeout", 30*time.Minute, "--wait: give up after this long (the run goes on)")
-	pos, err := a.parse(fs, args, 0, 1, "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait [--timeout 30m]]")
+	approve := fs.Bool("approve", false, "when the run waits for an approval and you may give it: show the risky changes and approve")
+	yes := fs.Bool("yes", false, "--approve without asking")
+	comment := fs.String("comment", "", "--approve: a comment recorded with the approval")
+	pos, err := a.parse(fs, args, 0, 1, "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait [--timeout 30m]] [--approve [--yes] [--comment TEXT]]")
 	if err != nil {
 		return err
 	}
@@ -312,10 +344,22 @@ func cmdApply(ctx context.Context, a *App, args []string) error {
 			fmt.Fprintln(out, run.URL)
 		}
 	}
-	if *wait && !run.Done() {
-		run, err = a.followRun(ctx, c, run, out, *timeout)
-		if err != nil {
+	for {
+		if *wait && !run.Done() {
+			run, err = a.followRun(ctx, c, run, out, *timeout)
+			if err != nil {
+				return err
+			}
+		}
+		if !*approve || run.Status != api.RunAwaitingApproval {
+			break
+		}
+		if run, err = a.approve(ctx, c, run, *comment, *yes, out); err != nil {
 			return err
+		}
+		*approve = false
+		if !*wait {
+			break
 		}
 	}
 	if a.jsonOut {
@@ -337,9 +381,16 @@ func (a *App) runOutcome(out io.Writer, file string, run api.ConfigRun, waited b
 	}
 	switch run.Status {
 	case api.RunAwaitingApproval:
-		return exitError{ExitApproval, fmt.Errorf("run %s waits for an approval (risky changes): approve it in the dashboard", run.ID)}
-	case api.RunRefused:
-		return fmt.Errorf("run %s refused%s (risky changes are refused while config as code is experimental)", run.ID, msg())
+		where := "`falak approve " + run.ID + "` or the dashboard"
+		if run.URL != "" {
+			where += ": " + run.URL
+		}
+		if ap := run.Approval; ap != nil && !ap.CanApprove && deref(ap.BlockedReason) != "" {
+			where += " (" + deref(ap.BlockedReason) + ")"
+		}
+		return exitError{ExitApproval, fmt.Errorf("run %s waits for an approval (risky changes): %s", run.ID, where)}
+	case api.RunRefused: // only runs from before approvals carry it
+		return fmt.Errorf("run %s refused%s", run.ID, msg())
 	case api.RunFailed:
 		printIssues(a.Stderr, file, run.Errors)
 		var failed []string
@@ -353,7 +404,15 @@ func (a *App) runOutcome(out io.Writer, file string, run api.ConfigRun, waited b
 		}
 		return fmt.Errorf("run %s failed%s", run.ID, msg())
 	case api.RunCancelled:
-		return fmt.Errorf("run %s was cancelled", run.ID)
+		why := map[string]string{"superseded": "a newer run of the environment took over", "rejected": "its approval was rejected",
+			"expired": "nobody approved it in time", "source_disabled": "config as code was turned off", "user": "cancelled by a user"}[deref(run.CancelReason)]
+		if why == "" {
+			why = "cancelled" + msg()
+		}
+		if run.Approval != nil && deref(run.Approval.Comment) != "" {
+			why += " (" + deref(run.Approval.Comment) + ")"
+		}
+		return fmt.Errorf("run %s was cancelled: %s", run.ID, why)
 	}
 	if waited && !a.jsonOut {
 		fmt.Fprintf(out, "Run %s %s\n", run.ID, run.Status)

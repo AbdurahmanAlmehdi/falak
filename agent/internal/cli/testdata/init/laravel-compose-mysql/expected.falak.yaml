@@ -37,6 +37,10 @@ units:
     type: redis # detected: image redis:8 of redis in compose.yaml
     version: "8" # detected: tag 8
 
-environments:
-  production:
-    branch: main # detected: current git branch
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop
