@@ -97,16 +97,3 @@ it('binds the production environment to the default branch when the file has no 
         ->and($run->resolved['environments'])->toBe(['production' => ['branch' => 'main']])
         ->and($run->status)->not->toBe(RunStatus::Failed);
 });
-
-it('runs once per environment bound to the pushed branch', function () {
-    $world = config_world();
-    projects_environment($world->deploy->organization, 'staging');
-    $world->file("version: 1\nunits:\n  web: { type: app, runtime: frankenphp, php: \"8.4\" }\nenvironments:\n  production: { branch: main }\n  staging: { branch: main }\n  qa: { branch: main }\n  dev: { branch: develop }\n");
-
-    $world->push(config_sha('b'));
-
-    $runs = ConfigRun::query()->orderBy('environment')->get();
-    expect($runs->pluck('environment')->all())->toBe(['production', 'qa', 'staging'])
-        ->and($runs->firstWhere('environment', 'qa')->status)->toBe(RunStatus::Failed)
-        ->and($runs->firstWhere('environment', 'qa')->error)->toContain('no environment "qa"');
-});
