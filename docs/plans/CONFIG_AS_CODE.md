@@ -949,9 +949,38 @@ item is a **[decision]** on top of the sections above; they replace phase 1's `v
   `rollback.risky_skipped` warning.
 - **[decision] Preview environments** need nothing special: the reconcilers take their scope as any environment's
   (`CreateInstance` keeps PITR off there). The preview strategies (`previews.units.<db>`) are the previews lane's.
-- Known gaps: secondary databases a unit adds are placed in the default project by `DatabaseCreated` like dashboard
-  ones (the canvas shows one service per container); compose units' volumes and `replace_with`; applying engine
-  changes, moves and volume kind changes; the Playwright check of the read-only fields.
+- Known gaps: compose units' volumes and `replace_with`; applying engine changes, moves and volume kind changes; the
+  Playwright check of the read-only fields.
+
+Phase 3 review fixes (data lane):
+
+- **[decision] The canvas service's database is never deleted** by a run (dropping it from `databases` only detaches
+  it, `allow_destroy` or not), and the dashboard refuses deleting a managed container's first database, deleting its
+  canvas service, or renaming it (422), as for sites. A unit the environment's file manages whose container no canvas
+  service points to any more is a stage 4 `value.conflict` and nothing is planned for it: never a new, empty container.
+- **[decision] Ownership follows a container that takes over** (a major upgrade, a swapped PITR restore):
+  `TakeOverInstance` moves its `config_ownership` rows (`ManagedResources::move`).
+- **[decision] Removal decisions are the environment's**: detach or delete, "managed" and "created by the file" read
+  only the scope environment's ownership rows (`managedIn`, `createdByFile(…, $environmentId)`), and `forget` drops
+  only them. Servers and storage count for a project only through containers of its own (non-preview) environments.
+- **[decision] Databases a unit adds** are placed on the unit's environment canvas as `<unit>-<name>` (not the default
+  project).
+- **[decision] Rollbacks never create data resources** (a database or Redis unit, a volume, a database): an empty one at
+  an old mount path or name would stand in for detached data. They are skipped with a `rollback.risky_skipped` warning;
+  adding them back takes a push (a volume a run unmounted to delete is then mounted again, see below).
+- **[decision] Retention and coverage are risky**: new rules `database.backups_retention`, `volume.backups_retention`
+  (condition **`tightens`**: a `keep`/`keep_days` set where there was none, or lowered) and
+  `database.backups_databases_removed` (condition **`removes_items`**). Only the control plane reads
+  `risky-changes.json` (the Go CLI doesn't).
+- **[decision] Preview servers are not production's**: `attachedServers` leaves out preview environments' servers
+  except for a preview's own scope, and a production `drill_server` change is risky (**`production.drill_server`**).
+- **[decision] Removing a volume deploys its unit** (a phase A removal below a unit deploys it; phase B removals don't).
+  With `allow_destroy` the volume is unmounted and marked, and deleted by a later run with `allow_destroy` once the
+  unit's last deployment, started after the unmount, succeeded (or the unit's site is gone): never while a running
+  release may mount it. Listing its key again mounts that volume again.
+- **[decision] Restart notes** also go on settings, CPUs, TLS or public set for the first time on a running container.
+  A version upgrade must be alone in its push for that unit (`value.conflict` otherwise), and `disk` on a container
+  whose data volume isn't sized is `value.unsupported`.
 
 ### Phase 3 (units): compose, functions, environments, previews
 
