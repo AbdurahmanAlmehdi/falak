@@ -30,6 +30,8 @@ final readonly class DatabaseData
         public ?string $volumeId = null,
         /** The container's CPU limit (null = none) */
         public ?float $cpus = null,
+        /** The project environment whose network the container joins (null: none) */
+        public ?string $environmentId = null,
     ) {}
 
     public function isKeyValue(): bool

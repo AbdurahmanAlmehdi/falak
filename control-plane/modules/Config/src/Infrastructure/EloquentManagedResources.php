@@ -62,14 +62,32 @@ final class EloquentManagedResources implements ManagedResources
         }
     }
 
-    public function forget(string $resourceType, string $resourceId): void
+    public function forget(string $resourceType, string $resourceId, ?string $environmentId = null): void
     {
-        ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))->delete();
+        ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))
+            ->when($environmentId !== null, fn ($q) => $q->where('environment_id', strtolower((string) $environmentId)))->delete();
     }
 
-    public function createdByFile(string $resourceType, string $resourceId): bool
+    public function createdByFile(string $resourceType, string $resourceId, ?string $environmentId = null): bool
     {
-        return ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))->where('created_by_file', true)->exists();
+        return ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))->where('created_by_file', true)
+            ->when($environmentId !== null, fn ($q) => $q->where('environment_id', strtolower((string) $environmentId)))->exists();
+    }
+
+    public function managedIn(string $environmentId, string $resourceType, string $resourceId): bool
+    {
+        return ConfigOwnership::query()->where('environment_id', strtolower($environmentId))->where('resource_type', $resourceType)
+            ->where('resource_id', strtolower($resourceId))->exists();
+    }
+
+    public function move(string $resourceType, string $fromId, string $toId): void
+    {
+        if (strtolower($fromId) === strtolower($toId)) {
+            return;
+        }
+
+        ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($toId))->delete();
+        ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($fromId))->update(['resource_id' => strtolower($toId)]);
     }
 
     public function managed(string $resourceType, string $resourceId): ManagedFields

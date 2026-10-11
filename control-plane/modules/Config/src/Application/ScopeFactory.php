@@ -34,7 +34,7 @@ final class ScopeFactory
     {
         $services = $this->services($environment->id);
 
-        $servers = $this->attachedServers($environment->projectId);
+        $servers = $this->attachedServers($environment->projectId, $environment->isPreview);
         $env = $resolved['environments'][$environment->slug] ?? [];
         $defaults = [];
 
@@ -116,17 +116,24 @@ final class ScopeFactory
     }
 
     /**
+     * **[decision]** Servers of preview environments (a fork's pull request may pick them) are attached only for a
+     * preview's own scope: a production file never names them (e.g. as a backup drill server). A database counts when
+     * its container belongs to the project (a database placed here from another project's container doesn't attach
+     * that project's server).
+     *
      * @return array<string, string> name => id
      */
-    public function attachedServers(string $projectId): array
+    public function attachedServers(string $projectId, bool $withPreviews = false): array
     {
         $ids = [];
+        $environments = array_values(array_filter($this->projects->environments($projectId), fn (EnvironmentData $e) => $withPreviews || ! $e->isPreview));
+        $own = array_map(fn (EnvironmentData $e) => $e->id, $environments);
 
-        foreach ($this->projects->environments($projectId) as $environment) {
+        foreach ($environments as $environment) {
             foreach ($this->projects->servicesIn($environment->id) as $service) {
                 if ($service->kind === ServiceKind::Database) {
                     // [decision] Phase 3: a server running one of the project's databases is attached too.
-                    if (($database = $this->databases->find($service->refId)) !== null) {
+                    if (($database = $this->databases->find($service->refId)) !== null && in_array($database->environmentId, $own, true)) {
                         $ids[$database->serverId] = true;
                     }
 

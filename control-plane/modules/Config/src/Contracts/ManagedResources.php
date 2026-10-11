@@ -28,11 +28,23 @@ interface ManagedResources
      */
     public function forgetPaths(string $resourceType, string $resourceId, array $prefixes, array $keep = []): void;
 
-    /** The resource is no longer managed (gone from the file, deleted or detached). */
-    public function forget(string $resourceType, string $resourceId): void;
+    /**
+     * The resource is no longer managed (gone from the file, deleted or detached). With $environmentId only that
+     * environment's rows go (a run never forgets what another environment's file manages).
+     */
+    public function forget(string $resourceType, string $resourceId, ?string $environmentId = null): void;
 
-    /** The file created the resource (so removing it from the file deletes it). */
-    public function createdByFile(string $resourceType, string $resourceId): bool;
+    /**
+     * The file created the resource (so removing it from the file deletes it). With $environmentId only that
+     * environment's rows count: removal decisions of a run are its environment's.
+     */
+    public function createdByFile(string $resourceType, string $resourceId, ?string $environmentId = null): bool;
+
+    /** The environment's file manages the resource (any path). */
+    public function managedIn(string $environmentId, string $resourceType, string $resourceId): bool;
+
+    /** The resource was replaced by another one (a database container's major upgrade): its rows move to it. */
+    public function move(string $resourceType, string $fromId, string $toId): void;
 
     /** What the file manages of a resource (empty when nothing, or when the project's config source is disabled). */
     public function managed(string $resourceType, string $resourceId): ManagedFields;
