@@ -1,3 +1,4 @@
+import { ManagedBadge, managedCovers } from '@/components/falak';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -70,7 +71,10 @@ export function PitrCard({ instance, pitr, storageProviders, canManage, canResto
                 <CardTitle className="flex items-center gap-2 text-base">
                     <History className="size-4" /> Point-in-time recovery
                 </CardTitle>
-                <StatusBadge status={pitr.enabled ? 'active' : 'pending'} className={pitr.enabled ? '' : 'bg-muted text-muted-foreground'} />
+                <div className="flex items-center gap-2">
+                    {managedCovers(instance.managed, '/pitr', true) && <ManagedBadge config={instance.managed} />}
+                    <StatusBadge status={pitr.enabled ? 'active' : 'pending'} className={pitr.enabled ? '' : 'bg-muted text-muted-foreground'} />
+                </div>
             </CardHeader>
             <CardContent className="space-y-6">
                 {pitr.enabled && <PitrStatus pitr={pitr} now={now} />}
@@ -438,17 +442,28 @@ function PitrSettings({ instance, pitr, storageProviders }: { instance: Database
     };
 
     const customerInvalid = form.data.encryption_mode === 'customer' && !AGE_RECIPIENT.test(form.data.age_recipient.trim());
+    // Fields falak.yaml sets are read-only here (the server answers 422 to a change).
+    const managed = (path: string) => managedCovers(instance.managed, path);
 
     return (
         <form onSubmit={submit} className="space-y-3 rounded-md border p-4">
             <div className="flex items-center gap-2">
-                <Checkbox id="pitr-enabled" checked={form.data.enabled} onCheckedChange={(checked) => form.setData('enabled', checked === true)} />
+                <Checkbox
+                    id="pitr-enabled"
+                    disabled={managed('/pitr/enabled')}
+                    checked={form.data.enabled}
+                    onCheckedChange={(checked) => form.setData('enabled', checked === true)}
+                />
                 <Label htmlFor="pitr-enabled">Ship the log continuously (restore to any second of the window)</Label>
             </div>
             <div className="grid gap-3 md:grid-cols-2">
                 <div className="space-y-1">
                     <Label>Storage</Label>
-                    <Select value={form.data.storage_provider_id} onValueChange={(value) => form.setData('storage_provider_id', value)}>
+                    <Select
+                        disabled={managed('/pitr/storage')}
+                        value={form.data.storage_provider_id}
+                        onValueChange={(value) => form.setData('storage_provider_id', value)}
+                    >
                         <SelectTrigger>
                             <SelectValue placeholder="Choose a storage provider" />
                         </SelectTrigger>
@@ -465,6 +480,7 @@ function PitrSettings({ instance, pitr, storageProviders }: { instance: Database
                 <div className="space-y-1">
                     <Label>Keys</Label>
                     <Select
+                        disabled={managed('/pitr/encryption/mode')}
                         value={form.data.encryption_mode}
                         onValueChange={(value) => form.setData('encryption_mode', value as SettingsForm['encryption_mode'])}
                     >
@@ -483,6 +499,7 @@ function PitrSettings({ instance, pitr, storageProviders }: { instance: Database
                         <Label htmlFor="pitr-recipient">Age public key</Label>
                         <Input
                             id="pitr-recipient"
+                            disabled={managed('/pitr/encryption/recipient')}
                             placeholder="age1…"
                             value={form.data.age_recipient}
                             onChange={(e) => form.setData('age_recipient', e.target.value)}
@@ -495,6 +512,7 @@ function PitrSettings({ instance, pitr, storageProviders }: { instance: Database
                     <Label htmlFor="pitr-window">Keep (days)</Label>
                     <Input
                         id="pitr-window"
+                        disabled={managed('/pitr/window_days')}
                         type="number"
                         min={1}
                         max={35}
@@ -507,6 +525,7 @@ function PitrSettings({ instance, pitr, storageProviders }: { instance: Database
                     <Label htmlFor="pitr-interval">Base backup every (days)</Label>
                     <Input
                         id="pitr-interval"
+                        disabled={managed('/pitr/base_interval_days')}
                         type="number"
                         min={1}
                         max={form.data.window_days}

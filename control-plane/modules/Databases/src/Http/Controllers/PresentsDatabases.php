@@ -2,6 +2,7 @@
 
 namespace Falak\Databases\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Databases\Application\Actions\RestoreBackup;
 use Falak\Databases\Application\Actions\RestoreToTime;
 use Falak\Databases\Application\PitrTimeline;
@@ -69,6 +70,8 @@ trait PresentsDatabases
             'databases_count' => $instance->databases_count ?? null,
             'users_count' => $instance->users_count ?? null,
             'created_at' => $instance->created_at->toIso8601String(),
+            // What falak.yaml manages (read-only here, with its badge), null when nothing.
+            'managed' => app(ManagedResources::class)->managed('database_instance', $instance->id)->toArray(),
         ];
     }
 
@@ -88,6 +91,7 @@ trait PresentsDatabases
             'status_message' => $database->status_message,
             'command_id' => $database->command_id,
             'created_at' => $database->created_at->toIso8601String(),
+            'managed' => app(ManagedResources::class)->managed('database', $database->id)->toArray(),
         ];
     }
 
@@ -121,6 +125,7 @@ trait PresentsDatabases
         return [
             'id' => $schedule->id,
             'name' => $schedule->name,
+            'managed' => app(ManagedResources::class)->managed('backup_schedule', $schedule->id)->toArray(),
             'cron' => $schedule->cron,
             'storage_provider_id' => $schedule->storage_provider_id,
             'storage_provider' => $schedule->storageProvider?->name,

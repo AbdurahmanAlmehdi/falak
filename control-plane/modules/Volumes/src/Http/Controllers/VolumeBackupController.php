@@ -28,6 +28,7 @@ use Illuminate\Validation\ValidationException;
  */
 final class VolumeBackupController extends Controller
 {
+    use GuardsConfigManaged;
     use PresentsVolumes;
 
     public function store(Request $request, Volume $volume, RunVolumeBackup $run): RedirectResponse|JsonResponse
@@ -55,6 +56,7 @@ final class VolumeBackupController extends Controller
     public function updateSchedule(Request $request, BackupSchedule $schedule, SaveBackupSchedule $save): RedirectResponse|JsonResponse
     {
         $this->authorize('manage', $schedule);
+        $this->guardSchedule($schedule, $request->all());
 
         $schedule = $this->save($request, $schedule->volume, $save, $schedule);
 
@@ -64,6 +66,7 @@ final class VolumeBackupController extends Controller
     public function destroySchedule(Request $request, BackupSchedule $schedule, AuditLog $audit): RedirectResponse|JsonResponse
     {
         $this->authorize('manage', $schedule);
+        $this->guardManaged('backup_schedule', $schedule->id, 'schedule', 'this backup schedule');
 
         $schedule->delete();
         $audit->record('volumes.backup_schedule_deleted', 'volume', $schedule->volume_id, ['schedule_id' => $schedule->id], $schedule->organization_id);

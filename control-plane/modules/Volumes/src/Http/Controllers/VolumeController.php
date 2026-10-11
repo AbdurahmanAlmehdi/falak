@@ -30,6 +30,7 @@ use Illuminate\Validation\ValidationException;
 
 final class VolumeController extends Controller
 {
+    use GuardsConfigManaged;
     use PresentsVolumes;
 
     private const LABELS = ['labels' => ['sometimes', 'array', 'max:32'], 'labels.*' => ['string', 'max:256']];
@@ -67,6 +68,7 @@ final class VolumeController extends Controller
     {
         $this->authorize('manage', $volume);
         $data = $request->validate(['protected' => ['sometimes', 'boolean'], ...self::LABELS]);
+        $this->guardVolume($volume, ['protected' => '/protected'], $data, ['protected' => $volume->protected]);
 
         // Protection guards data against deletion: only admins lift it.
         if ($volume->protected && array_key_exists('protected', $data) && ! $data['protected'] && ! $this->admin($request, $volume->organization_id)) {
@@ -85,6 +87,7 @@ final class VolumeController extends Controller
     {
         $this->authorize('manage', $volume);
         $request->validate(['confirm' => ['required', 'string', Rule::in([$volume->name])]], ['confirm.in' => 'Type the volume name to confirm.']);
+        $this->guardManaged('volume', $volume->id, 'confirm', 'this volume');
 
         $delete($volume, $request->user()?->getAuthIdentifier());
 
@@ -115,6 +118,7 @@ final class VolumeController extends Controller
     public function detach(Request $request, Attachment $attachment, DetachVolume $detach): RedirectResponse|JsonResponse
     {
         $this->authorize('manage', $attachment->volume);
+        $this->guardManaged('volume', $attachment->volume_id, 'attachment', 'where this volume is mounted');
 
         $detach($attachment, $request->user()?->getAuthIdentifier());
 
@@ -125,6 +129,7 @@ final class VolumeController extends Controller
     {
         $this->authorize('manage', $volume);
         $data = $request->validate(['size_bytes' => ['required', 'integer', 'min:1']]);
+        $this->guardVolume($volume, ['size_bytes' => '/size'], $data, ['size_bytes' => $volume->size_limit_bytes]);
 
         $operation = $resize($volume, (int) $data['size_bytes'], $request->user()?->getAuthIdentifier());
 
@@ -159,6 +164,7 @@ final class VolumeController extends Controller
             'storage_provider_id' => ['required', 'string', 'size:26'],
             'confirm' => ['required', 'string', Rule::in([$volume->name])],
         ], ['confirm.in' => 'Type the volume name to confirm.']);
+        $this->guardVolume($volume, ['server_id' => '/server'], $data, ['server_id' => $volume->server_id]);
 
         $operation = $move($volume, strtolower($data['server_id']), $data['storage_provider_id'], $request->user()?->getAuthIdentifier());
 

@@ -14,6 +14,8 @@ use Illuminate\Http\Request;
 
 final class DatabaseController extends Controller
 {
+    use GuardsConfigManaged;
+
     public function store(Request $request, DatabaseInstance $instance, CreateDatabase $create): RedirectResponse
     {
         $this->authorize('manage', $instance);
@@ -39,6 +41,7 @@ final class DatabaseController extends Controller
         $this->authorize('manage', $database);
 
         $request->validate(['confirm' => ['required', 'string', 'in:'.$database->name]], ['confirm.in' => 'Type the database name to confirm.']);
+        $this->guardManaged('database', $database->id, 'confirm', 'this database');
 
         $delete($database);
 

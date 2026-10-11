@@ -1,6 +1,6 @@
-import { Button, ConfirmDestructive, Field, Input, Section, Select, SkeletonRows, toast } from '@/components/falak';
+import { Button, ConfirmDestructive, Field, Input, ManagedBadge, managedCovers, Section, Select, SkeletonRows, toast } from '@/components/falak';
 import { Checkbox } from '@/components/ui/checkbox';
-import { HttpError, errorMessage, requestJson } from '@/lib/http';
+import { errorMessage, HttpError, requestJson } from '@/lib/http';
 import { type ServiceTabProps } from '@/lib/registry';
 import { ArrowUpCircle, KeyRound, RotateCw, Trash2 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
@@ -40,6 +40,8 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
     const { instance, can, options } = data;
     const keyValue = instance.kind === 'key_value';
     const running = instance.status === 'active';
+    // Fields falak.yaml sets are read-only here (the server answers 422 to a change).
+    const managed = (path: string) => managedCovers(instance.managed, path);
     const base = `/databases/instances/${instance.id}`;
     const done = (success: string) => ({ success, reload });
 
@@ -75,13 +77,18 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                 }
             >
                 <form id="instance-settings" onSubmit={save} className="grid gap-4 sm:grid-cols-2">
+                    {instance.managed && (
+                        <div className="sm:col-span-2">
+                            <ManagedBadge config={instance.managed} />
+                        </div>
+                    )}
                     <Field label="Memory limit (MB)" hint={`At least ${options.min_memory_mb} MB.`} error={errors.memory_mb}>
                         <Input
                             value={memory}
                             onChange={(event) => setMemory(event.target.value.replace(/\D/g, ''))}
                             inputMode="numeric"
                             mono
-                            disabled={!can.manage}
+                            disabled={!can.manage || managed('/memory')}
                         />
                     </Field>
                     {keyValue ? (
@@ -94,7 +101,7 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                                 <Select
                                     value={eviction}
                                     onValueChange={setEviction}
-                                    disabled={!can.manage}
+                                    disabled={!can.manage || managed('/settings/eviction')}
                                     options={options.evictions.map((item) => ({ value: item, label: item }))}
                                 />
                             </Field>
@@ -102,7 +109,7 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                                 <Select
                                     value={persistence}
                                     onValueChange={setPersistence}
-                                    disabled={!can.manage}
+                                    disabled={!can.manage || managed('/settings/persistence')}
                                     options={options.persistences.map((item) => ({ value: item, label: PERSISTENCE[item] ?? item }))}
                                 />
                             </Field>
@@ -114,7 +121,7 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                                 onChange={(event) => setMaxConnections(event.target.value.replace(/\D/g, ''))}
                                 inputMode="numeric"
                                 mono
-                                disabled={!can.manage}
+                                disabled={!can.manage || managed('/settings/max_connections')}
                             />
                         </Field>
                     )}
@@ -133,13 +140,13 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                                 <Select
                                     value={version}
                                     onValueChange={setVersion}
-                                    disabled={!options.upgradable}
+                                    disabled={!options.upgradable || managed('/version')}
                                     options={options.versions.map((item) => ({ value: item, label: item }))}
                                 />
                             </Field>
                             <Button
                                 icon={<ArrowUpCircle />}
-                                disabled={!options.upgradable}
+                                disabled={!options.upgradable || managed('/version')}
                                 onClick={() => mutate('POST', `${base}/upgrade`, { version }, done(`Upgrading ${instance.name}`))}
                             >
                                 Upgrade
@@ -175,7 +182,7 @@ export function DatabaseSettingsTab({ ctx }: ServiceTabProps) {
                                 kept.
                             </span>
                         </div>
-                        <Button variant="danger" icon={<Trash2 />} onClick={() => setDeleting(true)}>
+                        <Button variant="danger" icon={<Trash2 />} disabled={!!instance.managed} onClick={() => setDeleting(true)}>
                             Delete
                         </Button>
                     </div>

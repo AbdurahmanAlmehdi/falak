@@ -2,6 +2,7 @@
 
 namespace Falak\Volumes\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
 use Falak\Servers\Contracts\Data\ServerData;
@@ -80,6 +81,8 @@ trait PresentsVolumes
             'attachments' => $volume->attachments->map(fn (Attachment $attachment) => $this->presentAttachment($volume, $attachment))->values()->all(),
             'url' => "/volumes/{$volume->id}",
             'created_at' => $volume->created_at?->toIso8601String(),
+            // What falak.yaml manages (read-only here, with its badge), null when nothing.
+            'managed' => app(ManagedResources::class)->managed('volume', $volume->id)->toArray(),
         ];
     }
 
@@ -147,6 +150,7 @@ trait PresentsVolumes
     {
         return [
             'id' => $schedule->id,
+            'managed' => app(ManagedResources::class)->managed('backup_schedule', $schedule->id)->toArray(),
             'storage_provider_id' => $schedule->storage_provider_id,
             'cron' => $schedule->cron,
             'retention_count' => $schedule->retention_count,

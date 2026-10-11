@@ -1,3 +1,4 @@
+import { ManagedBadge, managedCovers } from '@/components/falak';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,6 +33,8 @@ export function InstanceCard({ instance, options, canManage }: Props) {
     const [open, setOpen] = useState<Open>(null);
     const keyValue = instance.kind === 'key_value';
     const running = instance.status === 'active';
+    // Fields falak.yaml sets are read-only here (the server answers 422 to a change).
+    const managed = (path: string) => managedCovers(instance.managed, path);
 
     const limits = useForm({
         memory_mb: String(instance.memory_mb),
@@ -102,7 +105,10 @@ export function InstanceCard({ instance, options, canManage }: Props) {
         <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2">
                 <CardTitle className="text-base">Container</CardTitle>
-                <StatusBadge status={instance.status} title={instance.status_message} />
+                <div className="flex items-center gap-2">
+                    <ManagedBadge config={instance.managed} />
+                    <StatusBadge status={instance.status} title={instance.status_message} />
+                </div>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
                 {instance.status_message && <p className="text-muted-foreground text-xs">{instance.status_message}</p>}
@@ -190,13 +196,18 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                         >
                             <RotateCw /> Restart
                         </Button>
-                        <Button size="sm" variant="outline" disabled={!options.upgradable} onClick={() => setOpen('upgrade')}>
+                        <Button size="sm" variant="outline" disabled={!options.upgradable || managed('/version')} onClick={() => setOpen('upgrade')}>
                             <ArrowUpCircle /> Upgrade
                         </Button>
                         <Button size="sm" variant="outline" disabled={!running || instance.rotating_password} onClick={() => setOpen('password')}>
                             <KeyRound /> {instance.rotating_password ? 'Rotating…' : keyValue ? 'Rotate password' : 'Rotate superuser password'}
                         </Button>
-                        <Button size="sm" variant="outline" disabled={instance.status === 'upgrading'} onClick={() => setOpen('delete')}>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={instance.status === 'upgrading' || !!instance.managed}
+                            onClick={() => setOpen('delete')}
+                        >
                             <Trash2 /> Delete
                         </Button>
                     </div>
@@ -218,6 +229,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                 <Label htmlFor="limit-memory">Memory (MB)</Label>
                                 <Input
                                     id="limit-memory"
+                                    disabled={managed('/memory')}
                                     inputMode="numeric"
                                     value={limits.data.memory_mb}
                                     onChange={(e) => limits.setData('memory_mb', e.target.value.replace(/\D/g, ''))}
@@ -229,6 +241,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                 <Label htmlFor="limit-cpus">CPUs</Label>
                                 <Input
                                     id="limit-cpus"
+                                    disabled={managed('/cpus')}
                                     inputMode="decimal"
                                     value={limits.data.cpus}
                                     placeholder="No limit"
@@ -240,7 +253,11 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                 <>
                                     <div className="grid gap-2">
                                         <Label>Eviction</Label>
-                                        <Select value={limits.data.eviction} onValueChange={(value) => limits.setData('eviction', value)}>
+                                        <Select
+                                            disabled={managed('/settings/eviction')}
+                                            value={limits.data.eviction}
+                                            onValueChange={(value) => limits.setData('eviction', value)}
+                                        >
                                             <SelectTrigger>
                                                 <SelectValue />
                                             </SelectTrigger>
@@ -256,6 +273,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                     <div className="grid gap-2">
                                         <Label>Persistence</Label>
                                         <Select
+                                            disabled={managed('/settings/persistence')}
                                             value={limits.data.persistence}
                                             onValueChange={(value) => limits.setData('persistence', value as 'rdb' | 'aof' | 'none')}
                                         >
@@ -277,6 +295,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                     <Label htmlFor="limit-connections">Max connections</Label>
                                     <Input
                                         id="limit-connections"
+                                        disabled={managed('/settings/max_connections')}
                                         inputMode="numeric"
                                         value={limits.data.max_connections}
                                         placeholder="Default"
@@ -288,6 +307,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                 <Label htmlFor="limit-slow">Slow query log (ms)</Label>
                                 <Input
                                     id="limit-slow"
+                                    disabled={managed('/settings/slow_query_ms')}
                                     inputMode="numeric"
                                     value={limits.data.slow_query_ms}
                                     placeholder="Default"
@@ -301,11 +321,16 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                             </p>
                         )}
                         <label className="flex items-center gap-2 text-sm">
-                            <Checkbox checked={limits.data.require_tls} onCheckedChange={(value) => limits.setData('require_tls', value === true)} />
+                            <Checkbox
+                                disabled={managed('/require_tls')}
+                                checked={limits.data.require_tls}
+                                onCheckedChange={(value) => limits.setData('require_tls', value === true)}
+                            />
                             Require TLS for every connection
                         </label>
                         <label className="flex items-start gap-2 text-sm">
                             <Checkbox
+                                disabled={managed('/public')}
                                 checked={limits.data.public_access}
                                 onCheckedChange={(value) => limits.setData('public_access', value === true)}
                                 className="mt-0.5"
@@ -323,6 +348,7 @@ export function InstanceCard({ instance, options, canManage }: Props) {
                                 <Label htmlFor="instance-sources">Allowed sources</Label>
                                 <Input
                                     id="instance-sources"
+                                    disabled={managed('/allowed_sources')}
                                     className="font-mono"
                                     placeholder="203.0.113.9, 198.51.100.0/24"
                                     value={limits.data.allowed_sources}

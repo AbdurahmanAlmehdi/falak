@@ -37,6 +37,7 @@ use Inertia\Response;
  */
 final class DatabaseInstanceController extends Controller
 {
+    use GuardsConfigManaged;
     use PresentsDatabases;
 
     public function __construct(
@@ -149,6 +150,7 @@ final class DatabaseInstanceController extends Controller
             'allowed_sources.*' => ['string', 'max:18'],
         ]);
 
+        $this->guardInstance($instance, $data);
         $instance = $update($instance, $data, $request->user()?->getAuthIdentifier());
 
         return $this->respond($request, $instance);
@@ -186,6 +188,12 @@ final class DatabaseInstanceController extends Controller
     {
         $this->authorize('manage', $instance);
         $data = $request->validate(['version' => ['nullable', 'string', 'max:16']]);
+
+        // A rebuild of the same major is not a change of the file's `version`.
+        if (($data['version'] ?? null) !== null && $data['version'] !== $instance->version) {
+            $this->managed('database_instance', $instance->id)->guard(['version' => '/version'], $data, ['version' => $instance->version]);
+        }
+
         $upgrade($instance, $data['version'] ?? null, $request->user()?->getAuthIdentifier());
 
         return $this->respond($request, $instance->refresh());
@@ -214,6 +222,7 @@ final class DatabaseInstanceController extends Controller
             'confirm' => ['required', 'string', 'in:'.$instance->name],
             'delete_volume' => ['nullable', 'boolean'],
         ], ['confirm.in' => 'Type the database server name to confirm.']);
+        $this->guardManaged('database_instance', $instance->id, 'confirm', 'this database server');
 
         $lifecycle->delete($instance, (bool) ($data['delete_volume'] ?? false), $request->user()?->getAuthIdentifier());
 

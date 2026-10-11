@@ -25,6 +25,7 @@ use Throwable;
  */
 final class PitrController extends Controller
 {
+    use GuardsConfigManaged;
     use PresentsDatabases;
 
     /**
@@ -42,6 +43,7 @@ final class PitrController extends Controller
             'window_days' => ['nullable', 'integer', 'min:1', 'max:35'],
             'base_interval_days' => ['nullable', 'integer', 'min:1', 'max:35'],
         ]);
+        $this->guardPitr($instance, $data);
 
         // Less history (PITR off, a shorter window) is what restoring needs: admins only.
         $shrinks = ($instance->pitr_enabled && ! $data['enabled'])
