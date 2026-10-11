@@ -1097,6 +1097,80 @@ deletes risky and only with `allow_destroy`). The `value.unsupported` warnings a
 **Gaps (later)**
 - `falak plan` for an environment the project doesn't have yet.
 
+### Phase 4: approvals, ownership, drift
+
+Contract for both lanes (control plane `feat/config-p4`, CLI `config-cli`). Choices are **[decision]**s.
+
+**Approvals replace refusals.**
+- **[decision]** A risky plan always waits: the run goes to `awaiting_approval` (never `refused` any more; `refused`
+  stays a status only old runs carry). `config_sources.experimental` stays as a label only ("Experimental" in the
+  dashboard until the release), with no effect on runs.
+- **[decision] Who approves:** anyone with `config.approve` (admins by default), the run's requester included, unless
+  the project's admin setting **"approver must differ from the requester"** (`config_sources.separate_approver`, off by
+  default) is on. A push run has no Falak requester (`requested_by` null), so the rule never blocks it.
+- **[decision] Approvals expire** after `config_as_code.approval_days` (env `FALAK_CONFIG_APPROVAL_DAYS`, default 7):
+  the run is cancelled (`cancel_reason: expired`). A newer run of the environment supersedes a waiting one
+  (`superseded`), a disabled source cancels it (`source_disabled`).
+- **[decision] Approving plans again.** The approval covers the risky changes the approver saw (by `path` + `rule`). If
+  the fresh plan has a risky change not in that set, nothing is applied: the run stays `awaiting_approval` with the new
+  plan (`409`, "The plan changed since it was shown; review it again."). Otherwise it applies.
+
+`ConfigRun` gains (other fields unchanged):
+
+```json
+{"approval": {"required": true, "risky": [{"path": "/units/web/deploy/strategy", "rule": "production.strategy", "reason": "…"}],
+              "expires_at": "2026-10-18T12:00:00Z", "approved_by": null, "approved_at": null,
+              "rejected_by": null, "rejected_at": null, "comment": null,
+              "can_approve": true, "blocked_reason": null},
+ "cancel_reason": null}
+```
+
+`approval` is null for a run that never needed one. `can_approve` / `blocked_reason` are for the caller (`blocked_reason`:
+"You need the config.approve permission." or "You requested this run: another approver must approve it.").
+`cancel_reason` (only when `status` is `cancelled`): `superseded`, `rejected`, `expired`, `source_disabled`, `user`.
+
+- **`POST /api/v1/config/runs/{run}/approve`** `{"comment": "…"?}` — `config.approve` (30/min). `200 {"data": ConfigRun}`
+  (now `applying`, or already `applied`/`failed`); `403 {"message": blocked_reason}`; `409 {"message": "This run is not
+  awaiting approval."}` (superseded, expired, rejected, cancelled, done); `409 {"message": "The plan changed since it was
+  shown; review it again.", "data": ConfigRun}`.
+- **`POST /api/v1/config/runs/{run}/reject`** `{"comment": "…"?}` — `config.approve`. `200 {"data": ConfigRun}`
+  (`cancelled`, `cancel_reason: rejected`, `approval.rejected_by`); `409` when not awaiting approval.
+- CLI: `falak approve <run> [--comment]`, `falak reject <run> [--comment]`; `apply --wait` keeps exiting 6 while the
+  run waits.
+
+**Notifications.** Alert types (Alerting module, routed by the organization's rules to its channels):
+`config.run.awaiting_approval` (warning, once per run), `config.run.failed` (warning, once per run), `config.drift`
+(warning, once per drift signature of an environment). A push run waiting for an approval also edits the plan comment
+of the pull request it merged (found by `#<number>` in the commit message or its head sha) with "Waiting for an
+approval" and the run's link.
+
+**Plan for an environment the project doesn't have yet.** `POST …/config/plan` with an `environment` the file declares
+but the project lacks answers `200` with `data.environment_exists: false` and `data.preview_only: true`: the plan has a
+`create` of `/environments/<slug>` and the creation of every unit, and a warning `environment.created_on_push` saying only
+a push to the production environment's branch (or `falak apply -e` by someone with `projects.manage`) creates it.
+Otherwise `environment_exists: true`, `preview_only: false`.
+
+**Drift.** Today's state of an environment against its last applied run (every reconciler's `current()`/`diff()`,
+env values masked).
+- **`GET /api/v1/projects/{project}/config/drift?environment=production`** — `config.view`.
+- **`POST /api/v1/projects/{project}/config/drift`** `{"environment": "production"}` — `config.view` (10/min): checks now.
+
+```json
+{"data": {"environment": "production", "status": "drifted", "checked_at": "…", "since": "…",
+          "baseline_run_id": "01j…", "baseline_commit": "abc…", "signature": "9f2c…",
+          "changes": [Change]}}
+```
+
+`status`: `in_sync`, `drifted`, `unknown` (nothing applied yet, or a run is applying). `changes` are the changes a run
+would make to put the file back (`before` today's value, `after` the file's). A scheduled check runs every
+`config_as_code.drift_minutes` (default 30).
+
+**Unmanaged resources.** What a run detached (removed from the file but kept, or released with its environment).
+- **`GET /api/v1/projects/{project}/config/unmanaged?environment=production`** — `config.view`:
+  `{"data": [{"id", "environment", "unit", "resource_type", "resource_id", "label", "reason": "removed_from_file" |
+  "environment_released", "run_id", "detached_at"}]}`. The dashboard lists them with the module's own delete (its
+  permissions) and an "adopt into the file" hint; a resource the file manages again leaves the list.
+
 ### CLI (`agent/internal/cli`)
 
 | Command | Flags | Does |
