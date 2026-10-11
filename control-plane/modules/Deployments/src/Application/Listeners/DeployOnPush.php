@@ -2,6 +2,7 @@
 
 namespace Falak\Deployments\Application\Listeners;
 
+use Falak\Config\Contracts\ConfigSources;
 use Falak\Deployments\Application\Actions\TriggerDeployment;
 use Falak\Deployments\Contracts\Exceptions\DeploymentTriggerBusy;
 use Falak\Deployments\Domain\Enums\Trigger;
@@ -12,19 +13,25 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Push-to-deploy: a verified push to a site's branch deploys every site with push-to-deploy enabled.
+ * Push-to-deploy: a verified push to a site's branch deploys every site with push-to-deploy enabled. Sites of a
+ * project that follows a falak.yaml are left to Config, which deploys the units the push changed.
  */
 final class DeployOnPush implements ShouldQueue
 {
     public function __construct(
         private readonly SiteDirectory $sites,
         private readonly TriggerDeployment $trigger,
+        private readonly ConfigSources $config,
     ) {}
 
     public function handle(PushReceived $event): void
     {
         foreach ($this->sites->forRepository($event->connectionId, $event->repository, $event->branch) as $site) {
             if (! $site->pushToDeploy || $site->organizationId !== $event->organizationId || $site->branch !== $event->branch) {
+                continue;
+            }
+
+            if ($this->config->managesSite($site->id)) {
                 continue;
             }
 

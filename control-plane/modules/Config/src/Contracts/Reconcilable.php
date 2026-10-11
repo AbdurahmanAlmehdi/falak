@@ -13,6 +13,9 @@ namespace Falak\Config\Contracts;
  */
 interface Reconcilable
 {
+    /** Container tag modules register their reconcilers under (`$this->app->tag([X::class], Reconcilable::TAG)`). */
+    public const TAG = 'falak.config.reconcilers';
+
     /**
      * The sections this reconciler owns, as section patterns: dotted paths where `*` is any unit key and `*(app|compose)`
      * a unit key of those types only, e.g. ['units.*(app).workers', 'units.*(app).daemons', 'units.*(app).schedules'].

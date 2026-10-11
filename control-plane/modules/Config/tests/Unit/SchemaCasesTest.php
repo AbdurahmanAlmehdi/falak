@@ -1,5 +1,6 @@
 <?php
 
+use Falak\Config\Application\Validation\Resolver;
 use Falak\Config\ConfigServiceProvider;
 use Falak\Config\Tests\Support\ConfigCases;
 
@@ -78,27 +79,30 @@ test('parse case', function (string $path) use ($read) {
         ->and(ConfigCases::plain($doc))->toEqual(ConfigCases::expect($path));
 })->with(fn () => ConfigCases::inputs('parse'));
 
-// The merge itself is built in phase 1; here: the inputs and every expected resolved file are schema-valid, and the
-// expectations name only known issue codes.
+// The PHP merge and reference checks (Falak\Config\Application\Validation\Resolver) against every resolve case, like
+// agent/internal/configspec does in Go: the resolved file, and the issues as sets of {code, pointer, source}.
 test('resolve case', function (string $path) use ($read) {
     [$doc, $error] = $read($path);
 
     expect($error)->toBeNull()
         ->and(ConfigCases::validate($doc))->toBe([]);
 
-    $expect = json_decode((string) file_get_contents((string) preg_replace('/\.(ya?ml|json)$/', '.expect.json', $path)), false, 512, JSON_THROW_ON_ERROR);
-    $codes = ['environment.unknown', 'override.type', 'reference.malformed', 'reference.secret_name', 'reference.unknown_key', 'reference.not_allowed', 'reference.external'];
+    $expect = json_decode((string) file_get_contents((string) preg_replace('/\.(ya?ml|json)$/', '.expect.json', $path)), true, 512, JSON_THROW_ON_ERROR);
+    $issues = fn (array $list) => collect($list)->map(fn ($i) => ['code' => $i['code'], 'pointer' => $i['pointer'], 'source' => $i['source']])
+        ->sortBy(fn ($i) => implode("\0", $i))->values()->all();
 
-    expect((array) $expect->environments)->not->toBe([]);
+    expect($expect['environments'])->not->toBe([]);
 
-    foreach ((array) $expect->environments as $env => $case) {
-        foreach ([...$case->errors, ...$case->warnings] as $issue) {
-            expect($codes)->toContain($issue->code);
-        }
+    foreach ($expect['environments'] as $env => $case) {
+        [$resolved, $errors, $warnings] = app(Resolver::class)->resolve($doc, $env);
 
-        if ($case->resolved !== null) {
-            expect(ConfigCases::validate($case->resolved))->toBe([], "{$env}: the resolved file must be valid")
-                ->and(array_keys((array) $case->resolved->environments))->toBe([$env]);
+        expect($resolved === null ? null : ConfigCases::plain($resolved))->toEqual($case['resolved'], "{$env}: resolved")
+            ->and($issues(array_map(fn ($i) => $i->toArray(), $errors)))->toEqual($issues($case['errors']), "{$env}: errors")
+            ->and($issues(array_map(fn ($i) => $i->toArray(), $warnings)))->toEqual($issues($case['warnings']), "{$env}: warnings");
+
+        if ($case['resolved'] !== null) {
+            expect(ConfigCases::validate(ConfigCases::document($case['resolved'])))->toBe([], "{$env}: the resolved file must be valid")
+                ->and(array_keys($case['resolved']['environments']))->toBe([$env]);
         }
     }
 })->with(fn () => ConfigCases::inputs('resolve'));
