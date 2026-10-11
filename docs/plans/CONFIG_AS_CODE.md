@@ -1165,6 +1165,45 @@ env values masked).
 would make to put the file back (`before` today's value, `after` the file's). A scheduled check runs every
 `config_as_code.drift_minutes` (default 30).
 
+`unknown` is **not drift**: never checked, nothing applied yet, or a run of the environment is planning or applying
+(its phase B may still be on its way); the CLI exits 0 for it. A file without `environments` is planned, applied and
+checked against the project's production environment, as for a push. The run list takes `per_page` (1–100, default 25)
+and `page`.
+
+**Built (phase 4, control plane).**
+- **[decision]** Alerts are module events implementing `Alertable` (`ConfigRunAwaitingApproval`, `ConfigRunFailed`,
+  `ConfigDriftDetected`), so the organization's rules and channels deliver them; their types are registered in the
+  "Config as code" group. A run alerts once per transition (awaiting approval, failed); a drift once per signature, and
+  again only after the environment was back in sync.
+- **[decision] Phase B re-plans when the release is live and applies a risky change only if the run's approval covered
+  it** (`path` + `rule`); others are skipped with the warning `phase_b.risky_skipped`. A rollback has no approval: every
+  risky change, phase A or B (e.g. removing a production domain), is skipped with `rollback.risky_skipped`.
+- **[decision] Drift** compares the last applied run's resolved file with today's state through the reconcilers' own
+  `current()`/`diff()` (the plan a run would make: `before` today's, `after` the file's), env values masked; its
+  signature is a hash of the sorted changes. The canvas shows a banner for a drifted environment with "Check again" and
+  a link to the runs. Checks run every `config_as_code.drift_minutes` (default 30, at least 5) and skip preview
+  environments.
+- **[decision] The approval UI** lives on the run in Project settings → Config as code: the risky changes with their
+  rule and reason, expiry, who approved or rejected and their comment; Approve / Reject with an optional comment for
+  those who may. The "approver must differ from the requester" toggle is an admin setting there.
+
+- **[decision] One deletion model, two classes.** Units (app, compose, function), data units, a unit's databases,
+  volumes and backup schedules are deleted only with `allow_destroy` (`config.destroy`, the only entry point being
+  `POST …/config/runs`, i.e. `falak apply --allow-destroy`) and when this environment's file created them; otherwise
+  they are detached. Items hanging on a unit (workers, daemons, schedules, domains, redirects, headers, mounts, function
+  schedules) are deleted without `allow_destroy` when this environment's file created them and their unit is still
+  managed there (else detached): requiring it would make dropping a worker or a domain from the file never take effect;
+  removing a production domain stays risky. Items follow their unit: a unit leaving the file detaches its items too.
+  Every decision reads only the environment's ownership rows; apply re-checks it (a stale `delete` only detaches).
+- **[decision] Detached resources are recorded** in `config_detached` (`ManagedResources::detach()`: label, the
+  module's own dashboard delete route and the body it needs, the site it hangs on); preview environments record none.
+  A row leaves the list when the file manages the resource again, when the module announces its deletion
+  (`SiteDeleted` — with everything on that site —, `DomainRemoved`, `DatabaseDeleted`), or when the dashboard dismisses
+  it after the module's delete succeeded. Releasing an environment records each resource its file managed
+  (`environment_released`). The API list needs `?environment=` and has no delete route; the dashboard's has it.
+- **[decision] The dashboard's "Unmanaged resources"** (Project settings → Config as code) deletes through the module's
+  own route (its permissions, its confirmations, its 403/422 shown), then dismisses the row (`config.apply`).
+
 **Unmanaged resources.** What a run detached (removed from the file but kept, or released with its environment).
 - **`GET /api/v1/projects/{project}/config/unmanaged?environment=production`** — `config.view`:
   `{"data": [{"id", "environment", "unit", "resource_type", "resource_id", "label", "reason": "removed_from_file" |

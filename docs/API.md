@@ -545,8 +545,9 @@ A project can follow one file in its repository (`falak.yaml`, `falak.yml` or `f
 repository, path, on/off) is set in the dashboard (Project settings → Config as code). A push to a branch an
 environment of the file names (`environments.<slug>.branch`) creates one **config run** per environment: the file is read
 at the pushed commit, validated, planned, applied, and the units that changed (their files, or their config) are
-deployed; phase B (workers, schedules, domains…) is applied when each unit's release goes live. While the source is
-**experimental** (until approvals land), a plan with risky changes is **refused** (status `refused`) instead of waiting.
+deployed; phase B (workers, schedules, domains…) is applied when each unit's release goes live. A plan with risky
+changes **waits for an approval** (`awaiting_approval`, `config.approve`, expires after 7 days by default); `refused` is
+only found on runs made before approvals. "Experimental" is a label only.
 A file without `environments` binds the project's production environment to the repository's default branch.
 
 `{project}` is the project id. Issues (`ConfigIssue`):
@@ -578,6 +579,10 @@ project, secrets, services, each module's checks) for that environment. Always `
 `{"data": {"valid": false, "environments": ["production", "staging"], "errors": [ConfigIssue], "warnings": [ConfigIssue]}}`.
 
 ### `POST /api/v1/projects/{project}/config/plan` — `config.view` (30/min)
+`data.environment_exists` / `data.preview_only`: for an environment the file declares but the project lacks, the plan
+is a preview of its creation (a `create` of `/environments/<slug>` first, then its units) with the warning
+`environment.created_on_push`. A file without `environments` plans the project's production environment.
+
 Body: exactly one of `file` (+ `format`) / `commit` (the file at that commit), plus `environment`. Nothing is applied.
 → `200 {"data": {"environment", "commit", "resolved": {…}, "plan": {"changes": [Change], "summary": {"create": 1,
 "update": 2, "delete": 0, "detach": 0, "noop": 9}, "risky": false, "deploy": ["web"]}, "warnings": [ConfigIssue]}}`.
@@ -611,12 +616,49 @@ Env values are `••••` in plans and runs unless the token has `sites.env.
 `apply_failed` (applying a phase failed; a phase A failure deploys nothing), `deployment_failed` (a unit's deployment
 failed or was cancelled: the entries with `status: failed` / `cancelled`).
 
-### `GET /api/v1/projects/{project}/config/runs[?environment=]` · `GET /api/v1/config/runs/{run}` — `config.view`
-Newest first, `{"data": [ConfigRun], "links", "meta"}` / `{"data": ConfigRun}` (`falak apply --wait` polls it).
+### `GET /api/v1/projects/{project}/config/runs[?environment=&per_page=&page=]` · `GET /api/v1/config/runs/{run}` — `config.view`
+Newest first, `{"data": [ConfigRun], "links": {"next", "prev"}, "meta": {"current_page", "last_page", "total", "per_page"}}`
+(`per_page` 1–100, default 25; `page` from 1) / `{"data": ConfigRun}` (`falak apply --wait` polls it).
 
-### `POST /api/v1/config/runs/{run}/approve` — `config.approve`
-`200 {"data": ConfigRun}` (status `applying`); `409 {"message": "This run is not awaiting approval."}` (every run of
-an experimental source: risky plans are refused, not held).
+A run that needed an approval carries `approval` (null otherwise), and a cancelled run its `cancel_reason`:
+
+```json
+{"approval": {"required": true, "risky": [{"path": "/units/web/deploy/strategy", "rule": "production.strategy", "reason": "…"}],
+              "expires_at": "…", "approved_by": null, "approved_at": null, "rejected_by": null, "rejected_at": null,
+              "comment": null, "can_approve": true, "blocked_reason": null},
+ "cancel_reason": null}
+```
+
+`can_approve`/`blocked_reason` are the caller's ("You need the config.approve permission.", "You requested this run:
+another approver must approve it." when the project's admins require a different approver). `cancel_reason`:
+`superseded`, `rejected`, `expired`, `source_disabled`, `user`.
+
+### `POST /api/v1/config/runs/{run}/approve` `{"comment"?}` — `config.approve` (30/min)
+The run plans again and applies: `200 {"data": ConfigRun}` (`applying`, or already `applied`/`failed`). `403
+{"message": blocked_reason}`; `409 {"message": "This run is not awaiting approval."}` (superseded, expired, rejected,
+done); `409 {"message": "The plan changed since it was shown; review it again.", "data": ConfigRun}` when the fresh plan
+has a risky change the approval didn't cover (the run waits again with the new plan).
+
+### `POST /api/v1/config/runs/{run}/reject` `{"comment"?}` — `config.approve` (30/min)
+`200 {"data": ConfigRun}` (`cancelled`, `cancel_reason: rejected`); `409` when it isn't awaiting approval.
+
+### `GET /api/v1/projects/{project}/config/drift?environment=` · `POST …/config/drift` `{"environment"}` — `config.view` (POST 10/min)
+The environment's state against the file last applied to it (POST checks now; a scheduled check runs every 30 minutes):
+
+```json
+{"data": {"environment": "production", "status": "drifted", "checked_at": "…", "since": "…",
+          "baseline_run_id": "01j…", "baseline_commit": "abc…", "signature": "9f2c…", "changes": [Change]}}
+```
+
+`status`: `in_sync`, `drifted`, `unknown` (never checked, nothing applied yet, or a run is applying: **not drift**).
+`changes` are what a run would change to put the file back (env values masked). A drift alerts `config.drift` once per
+signature.
+
+### `GET /api/v1/projects/{project}/config/unmanaged?environment=` — `config.view`
+What runs detached (removed from the file but kept, or released with their environment):
+`{"data": [{"id", "environment", "unit", "resource_type", "resource_id", "label", "reason", "run_id", "detached_at"}]}`
+(`reason`: `removed_from_file`, `environment_released`). Delete them from their module's page (its permissions), or add
+them back to the file to manage them again.
 
 ### `POST /api/v1/config/runs/{run}/cancel` — `config.apply`
 A run `planning` or `awaiting_approval` → `cancelled`; `409` otherwise.
