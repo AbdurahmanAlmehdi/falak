@@ -6,6 +6,7 @@ use Falak\Config\Contracts\ConfigSources;
 use Falak\Deployments\Application\Actions\TriggerDeployment;
 use Falak\Deployments\Contracts\Exceptions\DeploymentTriggerBusy;
 use Falak\Deployments\Domain\Enums\Trigger;
+use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\SourceControl\Events\PushReceived;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -31,8 +32,8 @@ final class DeployOnPush implements ShouldQueue
                 continue;
             }
 
-            if ($this->config->managesSite($site->id)) {
-                continue;
+            if ($this->config->managesSite($site->id) || Deployment::activeFor($site->id, $event->commit->sha) !== null) {
+                continue; // Config deploys it, or it already deploys this commit (Config got the push first)
             }
 
             $trigger = fn () => ($this->trigger)(

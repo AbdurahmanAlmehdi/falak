@@ -63,7 +63,7 @@ final class ConfigWorld
  */
 function config_world(array $site = [], int $servers = 1, bool $experimental = true, Role $role = Role::Owner, bool $actingAs = true): ConfigWorld
 {
-    $deploy = deploy_world($servers, $site, $role, $actingAs);
+    $deploy = deploy_world($servers, ['push_to_deploy' => true, ...$site], $role, $actingAs);
     $environment = projects_default_env($deploy->organization);
     app(LinkService::class)($environment, ServiceKind::Site, $deploy->site->id, 'web');
 
