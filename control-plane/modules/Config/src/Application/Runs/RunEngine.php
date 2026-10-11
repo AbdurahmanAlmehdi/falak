@@ -3,16 +3,21 @@
 namespace Falak\Config\Application\Runs;
 
 use Falak\Config\Application\EnvMask;
+use Falak\Config\Application\Planning\Plan;
 use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Application\Validation\FileCheck;
 use Falak\Config\Contracts\ApplyContext;
 use Falak\Config\Contracts\ApplyPhase;
+use Falak\Config\Contracts\Change;
 use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
+use Falak\Config\Events\ConfigRunAwaitingApproval;
+use Falak\Config\Events\ConfigRunFailed;
+use Falak\Config\Http\Presenters;
 use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Projects\Contracts\Data\EnvironmentData;
@@ -41,6 +46,7 @@ final class RunEngine
         private readonly ProjectDirectory $projects,
         private readonly ImplicitEnvironment $implicit,
         private readonly SiteDirectory $sites,
+        private readonly ApprovalNotice $notice,
     ) {}
 
     /**
@@ -105,15 +111,8 @@ final class RunEngine
             $run->forceFill(['resolved' => $validation->resolved, 'plan' => $planArray, 'errors' => $issues])->save();
 
             if ($plan->changes->isRisky()) {
-                if ($source->experimental) {
-                    $rules = implode(', ', array_unique(array_map(fn ($c) => (string) $c->rule, $plan->changes->risky())));
-
-                    return $this->finish($run, RunStatus::Refused, "The plan has risky changes ({$rules}); while config as code is experimental they are refused. Make them in the dashboard, or split them out of the file.");
-                }
-
-                $run->forceFill(['status' => RunStatus::AwaitingApproval])->save();
-
-                return $run;
+                // [decision] A risky plan always waits for an approval (experimental is a label only since phase 4).
+                return $this->awaitApproval($run, $plan, $commitInfo['message'] ?? null);
             }
 
             $this->apply($run, $commitInfo);
@@ -150,7 +149,7 @@ final class RunEngine
         $environment = $this->projects->environment((string) $run->environment_id);
 
         if ($source === null) {
-            return $this->finish($run, RunStatus::Cancelled, 'Config as code was disabled for this project before the run applied.');
+            return $this->finish($run, RunStatus::Cancelled, 'Config as code was disabled for this project before the run applied.', ['cancel_reason' => 'source_disabled']);
         }
 
         if ($environment === null || $run->resolved === null) {
@@ -163,12 +162,13 @@ final class RunEngine
         // Planned again against today's state: what is applied is never older than the run, and stored plans are masked.
         $plan = $this->planner->plan($scope, $run->resolved);
 
-        if ($plan->changes->isRisky() && $run->approved_at === null) {
-            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => (array) ($run->plan['deploy'] ?? [])])])->save();
+        $deployList = (array) ($run->plan['deploy'] ?? []);
 
-            return $source->experimental
-                ? $this->finish($run, RunStatus::Refused, 'The plan has risky changes; while config as code is experimental they are refused.')
-                : tap($run)->forceFill(['status' => RunStatus::AwaitingApproval])->save();
+        if ($plan->changes->isRisky() && ($run->approved_at === null || self::riskyBeyond($plan, (array) $run->approved_risky) !== [])) {
+            // Not approved, or the plan gained risky changes the approver didn't see: it waits (again).
+            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => $deployList])])->save();
+
+            return $this->awaitApproval($run, $plan, $commitInfo['message'] ?? null, reset: $run->approved_at !== null);
         }
 
         $deploy = array_values(array_unique([...(array) ($run->plan['deploy'] ?? []), ...$plan->deploy]));
@@ -354,7 +354,7 @@ final class RunEngine
         foreach ($older as $previous) {
             $this->entries($previous, fn (array $entries) => array_map(fn (array $e) => in_array($e['status'] ?? null, ['pending', 'deploying'], true)
                 ? [...$e, 'status' => 'superseded', 'error' => "Superseded by run {$run->id}."] : $e, $entries));
-            $this->finish($previous->refresh(), RunStatus::Cancelled, "Superseded by a newer run ({$run->id}).");
+            $this->finish($previous->refresh(), RunStatus::Cancelled, "Superseded by a newer run ({$run->id}).", ['cancel_reason' => 'superseded']);
         }
     }
 
@@ -369,7 +369,16 @@ final class RunEngine
 
         $scope = $this->scopes->make($environment, $source, $run->resolved, $run->commit, $run->requested_by, $run->allow_destroy);
         $ctx = new ApplyContext($run->id, ApplyPhase::WithRelease, $run->commit, $run->requested_by, $run->allow_destroy, $unit, $deploymentId, $releaseId);
-        DB::transaction(fn () => $this->applier->phaseB($scope, $run->resolved, $ctx, $unit));
+        $skipped = [];
+        DB::transaction(function () use ($scope, $run, $ctx, $unit, &$skipped) {
+            $skipped = $this->applier->phaseB($scope, $run->resolved, $ctx, $unit, (array) ($run->approved_risky ?? []));
+        });
+
+        if ($skipped !== []) {
+            // [decision] Phase B plans again when the release is live: a risky change no approval covered is skipped.
+            $run->forceFill(['errors' => [...(array) $run->errors, ...array_map(fn (Change $c) => ConfigIssue::warning('phase_b.risky_skipped', $c->path,
+                "Not applied: {$c->reason} It needs an approval: push the file again.")->toArray(), $skipped)]])->save();
+        }
     }
 
     /** Applied once every deployment settled (failed when one failed). */
@@ -399,9 +408,54 @@ final class RunEngine
      */
     private function finish(ConfigRun $run, RunStatus $status, ?string $error, array $extra = []): ConfigRun
     {
+        $was = $run->status;
         $run->forceFill([...$extra, 'status' => $status, 'error' => $error, 'finished_at' => now()])->save();
 
+        if ($status === RunStatus::Failed && $was !== RunStatus::Failed) {
+            DB::afterCommit(fn () => ConfigRunFailed::dispatch($run->organization_id, $run->project_id, $run->id, $run->environment, Presenters::run($run)['url'], '', (string) $error));
+        }
+
         return $run;
+    }
+
+    /**
+     * The run waits for an approval (until `approval_days`), announced once: an alert, and the merged pull request's
+     * plan comment.
+     */
+    private function awaitApproval(ConfigRun $run, Plan $plan, ?string $message, bool $reset = false): ConfigRun
+    {
+        $first = $run->status !== RunStatus::AwaitingApproval && $run->approval_expires_at === null;
+        $run->forceFill([
+            'status' => RunStatus::AwaitingApproval,
+            'approval_expires_at' => $run->approval_expires_at ?? now()->addDays(max(1, (int) config('config_as_code.approval_days', 7))),
+            ...($reset ? ['approved_by' => null, 'approved_at' => null, 'approved_risky' => null] : []),
+        ])->save();
+
+        if ($first) {
+            $rules = implode(', ', array_unique(array_map(fn ($c) => (string) $c->rule, $plan->changes->risky())));
+            DB::afterCommit(function () use ($run, $rules, $message) {
+                ConfigRunAwaitingApproval::dispatch($run->organization_id, $run->project_id, $run->id, $run->environment, Presenters::run($run)['url'], $rules);
+
+                if ($run->trigger === RunTrigger::Push) {
+                    $this->notice->post($run, $message);
+                }
+            });
+        }
+
+        return $run;
+    }
+
+    /**
+     * Risky changes of a plan an approval didn't cover (by path and rule).
+     *
+     * @param  list<array{path: string, rule: ?string}>  $approved
+     * @return list<Change>
+     */
+    public static function riskyBeyond(Plan $plan, array $approved): array
+    {
+        $seen = array_flip(array_map(fn (array $a) => $a['path']."\0".($a['rule'] ?? ''), $approved));
+
+        return array_values(array_filter($plan->changes->risky(), fn (Change $c) => ! isset($seen[$c->path."\0".($c->rule ?? '')])));
     }
 
     private static function message(Throwable $e): string

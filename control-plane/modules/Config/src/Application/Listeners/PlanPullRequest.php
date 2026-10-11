@@ -129,13 +129,13 @@ final class PlanPullRequest implements ShouldQueue
 
         $record->comment_id = $this->gateway->commentOnPullRequest($source->source_connection_id, $source->repository, $pr->number, $body, $record->comment_id);
         $record->head_sha = $pr->headSha;
-        $state = $failed || ($risky && $source->experimental) ? 'failure' : 'success';
+        $record->body = $body;
+        $state = $failed ? 'failure' : 'success';
         $record->state = $state;
         $record->save();
 
         $description = match (true) {
             $failed => "{$source->path} is invalid",
-            $risky && $source->experimental => 'Risky changes would be refused',
             $risky => 'Risky changes need an approval',
             default => "{$source->path} plan is ready",
         };
@@ -207,7 +207,7 @@ final class PlanPullRequest implements ShouldQueue
         }
 
         if ($plan->changes->isRisky()) {
-            $text .= "\n\n".($experimental ? '**Risky changes:** config as code is experimental for this project, so this plan would be refused on merge.' : '**Risky changes:** the run will wait for an approval.');
+            $text .= "\n\n".'**Risky changes:** once merged, the run waits for an approval (`config.approve`).';
         }
 
         if ($validation->warnings !== []) {

@@ -2,7 +2,12 @@
 
 namespace Falak\Config;
 
+use Falak\Alerting\Contracts\AlertTypes;
+use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Application\Jobs\CheckDrift;
+use Falak\Config\Application\Jobs\ExpireApprovals;
 use Falak\Config\Application\Listeners\FollowReleases;
+use Falak\Config\Application\Listeners\ForgetDeletedResources;
 use Falak\Config\Application\Listeners\PlanPullRequest;
 use Falak\Config\Application\Listeners\RunOnPush;
 use Falak\Config\Application\Planning\Reconcilers;
@@ -15,17 +20,24 @@ use Falak\Config\Contracts\PreviewConfig;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Config\Domain\Policies\ConfigPolicy;
+use Falak\Config\Events\ConfigDriftDetected;
+use Falak\Config\Events\ConfigRunAwaitingApproval;
+use Falak\Config\Events\ConfigRunFailed;
 use Falak\Config\Infrastructure\EloquentConfigSources;
 use Falak\Config\Infrastructure\EloquentManagedResources;
+use Falak\Databases\Events\DatabaseDeleted;
 use Falak\Deployments\Events\DeploymentFailed;
 use Falak\Deployments\Events\DeploymentUpdated;
 use Falak\Deployments\Events\ReleaseActivated;
+use Falak\Edge\Events\DomainRemoved;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\ModuleServiceProvider;
+use Falak\Sites\Events\SiteDeleted;
 use Falak\SourceControl\Events\PullRequestOpened;
 use Falak\SourceControl\Events\PullRequestUpdated;
 use Falak\SourceControl\Events\PushReceived;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 
@@ -77,6 +89,17 @@ class ConfigServiceProvider extends ModuleServiceProvider
         Gate::policy(ConfigSource::class, ConfigPolicy::class);
         Gate::policy(ConfigRun::class, ConfigPolicy::class);
 
+        $types = $this->app->make(AlertTypes::class);
+        $types->register(ConfigRunAwaitingApproval::TYPE, 'Config run waits for an approval', 'Config as code', Severity::Warning, 'Review the run');
+        $types->register(ConfigRunFailed::TYPE, 'Config run failed', 'Config as code', Severity::Warning);
+        $types->register(ConfigDriftDetected::TYPE, 'Environment drifted from falak.yaml', 'Config as code', Severity::Warning, 'Review the drift');
+
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            $schedule->job(new ExpireApprovals)->hourly()->name('config:expire-approvals')->withoutOverlapping();
+            $minutes = max(5, (int) config('config_as_code.drift_minutes', 30));
+            $schedule->job(new CheckDrift)->cron("*/{$minutes} * * * *")->name('config:check-drift')->withoutOverlapping();
+        });
+
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register(ConfigPolicy::VIEW, [Role::Admin, Role::Developer, Role::Viewer], 'View config as code: validate and plan falak.yaml, export it, read config runs', 'config');
         $registry->register(ConfigPolicy::APPLY, [Role::Admin, Role::Developer], 'Apply falak.yaml (config runs from the CLI or the dashboard), cancel runs, connect the config source', 'config');
@@ -84,6 +107,9 @@ class ConfigServiceProvider extends ModuleServiceProvider
         $registry->register(ConfigPolicy::DESTROY, [Role::Admin], 'Apply config runs that delete databases and volumes removed from the file (--allow-destroy)', 'config');
 
         Event::listen(PushReceived::class, RunOnPush::class);
+        Event::listen(SiteDeleted::class, [ForgetDeletedResources::class, 'siteDeleted']);
+        Event::listen(DomainRemoved::class, [ForgetDeletedResources::class, 'domainRemoved']);
+        Event::listen(DatabaseDeleted::class, [ForgetDeletedResources::class, 'databaseDeleted']);
         Event::listen(PullRequestOpened::class, [PlanPullRequest::class, 'opened']);
         Event::listen(PullRequestUpdated::class, [PlanPullRequest::class, 'updated']);
         Event::listen(ReleaseActivated::class, [FollowReleases::class, 'activated']);

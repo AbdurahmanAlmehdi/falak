@@ -54,6 +54,7 @@ final class SaveSource
             'repository' => trim($data['repository'], '/'),
             'path' => $path,
             'enabled' => (bool) ($data['enabled'] ?? true),
+            ...(array_key_exists('separate_approver', $data) ? ['separate_approver' => (bool) $data['separate_approver']] : []),
             ...(array_key_exists('allowed_credentials', $data)
                 ? ['allowed_credentials' => array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_credentials']))))] : []),
         ])->save();

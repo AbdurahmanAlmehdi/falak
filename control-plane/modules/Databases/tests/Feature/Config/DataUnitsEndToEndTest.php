@@ -1,8 +1,10 @@
 <?php
 
+use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Application\Exporter;
 use Falak\Config\Application\Runs\PlanFile;
 use Falak\Config\Domain\Enums\RunStatus;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Models\BackupSchedule;
@@ -180,7 +182,7 @@ it('exports database, redis and volume units; planning the export changes nothin
         ->and(array_map(fn ($c) => [$c->op->value, $c->path], $plan?->changes->actionable() ?? ['no plan']))->toBe([]);
 });
 
-it('refuses (while experimental) a run that drops a database unit; nothing is deleted', function () {
+it('a run that drops a database unit waits for an approval; nothing is deleted', function () {
     $world = config_world();
     $world->file(data_e2e_file());
     $world->push(config_sha('b'));
@@ -190,8 +192,8 @@ it('refuses (while experimental) a run that drops a database unit; nothing is de
     $world->push(config_sha('c'));
     $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
 
-    expect($run->status)->toBe(RunStatus::Refused)
-        ->and($run->error)->toContain('unit.remove_with_data')
+    expect($run->status)->toBe(RunStatus::AwaitingApproval)
+        ->and(collect($run->plan['changes'])->pluck('rule')->filter()->all())->toContain('unit.remove_with_data')
         ->and(DatabaseInstance::query()->where('name', 'cache')->sole()->status)->toBe(InstanceStatus::Active);
 });
 
@@ -255,4 +257,22 @@ it('validates names against the organization: a server the project doesn\'t have
     expect($run->status)->toBe(RunStatus::Failed)
         ->and(collect($run->errors)->firstWhere('code', 'name.server')['pointer'])->toBe('/units/db/server')
         ->and(DatabaseInstance::query()->count())->toBe(0);
+});
+
+it('an approved run that drops a database unit detaches it and lists it as unmanaged', function () {
+    $world = config_world();
+    $world->file(data_e2e_file());
+    $world->push(config_sha('b'));
+    $world->settle();
+
+    $world->file(str_replace("  cache:\n    type: redis\n    memory: 128m\n", '', data_e2e_file()));
+    $world->push(config_sha('c'));
+    $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
+
+    expect(app(ApproveRun::class)($run, $world->deploy->user->id))->toBe('approved');
+    $world->settle();
+
+    $cache = DatabaseInstance::query()->where('name', 'cache')->sole();
+    expect($cache->status)->toBe(InstanceStatus::Active)
+        ->and(ConfigDetached::query()->where('resource_id', $cache->id)->sole()->reason)->toBe('removed_from_file');
 });

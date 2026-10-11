@@ -4,6 +4,7 @@ use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Application\Exporter;
 use Falak\Config\Application\Runs\PlanFile;
 use Falak\Config\Domain\Enums\RunStatus;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Domain\Models\Deployment;
@@ -151,7 +152,9 @@ it('an environment gone from the file is released, never deleted', function () {
         ->and(ConfigOwnership::query()->where('environment_id', $staging->id)->exists())->toBeFalse()
         ->and(ConfigRun::query()->where('commit', config_sha('c'))->exists())->toBeFalse()
         // Released to push to deploy: the push still deploys it.
-        ->and(Deployment::query()->where('site_id', $site)->where('commit', config_sha('c'))->count())->toBe(1);
+        ->and(Deployment::query()->where('site_id', $site)->where('commit', config_sha('c'))->count())->toBe(1)
+        // What its file managed is listed as unmanaged (released with the environment).
+        ->and(ConfigDetached::query()->where('environment_id', $staging->id)->where('resource_type', 'site')->where('resource_id', $site)->sole()->reason)->toBe('environment_released');
 });
 
 it('falak apply creates an environment its file declares, for those who may manage projects', function () {
@@ -205,7 +208,7 @@ it('cancels a waiting run of an environment the file releases', function () {
     $world->push(config_sha('e'), 'develop');
 
     expect($pending->refresh()->status)->toBe(RunStatus::Cancelled)
-        ->and(app(ApproveRun::class)($pending->refresh(), $world->deploy->user->id))->toBeFalse();
+        ->and(app(ApproveRun::class)($pending->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING);
 });
 
 it('creates an environment once under concurrent pushes, and names a bad key\'s problem', function () {

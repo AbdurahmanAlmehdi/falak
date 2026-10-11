@@ -100,7 +100,7 @@ it('deploys only the units whose files or config changed', function () {
         ->and(ConfigRun::query()->where('commit', config_sha('d'))->sole()->status)->toBe(RunStatus::Applied);
 });
 
-it('refuses risky changes while the source is experimental: nothing is applied or deployed', function () {
+it('a risky plan waits for an approval: nothing is applied or deployed until then', function () {
     $world = config_world();
     $site = $world->deploy->site;
     $world->file("version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    env: { FEATURE: \"on\" }\n    deploy: { strategy: in-place }\nenvironments:\n  production: { branch: main }\n");
@@ -108,8 +108,8 @@ it('refuses risky changes while the source is experimental: nothing is applied o
     $world->push(config_sha('b'));
     $run = ConfigRun::query()->sole();
 
-    expect($run->status)->toBe(RunStatus::Refused)
-        ->and($run->error)->toContain('production.strategy')
+    expect($run->status)->toBe(RunStatus::AwaitingApproval)
+        ->and($run->approval_expires_at?->isFuture())->toBeTrue()
         ->and(collect($run->plan['changes'])->firstWhere('path', '/units/web/deploy/strategy'))->toMatchArray(['risky' => true, 'rule' => 'production.strategy'])
         ->and(SiteSettings::query()->find($site->id)?->strategy)->toBeNull()
         ->and(config_env($site->id))->not->toHaveKey('FEATURE')

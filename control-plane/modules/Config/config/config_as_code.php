@@ -9,4 +9,10 @@ return [
 
     // Runs kept per project (older finished runs are pruned).
     'keep_runs' => (int) env('FALAK_CONFIG_KEEP_RUNS', 200),
+
+    // Days a run waits for an approval before it is cancelled.
+    'approval_days' => (int) env('FALAK_CONFIG_APPROVAL_DAYS', 7),
+
+    // Minutes between drift checks of every environment that follows a file.
+    'drift_minutes' => (int) env('FALAK_CONFIG_DRIFT_MINUTES', 30),
 ];

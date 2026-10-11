@@ -20,7 +20,7 @@ final class CancelRun
                 return false;
             }
 
-            $locked->forceFill(['status' => RunStatus::Cancelled, 'finished_at' => now()])->save();
+            $locked->forceFill(['status' => RunStatus::Cancelled, 'cancel_reason' => 'user', 'finished_at' => now()])->save();
 
             return true;
         });

@@ -2,10 +2,14 @@
 
 namespace Falak\Config\Http;
 
+use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
+use Falak\Config\Domain\Policies\ConfigPolicy;
 use Falak\Deployments\Contracts\DeploymentDirectory;
+use Falak\Identity\Contracts\OrganizationAccess;
+use Illuminate\Contracts\Auth\Authenticatable;
 
 /**
  * The API's `ConfigRun` and the dashboard's config source.
@@ -15,7 +19,7 @@ final class Presenters
     /**
      * @return array<string, mixed>
      */
-    public static function run(ConfigRun $run, bool $withFile = false): array
+    public static function run(ConfigRun $run, bool $withFile = false, ?Authenticatable $user = null): array
     {
         $issues = (array) ($run->errors ?? []);
         $statuses = [];
@@ -45,6 +49,8 @@ final class Presenters
             'approved_by' => $run->approved_by,
             'approved_at' => $run->approved_at?->toIso8601String(),
             'error_code' => self::errorCode($run, $issues),
+            'approval' => self::approval($run, $user),
+            'cancel_reason' => $run->status === RunStatus::Cancelled ? ($run->cancel_reason ?? 'user') : null,
             'deployments' => array_map(fn (array $e) => [
                 'unit' => $e['unit'],
                 'site_id' => $e['site_id'] ?? null,
@@ -92,6 +98,45 @@ final class Presenters
     }
 
     /**
+     * The approval block (null when the run never needed one).
+     *
+     * @return ?array<string, mixed>
+     */
+    public static function approval(ConfigRun $run, ?Authenticatable $user): ?array
+    {
+        $risky = array_values(array_map(fn (array $c) => ['path' => $c['path'], 'rule' => $c['rule'] ?? null, 'reason' => $c['reason'] ?? null],
+            array_filter((array) ($run->plan['changes'] ?? []), fn (array $c) => (bool) ($c['risky'] ?? false))));
+
+        if ($run->approval_expires_at === null && $run->approved_at === null && $run->rejected_at === null) {
+            return null;
+        }
+
+        $userId = $user !== null ? (string) $user->getAuthIdentifier() : null;
+        $blocked = null;
+
+        if ($run->status !== RunStatus::AwaitingApproval) {
+            $blocked = 'This run is not awaiting approval.';
+        } elseif ($user === null || ! app(OrganizationAccess::class)->can($user, $run->organization_id, ConfigPolicy::APPROVE)) {
+            $blocked = 'You need the config.approve permission.';
+        } else {
+            $blocked = ApproveRun::blockedReason($run, $userId);
+        }
+
+        return [
+            'required' => true,
+            'risky' => $risky,
+            'expires_at' => $run->approval_expires_at?->toIso8601String(),
+            'approved_by' => $run->approved_by,
+            'approved_at' => $run->approved_at?->toIso8601String(),
+            'rejected_by' => $run->rejected_by,
+            'rejected_at' => $run->rejected_at?->toIso8601String(),
+            'comment' => $run->approval_comment,
+            'can_approve' => $blocked === null,
+            'blocked_reason' => $blocked,
+        ];
+    }
+
+    /**
      * @return ?array<string, mixed>
      */
     public static function source(?ConfigSource $source): ?array
@@ -107,6 +152,7 @@ final class Presenters
             'path' => $source->path,
             'enabled' => $source->enabled,
             'experimental' => $source->experimental,
+            'separate_approver' => $source->separate_approver,
             'allowed_credentials' => array_values((array) ($source->allowed_credentials ?? [])),
             'created_at' => $source->created_at?->toIso8601String(),
         ];

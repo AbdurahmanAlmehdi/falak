@@ -34,6 +34,12 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $approved_at
  * @property ?Carbon $started_at
  * @property ?Carbon $finished_at
+ * @property ?Carbon $approval_expires_at
+ * @property ?list<array{path: string, rule: ?string}> $approved_risky
+ * @property ?string $approval_comment
+ * @property ?string $rejected_by
+ * @property ?Carbon $rejected_at
+ * @property ?string $cancel_reason superseded | rejected | expired | source_disabled | user
  * @property Carbon $created_at
  */
 class ConfigRun extends Model
@@ -61,6 +67,9 @@ class ConfigRun extends Model
             'approved_at' => 'datetime',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
+            'approval_expires_at' => 'datetime',
+            'approved_risky' => 'array',
+            'rejected_at' => 'datetime',
         ];
     }
 
