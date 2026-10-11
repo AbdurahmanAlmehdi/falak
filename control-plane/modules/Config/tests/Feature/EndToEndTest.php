@@ -77,7 +77,7 @@ it('applies a push: phase A before the build, a deployment, phase B and the conf
 it('deploys only the units whose files or config changed', function () {
     $world = config_world();
     $docs = projects_site($world->deploy->organization, 'Docs', ['APP_ENV' => 'production'], $world->environment, $world->deploy->servers, [
-        'source_connection_id' => $world->source->source_connection_id, 'repository' => 'acme/shop', 'branch' => 'main',
+        'source_connection_id' => $world->source->source_connection_id, 'repository' => 'acme/shop', 'branch' => 'main', 'push_to_deploy' => true,
     ]);
     Service::query()->where('ref_id', $docs->id)->update(['name' => 'docs']);
     $file = "version: 1\nunits:\n  web: { type: app, runtime: frankenphp, php: \"8.4\", root: apps/web }\n  docs: { type: app, runtime: frankenphp, php: \"8.4\", root: apps/docs }\nenvironments:\n  production: { branch: main }\n";
@@ -113,7 +113,9 @@ it('refuses risky changes while the source is experimental: nothing is applied o
         ->and(collect($run->plan['changes'])->firstWhere('path', '/units/web/deploy/strategy'))->toMatchArray(['risky' => true, 'rule' => 'production.strategy'])
         ->and(SiteSettings::query()->find($site->id)?->strategy)->toBeNull()
         ->and(config_env($site->id))->not->toHaveKey('FEATURE')
-        ->and(Deployment::query()->count())->toBe(0);
+        ->and($run->deploy)->toBeNull()
+        // The file was never applied here yet: push to deploy still deployed the commit, the old way.
+        ->and(Deployment::query()->sole()->trigger->value)->toBe('push');
 });
 
 it('a rollback restores the config saved on the release it returns to', function () {

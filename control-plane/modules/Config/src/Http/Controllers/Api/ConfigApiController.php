@@ -5,6 +5,7 @@ namespace Falak\Config\Http\Controllers\Api;
 use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Application\Actions\CancelRun;
 use Falak\Config\Application\Actions\RequestRun;
+use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Exporter;
 use Falak\Config\Application\Runs\FileFetcher;
 use Falak\Config\Application\Runs\ImplicitEnvironment;
@@ -71,11 +72,14 @@ final class ConfigApiController extends Controller
             return response()->json($validation->toErrorResponse($source->path), 422);
         }
 
+        // Env values only for those who may read the site environment (sites.env.view).
+        $values = $this->can($request->user(), $data->organizationId, 'sites.env.view');
+
         return response()->json(['data' => [
             'environment' => $environment->slug,
             'commit' => $input['commit'] ?? null,
-            'resolved' => $validation->resolved,
-            'plan' => $result->toArray(),
+            'resolved' => $values ? $validation->resolved : EnvMask::document((array) $validation->resolved),
+            'plan' => $values ? $result->toArray() : EnvMask::plan($result->toArray()),
             'warnings' => array_map(fn (ConfigIssue $i) => $i->toArray(), $validation->warnings),
         ]]);
     }
@@ -164,7 +168,7 @@ final class ConfigApiController extends Controller
         return response()->json(['data' => [
             'environment' => $environment->slug,
             'format' => $format,
-            'file' => $exporter->render($exporter->document($environment, $source), $format),
+            'file' => $exporter->render($exporter->document($environment, $source, $this->can($request->user(), $data->organizationId, 'sites.env.view')), $format),
         ]]);
     }
 

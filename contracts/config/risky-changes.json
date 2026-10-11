@@ -82,6 +82,13 @@
       "reason": "The removed unit holds data."
     },
     {
+      "id": "unit.delete",
+      "paths": ["/units/*"],
+      "ops": ["delete"],
+      "unit_types": ["app", "compose", "function"],
+      "reason": "Deleting a unit deletes its service (a run deletes only with allow_destroy, else it detaches)."
+    },
+    {
       "id": "unit.remove_with_volumes",
       "paths": ["/units/*"],
       "ops": ["delete", "detach"],

@@ -8,6 +8,7 @@ use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Deployments\Events\DeploymentFailed;
+use Falak\Deployments\Events\DeploymentUpdated;
 use Falak\Deployments\Events\ReleaseActivated;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
@@ -49,6 +50,10 @@ final class FollowReleases
             return;
         }
 
+        if ($this->startedByConfig($service->environmentId, $event->deploymentId)) {
+            return; // a superseded run's deployment: its release is never paired with another run's config
+        }
+
         // A deployment Config didn't start (the dashboard, the API): the release keeps the config in force.
         $applied = ConfigRun::query()->where('environment_id', $service->environmentId)->where('status', RunStatus::Applied)->latest('finished_at')->first();
         $config = $applied?->unit($service->name);
@@ -68,9 +73,30 @@ final class FollowReleases
         }
     }
 
+    public function updated(DeploymentUpdated $event): void
+    {
+        if ($event->status !== 'cancelled') {
+            return;
+        }
+
+        $service = $this->projects->projectOf(ServiceKind::Site, $event->siteId);
+        $run = $service !== null ? $this->runOf($service->environmentId, $event->deploymentId) : null;
+
+        if ($run !== null) {
+            $this->engine->deploymentCancelled($run, $event->deploymentId);
+        }
+    }
+
+    /** The applying run whose deployment of a unit this is (matched by deployment id, never another run). */
     private function runOf(string $environmentId, string $deploymentId): ?ConfigRun
     {
         return ConfigRun::query()->where('environment_id', $environmentId)->where('status', RunStatus::Applying)->latest()->limit(20)->get()
-            ->first(fn (ConfigRun $r) => collect((array) $r->deploy)->contains(fn (array $e) => ($e['deployment_id'] ?? null) === $deploymentId));
+            ->first(fn (ConfigRun $r) => collect((array) $r->deploy)->contains(fn (array $e) => ($e['deployment_id'] ?? null) === $deploymentId && ($e['status'] ?? null) === 'deploying'));
+    }
+
+    private function startedByConfig(string $environmentId, string $deploymentId): bool
+    {
+        return ConfigRun::query()->where('environment_id', $environmentId)->whereNotNull('deploy')->latest()->limit(50)->get()
+            ->contains(fn (ConfigRun $r) => collect((array) $r->deploy)->contains(fn (array $e) => ($e['deployment_id'] ?? null) === $deploymentId));
     }
 }

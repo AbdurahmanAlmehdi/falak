@@ -318,7 +318,7 @@ A file goes through four stages; each stops the next on an error. Every issue is
 | 1. Read | CLI and control plane | `parse`, `parse.empty`, `parse.timestamp`, `parse.number`, `parse.tag`, `parse.key`, `parse.duplicate_key`, `parse.multiple_documents` |
 | 2. Schema | CLI and control plane | `schema` |
 | 3. Resolve (merge + references), per environment | CLI and control plane | `environment.unknown`, `override.type`, `reference.malformed`, `reference.secret_name`, `reference.unknown_key`, `reference.not_allowed`; warning `reference.external` |
-| 4. Semantic, per environment | control plane only (needs the organization) | `name.server`, `name.secret`, `name.storage`, `name.dns_credential`, `name.certificate`, `name.unit`, `name.environment`, `value.range`, `value.unsupported`, `value.conflict`, `limit.server` |
+| 4. Semantic, per environment | control plane only (needs the organization) | `name.server`, `name.secret`, `name.storage`, `name.dns_credential`, `name.certificate`, `name.unit`, `name.environment`, `value.range`, `value.unsupported`, `value.conflict`, `value.forbidden`, `limit.server` |
 
 Stage 4 in detail:
 - `name.*`: a named resource doesn't exist: a server not attached to the project (`servers`, `server`, `drill_server`,
@@ -751,10 +751,12 @@ and `previews`; defaults are left out. Exporting then planning gives an empty pl
 **Runs over the API [decision]** (phase 1, pinned for the CLI): the run's `status` alone says whether it is finished
 (`applied`, `failed`, `cancelled`, `refused`). `deployments[]` entries are `{unit, site_id, deployment_id, status,
 deployment_status, error}` with `status` one of `pending`, `deploying`, `released` (the release went live and phase B
-was applied), `skipped` (not deployed: no deploy source, or a unit the file removed), `failed`; `deployment_status` is
+was applied), `skipped` (not deployed: no deploy source, push to deploy off on a push, or a unit the file removed),
+`failed`, `cancelled` (the deployment was cancelled), `superseded` (a newer run of the environment took over); `deployment_status` is
 the deployment's own status. A failed run carries `error_code`: `invalid` (see `errors`), `unreadable` (the file couldn't
 be read at the commit), `apply_failed` (a phase failed; phase A failures deploy nothing), `deployment_failed` (a unit's
-deployment failed: its entry has `status: failed`; the CLI exits 3). `errors` and `warnings` are split by severity.
+deployment failed or was cancelled: its entry has `status: failed` or `cancelled`; the CLI exits 3). A superseded run
+ends `cancelled` with `error` "Superseded by a newer run (<id>)". `errors` and `warnings` are split by severity.
 `POST …/config/runs` answers `422` with the issues (and the stored `run`) for an invalid file.
 
 ### Phase 1 decisions (control plane)
@@ -804,7 +806,7 @@ Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decisi
   and `export` leaves secret-looking literal values out (it never writes values, nor references the store doesn't
   have), so export → plan stays empty. `expose` is one field (the whole list).
 - **[decision] Units the file adds** are created through `SiteFactory` (Sites' `CreateSite`, the same path as the
-  dashboard), so the framework preset applies: a Laravel unit gets a generated `APP_KEY` (and `APP_NAME`, `APP_URL`)
+  dashboard) with push to deploy on, so the framework preset applies: a Laravel unit gets a generated `APP_KEY` (and `APP_NAME`, `APP_URL`)
   unless the file sets them; `falak init` relies on it and leaves `APP_KEY` out. A new unit needs the environment's
   `branch` and servers (the unit's, else the environment's); `framework` defaults from the runtime. The site is named
   after the unit key (`<unit>-<env>` when taken in the organization).
@@ -826,6 +828,45 @@ Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decisi
 - **[decision] CLI compatibility** (from the CLI lane): the project comes from `-p` (id or name through `GET
   /projects`), `FALAK_PROJECT`, or `.falak/project.json` `{"project", "name", "url"}`; `falak validate` also calls the
   validate endpoint (stage 4) when logged in and only warns when it is unreachable. No approve command until phase 4.
+
+### Phase 1 review fixes
+
+- **[decision] Processes run as the site's user.** A daemon or schedule in the file may leave `user` out or name the
+  unit's site unix user; anything else is the stage 4 error **`value.forbidden`** (a new code), and apply always writes
+  the site's user. Push access to the repository never runs a process as another (sudo) user.
+- **[decision] Deleting a unit** needs `allow_destroy` (`config.destroy`) and a unit the file created; otherwise it is
+  detached. Every unit delete is risky (rule **`unit.delete`** in `risky-changes.json`), so it is refused while the
+  source is experimental. Units map to sites by the resource the file manages (`config_ownership`), not by the canvas
+  name, and a managed service can't be renamed in the dashboard (422); rename the unit in the file.
+- **[decision] Who Config deploys on push:** a site is Config's only when it is a unit of the file last applied to its
+  environment, deploys from the source's repository and connection, and that file binds the site's branch. Every other
+  site keeps push to deploy. A push whose file is missing, unreadable or invalid records a failed run only for the
+  environments the last applied file binds to that branch, and those sites deploy the old way for that push. A push
+  never deploys a site whose push to deploy is off (its config is applied; entry `skipped`). A commit already being
+  deployed for a site (whichever of push to deploy and Config got the push first) is not deployed twice.
+- **[decision] Env values** are masked (`••••`) in stored plans, in plan, run and export responses for callers without
+  `sites.env.view`, and always in pull request comments (env changes show the key and added / changed / removed).
+  References (`${{ … }}`) are kept. Exports without `sites.env.view` leave literal values out. The run's raw file is
+  only returned with `sites.env.view`.
+- **[decision] Phase A doesn't touch the running release:** `laravel` (scheduler, Horizon, Octane) is applied in phase
+  B, new units included (they start with the preset's settings). `servers` stay in phase A: the deployment must reach
+  the new servers; changing them on production is risky (`production.servers`).
+- **[decision] Runs of an environment apply one at a time** (a lock); a run that starts applying supersedes the older
+  runs of the environment not finished yet (`cancelled`, their entries `superseded`). Applying (and approving) plans
+  again against today's state, re-checks the risky rules and that the source is still enabled (a disabled source
+  cancels the run). A release is paired only with the run whose deployment it is; a cancelled deployment settles its
+  entry.
+- **[decision] Changed files are unknown** (every unit counts as changed) for a force push, an empty commit list, 20
+  commits or more, or a truncated list.
+- **[decision] A rollback to a release made before the file** records an applied `rollback` run with the warning
+  `rollback.no_config` ("the config was not restored").
+- **[decision] Certificates and DNS credentials** a file names must be used by the project's domains already, uploaded
+  for one of its sites, or listed by an admin in the source's allowed credentials (`config_sources.allowed_credentials`,
+  Project settings → Config as code); else `name.certificate` / `name.dns_credential`. A host taken by another
+  organization answers "This domain is not available."
+- **[decision] Commits are up to 64 characters** (`config_runs.commit`, SHA-256 repositories). "Apply now" in the
+  dashboard deploys the head of the branch the environment's last applied file binds (the default branch for
+  production without environments) and labels the run with that branch and commit.
 
 ### CLI (`agent/internal/cli`)
 

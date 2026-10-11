@@ -21,6 +21,12 @@ final class EloquentConfigReleases implements ConfigReleases
     public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null): string
     {
         $site = $this->sites->find(strtolower($siteId)) ?? throw ValidationException::withMessages(['site' => 'Unknown site.']);
+
+        // The same commit already on its way (push to deploy got the push first): that deployment is the unit's.
+        if ($commit !== null && ($active = Deployment::activeFor($site->id, $commit)) !== null) {
+            return $active->id;
+        }
+
         $trigger = fn () => ($this->trigger)($site, $requestedBy === null ? Trigger::Push : Trigger::Manual, branch: $branch, commit: $commit, message: $message, author: $author, requestedBy: $requestedBy);
 
         try {

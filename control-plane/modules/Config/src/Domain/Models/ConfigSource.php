@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property string $path
  * @property bool $enabled
  * @property bool $experimental
+ * @property ?list<string> $allowed_credentials
  * @property ?string $created_by
  */
 class ConfigSource extends Model
@@ -32,7 +33,7 @@ class ConfigSource extends Model
      */
     protected function casts(): array
     {
-        return ['enabled' => 'boolean', 'experimental' => 'boolean'];
+        return ['enabled' => 'boolean', 'experimental' => 'boolean', 'allowed_credentials' => 'array'];
     }
 
     public static function enabledFor(string $projectId): ?self

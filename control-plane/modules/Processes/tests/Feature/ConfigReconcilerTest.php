@@ -161,6 +161,49 @@ it('validates cron, time zones, bounds, env and servers', function () {
     ]);
 });
 
+it('runs file processes only as the site\'s own unix user', function () {
+    $issues = $this->reconciler->validate($this->scope, ['units' => ['web' => ['type' => 'app',
+        'daemons' => ['ws' => ['command' => 'run', 'user' => 'ubuntu'], 'ok' => ['command' => 'run', 'user' => 'shop'], 'default' => ['command' => 'run']],
+        'schedules' => ['report' => ['command' => 'php artisan report', 'cron' => '@daily', 'user' => 'deploy']],
+    ]], 'environments' => [$this->scope->environment => []]]);
+
+    expect(collect($issues)->map(fn ($i) => [$i->code, $i->pointer])->all())->toEqualCanonicalizing([
+        ['value.forbidden', '/units/web/daemons/ws/user'],
+        ['value.forbidden', '/units/web/schedules/report/user'],
+    ])->and($issues[0]->message)->toContain('"shop"');
+
+    // Defense in depth: apply always writes the site's user, even for a plan that names another one.
+    processes_config_apply(['daemons' => ['ws' => ['command' => 'run', 'user' => 'ubuntu']], 'schedules' => ['report' => ['command' => 'php artisan report', 'cron' => '@daily', 'user' => 'ubuntu']]]);
+
+    expect(Daemon::query()->where('name', 'ws')->value('user'))->toBe('shop')
+        ->and(Schedule::query()->where('name', 'report')->value('user'))->toBe('shop');
+
+    // A unit without a site yet may not name a user at all.
+    $new = new ConfigScope($this->scope->organizationId, $this->scope->projectId, $this->scope->environmentId, $this->scope->environment);
+    expect(collect($this->reconciler->validate($new, ['units' => ['api' => ['type' => 'app', 'daemons' => ['ws' => ['command' => 'run', 'user' => 'shop']]]]]))->pluck('code')->all())
+        ->toBe(['value.forbidden']);
+});
+
+it('never reuses env values of an earlier plan', function () {
+    $other = processes_site($this->organization->id, [$this->server], ['slug' => 'other']);
+    $scope = new ConfigScope($this->scope->organizationId, $this->scope->projectId, $this->scope->environmentId, $this->scope->environment, true, null,
+        ['web' => ['kind' => 'site', 'ref_id' => $this->site->id], 'api' => ['kind' => 'site', 'ref_id' => $other->id]], $this->scope->servers);
+    $r = $this->reconciler;
+
+    // A plan for web with env, then a plan for api's worker of the same key without env.
+    $r->diff($scope, ['units' => ['web' => ['type' => 'app', 'workers' => ['queue' => ['command' => 'work', 'env' => ['TOKEN' => 'web-secret']]]]]], ['units' => []]);
+    $changes = $r->diff($scope, ['units' => ['api' => ['type' => 'app', 'workers' => ['queue' => ['command' => 'work']]]]], ['units' => []]);
+    $r->apply($scope, $changes, new ApplyContext($this->ctx->runId, ApplyPhase::WithRelease, null, unit: 'api'));
+
+    expect(Worker::query()->where('site_id', $other->id)->sole()->env)->toBeEmpty();
+
+    // A later plan doesn't see web's env either: applying web's stale changes after another diff refuses.
+    $stale = $r->diff($scope, ['units' => ['web' => ['type' => 'app', 'workers' => ['queue' => ['command' => 'work', 'env' => ['TOKEN' => 'web-secret']]]]]], ['units' => []]);
+    $r->diff($scope, ['units' => ['api' => ['type' => 'app']]], ['units' => []]);
+
+    expect(fn () => $r->apply($scope, $stale, $this->ctx))->toThrow(RuntimeException::class, 'plan the unit again');
+});
+
 it('shows managed processes read-only and refuses edits of them', function () {
     processes_config_apply(['workers' => ['queue' => ['processes' => 2]], 'daemons' => ['ws' => ['command' => 'run ws']]]);
     $free = Worker::query()->create(['organization_id' => $this->organization->id, 'site_id' => $this->site->id, 'name' => null]);

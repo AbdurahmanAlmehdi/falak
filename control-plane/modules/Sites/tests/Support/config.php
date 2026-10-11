@@ -36,15 +36,18 @@ function config_source(Organization $organization, Environment $environment, boo
  *
  * @param  array<string, mixed>  $resolved
  */
-function config_scope(Environment $environment, ?ConfigSource $source = null, array $resolved = []): ConfigScope
+function config_scope(Environment $environment, ?ConfigSource $source = null, array $resolved = [], bool $allowDestroy = false): ConfigScope
 {
     $data = app(ProjectDirectory::class)->environment($environment->id);
+    $s = app(ScopeFactory::class)->make($data, $source, $resolved, str_repeat('a', 40));
 
-    return app(ScopeFactory::class)->make($data, $source, $resolved, str_repeat('a', 40));
+    // The run's allow_destroy (config.destroy): whether removed units may be deleted.
+    return new ConfigScope($s->organizationId, $s->projectId, $s->environmentId, $s->environment, $s->production, $s->commit, $s->services,
+        $s->servers, $s->defaultServers, $s->connectionId, $s->repository, $s->branch, $s->actorId, $allowDestroy, $s->credentials);
 }
 
 /** A run to record ownership against, and its apply context. */
-function config_ctx(Environment $environment, ApplyPhase $phase = ApplyPhase::BeforeBuild): ApplyContext
+function config_ctx(Environment $environment, ApplyPhase $phase = ApplyPhase::BeforeBuild, bool $allowDestroy = false): ApplyContext
 {
     $run = ConfigRun::query()->create([
         'organization_id' => $environment->organization_id,
@@ -57,7 +60,7 @@ function config_ctx(Environment $environment, ApplyPhase $phase = ApplyPhase::Be
         'file' => '',
     ]);
 
-    return new ApplyContext($run->id, $phase, $run->commit);
+    return new ApplyContext($run->id, $phase, $run->commit, allowDestroy: $allowDestroy);
 }
 
 /**

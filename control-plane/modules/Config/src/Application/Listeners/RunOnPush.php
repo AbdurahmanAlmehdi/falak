@@ -6,15 +6,21 @@ use Falak\Config\Application\Reading\ConfigReader;
 use Falak\Config\Application\Runs\FileFetcher;
 use Falak\Config\Application\Runs\ImplicitEnvironment;
 use Falak\Config\Application\Runs\RunEngine;
+use Falak\Config\Contracts\ConfigSources;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
+use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Projects\Contracts\Data\EnvironmentData;
 use Falak\Projects\Contracts\ProjectDirectory;
+use Falak\Projects\Contracts\ServiceKind;
+use Falak\Sites\Contracts\SiteDirectory;
 use Falak\SourceControl\Events\PushReceived;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Log;
 use stdClass;
+use Throwable;
 
 /**
  * A push to a repository a project follows: the file is read at the pushed commit, and every environment whose
@@ -28,6 +34,9 @@ final class RunOnPush implements ShouldQueue
         private readonly RunEngine $engine,
         private readonly ProjectDirectory $projects,
         private readonly ImplicitEnvironment $implicit,
+        private readonly SiteDirectory $sites,
+        private readonly ConfigSources $sources,
+        private readonly ConfigReleases $releases,
     ) {}
 
     public function handle(PushReceived $event): void
@@ -50,8 +59,9 @@ final class RunOnPush implements ShouldQueue
         $environments = $this->projects->environments($source->project_id);
 
         if ($raw === null) {
-            // Which environments the push targets is in the file: without it, one failed run says why.
-            $this->failed($source, $event, $environments[0] ?? null, (string) $problem);
+            // The file isn't readable at the commit: the environments the last applied file bound to this branch get a
+            // failed run each (other branches record nothing), and their sites deploy the legacy way.
+            $this->unplanned($source, $event, (string) $problem, '');
 
             return;
         }
@@ -70,7 +80,7 @@ final class RunOnPush implements ShouldQueue
                 }
             }
         } elseif (! $file->ok()) {
-            $this->failed($source, $event, $environments[0] ?? null, "{$source->path} can't be read: {$file->error?->message}", $raw);
+            $this->unplanned($source, $event, "{$source->path} can't be read: {$file->error?->message}", $raw);
 
             return;
         }
@@ -84,8 +94,50 @@ final class RunOnPush implements ShouldQueue
                 continue;
             }
 
-            $this->engine->start($source, $environment, $raw, $format, RunTrigger::Push, $event->commit->sha, $event->branch,
+            $run = $this->engine->start($source, $environment, $raw, $format, RunTrigger::Push, $event->commit->sha, $event->branch,
                 changedPaths: $event->changedPaths, commitInfo: ['message' => $event->commit->message, 'author' => $event->commit->authorName ?? $event->pusher]);
+
+            if ($run->status === RunStatus::Failed && $run->plan === null) {
+                $this->legacyDeploy($event, $environment->id); // the file is invalid: nothing was planned
+            }
+        }
+    }
+
+    /**
+     * The file at the commit can't be planned (missing, unreadable, not parseable). **[decision]** Runs are recorded
+     * only for environments bound to the pushed branch by the file last applied there; the sites Config deploys on push
+     * fall back to push to deploy for this push.
+     */
+    private function unplanned(ConfigSource $source, PushReceived $event, string $error, string $raw): void
+    {
+        foreach ($this->projects->environments($source->project_id) as $environment) {
+            $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->whereNotNull('resolved')
+                ->latest('finished_at')->orderByDesc('id')->first();
+
+            if (($applied?->resolved['environments'][$environment->slug]['branch'] ?? null) !== $event->branch) {
+                continue;
+            }
+
+            $this->failed($source, $event, $environment, $error, $raw);
+            $this->legacyDeploy($event, $environment->id);
+        }
+    }
+
+    /** Push to deploy for the sites of an environment that Config would have deployed (DeployOnPush left them). */
+    private function legacyDeploy(PushReceived $event, string $environmentId): void
+    {
+        foreach ($this->sites->forRepository($event->connectionId, $event->repository, $event->branch) as $site) {
+            $service = $this->projects->projectOf(ServiceKind::Site, $site->id);
+
+            if (! $site->pushToDeploy || $site->branch !== $event->branch || $service?->environmentId !== $environmentId || ! $this->sources->managesSite($site->id)) {
+                continue;
+            }
+
+            try {
+                $this->releases->deploy($site->id, $event->branch, $event->commit->sha, $event->commit->message, $event->commit->authorName ?? $event->pusher);
+            } catch (Throwable $e) {
+                Log::warning('config: push to deploy fallback failed', ['site_id' => $site->id, 'error' => $e->getMessage()]);
+            }
         }
     }
 

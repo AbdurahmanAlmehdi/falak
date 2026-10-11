@@ -2,6 +2,7 @@
 
 namespace Falak\Config\Application\Listeners;
 
+use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Planning\Plan;
 use Falak\Config\Application\Reading\ConfigReader;
 use Falak\Config\Application\Runs\FileFetcher;
@@ -186,8 +187,20 @@ final class PlanPullRequest implements ShouldQueue
             $text .= ' Deploys: '.implode(', ', array_map(fn ($u) => "`{$u}`", $plan->deploy)).'.';
         }
 
-        $rows = array_map(fn (Change $c) => sprintf('| %s | `%s` | %s | %s |%s', $c->op->value, $c->path, self::cell($c->before), self::cell($c->after), $c->risky ? ' risky: '.$c->reason.' |' : ' |'),
-            array_slice($plan->changes->actionable(), 0, 50));
+        // [decision] No env value ever reaches a comment (fork pull requests included): env changes show the key and
+        // whether it was added, changed or removed; whole units and items have their env values masked.
+        $rows = array_map(function (Change $c) {
+            if (EnvMask::isEnvPath($c->path)) {
+                $what = match ($c->op->value) {
+                    'create' => 'added', 'update' => 'changed', default => 'removed'
+                };
+
+                return sprintf('| %s | `%s` | | |%s', $what, $c->path, $c->risky ? ' risky: '.$c->reason.' |' : ' |');
+            }
+
+            return sprintf('| %s | `%s` | %s | %s |%s', $c->op->value, $c->path, self::cell(EnvMask::value($c->before, $c->path)), self::cell(EnvMask::value($c->after, $c->path)),
+                $c->risky ? ' risky: '.$c->reason.' |' : ' |');
+        }, array_slice($plan->changes->actionable(), 0, 50));
 
         if ($rows !== []) {
             $text .= "\n\n| Change | Path | Before | After | |\n|---|---|---|---|---|\n".implode("\n", $rows);

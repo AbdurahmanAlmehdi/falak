@@ -167,7 +167,7 @@
       }
     },
     "unixUser": {
-      "description": "A unix user on the servers (not root). Defaults to the site's isolated user.",
+      "description": "The unix user the process runs as: always the unit's site user. Leave it out, or set it to exactly that user; any other user is refused (value.forbidden).",
       "type": "string",
       "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
       "not": {
@@ -989,7 +989,7 @@
           ]
         },
         "stop_timeout": {
-          "description": "Wait after the stop signal before killing (1s to 1h). Default 10s.",
+          "description": "Wait after the stop signal before killing (1s to 1h). Default 30s.",
           "$ref": "#/$defs/duration"
         },
         "env": {

@@ -16,6 +16,7 @@ use Falak\Config\Domain\Policies\ConfigPolicy;
 use Falak\Config\Infrastructure\EloquentConfigSources;
 use Falak\Config\Infrastructure\EloquentManagedResources;
 use Falak\Deployments\Events\DeploymentFailed;
+use Falak\Deployments\Events\DeploymentUpdated;
 use Falak\Deployments\Events\ReleaseActivated;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
@@ -84,5 +85,6 @@ class ConfigServiceProvider extends ModuleServiceProvider
         Event::listen(PullRequestUpdated::class, [PlanPullRequest::class, 'updated']);
         Event::listen(ReleaseActivated::class, [FollowReleases::class, 'activated']);
         Event::listen(DeploymentFailed::class, [FollowReleases::class, 'failed']);
+        Event::listen(DeploymentUpdated::class, [FollowReleases::class, 'updated']);
     }
 }

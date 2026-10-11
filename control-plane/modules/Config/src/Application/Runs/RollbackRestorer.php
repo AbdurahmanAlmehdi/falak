@@ -2,10 +2,13 @@
 
 namespace Falak\Config\Application\Runs;
 
+use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Contracts\ApplyContext;
 use Falak\Config\Contracts\ApplyPhase;
+use Falak\Config\Contracts\ConfigIssue;
+use Falak\Config\Contracts\Pointer;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigRun;
@@ -36,8 +39,28 @@ final class RollbackRestorer
         $source = ConfigSource::enabledFor($projectId);
         $environment = $this->projects->environment($environmentId);
 
-        if ($config === null || $source === null || $environment === null) {
+        if ($source === null || $environment === null) {
             return null;
+        }
+
+        if ($config === null) {
+            // [decision] The release predates the file (or its config): say so on a run instead of restoring nothing silently.
+            return ConfigRun::query()->create([
+                'organization_id' => $source->organization_id,
+                'project_id' => $projectId,
+                'environment_id' => $environmentId,
+                'environment' => $environment->slug,
+                'commit' => $commit,
+                'trigger' => RunTrigger::Rollback,
+                'status' => RunStatus::Applied,
+                'file' => '',
+                'format' => $source->format(),
+                'errors' => [ConfigIssue::warning('rollback.no_config', '/units/'.Pointer::escape($unit),
+                    "The release {$unit} rolled back to predates its falak.yaml config: the config was not restored; today's settings stay.")->toArray()],
+                'deploy' => [],
+                'started_at' => now(),
+                'finished_at' => now(),
+            ]);
         }
 
         $previous = ConfigRun::query()->where('environment_id', $environmentId)->whereNotNull('resolved')
@@ -50,7 +73,7 @@ final class RollbackRestorer
             'project_id' => $projectId,
             'environment_id' => $environmentId,
             'environment' => $environment->slug,
-            'commit' => $commit !== null ? substr($commit, 0, 40) : null,
+            'commit' => $commit,
             'trigger' => RunTrigger::Rollback,
             'status' => RunStatus::Applying,
             'file' => $previous?->file ?? '',
@@ -62,7 +85,7 @@ final class RollbackRestorer
         try {
             $scope = $this->scopes->make($environment, $source, $resolved, $run->commit);
             $plan = $this->planner->plan($scope, $resolved, $unit);
-            $run->forceFill(['plan' => [...$plan->toArray(), 'deploy' => []], 'deploy' => []])->save();
+            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => []]), 'deploy' => []])->save();
 
             DB::transaction(function () use ($scope, $plan, $run, $unit, $resolved, $releaseId) {
                 $scope = $this->applier->phaseA($scope, $plan->changes, new ApplyContext($run->id, ApplyPhase::BeforeBuild, $run->commit), $unit);

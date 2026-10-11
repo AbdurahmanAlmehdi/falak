@@ -17,6 +17,10 @@ final readonly class ConfigScope
      * @param  ?string  $connectionId  the config source's connection and repository (new units deploy from them)
      * @param  ?string  $branch  the environment's `branch` (new units deploy it)
      * @param  ?string  $actorId  the user the run is recorded as (null: a push)
+     * @param  bool  $allowDestroy  the run may delete what the file created and removed (`allow_destroy`, config.destroy);
+     *                              otherwise removed units and resources are only detached
+     * @param  list<string>  $credentials  names of the organization's certificates and DNS credentials an admin allowed
+     *                                     this project's file to use (besides those its domains already use)
      */
     public function __construct(
         public string $organizationId,
@@ -32,6 +36,8 @@ final readonly class ConfigScope
         public ?string $repository = null,
         public ?string $branch = null,
         public ?string $actorId = null,
+        public bool $allowDestroy = false,
+        public array $credentials = [],
     ) {}
 
     /** A server id by name (null: not attached to the project). */
@@ -70,6 +76,6 @@ final readonly class ConfigScope
     {
         return new self($this->organizationId, $this->projectId, $this->environmentId, $this->environment, $this->production, $this->commit,
             [...$this->services, $unit => ['kind' => $kind, 'ref_id' => $refId]], $this->servers, $this->defaultServers, $this->connectionId,
-            $this->repository, $this->branch, $this->actorId);
+            $this->repository, $this->branch, $this->actorId, $this->allowDestroy, $this->credentials);
     }
 }

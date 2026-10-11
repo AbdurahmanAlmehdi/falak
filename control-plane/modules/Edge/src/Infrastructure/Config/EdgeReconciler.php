@@ -32,6 +32,8 @@ use Falak\Edge\Domain\Models\DnsCredential;
 use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Domain\Models\Header;
 use Falak\Edge\Domain\Models\Redirect;
+use Falak\Projects\Contracts\ProjectDirectory;
+use Falak\Projects\Contracts\ServiceKind;
 use Falak\Sites\Contracts\Data\SiteData;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteRuntime;
@@ -53,6 +55,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     public function __construct(
         private readonly SiteDirectory $sites,
         private readonly ManagedResources $managed,
+        private readonly ProjectDirectory $projects,
     ) {}
 
     public function sections(): array
@@ -238,6 +241,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
         $issues = [];
         $owners = [];
         $envSites = array_values(array_map(fn (array $s) => $s['ref_id'], array_filter($scope->services, fn (array $s) => $s['kind'] === 'site')));
+        $allowed = $this->allowedCredentials($scope);
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
             if (! is_array($body) || ($body['type'] ?? null) !== 'app') {
@@ -266,18 +270,25 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                     $issues[] = ConfigIssue::error('value.conflict', "{$at}/www", 'A www redirect needs an apex name (not a wildcard or a www. name).');
                 }
 
-                if (isset($entry['dns_credential']) && ! DnsCredential::query()->where('organization_id', $scope->organizationId)->where('name', $entry['dns_credential'])->exists()) {
-                    $issues[] = ConfigIssue::error('name.dns_credential', "{$at}/dns_credential", "No DNS credential named \"{$entry['dns_credential']}\".");
+                if (isset($entry['dns_credential']) && ! in_array((string) $entry['dns_credential'], $allowed['dns'], true)) {
+                    $issues[] = ConfigIssue::error('name.dns_credential', "{$at}/dns_credential", DnsCredential::query()->where('organization_id', $scope->organizationId)->where('name', $entry['dns_credential'])->exists()
+                        ? "The DNS credential \"{$entry['dns_credential']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
+                        : "No DNS credential named \"{$entry['dns_credential']}\".");
                 }
 
-                if (isset($entry['certificate']) && ! Certificate::query()->where('organization_id', $scope->organizationId)->where('name', $entry['certificate'])->exists()) {
-                    $issues[] = ConfigIssue::error('name.certificate', "{$at}/certificate", "No certificate named \"{$entry['certificate']}\".");
+                if (isset($entry['certificate']) && ! in_array((string) $entry['certificate'], $allowed['certificates'], true)) {
+                    $issues[] = ConfigIssue::error('name.certificate', "{$at}/certificate", Certificate::query()->where('organization_id', $scope->organizationId)->where('name', $entry['certificate'])->exists()
+                        ? "The certificate \"{$entry['certificate']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
+                        : "No certificate named \"{$entry['certificate']}\".");
                 }
 
-                $taken = Domain::query()->where('name', $name)->whereNotIn('site_id', $envSites ?: [''])->exists();
+                $taken = Domain::query()->where('name', $name)->whereNotIn('site_id', $envSites ?: [''])->first(['organization_id']);
 
-                if ($taken) {
-                    $issues[] = ConfigIssue::error('value.conflict', $at, "\"{$name}\" is already a domain of a site outside this environment.");
+                if ($taken !== null) {
+                    // Another organization's domain: say nothing about it.
+                    $issues[] = ConfigIssue::error('value.conflict', $at, $taken->organization_id === $scope->organizationId
+                        ? "\"{$name}\" is already a domain of a site outside this environment."
+                        : 'This domain is not available.');
                 }
             }
         }
@@ -309,6 +320,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     private function applyDomains(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, array $items): void
     {
         $primary = null;
+        $allowed = null;
 
         foreach ($items as $host => $changes) {
             $host = (string) $host;
@@ -330,6 +342,13 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             $entry = $first->op === ChangeOp::Create && count(Pointer::tokens($first->path)) === 4 ? (array) $first->after : $this->entryOf($changes);
             $tls = TlsMode::from((string) ($entry['tls'] ?? 'auto'));
             $www = WwwRedirect::from((string) ($entry['www'] ?? 'none'));
+            $allowed ??= $this->allowedCredentials($scope);
+
+            if ((isset($entry['certificate']) && ! in_array((string) $entry['certificate'], $allowed['certificates'], true))
+                || (isset($entry['dns_credential']) && ! in_array((string) $entry['dns_credential'], $allowed['dns'], true))) {
+                throw new RuntimeException("The domain {$host} uses a certificate or DNS credential this project's file may not use.");
+            }
+
             $certificate = isset($entry['certificate']) ? Certificate::query()->where('organization_id', $site->organizationId)->where('name', $entry['certificate'])->value('id') : null;
             $credential = isset($entry['dns_credential']) ? DnsCredential::query()->where('organization_id', $site->organizationId)->where('name', $entry['dns_credential'])->value('id') : null;
             $created = $model === null;
@@ -615,5 +634,38 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
         }
 
         return $out;
+    }
+
+    /**
+     * Certificates and DNS credentials (by name) the project's file may use: those the project's domains (any
+     * environment) already use, certificates uploaded for one of its sites, and the names an admin allowed on the
+     * project's config source ($scope->credentials). Never the rest of the organization's.
+     *
+     * @return array{certificates: list<string>, dns: list<string>}
+     */
+    private function allowedCredentials(ConfigScope $scope): array
+    {
+        $siteIds = array_values(array_map(fn (array $s) => $s['ref_id'], array_filter($scope->services, fn (array $s) => $s['kind'] === 'site')));
+
+        foreach ($this->projects->environments($scope->projectId) as $environment) {
+            foreach ($this->projects->servicesIn($environment->id) as $service) {
+                if ($service->kind === ServiceKind::Site) {
+                    $siteIds[] = $service->refId;
+                }
+            }
+        }
+
+        $domains = Domain::query()->whereIn('site_id', $siteIds ?: [''])->get(['certificate_id', 'dns_credential_id']);
+        $certificates = Certificate::query()->where('organization_id', $scope->organizationId)
+            ->where(fn ($q) => $q->whereIn('id', $domains->pluck('certificate_id')->filter()->all() ?: [''])
+                ->orWhereIn('site_id', $siteIds ?: [''])
+                ->orWhereIn('name', $scope->credentials ?: ['']))
+            ->pluck('name')->all();
+        $dns = DnsCredential::query()->where('organization_id', $scope->organizationId)
+            ->where(fn ($q) => $q->whereIn('id', $domains->pluck('dns_credential_id')->filter()->all() ?: [''])
+                ->orWhereIn('name', $scope->credentials ?: ['']))
+            ->pluck('name')->all();
+
+        return ['certificates' => array_values(array_map('strval', $certificates)), 'dns' => array_values(array_map('strval', $dns))];
     }
 }

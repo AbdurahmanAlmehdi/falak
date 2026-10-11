@@ -41,6 +41,7 @@ use Falak\Sites\Infrastructure\ActionSiteRelocation;
 use Falak\Sites\Infrastructure\Compose\EloquentComposeServiceExtraction;
 use Falak\Sites\Infrastructure\Compose\EloquentComposeSites;
 use Falak\Sites\Infrastructure\Compose\YamlComposeInspector;
+use Falak\Sites\Infrastructure\Config\SitesLaravelReconciler;
 use Falak\Sites\Infrastructure\Config\SitesReconciler;
 use Falak\Sites\Infrastructure\EloquentServerSites;
 use Falak\Sites\Infrastructure\EloquentSiteDeploySettings;
@@ -85,7 +86,7 @@ class SitesServiceProvider extends ModuleServiceProvider
         $this->mergeConfigFrom($this->modulePath().'/config/sites.php', 'sites');
 
         // falak.yaml: the unit fields, env and deploy hooks of app units.
-        $this->app->tag([SitesReconciler::class], Reconcilable::TAG);
+        $this->app->tag([SitesReconciler::class, SitesLaravelReconciler::class], Reconcilable::TAG);
 
         // Edge owns domains and rebinds this (it boots after Sites).
         if (! $this->app->bound(SiteDomains::class)) {

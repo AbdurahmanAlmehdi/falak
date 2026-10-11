@@ -23,7 +23,7 @@ final class Exporter
     /**
      * @return array<string, mixed>
      */
-    public function document(EnvironmentData $environment, ?ConfigSource $source): array
+    public function document(EnvironmentData $environment, ?ConfigSource $source, bool $withValues = true): array
     {
         $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->latest('finished_at')->first();
         $branch = $applied?->resolved['environments'][$environment->slug]['branch'] ?? null;
@@ -35,6 +35,22 @@ final class Exporter
 
             foreach ((array) ($current['units'] ?? []) as $unit => $body) {
                 $units[$unit] = array_replace_recursive($units[$unit] ?? [], (array) $body);
+            }
+        }
+
+        if (! $withValues) {
+            // [decision] Without sites.env.view an export keeps references only: literal env values (of the unit, its
+            // workers and daemons) are left out, so planning it changes nothing.
+            foreach ($units as $unit => $body) {
+                if (isset($body['env'])) {
+                    $units[$unit]['env'] = array_filter((array) $body['env'], fn ($v) => is_string($v) && str_contains($v, '${{'));
+                }
+
+                foreach (['workers', 'daemons'] as $kind) {
+                    foreach ((array) ($body[$kind] ?? []) as $key => $item) {
+                        unset($units[$unit][$kind][$key]['env']);
+                    }
+                }
             }
         }
 

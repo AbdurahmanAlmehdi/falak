@@ -9,6 +9,7 @@ use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Edge\Contracts\TlsMode;
 use Falak\Edge\Domain\Enums\WwwRedirect;
+use Falak\Edge\Domain\Models\Certificate;
 use Falak\Edge\Domain\Models\DnsCredential;
 use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Domain\Models\Header;
@@ -40,7 +41,7 @@ beforeEach(function () {
         'commit' => str_repeat('b', 40), 'trigger' => 'push', 'status' => 'applying', 'file' => '',
     ]);
     $this->scope = new ConfigScope($this->org, $project->id, $environment->id, $environment->slug, true, str_repeat('b', 40),
-        ['web' => ['kind' => 'site', 'ref_id' => $this->site->id]], [$this->web->name => $this->web->id], [$this->web->id]);
+        ['web' => ['kind' => 'site', 'ref_id' => $this->site->id]], [$this->web->name => $this->web->id], [$this->web->id], credentials: ['cf']);
     $this->reconciler = app(EdgeReconciler::class);
     $this->ctx = new ApplyContext($run->id, ApplyPhase::WithRelease, str_repeat('b', 40), unit: 'web');
 });
@@ -165,6 +166,45 @@ it('validates domain conflicts and names', function () {
         ['value.conflict', '/units/web/domains/5'],
         ['value.conflict', '/units/api/domains/0'],
     ]);
+});
+
+it('uses only certificates and DNS credentials the project already uses or an admin allowed', function () {
+    $credential = DnsCredential::query()->create(['organization_id' => $this->org, 'provider' => 'cloudflare', 'name' => 'org-wide', 'api_token' => 'secret']);
+    $certificate = Certificate::query()->create([
+        'organization_id' => $this->org, 'name' => 'org-cert', 'domains' => ['*.example.com'], 'cert_pem' => 'x', 'key_pem' => 'y',
+        'not_before' => now()->subDay(), 'not_after' => now()->addYear(), 'fingerprint' => str_repeat('f', 64),
+    ]);
+    $file = ['units' => ['web' => ['type' => 'app', 'domains' => [
+        ['name' => 'd.example.com', 'tls' => 'dns', 'dns_credential' => 'org-wide'],
+        ['name' => 'e.example.com', 'tls' => 'custom', 'certificate' => 'org-cert'],
+    ]]]];
+    $refused = $this->reconciler->validate($this->scope, $file);
+
+    expect(collect($refused)->map(fn ($i) => [$i->code, $i->pointer])->all())->toEqualCanonicalizing([
+        ['name.dns_credential', '/units/web/domains/0/dns_credential'],
+        ['name.certificate', '/units/web/domains/1/certificate'],
+    ])->and($refused[0]->message)->toContain('an admin must allow it');
+
+    // Used by a domain of the project already: allowed.
+    edge_config_domain('old.example.com', ['tls_mode' => TlsMode::Dns, 'dns_credential_id' => $credential->id]);
+    // Allowed by an admin on the config source.
+    $allowed = new ConfigScope($this->scope->organizationId, $this->scope->projectId, $this->scope->environmentId, $this->scope->environment, true, null,
+        $this->scope->services, $this->scope->servers, $this->scope->defaultServers, credentials: ['org-cert']);
+
+    expect($this->reconciler->validate($allowed, $file))->toBe([])
+        ->and($certificate->exists)->toBeTrue();
+});
+
+it('says nothing about domains of other organizations', function () {
+    [, $other] = memberOf();
+    $site = edge_site($this->sites, $other->id, [$this->web->id]);
+    Domain::query()->create(['organization_id' => $other->id, 'site_id' => $site->id, 'name' => 'theirs.example.com', 'www_redirect' => WwwRedirect::None, 'tls_mode' => TlsMode::Auto]);
+
+    $issues = $this->reconciler->validate($this->scope, ['units' => ['web' => ['type' => 'app', 'domains' => ['theirs.example.com']]]]);
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->code)->toBe('value.conflict')
+        ->and($issues[0]->message)->toBe('This domain is not available.');
 });
 
 it('shows managed routes read-only and refuses edits of them', function () {
