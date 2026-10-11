@@ -162,7 +162,8 @@ falak config export shop -e production -o falak.yaml
 `falak init` reads the repository the way the builder does (`builder.Detect`, a Dockerfile's `EXPOSE`, a compose file
 that builds the code, `.env.example`, package and dependency files, workspaces) and writes each value with the reason
 it was chosen; versions come only from the repository. Secrets (by name, or by a value that looks like a credential)
-become `${{ secrets.NAME }}` references and are never printed; databases and Redis become units wired with
+become `${{ secrets.NAME }}` references and are never printed (secret keys left empty in the example are written
+commented out, as optional; Laravel's `APP_KEY` is left to Falak, which generates it); databases and Redis become units wired with
 `${{ db.DATABASE_URL }}`-style references; local development values are left out. It reads and writes nothing through
 symlinks that leave the repository, and never overwrites a file without `--force`. Logged in, it asks for the project,
 environments, servers, a domain and previews; it links the repository (`.falak/project.json`) only to a project you
