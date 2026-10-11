@@ -7,6 +7,7 @@ use Falak\Config\Application\Actions\CancelRun;
 use Falak\Config\Application\Actions\RequestRun;
 use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Exporter;
+use Falak\Config\Application\Reading\ConfigReader;
 use Falak\Config\Application\Runs\FileFetcher;
 use Falak\Config\Application\Runs\ImplicitEnvironment;
 use Falak\Config\Application\Runs\PlanFile;
@@ -20,10 +21,13 @@ use Falak\Config\Domain\Policies\ConfigPolicy;
 use Falak\Config\Http\Controllers\ResolvesProjects;
 use Falak\Config\Http\Presenters;
 use Falak\Kernel\Http\Controller;
+use Falak\Projects\Contracts\ConfigEnvironments;
+use Falak\Projects\Contracts\Data\EnvironmentData;
 use Falak\Projects\Contracts\Data\ProjectData;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use stdClass;
 
 /**
  * Config as code over `/api/v1` (docs/API.md "Config as code"; the CLI's validate, plan, apply and export).
@@ -94,7 +98,7 @@ final class ConfigApiController extends Controller
         }
 
         $source = $this->source($data);
-        $environment = $this->environment($data, $input['environment']);
+        $environment = $this->declaredEnvironment($request, $data, $source, $input);
         $run = $requestRun($source, $environment, $input['file'] ?? null, $input['format'] ?? 'yaml', $input['commit'] ?? null,
             RunTrigger::Cli, (string) $request->user()?->getAuthIdentifier(), (bool) ($input['allow_destroy'] ?? false));
 
@@ -186,6 +190,29 @@ final class ConfigApiController extends Controller
 
         /** @var array{file?: ?string, format?: ?string, commit?: ?string, environment: string} */
         return $input;
+    }
+
+    /**
+     * The run's environment; **[decision]** one the project doesn't have yet is created when the file applied declares
+     * it under `environments` (as a push does), for callers who may also manage projects.
+     *
+     * @param  array{file?: ?string, format?: ?string, commit?: ?string, environment: string}  $input
+     */
+    private function declaredEnvironment(Request $request, ProjectData $project, ConfigSource $source, array $input): EnvironmentData
+    {
+        try {
+            return $this->environment($project, $input['environment']);
+        } catch (ValidationException $e) {
+            $raw = $input['file'] ?? app(FileFetcher::class)->fetch($source, (string) ($input['commit'] ?? ''))[0];
+            $document = $raw !== null ? app(ConfigReader::class)->read($raw, isset($input['file']) ? ($input['format'] ?? 'yaml') : $source->format())->document : null;
+            $declared = $document instanceof stdClass && ($document->environments ?? null) instanceof stdClass && property_exists($document->environments, $input['environment']);
+
+            if (! $declared || ! $this->can($request->user(), $project->organizationId, 'projects.manage')) {
+                throw $e;
+            }
+
+            return app(ConfigEnvironments::class)->create($project->id, $input['environment'], (string) $request->user()?->getAuthIdentifier());
+        }
     }
 
     private function source(ProjectData $project): ConfigSource

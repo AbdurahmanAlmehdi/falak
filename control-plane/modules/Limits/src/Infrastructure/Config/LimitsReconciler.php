@@ -23,11 +23,15 @@ use Falak\Sites\Contracts\SiteRuntime;
 use Illuminate\Validation\ValidationException;
 
 /**
- * falak.yaml's `units.<u>.limits` for app units (phase A): the site's own ResourceLimits (sites_sites.limits).
+ * falak.yaml's `units.<u>.limits` for app units and `units.<u>.services.<s>.limits` for compose units (phase A): the
+ * site's own ResourceLimits (sites_sites.limits), and a compose service's (sites_sites.compose_limits.<s>, applied on
+ * the next deploy). Fields the file doesn't set keep today's value.
  */
 final class LimitsReconciler implements Reconcilable, ValidatesConfig
 {
     public const SECTION = 'units.*(app).limits';
+
+    public const SERVICES = 'units.*(compose).services.*.limits';
 
     /** File pointer (relative to /limits) => ResourceLimits key; sizes are MiB in the columns. */
     public const FIELDS = [
@@ -53,7 +57,7 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
 
     public function sections(): array
     {
-        return [self::SECTION];
+        return [self::SECTION, self::SERVICES];
     }
 
     public function phase(): ApplyPhase
@@ -66,7 +70,21 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
         $units = [];
 
         foreach ($scope->services as $unit => $service) {
-            if ($service['kind'] !== 'site' || ($site = $this->sites->find($service['ref_id'])) === null || in_array($site->runtime, [SiteRuntime::Compose, SiteRuntime::Function], true)) {
+            if ($service['kind'] !== 'site' || ($site = $this->sites->find($service['ref_id'])) === null || $site->runtime === SiteRuntime::Function) {
+                continue;
+            }
+
+            if ($site->runtime === SiteRuntime::Compose) {
+                $services = [];
+
+                foreach ($site->composeLimits as $name => $limits) {
+                    if ($name !== '*' && ($file = self::toFile($limits)) !== []) {
+                        $services[(string) $name] = ['limits' => $file];
+                    }
+                }
+
+                $units[(string) $unit] = ['type' => 'compose', ...($services !== [] ? ['services' => $services] : [])];
+
                 continue;
             }
 
@@ -146,15 +164,20 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
         $changes = [];
 
         foreach ((array) ($desired['units'] ?? []) as $unit => $body) {
-            if (! is_array($body['limits'] ?? null)) {
-                continue;
+            $unit = (string) $unit;
+            $base = '/units/'.Pointer::escape($unit);
+            $creating = ! isset($current['units'][$unit]);
+
+            if (is_array($body['limits'] ?? null)) {
+                $have = Diff::leaves((array) ($current['units'][$unit]['limits'] ?? []));
+                array_push($changes, ...Diff::fields(self::SECTION, $unit, "{$base}/limits", self::desiredLeaves($body['limits']), $have, $creating));
             }
 
-            $unit = (string) $unit;
-            $have = Diff::leaves((array) ($current['units'][$unit]['limits'] ?? []));
-
-            foreach (Diff::fields(self::SECTION, $unit, '/units/'.Pointer::escape($unit).'/limits', self::desiredLeaves($body['limits']), $have, ! isset($current['units'][$unit])) as $change) {
-                $changes[] = $change;
+            foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+                if (is_array($settings['limits'] ?? null)) {
+                    $have = Diff::leaves((array) ($current['units'][$unit]['services'][$service]['limits'] ?? []));
+                    array_push($changes, ...Diff::fields(self::SERVICES, $unit, "{$base}/services/".Pointer::escape((string) $service).'/limits', self::desiredLeaves($settings['limits']), $have, $creating));
+                }
             }
         }
 
@@ -166,12 +189,17 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
         $byUnit = [];
 
         foreach ($changes->changes as $change) {
-            if ($change->unit !== null) {
-                $byUnit[$change->unit][] = $change;
+            if ($change->unit === null) {
+                continue;
             }
+
+            $tokens = Pointer::tokens((string) Pointer::relativeToUnit($change->path));
+            // The site's own limits ('') or a compose service's.
+            $owner = $tokens[0] === 'services' ? (string) $tokens[1] : '';
+            $byUnit[$change->unit][$owner][] = $change;
         }
 
-        foreach ($byUnit as $unit => $list) {
+        foreach ($byUnit as $unit => $owners) {
             $siteId = $scope->refId((string) $unit);
             $site = $siteId !== null ? $this->sites->find($siteId) : null;
 
@@ -179,21 +207,34 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $wanted = [];
+            $paths = [];
 
-            foreach ($list as $change) {
-                $path = substr((string) Pointer::relativeToUnit($change->path), strlen('/limits'));
-                $wanted[self::FIELDS[$path] ?? $path] = in_array($path, self::SIZES, true) ? Units::mebibytes($change->after) : $change->after;
-            }
+            foreach ($owners as $service => $list) {
+                $service = (string) $service;
+                $prefix = $service === '' ? '/limits' : '/services/'.Pointer::escape($service).'/limits';
+                $wanted = [];
 
-            if (array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop) !== []) {
+                foreach ($list as $change) {
+                    $path = substr((string) Pointer::relativeToUnit($change->path), strlen($prefix));
+                    $wanted[self::FIELDS[$path] ?? $path] = in_array($path, self::SIZES, true) ? Units::mebibytes($change->after) : $change->after;
+                    $paths[] = (string) Pointer::relativeToUnit($change->path);
+                }
+
+                if (array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop) === []) {
+                    continue;
+                }
+
                 // Fields the file doesn't set keep today's value.
-                $this->siteLimits->set($site->id, [...$site->limits->toArray(), ...$wanted], $ctx->actorId);
+                if ($service === '') {
+                    $this->siteLimits->set($site->id, [...$site->limits->toArray(), ...$wanted], $ctx->actorId);
+                } else {
+                    $this->siteLimits->setService($site->id, $service, [...($site->composeLimits[$service] ?? new ResourceLimits)->toArray(), ...$wanted], $ctx->actorId);
+                }
             }
 
-            $paths = array_map(fn (Change $c) => (string) Pointer::relativeToUnit($c->path), $list);
             $this->managed->record($scope, $ctx, (string) $unit, 'site', $site->id, $paths, merge: true);
-            $this->managed->forgetPaths('site', $site->id, ['/limits'], $paths);
+            $owned = array_filter($this->managed->managed('site', $site->id)->paths, fn (string $p) => preg_match('#^/services/[^/]+/limits(/|$)#', $p) === 1);
+            $this->managed->forgetPaths('site', $site->id, ['/limits', ...$owned], $paths);
         }
     }
 
@@ -202,35 +243,23 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
         $issues = [];
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
-            if (($body['type'] ?? null) !== 'app' || ! is_array($body['limits'] ?? null)) {
-                continue;
+            $type = $body['type'] ?? null;
+            $base = '/units/'.Pointer::escape((string) $unit);
+            $sets = [];
+
+            if ($type === 'app' && is_array($body['limits'] ?? null)) {
+                $sets["{$base}/limits"] = $body['limits'];
             }
 
-            $base = '/units/'.Pointer::escape((string) $unit).'/limits';
-            $limits = $body['limits'];
-            $bad = false;
-
-            foreach (['/memory' => [32, null, 'at least 32m'], '/memory_reservation' => [32, null, 'at least 32m'], '/log/max_size' => [1, 10240, '1m to 10g']] as $path => [$min, $max, $label]) {
-                $value = Diff::at($limits, $path);
-
-                if ($value === null) {
-                    continue;
-                }
-
-                $mib = Units::mebibytes($value);
-
-                if ($mib === null || $mib < $min || ($max !== null && $mib > $max)) {
-                    $issues[] = ConfigIssue::error('value.range', $base.$path, "Must be a whole number of MiB, {$label}.");
-                    $bad = true;
+            if ($type === 'compose') {
+                foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+                    if (is_array($settings['limits'] ?? null)) {
+                        $sets["{$base}/services/".Pointer::escape((string) $service).'/limits'] = $settings['limits'];
+                    }
                 }
             }
 
-            if (! $bad && isset($limits['memory'], $limits['memory_reservation']) && Units::mebibytes($limits['memory_reservation']) > Units::mebibytes($limits['memory'])) {
-                $issues[] = ConfigIssue::error('value.conflict', "{$base}/memory_reservation", 'memory_reservation is above memory.');
-                $bad = true;
-            }
-
-            if ($bad) {
+            if ($sets === []) {
                 continue;
             }
 
@@ -240,12 +269,50 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
                 $serverIds = $this->sites->find($siteId)?->serverIds() ?? [];
             }
 
-            try {
-                $this->validator->validate(self::toInput($limits), $serverIds);
-            } catch (ValidationException $e) {
-                foreach ($e->errors() as $messages) {
-                    $issues[] = ConfigIssue::error('limit.server', $base, (string) ($messages[0] ?? 'The limits exceed the unit\'s servers.'));
-                }
+            foreach ($sets as $at => $limits) {
+                array_push($issues, ...$this->validateLimits($at, $limits, $serverIds));
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * @param  array<string, mixed>  $limits
+     * @param  list<string>  $serverIds
+     * @return list<ConfigIssue>
+     */
+    private function validateLimits(string $base, array $limits, array $serverIds): array
+    {
+        $issues = [];
+
+        foreach (['/memory' => [32, null, 'at least 32m'], '/memory_reservation' => [32, null, 'at least 32m'], '/log/max_size' => [1, 10240, '1m to 10g']] as $path => [$min, $max, $label]) {
+            $value = Diff::at($limits, $path);
+
+            if ($value === null) {
+                continue;
+            }
+
+            $mib = Units::mebibytes($value);
+
+            if ($mib === null || $mib < $min || ($max !== null && $mib > $max)) {
+                $issues[] = ConfigIssue::error('value.range', $base.$path, "Must be a whole number of MiB, {$label}.");
+            }
+        }
+
+        if ($issues === [] && isset($limits['memory'], $limits['memory_reservation']) && Units::mebibytes($limits['memory_reservation']) > Units::mebibytes($limits['memory'])) {
+            $issues[] = ConfigIssue::error('value.conflict', "{$base}/memory_reservation", 'memory_reservation is above memory.');
+        }
+
+        if ($issues !== []) {
+            return $issues;
+        }
+
+        try {
+            $this->validator->validate(self::toInput($limits), $serverIds);
+        } catch (ValidationException $e) {
+            foreach ($e->errors() as $messages) {
+                $issues[] = ConfigIssue::error('limit.server', $base, (string) ($messages[0] ?? 'The limits exceed the unit\'s servers.'));
             }
         }
 

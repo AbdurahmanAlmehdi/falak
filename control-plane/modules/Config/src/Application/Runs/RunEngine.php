@@ -96,7 +96,7 @@ final class RunEngine
 
             foreach (array_keys((array) ($validation->resolved['units'] ?? [])) as $unit) {
                 if (! in_array($unit, $deploy, true) && self::filesChanged($validation->resolved['units'][$unit], $changedPaths) && $scope->refId((string) $unit) !== null
-                    && ($validation->resolved['units'][$unit]['type'] ?? null) === 'app') {
+                    && in_array($validation->resolved['units'][$unit]['type'] ?? null, ['app', 'compose', 'function'], true)) {
                     $deploy[] = (string) $unit;
                 }
             }

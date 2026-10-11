@@ -22,8 +22,10 @@ use Falak\Edge\Application\Actions\RemoveDomain;
 use Falak\Edge\Application\Actions\SaveHeader;
 use Falak\Edge\Application\Actions\UpdateDomain;
 use Falak\Edge\Application\CloudflareEdgeControls;
+use Falak\Edge\Application\ComposeServiceDomains;
 use Falak\Edge\Application\EdgeChanges;
 use Falak\Edge\Application\Jobs\SyncCloudflareDns;
+use Falak\Edge\Application\PathMounts;
 use Falak\Edge\Contracts\TlsMode;
 use Falak\Edge\Domain\Enums\WwwRedirect;
 use Falak\Edge\Domain\Models\Certificate;
@@ -31,36 +33,49 @@ use Falak\Edge\Domain\Models\CloudflareZone;
 use Falak\Edge\Domain\Models\DnsCredential;
 use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Domain\Models\Header;
+use Falak\Edge\Domain\Models\Mount;
 use Falak\Edge\Domain\Models\Redirect;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
 use Falak\Sites\Contracts\Data\SiteData;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteRuntime;
+use Illuminate\Database\Eloquent\Builder;
 use RuntimeException;
 
 /**
- * falak.yaml's `domains`, `redirects` and `headers` of app units (phase B: they go live with the unit's release).
- * Identity: a domain's host name, a redirect's `from`, a header's name. Only the site's own routes (not a compose
- * service's) are managed.
+ * falak.yaml's `domains`, `redirects`, `headers` and `mounts` of units, and the `domains`, `redirects` and `headers` of
+ * compose services (phase B: they go live with the unit's release). Identity: a domain's host name, a redirect's
+ * `from`, a header's name, a mount's path. A unit's own routes are its site's (a compose unit's: its first public
+ * service's, which `services.<first>` also names); another public service's are that service's rows
+ * (`compose_service`). A function unit has domains only.
  */
 final class EdgeReconciler implements Reconcilable, ValidatesConfig
 {
-    public const DOMAINS = 'units.*(app).domains';
+    public const DOMAINS = 'units.*(app|compose|function).domains';
 
-    public const REDIRECTS = 'units.*(app).redirects';
+    public const REDIRECTS = 'units.*(app|compose).redirects';
 
-    public const HEADERS = 'units.*(app).headers';
+    public const HEADERS = 'units.*(app|compose).headers';
+
+    public const MOUNTS = 'units.*(app|compose).mounts';
+
+    public const SERVICE_DOMAINS = 'units.*(compose).services.*.domains';
+
+    public const SERVICE_REDIRECTS = 'units.*(compose).services.*.redirects';
+
+    public const SERVICE_HEADERS = 'units.*(compose).services.*.headers';
 
     public function __construct(
         private readonly SiteDirectory $sites,
         private readonly ManagedResources $managed,
         private readonly ProjectDirectory $projects,
+        private readonly PathMounts $mounts,
     ) {}
 
     public function sections(): array
     {
-        return [self::DOMAINS, self::REDIRECTS, self::HEADERS];
+        return [self::DOMAINS, self::REDIRECTS, self::HEADERS, self::MOUNTS, self::SERVICE_DOMAINS, self::SERVICE_REDIRECTS, self::SERVICE_HEADERS];
     }
 
     public function phase(): ApplyPhase
@@ -72,36 +87,73 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     {
         $units = [];
 
-        foreach ($this->appSites($scope) as $unit => $site) {
-            $body = ['type' => 'app'];
-            $domains = [];
+        foreach ($this->unitSites($scope) as $unit => $site) {
+            $type = self::typeOf($site);
+            $body = ['type' => $type, ...$this->routeOf($site, null, $type === 'function')];
 
-            foreach ($this->domains($site->id) as $name => $domain) {
-                $entry = $this->domainShape($domain);
-                unset($entry['primary']);
-                $domains[] = array_keys($entry) === ['name', 'www', 'tls'] && $entry['www'] === 'none' && $entry['tls'] === 'auto' ? $name : $entry;
+            if ($type !== 'function') {
+                $mounts = [];
+
+                foreach (Mount::query()->where('site_id', $site->id)->whereNull('compose_service')->orderBy('path_prefix')->get() as $mount) {
+                    if (($function = $scope->unitOf($mount->function_site_id)) !== null) {
+                        $mounts[] = ['path' => $mount->path_prefix, 'function' => $function, ...($mount->strip_prefix ? [] : ['strip_prefix' => false])];
+                    }
+                }
+
+                if ($mounts !== []) {
+                    $body['mounts'] = $mounts;
+                }
             }
 
-            if ($domains !== []) {
-                $body['domains'] = $domains;
-            }
-
-            $redirects = array_values(array_map(fn (Redirect $r) => ['from' => $r->from, 'to' => $r->to, 'status' => (int) $r->status], $this->redirects($site->id)));
-
-            if ($redirects !== []) {
-                $body['redirects'] = $redirects;
-            }
-
-            $headers = array_map(fn (Header $h) => $h->value, $this->headers($site->id));
-
-            if ($headers !== []) {
-                $body['headers'] = $headers;
+            foreach (self::services($site) as $service) {
+                if (($route = $this->routeOf($site, $service)) !== []) {
+                    $body['services'][$service] = $route;
+                }
             }
 
             $units[$unit] = $body;
         }
 
         return $units === [] ? [] : ['units' => $units];
+    }
+
+    /**
+     * One route's domains, redirects and headers in the file's shape (a function: domains only).
+     *
+     * @return array<string, mixed>
+     */
+    private function routeOf(SiteData $site, ?string $service, bool $domainsOnly = false): array
+    {
+        $body = [];
+        $domains = [];
+
+        foreach ($this->domains($site, $service) as $name => $domain) {
+            $entry = $this->domainShape($domain);
+            unset($entry['primary']);
+            $domains[] = array_keys($entry) === ['name', 'www', 'tls'] && $entry['www'] === 'none' && $entry['tls'] === 'auto' ? $name : $entry;
+        }
+
+        if ($domains !== []) {
+            $body['domains'] = $domains;
+        }
+
+        if ($domainsOnly) {
+            return $body;
+        }
+
+        $redirects = array_values(array_map(fn (Redirect $r) => ['from' => $r->from, 'to' => $r->to, 'status' => (int) $r->status], $this->redirects($site, $service)));
+
+        if ($redirects !== []) {
+            $body['redirects'] = $redirects;
+        }
+
+        $headers = array_map(fn (Header $h) => $h->value, $this->headers($site, $service));
+
+        if ($headers !== []) {
+            $body['headers'] = $headers;
+        }
+
+        return $body;
     }
 
     public function diff(ConfigScope $scope, array $desired, array $current): ChangeSet
@@ -112,95 +164,225 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
         foreach ($units as $unit) {
             $unit = (string) $unit;
             $siteId = $scope->refId($unit);
+            $site = $siteId !== null ? $this->sites->find($siteId) : null;
             $base = '/units/'.Pointer::escape($unit);
-            $want = $desired['units'][$unit] ?? [];
+            $want = self::ownRoute($desired['units'][$unit] ?? [], $site);
             $have = $current['units'][$unit] ?? [];
 
-            // Domains
-            $wantDomains = self::normalizeDomains((array) ($want['domains'] ?? []));
-            $haveDomains = self::normalizeDomains((array) ($have['domains'] ?? []));
-            $models = $siteId !== null ? $this->domains($siteId) : [];
+            array_push($changes, ...$this->diffRoute($unit, $base, $site, null, $want, $have, [self::DOMAINS, self::REDIRECTS, self::HEADERS]));
+            array_push($changes, ...$this->diffMounts($unit, $base, $site, (array) ($want['mounts'] ?? []), (array) ($have['mounts'] ?? [])));
 
-            foreach ($wantDomains as $host => $entry) {
-                $path = "{$base}/domains/".Pointer::escape($host);
+            $services = array_unique([...array_keys((array) ($want['services'] ?? [])), ...array_keys((array) ($have['services'] ?? []))]);
 
-                if (! isset($haveDomains[$host])) {
-                    $changes[] = new Change(ChangeOp::Create, $path, null, $entry, self::DOMAINS, $unit);
-
-                    continue;
-                }
-
-                foreach (Diff::leaves($entry) as $field => $value) {
-                    $old = Diff::at($haveDomains[$host], $field);
-                    $changes[] = new Change(Diff::same($value, $old) ? ChangeOp::Noop : ($old === null ? ChangeOp::Create : ChangeOp::Update), $path.$field, $old, $value, self::DOMAINS, $unit);
-                }
-            }
-
-            foreach ($haveDomains as $host => $entry) {
-                if (isset($wantDomains[$host]) || ! isset($models[$host]) || ! $this->managed->managed('domain', $models[$host]->id)->any()) {
-                    continue;
-                }
-
-                $op = $this->managed->createdByFile('domain', $models[$host]->id) ? ChangeOp::Delete : ChangeOp::Detach;
-                $changes[] = new Change($op, "{$base}/domains/".Pointer::escape($host), $entry, null, self::DOMAINS, $unit);
-            }
-
-            // Redirects
-            $wantRedirects = self::keyedRedirects((array) ($want['redirects'] ?? []));
-            $haveRedirects = self::keyedRedirects((array) ($have['redirects'] ?? []));
-            $redirectModels = $siteId !== null ? $this->redirects($siteId) : [];
-
-            foreach ($wantRedirects as $from => $redirect) {
-                $path = "{$base}/redirects/".Pointer::escape($from);
-
-                if (! isset($haveRedirects[$from])) {
-                    $changes[] = new Change(ChangeOp::Create, $path, null, $redirect, self::REDIRECTS, $unit);
-
-                    continue;
-                }
-
-                foreach (['to', 'status'] as $field) {
-                    $old = $haveRedirects[$from][$field];
-                    $changes[] = new Change(Diff::same($redirect[$field], $old) ? ChangeOp::Noop : ChangeOp::Update, "{$path}/{$field}", $old, $redirect[$field], self::REDIRECTS, $unit);
-                }
-            }
-
-            foreach ($haveRedirects as $from => $redirect) {
-                $model = $redirectModels[$from] ?? null;
-
-                if (isset($wantRedirects[$from]) || $model === null || ! $this->managed->managed('redirect', $model->id)->any()) {
-                    continue;
-                }
-
-                $op = $this->managed->createdByFile('redirect', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
-                $changes[] = new Change($op, "{$base}/redirects/".Pointer::escape($from), $redirect, null, self::REDIRECTS, $unit);
-            }
-
-            // Headers
-            $wantHeaders = (array) ($want['headers'] ?? []);
-            $haveHeaders = (array) ($have['headers'] ?? []);
-            $headerModels = $siteId !== null ? $this->headers($siteId) : [];
-
-            foreach ($wantHeaders as $name => $value) {
-                $name = (string) $name;
-                $old = $haveHeaders[$name] ?? null;
-                $op = $old === null ? ChangeOp::Create : ($old === $value ? ChangeOp::Noop : ChangeOp::Update);
-                $changes[] = new Change($op, "{$base}/headers/".Pointer::escape($name), $old, $value, self::HEADERS, $unit);
-            }
-
-            foreach ($haveHeaders as $name => $value) {
-                $model = $headerModels[(string) $name] ?? null;
-
-                if (array_key_exists($name, $wantHeaders) || $model === null || ! $this->managed->managed('header', $model->id)->any()) {
-                    continue;
-                }
-
-                $op = $this->managed->createdByFile('header', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
-                $changes[] = new Change($op, "{$base}/headers/".Pointer::escape((string) $name), $value, null, self::HEADERS, $unit);
+            foreach ($services as $service) {
+                $service = (string) $service;
+                array_push($changes, ...$this->diffRoute($unit, "{$base}/services/".Pointer::escape($service), $site, $service,
+                    (array) ($want['services'][$service] ?? []), (array) ($have['services'][$service] ?? []), [self::SERVICE_DOMAINS, self::SERVICE_REDIRECTS, self::SERVICE_HEADERS]));
             }
         }
 
         return new ChangeSet($changes);
+    }
+
+    /**
+     * A compose unit's first public service is its own route: what the file sets under `services.<first>` is the
+     * unit's (`domains`, `redirects`, `headers` at the unit's level).
+     *
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    private static function ownRoute(array $body, ?SiteData $site): array
+    {
+        $primary = $site !== null ? ComposeServiceDomains::primaryService($site) : self::firstPublic($body);
+
+        if ($primary === null || ! isset($body['services'][$primary])) {
+            return $body;
+        }
+
+        foreach (['domains', 'redirects', 'headers'] as $field) {
+            if (isset($body['services'][$primary][$field])) {
+                $body[$field] = $field === 'headers' ? [...(array) ($body[$field] ?? []), ...$body['services'][$primary][$field]] : [...(array) ($body[$field] ?? []), ...$body['services'][$primary][$field]];
+            }
+        }
+
+        unset($body['services'][$primary]);
+
+        if ($body['services'] === []) {
+            unset($body['services']);
+        }
+
+        return $body;
+    }
+
+    /**
+     * The first service of a new compose unit with a port (it becomes the first public service).
+     *
+     * @param  array<string, mixed>  $body
+     */
+    private static function firstPublic(array $body): ?string
+    {
+        foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+            if (isset($settings['port'])) {
+                return (string) $service;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $want
+     * @param  array<string, mixed>  $have
+     * @param  array{0: string, 1: string, 2: string}  $sections  domains, redirects, headers
+     * @return list<Change>
+     */
+    private function diffRoute(string $unit, string $base, ?SiteData $site, ?string $service, array $want, array $have, array $sections): array
+    {
+        $changes = [];
+        [$domainsSection, $redirectsSection, $headersSection] = $sections;
+
+        // Domains
+        $wantDomains = self::normalizeDomains((array) ($want['domains'] ?? []));
+        $haveDomains = self::normalizeDomains((array) ($have['domains'] ?? []));
+        $models = $site !== null ? $this->domains($site, $service) : [];
+
+        foreach ($wantDomains as $host => $entry) {
+            $path = "{$base}/domains/".Pointer::escape($host);
+
+            if (! isset($haveDomains[$host])) {
+                $changes[] = new Change(ChangeOp::Create, $path, null, $entry, $domainsSection, $unit);
+
+                continue;
+            }
+
+            foreach (Diff::leaves($entry) as $field => $value) {
+                $old = Diff::at($haveDomains[$host], $field);
+                $changes[] = new Change(Diff::same($value, $old) ? ChangeOp::Noop : ($old === null ? ChangeOp::Create : ChangeOp::Update), $path.$field, $old, $value, $domainsSection, $unit);
+            }
+        }
+
+        foreach ($haveDomains as $host => $entry) {
+            if (isset($wantDomains[$host]) || ! isset($models[$host]) || ! $this->managed->managed('domain', $models[$host]->id)->any()) {
+                continue;
+            }
+
+            $op = $this->managed->createdByFile('domain', $models[$host]->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $changes[] = new Change($op, "{$base}/domains/".Pointer::escape($host), $entry, null, $domainsSection, $unit);
+        }
+
+        // Redirects
+        $wantRedirects = self::keyedRedirects((array) ($want['redirects'] ?? []));
+        $haveRedirects = self::keyedRedirects((array) ($have['redirects'] ?? []));
+        $redirectModels = $site !== null ? $this->redirects($site, $service) : [];
+
+        foreach ($wantRedirects as $from => $redirect) {
+            $path = "{$base}/redirects/".Pointer::escape($from);
+
+            if (! isset($haveRedirects[$from])) {
+                $changes[] = new Change(ChangeOp::Create, $path, null, $redirect, $redirectsSection, $unit);
+
+                continue;
+            }
+
+            foreach (['to', 'status'] as $field) {
+                $old = $haveRedirects[$from][$field];
+                $changes[] = new Change(Diff::same($redirect[$field], $old) ? ChangeOp::Noop : ChangeOp::Update, "{$path}/{$field}", $old, $redirect[$field], $redirectsSection, $unit);
+            }
+        }
+
+        foreach ($haveRedirects as $from => $redirect) {
+            $model = $redirectModels[$from] ?? null;
+
+            if (isset($wantRedirects[$from]) || $model === null || ! $this->managed->managed('redirect', $model->id)->any()) {
+                continue;
+            }
+
+            $op = $this->managed->createdByFile('redirect', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $changes[] = new Change($op, "{$base}/redirects/".Pointer::escape($from), $redirect, null, $redirectsSection, $unit);
+        }
+
+        // Headers
+        $wantHeaders = (array) ($want['headers'] ?? []);
+        $haveHeaders = (array) ($have['headers'] ?? []);
+        $headerModels = $site !== null ? $this->headers($site, $service) : [];
+
+        foreach ($wantHeaders as $name => $value) {
+            $name = (string) $name;
+            $old = $haveHeaders[$name] ?? null;
+            $op = $old === null ? ChangeOp::Create : ($old === $value ? ChangeOp::Noop : ChangeOp::Update);
+            $changes[] = new Change($op, "{$base}/headers/".Pointer::escape($name), $old, $value, $headersSection, $unit);
+        }
+
+        foreach ($haveHeaders as $name => $value) {
+            $model = $headerModels[(string) $name] ?? null;
+
+            if (array_key_exists($name, $wantHeaders) || $model === null || ! $this->managed->managed('header', $model->id)->any()) {
+                continue;
+            }
+
+            $op = $this->managed->createdByFile('header', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $changes[] = new Change($op, "{$base}/headers/".Pointer::escape((string) $name), $value, null, $headersSection, $unit);
+        }
+
+        return $changes;
+    }
+
+    /**
+     * Mounts by path: `function` and `strip_prefix` (default true) per path.
+     *
+     * @param  list<mixed>  $want
+     * @param  list<mixed>  $have
+     * @return list<Change>
+     */
+    private function diffMounts(string $unit, string $base, ?SiteData $site, array $want, array $have): array
+    {
+        $changes = [];
+        $wanted = self::keyedMounts($want);
+        $current = self::keyedMounts($have);
+        $models = $site !== null ? $this->mountModels($site->id) : [];
+
+        foreach ($wanted as $path => $mount) {
+            $at = "{$base}/mounts/".Pointer::escape($path);
+
+            if (! isset($current[$path])) {
+                $changes[] = new Change(ChangeOp::Create, $at, null, $mount, self::MOUNTS, $unit);
+
+                continue;
+            }
+
+            foreach (['function', 'strip_prefix'] as $field) {
+                $changes[] = new Change(Diff::same($mount[$field], $current[$path][$field]) ? ChangeOp::Noop : ChangeOp::Update, "{$at}/{$field}", $current[$path][$field], $mount[$field], self::MOUNTS, $unit);
+            }
+        }
+
+        foreach ($current as $path => $mount) {
+            $model = $models[$path] ?? null;
+
+            if (isset($wanted[$path]) || $model === null || ! $this->managed->managed('mount', $model->id)->any()) {
+                continue;
+            }
+
+            $op = $this->managed->createdByFile('mount', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $changes[] = new Change($op, "{$base}/mounts/".Pointer::escape($path), $mount, null, self::MOUNTS, $unit);
+        }
+
+        return $changes;
+    }
+
+    /**
+     * @param  list<mixed>  $mounts
+     * @return array<string, array{path: string, function: string, strip_prefix: bool}>
+     */
+    private static function keyedMounts(array $mounts): array
+    {
+        $out = [];
+
+        foreach ($mounts as $mount) {
+            $mount = (array) $mount;
+            $out[(string) $mount['path']] = ['path' => (string) $mount['path'], 'function' => (string) $mount['function'], 'strip_prefix' => (bool) ($mount['strip_prefix'] ?? true)];
+        }
+
+        return $out;
     }
 
     public function apply(ConfigScope $scope, ChangeSet $changes, ApplyContext $ctx): void
@@ -214,25 +396,44 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $groups[$tokens[1]][$tokens[2]][$tokens[3]][] = $change;
+            if ($tokens[2] === 'services') {
+                if (count($tokens) >= 6) {
+                    $groups[$tokens[1]][$tokens[3]][$tokens[4]][$tokens[5]][] = $change;
+                }
+
+                continue;
+            }
+
+            // '' is the unit's own route.
+            $groups[$tokens[1]][''][$tokens[2]][$tokens[3]][] = $change;
         }
 
-        foreach ($groups as $unit => $sections) {
+        foreach ($groups as $unit => $routes) {
             $unit = (string) $unit;
             $siteId = $scope->refId($unit);
             $site = $siteId !== null ? $this->sites->find($siteId) : null;
 
             if ($site === null) {
-                if ($this->onlyRemovals($sections)) {
+                if ($this->onlyRemovals($routes)) {
                     continue; // the unit's site is gone: so are its routes
                 }
 
                 throw new RuntimeException("The unit \"{$unit}\" has no site to route to.");
             }
 
-            $this->applyDomains($scope, $ctx, $unit, $site, $sections['domains'] ?? []);
-            $this->applyRedirects($scope, $ctx, $unit, $site, $sections['redirects'] ?? []);
-            $this->applyHeaders($scope, $ctx, $unit, $site, $sections['headers'] ?? []);
+            foreach ($routes as $route => $sections) {
+                $service = $route === '' ? null : (string) $route;
+                $base = '/'.($service === null ? '' : 'services/'.Pointer::escape($service).'/');
+                $depth = $service === null ? 4 : 6;
+
+                $this->applyDomains($scope, $ctx, $unit, $site, $service, $base, $depth, $sections['domains'] ?? []);
+                $this->applyRedirects($scope, $ctx, $unit, $site, $service, $base, $depth, $sections['redirects'] ?? []);
+                $this->applyHeaders($scope, $ctx, $unit, $site, $service, $base, $sections['headers'] ?? []);
+
+                if ($service === null) {
+                    $this->applyMounts($scope, $ctx, $unit, $site, $sections['mounts'] ?? []);
+                }
+            }
         }
     }
 
@@ -244,51 +445,67 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
         $allowed = $this->allowedCredentials($scope);
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
-            if (! is_array($body) || ($body['type'] ?? null) !== 'app') {
+            if (! is_array($body) || ! in_array($body['type'] ?? null, ['app', 'compose', 'function'], true)) {
                 continue;
             }
 
-            $base = '/units/'.Pointer::escape((string) $unit).'/domains';
-            $primaries = 0;
+            $base = '/units/'.Pointer::escape((string) $unit);
+            $lists = ["{$base}/domains" => (array) ($body['domains'] ?? [])];
 
-            foreach ((array) ($body['domains'] ?? []) as $i => $entry) {
-                $entry = is_string($entry) ? ['name' => $entry] : (array) $entry;
-                $name = (string) ($entry['name'] ?? '');
-                $at = "{$base}/{$i}";
+            foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+                $lists["{$base}/services/".Pointer::escape((string) $service).'/domains'] = (array) ($settings['domains'] ?? []);
+            }
 
-                if (($entry['primary'] ?? false) === true && ++$primaries === 2) {
-                    $issues[] = ConfigIssue::error('value.conflict', "{$at}/primary", 'Only one domain can be primary.');
+            foreach ((array) ($body['mounts'] ?? []) as $i => $mount) {
+                $function = (string) ($mount['function'] ?? '');
+
+                if (($resolved['units'][$function]['type'] ?? null) !== 'function') {
+                    $issues[] = ConfigIssue::error('name.unit', "{$base}/mounts/{$i}/function", "No function unit named \"{$function}\".");
                 }
+            }
 
-                if (isset($owners[$name]) && $owners[$name] !== $unit) {
-                    $issues[] = ConfigIssue::error('value.conflict', $at, "\"{$name}\" is also a domain of the unit \"{$owners[$name]}\".");
-                }
+            foreach ($lists as $listBase => $domains) {
+                $primaries = 0;
 
-                $owners[$name] = (string) $unit;
+                foreach ($domains as $i => $entry) {
+                    $entry = is_string($entry) ? ['name' => $entry] : (array) $entry;
+                    $name = (string) ($entry['name'] ?? '');
+                    $at = "{$listBase}/{$i}";
 
-                if (($entry['www'] ?? 'none') !== 'none' && (str_starts_with($name, '*.') || str_starts_with($name, 'www.'))) {
-                    $issues[] = ConfigIssue::error('value.conflict', "{$at}/www", 'A www redirect needs an apex name (not a wildcard or a www. name).');
-                }
+                    if (($entry['primary'] ?? false) === true && ++$primaries === 2) {
+                        $issues[] = ConfigIssue::error('value.conflict', "{$at}/primary", 'Only one domain can be primary.');
+                    }
 
-                if (isset($entry['dns_credential']) && ! in_array((string) $entry['dns_credential'], $allowed['dns'], true)) {
-                    $issues[] = ConfigIssue::error('name.dns_credential', "{$at}/dns_credential", DnsCredential::query()->where('organization_id', $scope->organizationId)->where('name', $entry['dns_credential'])->exists()
-                        ? "The DNS credential \"{$entry['dns_credential']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
-                        : "No DNS credential named \"{$entry['dns_credential']}\".");
-                }
+                    if (isset($owners[$name]) && $owners[$name] !== $listBase) {
+                        $issues[] = ConfigIssue::error('value.conflict', $at, "\"{$name}\" is also a domain of ".str_replace('/', ' ', trim(substr($owners[$name], 7, -8), '/')).'.');
+                    }
 
-                if (isset($entry['certificate']) && ! in_array((string) $entry['certificate'], $allowed['certificates'], true)) {
-                    $issues[] = ConfigIssue::error('name.certificate', "{$at}/certificate", Certificate::query()->where('organization_id', $scope->organizationId)->where('name', $entry['certificate'])->exists()
-                        ? "The certificate \"{$entry['certificate']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
-                        : "No certificate named \"{$entry['certificate']}\".");
-                }
+                    $owners[$name] = $listBase;
 
-                $taken = Domain::query()->where('name', $name)->whereNotIn('site_id', $envSites ?: [''])->first(['organization_id']);
+                    if (($entry['www'] ?? 'none') !== 'none' && (str_starts_with($name, '*.') || str_starts_with($name, 'www.'))) {
+                        $issues[] = ConfigIssue::error('value.conflict', "{$at}/www", 'A www redirect needs an apex name (not a wildcard or a www. name).');
+                    }
 
-                if ($taken !== null) {
-                    // Another organization's domain: say nothing about it.
-                    $issues[] = ConfigIssue::error('value.conflict', $at, $taken->organization_id === $scope->organizationId
-                        ? "\"{$name}\" is already a domain of a site outside this environment."
-                        : 'This domain is not available.');
+                    if (isset($entry['dns_credential']) && ! in_array((string) $entry['dns_credential'], $allowed['dns'], true)) {
+                        $issues[] = ConfigIssue::error('name.dns_credential', "{$at}/dns_credential", DnsCredential::query()->where('organization_id', $scope->organizationId)->where('name', $entry['dns_credential'])->exists()
+                            ? "The DNS credential \"{$entry['dns_credential']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
+                            : "No DNS credential named \"{$entry['dns_credential']}\".");
+                    }
+
+                    if (isset($entry['certificate']) && ! in_array((string) $entry['certificate'], $allowed['certificates'], true)) {
+                        $issues[] = ConfigIssue::error('name.certificate', "{$at}/certificate", Certificate::query()->where('organization_id', $scope->organizationId)->where('name', $entry['certificate'])->exists()
+                            ? "The certificate \"{$entry['certificate']}\" isn't used by this project yet: an admin must allow it in the project's Config settings."
+                            : "No certificate named \"{$entry['certificate']}\".");
+                    }
+
+                    $taken = Domain::query()->where('name', $name)->whereNotIn('site_id', $envSites ?: [''])->first(['organization_id']);
+
+                    if ($taken !== null) {
+                        // Another organization's domain: say nothing about it.
+                        $issues[] = ConfigIssue::error('value.conflict', $at, $taken->organization_id === $scope->organizationId
+                            ? "\"{$name}\" is already a domain of a site outside this environment."
+                            : 'This domain is not available.');
+                    }
                 }
             }
         }
@@ -297,15 +514,17 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
-     * @param  array<string, array<string, list<Change>>>  $sections
+     * @param  array<string, array<string, array<string, list<Change>>>>  $routes
      */
-    private function onlyRemovals(array $sections): bool
+    private function onlyRemovals(array $routes): bool
     {
-        foreach ($sections as $items) {
-            foreach ($items as $changes) {
-                foreach ($changes as $change) {
-                    if (! in_array($change->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
-                        return false;
+        foreach ($routes as $sections) {
+            foreach ($sections as $items) {
+                foreach ($items as $changes) {
+                    foreach ($changes as $change) {
+                        if (! in_array($change->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
+                            return false;
+                        }
                     }
                 }
             }
@@ -317,17 +536,17 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     /**
      * @param  array<string, list<Change>>  $items  host => changes
      */
-    private function applyDomains(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, array $items): void
+    private function applyDomains(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, ?string $service, string $base, int $depth, array $items): void
     {
         $primary = null;
         $allowed = null;
 
         foreach ($items as $host => $changes) {
             $host = (string) $host;
-            $model = $this->domains($site->id)[$host] ?? null;
+            $model = $this->domains($site, $service)[$host] ?? null;
             $first = $changes[0];
 
-            if (count(Pointer::tokens($first->path)) === 4 && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
+            if (count(Pointer::tokens($first->path)) === $depth && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
                     if ($first->op === ChangeOp::Delete) {
                         app(RemoveDomain::class)($model);
@@ -339,7 +558,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $entry = $first->op === ChangeOp::Create && count(Pointer::tokens($first->path)) === 4 ? (array) $first->after : $this->entryOf($changes);
+            $entry = $first->op === ChangeOp::Create && count(Pointer::tokens($first->path)) === $depth ? (array) $first->after : $this->entryOf($changes, $depth);
             $tls = TlsMode::from((string) ($entry['tls'] ?? 'auto'));
             $www = WwwRedirect::from((string) ($entry['www'] ?? 'none'));
             $allowed ??= $this->allowedCredentials($scope);
@@ -355,7 +574,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             $changed = array_filter($changes, fn (Change $c) => $c->op !== ChangeOp::Noop) !== [];
 
             if ($created) {
-                $model = app(AddDomain::class)($site, $host, $tls, $www, $certificate, $credential);
+                $model = app(AddDomain::class)($site, $host, $tls, $www, $certificate, $credential, $service);
             } elseif ($changed && ($model->tls_mode !== $tls || $model->www_redirect !== $www || $model->certificate_id !== $certificate || $model->dns_credential_id !== $credential)) {
                 app(UpdateDomain::class)($model, $tls, $www, $certificate, $credential);
             }
@@ -373,7 +592,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 $primary = $model;
             }
 
-            $this->managed->record($scope, $ctx, $unit, 'domain', $model->id, ['/domains/'.Pointer::escape($host)], $created ? true : null);
+            $this->managed->record($scope, $ctx, $unit, 'domain', $model->id, [$base.'domains/'.Pointer::escape($host)], $created ? true : null);
         }
 
         if ($primary !== null && ! $primary->refresh()->is_primary) {
@@ -384,15 +603,15 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     /**
      * @param  array<string, list<Change>>  $items  from => changes
      */
-    private function applyRedirects(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, array $items): void
+    private function applyRedirects(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, ?string $service, string $base, int $depth, array $items): void
     {
         $order = [];
 
         foreach ($items as $from => $changes) {
             $from = (string) $from;
-            $model = $this->redirects($site->id)[$from] ?? null;
+            $model = $this->redirects($site, $service)[$from] ?? null;
             $first = $changes[0];
-            $whole = count(Pointer::tokens($first->path)) === 4;
+            $whole = count(Pointer::tokens($first->path)) === $depth;
 
             if ($whole && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
@@ -411,8 +630,8 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             foreach ($changes as $change) {
                 $tokens = Pointer::tokens($change->path);
 
-                if (count($tokens) === 5) {
-                    $wanted[$tokens[4]] = $change->after;
+                if (count($tokens) === $depth + 1) {
+                    $wanted[$tokens[$depth]] = $change->after;
                 }
             }
 
@@ -425,11 +644,11 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                     $this->managed->forget('redirect', $model->id);
                 }
 
-                $model = app(AddRedirect::class)($site, $from, (string) $wanted['to'], (int) $wanted['status']);
+                $model = app(AddRedirect::class)($site, $from, (string) $wanted['to'], (int) $wanted['status'], $service);
             }
 
             $order[] = $model;
-            $this->managed->record($scope, $ctx, $unit, 'redirect', $model->id, ['/redirects/'.Pointer::escape($from)], $createdByFile);
+            $this->managed->record($scope, $ctx, $unit, 'redirect', $model->id, [$base.'redirects/'.Pointer::escape($from)], $createdByFile);
         }
 
         // The file's order is the matching order: its redirects come first, in the file's order.
@@ -450,11 +669,11 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     /**
      * @param  array<string, list<Change>>  $items  name => changes
      */
-    private function applyHeaders(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, array $items): void
+    private function applyHeaders(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, ?string $service, string $base, array $items): void
     {
         foreach ($items as $name => $changes) {
             $name = (string) $name;
-            $model = $this->headers($site->id)[$name] ?? null;
+            $model = $this->headers($site, $service)[$name] ?? null;
             $change = $changes[0];
 
             if (in_array($change->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
@@ -472,10 +691,66 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             $created = $model === null;
 
             if ($created || $model->value !== $change->after) {
-                $model = app(SaveHeader::class)($site, $name, (string) $change->after);
+                $model = app(SaveHeader::class)($site, $name, (string) $change->after, $service);
             }
 
-            $this->managed->record($scope, $ctx, $unit, 'header', $model->id, ['/headers/'.Pointer::escape($name)], $created ? true : null);
+            $this->managed->record($scope, $ctx, $unit, 'header', $model->id, [$base.'headers/'.Pointer::escape($name)], $created ? true : null);
+        }
+    }
+
+    /**
+     * @param  array<string, list<Change>>  $items  path => changes
+     */
+    private function applyMounts(ConfigScope $scope, ApplyContext $ctx, string $unit, SiteData $site, array $items): void
+    {
+        foreach ($items as $path => $changes) {
+            $path = (string) $path;
+            $model = $this->mountModels($site->id)[$path] ?? null;
+            $first = $changes[0];
+            $whole = count(Pointer::tokens($first->path)) === 4;
+
+            if ($whole && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
+                if ($model !== null) {
+                    if ($first->op === ChangeOp::Delete) {
+                        $this->mounts->delete($model);
+                    }
+
+                    $this->managed->forget('mount', $model->id);
+                }
+
+                continue;
+            }
+
+            $wanted = $whole ? (array) $first->after : ['path' => $path, 'function' => $scope->unitOf((string) $model?->function_site_id), 'strip_prefix' => (bool) $model?->strip_prefix];
+
+            foreach ($changes as $change) {
+                $tokens = Pointer::tokens($change->path);
+
+                if (count($tokens) === 5) {
+                    $wanted[$tokens[4]] = $change->after;
+                }
+            }
+
+            $functionId = $scope->refId((string) $wanted['function']);
+            $function = $functionId !== null ? $this->sites->find($functionId) : null;
+
+            if ($function === null || ! $function->runtime->isFunction()) {
+                throw new RuntimeException("The mount {$path} of {$unit} names \"{$wanted['function']}\", which is not a function of this environment.");
+            }
+
+            $created = $model === null;
+            $createdByFile = $created || $this->managed->createdByFile('mount', $model->id);
+
+            if ($created || $model->function_site_id !== $function->id || $model->strip_prefix !== (bool) $wanted['strip_prefix']) {
+                if ($model !== null) {
+                    $this->mounts->delete($model);
+                    $this->managed->forget('mount', $model->id);
+                }
+
+                $model = $this->mounts->create($function, $site->id, $path, (bool) $wanted['strip_prefix']);
+            }
+
+            $this->managed->record($scope, $ctx, $unit, 'mount', $model->id, ['/mounts/'.Pointer::escape($path)], $createdByFile);
         }
     }
 
@@ -485,12 +760,12 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
      * @param  list<Change>  $changes
      * @return array<string, mixed>
      */
-    private function entryOf(array $changes): array
+    private function entryOf(array $changes, int $depth): array
     {
         $entry = [];
 
         foreach ($changes as $change) {
-            $tokens = array_slice(Pointer::tokens($change->path), 4);
+            $tokens = array_slice(Pointer::tokens($change->path), $depth);
 
             if ($tokens === ['cloudflare', 'proxied'] || $tokens === ['cloudflare', 'cache']) {
                 $entry['cloudflare'][$tokens[1]] = $change->after;
@@ -589,51 +864,89 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
-     * The site's own domains (not a compose service's), primary first.
+     * A route's domains (the site's own, or a compose service's), primary first.
      *
      * @return array<string, Domain>
      */
-    private function domains(string $siteId): array
+    private function domains(SiteData $site, ?string $service = null): array
     {
-        return Domain::query()->where('site_id', $siteId)->whereNull('compose_service')->orderByDesc('is_primary')->orderBy('name')->get()->keyBy('name')->all();
+        return ComposeServiceDomains::scope(Domain::query()->where('site_id', $site->id), $site, $service)->orderByDesc('is_primary')->orderBy('name')->get()->keyBy('name')->all();
     }
 
     /**
      * @return array<string, Redirect>
      */
-    private function redirects(string $siteId): array
+    private function redirects(SiteData $site, ?string $service = null): array
     {
-        return Redirect::query()->where('site_id', $siteId)->whereNull('compose_service')->orderBy('position')->orderBy('id')->get()->keyBy('from')->all();
+        return self::route(Redirect::query()->where('site_id', $site->id), $service)->orderBy('position')->orderBy('id')->get()->keyBy('from')->all();
     }
 
     /**
      * @return array<string, Header>
      */
-    private function headers(string $siteId): array
+    private function headers(SiteData $site, ?string $service = null): array
     {
-        return Header::query()->where('site_id', $siteId)->whereNull('compose_service')->orderBy('name')->get()->keyBy('name')->all();
+        return self::route(Header::query()->where('site_id', $site->id), $service)->orderBy('name')->get()->keyBy('name')->all();
     }
 
     /**
+     * Rules of exactly one route: the site's own (compose_service null) or one service's.
+     *
+     * @template TModel of \Illuminate\Database\Eloquent\Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    private static function route(Builder $query, ?string $service): Builder
+    {
+        return $service === null ? $query->whereNull('compose_service') : $query->where('compose_service', $service);
+    }
+
+    /**
+     * The site's own mounts (on every route) by path.
+     *
+     * @return array<string, Mount>
+     */
+    private function mountModels(string $siteId): array
+    {
+        return Mount::query()->where('site_id', $siteId)->whereNull('compose_service')->get()->keyBy('path_prefix')->all();
+    }
+
+    /**
+     * Sites of the environment's units.
+     *
      * @return array<string, SiteData>
      */
-    private function appSites(ConfigScope $scope): array
+    private function unitSites(ConfigScope $scope): array
     {
         $out = [];
 
         foreach ($scope->services as $unit => $service) {
-            if ($service['kind'] !== 'site') {
-                continue;
-            }
-
-            $site = $this->sites->find($service['ref_id']);
-
-            if ($site !== null && ! in_array($site->runtime, [SiteRuntime::Compose, SiteRuntime::Function], true)) {
+            if ($service['kind'] === 'site' && ($site = $this->sites->find($service['ref_id'])) !== null) {
                 $out[(string) $unit] = $site;
             }
         }
 
         return $out;
+    }
+
+    private static function typeOf(SiteData $site): string
+    {
+        return match ($site->runtime) {
+            SiteRuntime::Compose => 'compose',
+            SiteRuntime::Function => 'function',
+            default => 'app',
+        };
+    }
+
+    /**
+     * A compose site's public services other than the first (whose routes are the site's own).
+     *
+     * @return list<string>
+     */
+    private static function services(SiteData $site): array
+    {
+        return array_values(array_map(fn ($public) => $public->service, array_slice(ComposeServiceDomains::publicServices($site), 1)));
     }
 
     /**

@@ -17,4 +17,11 @@ final class ActionSiteLimits implements SiteLimits
 
         return ($this->update)($site, $limits, null, $userId);
     }
+
+    public function setService(string $siteId, string $service, ?array $limits, ?string $userId = null): string
+    {
+        $site = Site::query()->find(strtolower($siteId)) ?? throw ValidationException::withMessages(['site' => 'Unknown site.']);
+
+        return ($this->update)($site, $limits, $service, $userId);
+    }
 }

@@ -7,6 +7,7 @@ use Falak\Functions\Domain\Models\FunctionApiKey;
 use Falak\Functions\Domain\Models\FunctionDraft;
 use Falak\Functions\Domain\Models\FunctionSchedule;
 use Falak\Functions\Domain\Models\FunctionVersion;
+use Falak\Functions\Domain\Models\FunctionVersionCommit;
 use Falak\Sites\Contracts\Data\SiteData;
 use Illuminate\Support\Facades\DB;
 
@@ -86,6 +87,7 @@ final class FunctionStore
             FunctionDraft::query()->where('function_id', $function->id)->delete();
             FunctionSchedule::query()->where('function_id', $function->id)->delete();
             FunctionApiKey::query()->where('function_id', $function->id)->delete();
+            FunctionVersionCommit::query()->where('function_id', $function->id)->delete();
             FunctionVersion::query()->where('function_id', $function->id)->delete();
             $function->delete();
         });

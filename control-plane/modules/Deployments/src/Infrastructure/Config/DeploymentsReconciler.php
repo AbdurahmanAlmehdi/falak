@@ -26,11 +26,11 @@ use Falak\Sites\Contracts\SiteRuntime;
 
 /**
  * falak.yaml's `units.<u>.deploy` (minus `hooks`, owned by Sites): the deployment settings of app units (strategy,
- * batches, releases kept, secrets mode, health check, watch after go-live). Phase A.
+ * batches, releases kept, secrets mode, health check, watch after go-live) of app and compose units. Phase A.
  */
 final class DeploymentsReconciler implements Reconcilable, ValidatesConfig
 {
-    public const SECTION = 'units.*(app).deploy';
+    public const SECTION = 'units.*(app|compose).deploy';
 
     /** File field => SiteSettings column. Durations are seconds in the columns. */
     private const HEALTH = ['enabled' => 'health_enabled', 'path' => 'health_path', 'status' => 'health_status', 'timeout' => 'health_timeout_s', 'retries' => 'health_retries', 'retry_delay' => 'health_retry_delay_s'];
@@ -59,11 +59,11 @@ final class DeploymentsReconciler implements Reconcilable, ValidatesConfig
         $units = [];
 
         foreach ($scope->services as $unit => $service) {
-            if ($service['kind'] !== 'site' || ($site = $this->sites->find($service['ref_id'])) === null || $site->runtime === SiteRuntime::Compose || $site->runtime->isFunction()) {
+            if ($service['kind'] !== 'site' || ($site = $this->sites->find($service['ref_id'])) === null || $site->runtime->isFunction()) {
                 continue;
             }
 
-            $units[(string) $unit] = ['type' => 'app', 'deploy' => self::deployOf($site, SiteSettings::query()->find($site->id))];
+            $units[(string) $unit] = ['type' => $site->runtime === SiteRuntime::Compose ? 'compose' : 'app', 'deploy' => self::deployOf($site, SiteSettings::query()->find($site->id))];
         }
 
         return $units === [] ? [] : ['units' => $units];
@@ -255,13 +255,13 @@ final class DeploymentsReconciler implements Reconcilable, ValidatesConfig
         $issues = [];
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
-            if (($body['type'] ?? null) !== 'app' || ! is_array($body['deploy'] ?? null)) {
+            if (! in_array($body['type'] ?? null, ['app', 'compose'], true) || ! is_array($body['deploy'] ?? null)) {
                 continue;
             }
 
             $base = '/units/'.Pointer::escape((string) $unit).'/deploy';
             $deploy = $body['deploy'];
-            $runtime = SiteRuntime::tryFrom((string) ($body['runtime'] ?? ''));
+            $runtime = $body['type'] === 'compose' ? SiteRuntime::Compose : SiteRuntime::tryFrom((string) ($body['runtime'] ?? ''));
 
             if ($runtime === null && ($siteId = $scope->refId((string) $unit)) !== null) {
                 $runtime = $this->sites->find($siteId)?->runtime;

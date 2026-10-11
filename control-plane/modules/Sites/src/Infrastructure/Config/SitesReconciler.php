@@ -14,13 +14,17 @@ use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
 use Falak\Config\Contracts\ValidatesConfig;
+use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Application\Actions\SaveEnvironment;
 use Falak\Sites\Application\Actions\SetSiteTargets;
+use Falak\Sites\Application\Actions\UpdateComposeSettings;
 use Falak\Sites\Application\Actions\UpdateDeployScript;
 use Falak\Sites\Application\Actions\UpdateSite;
 use Falak\Sites\Application\SiteRules;
 use Falak\Sites\Contracts\BuildMode;
+use Falak\Sites\Contracts\ComposeSource;
+use Falak\Sites\Contracts\Data\ComposeConfig;
 use Falak\Sites\Contracts\Data\SitePlacement;
 use Falak\Sites\Contracts\DeployScriptSections;
 use Falak\Sites\Contracts\Framework;
@@ -34,11 +38,15 @@ use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 /**
- * falak.yaml's app units (phase A): the site itself (created from the file when it doesn't exist), its runtime,
- * versions, directories, build, Laravel processes, servers, env variables and deploy hooks.
+ * falak.yaml's app, compose and function units (phase A): the site itself (created from the file when it doesn't
+ * exist), its runtime, versions, directories, build, servers, env variables and deploy hooks; a compose unit's files,
+ * profiles and services (public port and health path, or replaced by a database unit). A function unit's code and
+ * settings belong to Functions.
  *
  * The file only manages what it sets: an absent field keeps today's value. Env keys merge into today's variables
- * (keys not in the file stay); each hook replaces only its section of today's deploy script.
+ * (keys not in the file stay); each hook replaces only its section of today's deploy script. **[decision]** Compose
+ * bind adjustments (`keep_binds`, host folders mounted into containers) are not in the file: the schema refuses them
+ * and the file never changes them (an admin's choice in the dashboard).
  */
 final class SitesReconciler implements Reconcilable, ValidatesConfig
 {
@@ -48,6 +56,16 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
      */
     public const FIELDS = ['type', 'root', 'runtime', 'framework', 'php', 'node', 'web_directory', 'port', 'image', 'health_path', 'test_domain', 'servers', 'build', 'env', 'expose', 'deploy.hooks'];
 
+    /** Fields of compose units only. */
+    public const COMPOSE_FIELDS = ['files', 'profiles', 'services.*.port', 'services.*.health_path', 'services.*.replace_with'];
+
+    /** The unit types owning a field (others: app units only). A function's root is its code (Functions). */
+    private const TYPES = [
+        'type' => 'app|compose|function', 'servers' => 'app|compose|function', 'env' => 'app|compose|function',
+        'root' => 'app|compose', 'test_domain' => 'app|compose', 'expose' => 'app|compose', 'deploy.hooks' => 'app|compose',
+        'files' => 'compose', 'profiles' => 'compose', 'services.*.port' => 'compose', 'services.*.health_path' => 'compose', 'services.*.replace_with' => 'compose',
+    ];
+
     /** Shown instead of a stored value that may be a secret. */
     public const REDACTED = '••••';
 
@@ -55,11 +73,17 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
         private readonly ManagedResources $managed,
         private readonly ServerDirectory $servers,
         private readonly SecretVariables $secrets,
+        private readonly DatabaseDirectory $databases,
     ) {}
 
     public function sections(): array
     {
-        return array_map(fn (string $field) => "units.*(app).{$field}", self::FIELDS);
+        return array_map(fn (string $field) => self::section($field), [...self::FIELDS, ...self::COMPOSE_FIELDS]);
+    }
+
+    private static function section(string $field): string
+    {
+        return 'units.*('.(self::TYPES[$field] ?? 'app').").{$field}";
     }
 
     public function phase(): ApplyPhase
@@ -177,7 +201,43 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             $unit['deploy'] = ['hooks' => $hooks];
         }
 
+        if ($site->runtime === SiteRuntime::Compose) {
+            $unit = [...$unit, ...$this->composeOf($site, $scope)];
+        }
+
         return $unit;
+    }
+
+    /**
+     * A compose site's files, profiles and services in the file's shape: public services (in their order) with their
+     * port and health path, services replaced by a database with the unit of that database. A service split into its
+     * own site is the dashboard's (not in the file).
+     *
+     * @return array<string, mixed>
+     */
+    private function composeOf(Site $site, ConfigScope $scope): array
+    {
+        $out = [];
+
+        if (($site->compose_source ?? ComposeSource::Repo) === ComposeSource::Repo && $site->composeFiles() !== []) {
+            $out['files'] = $site->composeFiles();
+        }
+
+        if (($profiles = array_values(array_map('strval', (array) $site->compose_profiles))) !== []) {
+            $out['profiles'] = $profiles;
+        }
+
+        foreach (array_filter((array) $site->public_services, 'is_array') as $public) {
+            $out['services'][(string) $public['service']] = array_filter(['port' => (int) $public['port'], 'health_path' => $public['health_check_path'] ?? null], fn ($v) => $v !== null);
+        }
+
+        foreach ((array) $site->compose_services as $service => $decision) {
+            if (is_array($decision) && ($decision['mode'] ?? null) === ComposeConfig::MODE_DATABASE && ($unit = $scope->unitOf(strtolower((string) ($decision['database_id'] ?? '')))) !== null) {
+                $out['services'][(string) $service]['replace_with'] = $unit;
+            }
+        }
+
+        return $out;
     }
 
     public function diff(ConfigScope $scope, array $desired, array $current): ChangeSet
@@ -292,7 +352,7 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             $this->update($site, $scope, $ctx, array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop), $desired);
             $paths = array_keys($desired);
             $this->managed->record($scope, $ctx, $unit, 'site', $siteId, $paths, merge: true);
-            $this->managed->forgetPaths('site', $siteId, self::prefixes(), $paths);
+            $this->managed->forgetPaths('site', $siteId, [...self::prefixes(self::typeOf($site->runtime)), ...$this->servicePaths($siteId)], $paths);
         }
     }
 
@@ -302,7 +362,12 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
     private function create(ConfigScope $scope, ApplyContext $ctx, string $unit, array $body): void
     {
         $body = self::normalize($body);
-        $runtime = SiteRuntime::from((string) $body['runtime']);
+        $type = (string) ($body['type'] ?? 'app');
+        $runtime = match ($type) {
+            'compose' => SiteRuntime::Compose,
+            'function' => SiteRuntime::Function,
+            default => SiteRuntime::from((string) $body['runtime']),
+        };
         $framework = isset($body['framework']) ? Framework::from((string) $body['framework']) : self::frameworkFor($runtime);
         $serverIds = $this->serverIds($scope, $body);
 
@@ -310,7 +375,11 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             throw ValidationException::withMessages(["units.{$unit}.servers" => "Unit {$unit} has no servers: set `servers` on it or on the environment."]);
         }
 
-        if ($scope->repository !== null && $scope->branch === null) {
+        // [decision] A function's code comes from the repository through Functions (a version per code change): its
+        // site deploys versions, not the repository.
+        $fromRepository = $runtime !== SiteRuntime::Function;
+
+        if ($fromRepository && $scope->repository !== null && $scope->branch === null) {
             throw ValidationException::withMessages(["units.{$unit}" => "Unit {$unit} can't be created: the environment {$scope->environment} has no `branch` to deploy."]);
         }
 
@@ -330,11 +399,15 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             'test_domain_enabled' => $body['test_domain'] ?? null,
             'server_ids' => $serverIds,
             'leader_server_id' => $serverIds[0],
-            'source_connection_id' => $scope->connectionId,
-            'repository' => $scope->repository,
-            'branch' => $scope->branch,
-            'push_to_deploy' => true, // a push deploys it (through Config while the file manages it)
+            'source_connection_id' => $fromRepository ? $scope->connectionId : null,
+            'repository' => $fromRepository ? $scope->repository : null,
+            'branch' => $fromRepository ? $scope->branch : null,
+            // A push deploys it (through Config while the file manages it); a preview's units are deployed by Previews,
+            // under their own Linux user, like the preview's copies.
+            'push_to_deploy' => ! $scope->preview,
+            'isolated' => $scope->preview ? true : null,
             'variables' => isset($body['env']) ? array_map('strval', $body['env']) : null,
+            ...($runtime === SiteRuntime::Compose ? $this->composeInput($scope, $body) : []),
         ], fn ($v) => $v !== null);
 
         $created = app(SiteFactory::class)->create($scope->organizationId, $ctx->actorId, $data, new SitePlacement($scope->projectId, $scope->environmentId, null, null, $unit));
@@ -409,6 +482,131 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             $exposed = in_array('/expose', $paths, true) ? (array) $value('/expose') : ($current->exposed ?? []);
             app(SaveEnvironment::class)($site, $variables, $exposed, $ctx->actorId, 'site.environment_updated');
         }
+
+        $compose = array_filter($paths, fn (string $p) => in_array(Pointer::tokens($p)[0] ?? '', ['files', 'profiles', 'services'], true));
+
+        if ($compose !== [] && $site->runtime === SiteRuntime::Compose) {
+            app(UpdateComposeSettings::class)($site->refresh(), $this->composeUpdate($site, $scope, $desired, $compose), $ctx->actorId);
+        }
+    }
+
+    /**
+     * Compose settings of a new compose unit (SiteFactory's input): its files (else the default compose file), profiles,
+     * public services in the file's order and the services a database unit replaces.
+     *
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    private function composeInput(ConfigScope $scope, array $body): array
+    {
+        $public = [];
+        $replaced = [];
+
+        foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+            if (isset($settings['port'])) {
+                $public[] = array_filter(['service' => (string) $service, 'port' => (int) $settings['port'], 'domain' => null, 'health_check_path' => $settings['health_path'] ?? null], fn ($v) => $v !== null);
+            }
+
+            if (isset($settings['replace_with'])) {
+                $replaced[(string) $service] = $this->replacement($scope, (string) $settings['replace_with']);
+            }
+        }
+
+        return array_filter([
+            'compose_source' => ComposeSource::Repo->value,
+            'compose_files' => isset($body['files']) ? array_values($body['files']) : null,
+            'compose_profiles' => isset($body['profiles']) ? array_values($body['profiles']) : null,
+            'public_services' => $public,
+            'compose_services' => $replaced ?: null,
+        ], fn ($v) => $v !== null);
+    }
+
+    /**
+     * Settings → Compose input for the compose fields that changed: public services keep their order and domains
+     * (new ones are added last), only the fields the file sets change.
+     *
+     * @param  array<string, mixed>  $desired  pointer relative to the unit => value
+     * @param  array<int, string>  $paths  the compose paths that changed
+     * @return array<string, mixed>
+     */
+    private function composeUpdate(Site $site, ConfigScope $scope, array $desired, array $paths): array
+    {
+        $data = [];
+
+        if (array_filter($paths, fn (string $p) => $p === '/files') !== []) {
+            $data['compose_source'] = ComposeSource::Repo->value;
+            $data['compose_files'] = array_values((array) $desired['/files']);
+        }
+
+        if (in_array('/profiles', $paths, true)) {
+            $data['compose_profiles'] = array_values((array) $desired['/profiles']);
+        }
+
+        $public = array_values(array_filter((array) $site->public_services, 'is_array'));
+        $published = false;
+
+        foreach ($paths as $path) {
+            $tokens = Pointer::tokens($path);
+
+            if (count($tokens) !== 3 || $tokens[0] !== 'services') {
+                continue;
+            }
+
+            [, $service, $field] = $tokens;
+
+            if ($field === 'replace_with') {
+                $data['compose_services'][$service] = $this->replacement($scope, (string) $desired[$path]);
+
+                continue;
+            }
+
+            $published = true;
+            $index = collect($public)->search(fn (array $p) => (string) $p['service'] === $service);
+
+            if ($index === false) {
+                $public[] = ['service' => $service, 'port' => (int) ($desired['/services/'.Pointer::escape($service).'/port'] ?? 0), 'domain' => null];
+                $index = count($public) - 1;
+            }
+
+            if ($field === 'port') {
+                $public[$index]['port'] = (int) $desired[$path];
+            } else {
+                $public[$index]['health_check_path'] = (string) $desired[$path];
+            }
+        }
+
+        if ($published) {
+            $data['public_services'] = array_map(fn (array $p) => array_intersect_key($p, array_flip(['service', 'port', 'domain', 'health_check_path'])), $public);
+        }
+
+        return $data;
+    }
+
+    /**
+     * A compose service replaced by a database unit: the instance behind the unit (created in phase A before Sites).
+     *
+     * @return array{mode: string, database_id: string, engine: string}
+     */
+    private function replacement(ConfigScope $scope, string $unit): array
+    {
+        $databaseId = ($scope->services[$unit]['kind'] ?? null) === 'database' ? $scope->refId($unit) : null;
+        $database = $databaseId !== null ? $this->databases->find($databaseId) : null;
+
+        if ($database === null) {
+            throw ValidationException::withMessages(["units.{$unit}" => "The database unit {$unit} doesn't exist in this environment yet."]);
+        }
+
+        return ['mode' => ComposeConfig::MODE_DATABASE, 'database_id' => $database->id, 'engine' => $database->engine];
+    }
+
+    /**
+     * Ownership paths of the compose services' fields this reconciler records (limits are Limits').
+     *
+     * @return list<string>
+     */
+    private function servicePaths(string $siteId): array
+    {
+        return array_values(array_filter($this->managed->managed('site', $siteId)->paths, fn (string $p) => preg_match('#^/services/[^/]+/(port|health_path|replace_with)$#', $p) === 1));
     }
 
     public function validate(ConfigScope $scope, array $resolved): array
@@ -416,11 +614,27 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
         $issues = [];
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
-            if (($body['type'] ?? null) !== 'app') {
+            $base = '/units/'.Pointer::escape((string) $unit);
+            $type = (string) ($body['type'] ?? '');
+            $siteId = ($scope->services[(string) $unit]['kind'] ?? null) === 'site' ? $scope->refId((string) $unit) : null;
+            $site = $siteId !== null && in_array($type, ['app', 'compose', 'function'], true) ? Site::query()->find($siteId) : null;
+
+            if ($site !== null && self::typeOf($site->runtime) !== $type) {
+                $issues[] = ConfigIssue::error('value.conflict', "{$base}/type", "The unit {$unit} is a".(self::typeOf($site->runtime) === 'app' ? 'n app' : ' '.self::typeOf($site->runtime))." unit: its type can't change (add a unit with another key instead).");
+
                 continue;
             }
 
-            $base = '/units/'.Pointer::escape((string) $unit);
+            if ($type === 'compose') {
+                array_push($issues, ...$this->validateCompose($scope, $resolved, (string) $unit, $body, $site));
+
+                continue;
+            }
+
+            if ($type !== 'app') {
+                continue;
+            }
+
             $runtime = SiteRuntime::tryFrom((string) ($body['runtime'] ?? ''));
 
             if (isset($body['php']) && ! in_array($body['php'], (array) config('sites.php_versions'), true)) {
@@ -463,6 +677,62 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
+     * @param  array<string, mixed>  $resolved
+     * @param  array<string, mixed>  $body
+     * @return list<ConfigIssue>
+     */
+    private function validateCompose(ConfigScope $scope, array $resolved, string $unit, array $body, ?Site $site): array
+    {
+        $issues = [];
+        $base = '/units/'.Pointer::escape($unit);
+        $public = array_column(array_filter((array) $site?->public_services, 'is_array'), 'service');
+
+        if (isset($body['deploy']['hooks'])) {
+            $issues[] = ConfigIssue::error('value.unsupported', "{$base}/deploy/hooks", 'Deploy hooks run on host runtimes only (not compose).');
+        }
+
+        foreach ((array) ($body['services'] ?? []) as $service => $settings) {
+            $at = "{$base}/services/".Pointer::escape((string) $service);
+            $isPublic = isset($settings['port']) || in_array((string) $service, $public, true);
+
+            foreach (['health_path', 'domains', 'redirects', 'headers'] as $field) {
+                if (isset($settings[$field]) && ! $isPublic) {
+                    $issues[] = ConfigIssue::error('value.conflict', "{$at}/{$field}", "`{$field}` needs the service to be public: set its `port`.");
+                }
+            }
+
+            if (! isset($settings['replace_with'])) {
+                continue;
+            }
+
+            $target = (string) $settings['replace_with'];
+            $isDatabase = in_array($resolved['units'][$target]['type'] ?? null, ['database', 'redis'], true) || ($scope->services[$target]['kind'] ?? null) === 'database';
+            $decision = (array) ($site?->compose_services[(string) $service] ?? []);
+
+            if (! $isDatabase) {
+                $issues[] = ConfigIssue::error('name.unit', "{$at}/replace_with", "No database or redis unit named \"{$target}\".");
+            } elseif ($isPublic) {
+                $issues[] = ConfigIssue::error('value.conflict', "{$at}/replace_with", 'A service replaced by a database is not public: remove its `port`.');
+            } elseif (($decision['mode'] ?? null) === ComposeConfig::MODE_SITE) {
+                $issues[] = ConfigIssue::error('value.conflict', "{$at}/replace_with", "{$service} runs as its own site (a dashboard choice): put it back in the stack there first.");
+            } elseif (($decision['mode'] ?? null) === ComposeConfig::MODE_DATABASE && ($current = $scope->unitOf(strtolower((string) ($decision['database_id'] ?? '')))) !== $target) {
+                $issues[] = ConfigIssue::error('value.conflict', "{$at}/replace_with", "{$service} is already replaced by ".($current !== null ? "the unit {$current}" : 'another database').': put it back in the stack in the dashboard first.');
+            }
+        }
+
+        return $issues;
+    }
+
+    private static function typeOf(SiteRuntime $runtime): string
+    {
+        return match ($runtime) {
+            SiteRuntime::Compose => 'compose',
+            SiteRuntime::Function => 'function',
+            default => 'app',
+        };
+    }
+
+    /**
      * File values as stored: env integers and booleans as text, `root` "." kept (the root).
      *
      * @param  array<string, mixed>  $body
@@ -470,7 +740,11 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
      */
     private static function normalize(array $body): array
     {
-        $out = array_intersect_key($body, array_flip(array_filter(self::FIELDS, fn (string $f) => ! str_contains($f, '.'))));
+        $out = array_intersect_key($body, array_flip([...array_filter(self::FIELDS, fn (string $f) => ! str_contains($f, '.')), 'files', 'profiles', 'services']));
+
+        if (isset($out['services']) && is_array($out['services'])) {
+            $out['services'] = array_filter(array_map(fn ($s) => array_intersect_key((array) $s, array_flip(['port', 'health_path', 'replace_with'])), $out['services']));
+        }
 
         if (isset($out['env']) && is_array($out['env'])) {
             foreach ($out['env'] as $key => $value) {
@@ -519,9 +793,14 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
 
     private static function sectionOf(string $path): string
     {
-        $first = Pointer::tokens($path)[0] ?? '';
+        $tokens = Pointer::tokens($path);
+        $first = $tokens[0] ?? '';
 
-        return $first === 'deploy' ? 'units.*(app).deploy.hooks' : "units.*(app).{$first}";
+        return self::section(match ($first) {
+            'deploy' => 'deploy.hooks',
+            'services' => 'services.*.'.($tokens[2] ?? 'port'),
+            default => $first,
+        });
     }
 
     private static function envKey(string $path): ?string
@@ -532,13 +811,15 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
-     * Ownership prefixes this reconciler records under.
+     * Ownership prefixes this reconciler records under for a unit type (compose services' fields aside).
      *
      * @return list<string>
      */
-    public static function prefixes(): array
+    public static function prefixes(string $type = 'app'): array
     {
-        return array_map(fn (string $f) => '/'.str_replace('.', '/', $f), self::FIELDS);
+        $fields = array_filter([...self::FIELDS, 'files', 'profiles'], fn (string $f) => in_array($type, explode('|', self::TYPES[$f] ?? 'app'), true));
+
+        return array_values(array_map(fn (string $f) => '/'.str_replace('.', '/', $f), $fields));
     }
 
     /**
@@ -576,7 +857,7 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
         return match ($runtime) {
             SiteRuntime::FrankenPhp, SiteRuntime::PhpFpm => Framework::Php,
             SiteRuntime::Static => Framework::Static,
-            SiteRuntime::Docker => Framework::Docker,
+            SiteRuntime::Docker, SiteRuntime::Compose, SiteRuntime::Function => Framework::Docker,
             default => Framework::Node,
         };
     }

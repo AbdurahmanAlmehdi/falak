@@ -2,6 +2,7 @@
 
 namespace Falak\Sites\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Identity\Contracts\AuditLog;
@@ -84,6 +85,7 @@ final class ComposeController extends Controller
     {
         $this->authorize('view', $site);
         $row = ComposeVersion::query()->where('site_id', $site->id)->where('version', $version)->firstOrFail();
+        $this->guardManaged($site, ['compose_source' => ComposeSource::Inline->value]);
 
         return response()->json(['data' => ['version' => $row->version, 'content' => $row->content]])->header('Cache-Control', 'no-store');
     }
@@ -118,6 +120,7 @@ final class ComposeController extends Controller
             'base_version' => ['nullable', 'integer'],
         ]);
 
+        $this->guardManaged($site, $data);
         $latest = ComposeVersion::query()->where('site_id', $site->id)->max('version');
 
         if (isset($data['base_version']) && $latest !== null && (int) $data['base_version'] !== (int) $latest) {
@@ -127,6 +130,45 @@ final class ComposeController extends Controller
         $result = $update($site, $data, $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => $result]);
+    }
+
+    /**
+     * Fields a falak.yaml manages (files, profiles, a public service's port and health path, a service replaced by a
+     * database unit) are refused (422) when the form changes them.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function guardManaged(Site $site, array $data): void
+    {
+        $managed = app(ManagedResources::class)->managed('site', $site->id);
+
+        if (! $managed->any()) {
+            return;
+        }
+
+        $managed->guard(['compose_files' => '/files', 'compose_profiles' => '/profiles'], $data, [
+            'compose_files' => $site->composeFiles(),
+            'compose_profiles' => array_values((array) $site->compose_profiles),
+        ]);
+
+        if (($data['compose_source'] ?? null) === ComposeSource::Inline->value && $managed->covers('/files')) {
+            $managed->guard(['compose_source' => '/files'], $data, ['compose_source' => ComposeSource::Repo->value]);
+        }
+
+        $current = collect(array_filter((array) $site->public_services, 'is_array'))->keyBy('service');
+        $wanted = collect(array_key_exists('public_services', $data) ? array_filter((array) $data['public_services'], 'is_array') : $current->all())->keyBy('service');
+
+        foreach ($current->keys()->merge($wanted->keys())->unique() as $service) {
+            foreach (['port' => 'port', 'health_check_path' => 'health_path'] as $key => $field) {
+                $managed->guard(["public_services.{$service}.{$key}" => "/services/{$service}/{$field}"],
+                    ["public_services.{$service}.{$key}" => $wanted->get($service)[$key] ?? null],
+                    ["public_services.{$service}.{$key}" => $current->get($service)[$key] ?? null]);
+            }
+        }
+
+        foreach ((array) ($data['compose_services'] ?? []) as $service => $decision) {
+            $managed->guardWhole("compose_services.{$service}", '/services/'.$service.'/replace_with');
+        }
     }
 
     /** POST /sites/{site}/compose/versions/{version}/restore — the version's content becomes a new version. */
