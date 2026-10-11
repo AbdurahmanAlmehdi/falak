@@ -350,10 +350,25 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             }
 
             $this->update($site, $scope, $ctx, array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop), $desired);
+            $this->followBranch($site, $scope);
             $paths = array_keys($desired);
             $this->managed->record($scope, $ctx, $unit, 'site', $siteId, $paths, merge: true);
             $this->managed->forgetPaths('site', $siteId, [...self::prefixes(self::typeOf($site->runtime)), ...$this->servicePaths($siteId)], $paths);
         }
+    }
+
+    /**
+     * **[decision]** A unit deploying the source's repository follows its environment's `branch`: an environment the
+     * file moves to another branch takes its sites along (push to deploy and the dashboard see the new branch).
+     */
+    private function followBranch(Site $site, ConfigScope $scope): void
+    {
+        if ($scope->preview || $scope->branch === null || $scope->repository === null || $site->branch === $scope->branch
+            || strcasecmp((string) $site->repository, $scope->repository) !== 0 || $site->source_connection_id !== $scope->connectionId) {
+            return;
+        }
+
+        app(UpdateSite::class)($site->refresh(), ['branch' => $scope->branch]);
     }
 
     /**

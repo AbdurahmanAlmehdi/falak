@@ -28,8 +28,9 @@ use Throwable;
 /**
  * A push to a repository a project follows: the file is read at the pushed commit, and every environment whose
  * `branch` is the pushed branch gets a run (**[decision]** one run per environment, not per site). An environment the
- * file declares and the project doesn't have is created first (not production: the flag is its run's risky change); an
- * environment the file no longer declares is only no longer managed.
+ * file declares and the project doesn't have is created first, by a push to the production environment's branch only
+ * (not production: the flag is its run's risky change); an environment the file no longer declares is only no longer
+ * managed.
  */
 final class RunOnPush implements ShouldQueue
 {
@@ -91,8 +92,32 @@ final class RunOnPush implements ShouldQueue
             return;
         }
 
+        $productionBranch = $this->productionBranch($source, $file->document, $environments);
+
+        if ($event->branch === $productionBranch && $file->ok() && ! ImplicitEnvironment::applies($file->document)) {
+            // [decision] The production branch's file creates every environment it declares (bound to any branch):
+            // their runs come with pushes to their branches.
+            foreach (array_keys((array) $file->document->environments) as $slug) {
+                if (! in_array((string) $slug, $bound, true) && ! collect($environments)->contains(fn (EnvironmentData $e) => $e->slug === (string) $slug && ! $e->isPreview)) {
+                    try {
+                        $this->environments->create($source->project_id, (string) $slug);
+                    } catch (ValidationException $e) {
+                        $this->failed($source, $event, null, "The environment \"{$slug}\" can't be created: ".collect($e->errors())->flatten()->first(), $raw, (string) $slug);
+                    }
+                }
+            }
+        }
+
         foreach ($bound as $slug) {
             $environment = collect($environments)->first(fn (EnvironmentData $e) => $e->slug === $slug && ! $e->isPreview);
+
+            if ($environment === null && $event->branch !== $productionBranch) {
+                // [decision] Only a push to the production environment's branch creates environments.
+                $this->failed($source, $event, null, "The project has no environment \"{$slug}\": environments are created only by a push to "
+                    .($productionBranch !== null ? "{$productionBranch} (the production environment's branch)" : "the production environment's branch").'. Push the file there, or create it in the dashboard.', $raw, $slug);
+
+                continue;
+            }
 
             if ($environment === null) {
                 // [decision] The file creates the environments it declares (empty, not production).
@@ -113,9 +138,28 @@ final class RunOnPush implements ShouldQueue
             }
         }
 
-        if ($file->ok() && ! ImplicitEnvironment::applies($file->document)) {
-            $this->released($source, $event, array_keys((array) $file->document->environments));
+        if ($file->ok()) {
+            // [decision] A file without `environments` declares production only: the others it bound are released.
+            $declared = ImplicitEnvironment::applies($file->document)
+                ? array_values(array_map(fn (EnvironmentData $e) => $e->slug, array_filter($environments, fn (EnvironmentData $e) => $e->isProduction && ! $e->isPreview)))
+                : array_keys((array) $file->document->environments);
+            $this->released($source, $event, $declared);
         }
+    }
+
+    /**
+     * The branch the production environment follows: the pushed file's `environments.<production>.branch`, else the
+     * repository's default branch (a file without environments binds it).
+     *
+     * @param  list<EnvironmentData>  $environments
+     */
+    private function productionBranch(ConfigSource $source, mixed $document, array $environments): ?string
+    {
+        $production = collect($environments)->first(fn (EnvironmentData $e) => $e->isProduction && ! $e->isPreview);
+        $declared = $production !== null && $document instanceof stdClass && ($document->environments ?? null) instanceof stdClass
+            ? ($document->environments->{$production->slug} ?? null) : null;
+
+        return $declared instanceof stdClass && isset($declared->branch) ? (string) $declared->branch : $this->implicit->defaultBranch($source);
     }
 
     /**
@@ -141,6 +185,10 @@ final class RunOnPush implements ShouldQueue
 
             $this->legacyDeploy($event, $environment->id);
             ConfigOwnership::query()->where('environment_id', $environment->id)->delete();
+
+            // A run still waiting can't apply the file to it later.
+            ConfigRun::query()->where('environment_id', $environment->id)->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval])
+                ->update(['status' => RunStatus::Cancelled, 'error' => 'The environment is no longer in the file: it was released.', 'finished_at' => now()]);
         }
     }
 
