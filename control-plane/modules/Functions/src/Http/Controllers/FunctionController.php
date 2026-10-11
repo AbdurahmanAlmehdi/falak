@@ -2,6 +2,7 @@
 
 namespace Falak\Functions\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Deployments\Contracts\DeploymentDirectory;
 use Falak\Functions\Application\Actions\DeployCode;
 use Falak\Functions\Application\Actions\DeployVersion;
@@ -157,6 +158,8 @@ final class FunctionController extends Controller
         [$data, $function] = $this->resolve($request->user(), $site, Permissions::DEPLOY);
         $this->authorizeDeploy($request->user(), $data);
         $input = $request->validate(['allow_cidrs' => ['present', 'array', 'max:'.ManageAccess::MAX_CIDRS], 'allow_cidrs.*' => ['nullable', 'string', 'max:64']]);
+        app(ManagedResources::class)->managed('site', $data->id)->guard(['allow_cidrs' => '/access/allow'],
+            ['allow_cidrs' => array_values(array_filter((array) $input['allow_cidrs']))], ['allow_cidrs' => array_values((array) ($function->allow_cidrs ?? []))]);
         $deploymentId = $manage->setAllowlist($data, $function, array_values((array) $input['allow_cidrs']), $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => ['allow_cidrs' => array_values((array) ($function->refresh()->allow_cidrs ?? [])), 'deployment_id' => $deploymentId]]);
@@ -253,6 +256,11 @@ final class FunctionController extends Controller
         [$data, $function] = $this->resolve($request->user(), $site, Permissions::DEPLOY);
         $this->authorizeDeploy($request->user(), $data);
         $input = $request->validate(UpdateSettings::rules());
+        // Settings a falak.yaml sets are its (422 when the form changes them).
+        app(ManagedResources::class)->managed('site', $data->id)->guard([
+            'min_instances' => '/scaling/min_instances', 'max_instances' => '/scaling/max_instances', 'concurrency' => '/scaling/concurrency',
+            'idle_timeout_s' => '/scaling/idle_timeout', 'memory_mb' => '/memory', 'cpus' => '/cpus', 'request_timeout_s' => '/timeout',
+        ], $input, $function->only(UpdateSettings::FIELDS));
         $deploymentId = $update($data, $function, $input, $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => ['settings' => $this->settings($function->refresh()), 'deployment_id' => $deploymentId]]);

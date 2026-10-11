@@ -124,3 +124,20 @@ it('creates, updates and removes the schedules the file sets; adopted ones are o
         'value.range /units/api/schedules/bad/timeout',
     ]);
 });
+
+it('refuses dashboard edits of what the file manages: settings, allowlist, schedules', function () {
+    $desired = ['units' => ['api' => ['type' => 'function', 'runtime' => 'python', 'root' => 'fn', 'scaling' => ['max_instances' => 2], 'access' => ['allow' => ['10.0.0.0/8']]]]];
+    $ctx = config_ctx($this->env);
+    $this->functions->apply($this->scope, $this->functions->diff($this->scope, $desired, $this->functions->current($this->scope)), $ctx);
+    $schedules = ['units' => ['api' => ['type' => 'function', 'schedules' => ['nightly' => ['cron' => '@daily']]]]];
+    $this->schedules->apply($this->scope, $this->schedules->diff($this->scope, $schedules, $this->schedules->current($this->scope)), $ctx);
+    $nightly = FunctionSchedule::query()->where('name', 'nightly')->sole();
+    $base = "/sites/{$this->site->id}/function";
+
+    $this->putJson("{$base}/settings", ['max_instances' => 4])->assertStatus(422)->assertJsonValidationErrors('max_instances');
+    $this->putJson("{$base}/settings", ['max_instances' => 2, 'concurrency' => 10])->assertOk();
+    $this->putJson("{$base}/access/allowlist", ['allow_cidrs' => ['0.0.0.0/0']])->assertStatus(422)->assertJsonValidationErrors('allow_cidrs');
+    $this->putJson("{$base}/schedules/{$nightly->id}", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
+    $this->deleteJson("{$base}/schedules/{$nightly->id}")->assertStatus(422);
+    $this->postJson("{$base}/schedules", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
+});

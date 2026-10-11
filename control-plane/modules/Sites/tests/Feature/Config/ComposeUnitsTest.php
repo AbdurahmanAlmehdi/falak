@@ -243,3 +243,18 @@ it('routes the unit\'s domains to its first public service and a service\'s doma
         // `services.<first>` is the unit's own route.
         ->and($edge->diff($scope, ['units' => ['shop' => ['type' => 'compose', 'services' => ['web' => ['domains' => ['shop.example.com']], 'api' => ['domains' => ['api.example.com'], 'headers' => ['X-Api' => '1']]]]]], $edge->current($scope))->actionable())->toBe([]);
 });
+
+it('refuses dashboard edits of compose fields the file manages', function () {
+    ($this->apply)($this->sites, ['units' => ['shop' => compose_unit()]]);
+    $site = Site::query()->where('name', 'shop')->sole();
+    $public = [['service' => 'web', 'port' => 80, 'health_check_path' => '/up']];
+    $body = ['compose_source' => 'repo', 'compose_files' => ['compose.yaml'], 'compose_profiles' => ['dev'], 'public_services' => $public];
+
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_files' => ['other.yaml']])->assertStatus(422)->assertJsonValidationErrors('compose_files');
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'public_services' => [['service' => 'web', 'port' => 81, 'health_check_path' => '/up']]])
+        ->assertStatus(422)->assertJsonValidationErrors('public_services.web.port');
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_source' => 'inline', 'compose_content' => "services: {}\n"])->assertStatus(422);
+
+    // The managed values unchanged, another service made public: accepted.
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'public_services' => [...$public, ['service' => 'api', 'port' => 8080]]])->assertOk();
+});
