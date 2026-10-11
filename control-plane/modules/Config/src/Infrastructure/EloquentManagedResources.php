@@ -7,6 +7,7 @@ use Falak\Config\Contracts\ApplyContext;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\ManagedFields;
 use Falak\Config\Contracts\ManagedResources;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
@@ -42,6 +43,35 @@ final class EloquentManagedResources implements ManagedResources
         if ($createdByFile !== null) {
             ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', $resourceId)->update(['created_by_file' => $createdByFile]);
         }
+
+        // Managed again (the file lists it once more): no longer an unmanaged resource.
+        ConfigDetached::query()->where('resource_type', $resourceType)->where('resource_id', $resourceId)->delete();
+    }
+
+    public function detach(ConfigScope $scope, ApplyContext $ctx, ?string $unit, string $resourceType, string $resourceId, string $label, ?string $deleteUrl = null, ?string $siteId = null, array $deleteBody = []): void
+    {
+        $resourceId = strtolower($resourceId);
+        $this->forget($resourceType, $resourceId, $scope->environmentId);
+
+        if ($scope->preview) {
+            return; // a preview is torn down whole: nothing to list
+        }
+
+        ConfigDetached::query()->updateOrCreate(
+            ['environment_id' => $scope->environmentId, 'resource_type' => $resourceType, 'resource_id' => $resourceId],
+            [
+                'organization_id' => $scope->organizationId,
+                'project_id' => $scope->projectId,
+                'unit' => $unit,
+                'site_id' => $siteId !== null ? strtolower($siteId) : null,
+                'label' => mb_substr($label, 0, 255),
+                'reason' => ConfigDetached::REMOVED_FROM_FILE,
+                'delete_url' => $deleteUrl,
+                'delete_body' => $deleteBody === [] ? null : $deleteBody,
+                'run_id' => $ctx->runId,
+                'detached_at' => now(),
+            ],
+        );
     }
 
     public function forgetPaths(string $resourceType, string $resourceId, array $prefixes, array $keep = []): void

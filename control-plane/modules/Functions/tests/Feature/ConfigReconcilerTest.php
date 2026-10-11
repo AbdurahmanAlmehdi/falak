@@ -1,6 +1,8 @@
 <?php
 
 use Falak\Config\Contracts\ChangeSet;
+use Falak\Config\Contracts\ManagedResources;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Fleet\Domain\Models\Agent;
 use Falak\Functions\Application\FunctionStore;
@@ -91,6 +93,7 @@ it('validates runtimes, bounds and the code', function () {
 it('creates, updates and removes the schedules the file sets; adopted ones are only released', function () {
     FunctionSchedule::query()->create(['function_id' => $this->function->id, 'name' => 'manual', 'expression' => '@hourly', 'timezone' => 'UTC', 'overlap' => 'skip', 'timeout_s' => 300, 'enabled' => true]);
     $ctx = config_ctx($this->env);
+    app(ManagedResources::class)->record($this->scope, $ctx, 'api', 'site', $this->site->id, ['/type'], merge: true); // the unit is the file's
     $apply = function (array $schedules) use ($ctx) {
         $desired = ['units' => ['api' => ['type' => 'function', 'schedules' => $schedules]]];
         $plan = $this->schedules->diff($this->scope, $desired, $this->schedules->current($this->scope));
@@ -113,7 +116,8 @@ it('creates, updates and removes the schedules the file sets; adopted ones are o
     expect($changes['/units/api/schedules/nightly'][0])->toBe('delete')
         ->and($changes['/units/api/schedules/manual'][0])->toBe('detach')
         ->and(FunctionSchedule::query()->pluck('name')->all())->toBe(['manual'])
-        ->and(ConfigOwnership::query()->where('resource_type', 'function_schedule')->exists())->toBeFalse();
+        ->and(ConfigOwnership::query()->where('resource_type', 'function_schedule')->exists())->toBeFalse()
+        ->and(ConfigDetached::query()->sole()->only(['resource_type', 'label']))->toBe(['resource_type' => 'function_schedule', 'label' => 'Function schedule manual (api)']);
 
     $issues = $this->schedules->validate($this->scope, config_doc('production', ['api' => ['type' => 'function', 'schedules' => [
         'bad' => ['cron' => 'every day', 'timezone' => 'Mars/Olympus', 'timeout' => '2d'],

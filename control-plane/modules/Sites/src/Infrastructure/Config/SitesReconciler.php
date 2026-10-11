@@ -290,7 +290,7 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             }
 
             // Deleting a site needs the run's allow_destroy (config.destroy); otherwise the site is only detached.
-            $op = $scope->allowDestroy && $this->managed->createdByFile('site', $siteId) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $scope->allowDestroy && $this->managed->createdByFile('site', $siteId, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
             $changes[] = new Change($op, '/units/'.Pointer::escape($unit), ['type' => $body['type'] ?? 'app', 'runtime' => $body['runtime'] ?? null], null, $first, $unit);
         }
 
@@ -323,21 +323,17 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            if ($whole?->op === ChangeOp::Delete && $ctx->allowDestroy) {
+            if ($whole?->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('site', $siteId, $scope->environmentId)) {
                 app(SiteFactory::class)->delete($siteId, actorId: $ctx->actorId);
-                $this->managed->forget('site', $siteId);
+                $this->managed->forget('site', $siteId, $scope->environmentId);
 
                 continue;
             }
 
-            if ($whole?->op === ChangeOp::Delete) {
-                $this->managed->forget('site', $siteId); // never deleted without allow_destroy: detached
-
-                continue;
-            }
-
-            if ($whole?->op === ChangeOp::Detach) {
-                $this->managed->forget('site', $siteId);
+            if ($whole?->op === ChangeOp::Delete || $whole?->op === ChangeOp::Detach) {
+                // Never deleted without allow_destroy and a site the file created: detached, listed as unmanaged.
+                $name = (string) (Site::query()->whereKey($siteId)->value('name') ?? $unit);
+                $this->managed->detach($scope, $ctx, $unit, 'site', $siteId, "Site {$name}", route('sites.destroy', ['site' => $siteId], false), $siteId, ['name' => $name]);
 
                 continue;
             }

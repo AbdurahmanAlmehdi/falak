@@ -5,6 +5,7 @@ use Falak\Config\Contracts\ApplyPhase;
 use Falak\Config\Contracts\Change;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\ManagedResources;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Identity\Contracts\Role;
@@ -40,6 +41,8 @@ beforeEach(function () {
         'commit' => str_repeat('a', 40), 'trigger' => 'push', 'status' => 'applying', 'file' => '',
     ]);
     $this->ctx = new ApplyContext($run->id, ApplyPhase::WithRelease, str_repeat('a', 40), unit: 'web');
+    // The unit is the file's (Sites records its site in phase A).
+    app(ManagedResources::class)->record($this->scope, $this->ctx, 'web', 'site', $this->site->id, ['/type'], merge: true);
 });
 
 /**
@@ -140,7 +143,26 @@ it('deletes what the file created and only unmanages what it adopted', function 
         ->and(Worker::query()->find($adopted->id))->not->toBeNull()
         ->and(app(ManagedResources::class)->managed('worker', $adopted->id)->any())->toBeFalse()
         ->and(Daemon::query()->find($created->id))->toBeNull()
-        ->and(Daemon::query()->find($untouched->id))->not->toBeNull();
+        ->and(Daemon::query()->find($untouched->id))->not->toBeNull()
+        // The adopted worker is listed as unmanaged, with the Processes delete route.
+        ->and(ConfigDetached::query()->sole()->only(['resource_type', 'resource_id', 'unit', 'label', 'reason', 'delete_url']))->toBe([
+            'resource_type' => 'worker', 'resource_id' => $adopted->id, 'unit' => 'web', 'label' => 'Worker worker-1 (web)', 'reason' => 'removed_from_file',
+            'delete_url' => "/sites/{$this->site->id}/queues/{$adopted->id}",
+        ]);
+
+    // Managed again (the file lists it once more): off the list.
+    processes_config_apply(['workers' => ['worker-1' => ['processes' => 4]]]);
+    expect(ConfigDetached::query()->count())->toBe(0);
+});
+
+it('items of a unit that left the file follow its detached site: detached, never deleted', function () {
+    processes_config_apply(['daemons' => ['ws' => ['command' => 'run ws']]]);
+    $daemon = Daemon::query()->sole();
+    app(ManagedResources::class)->forget('site', $this->site->id, $this->scope->environmentId); // Sites detached the unit's site
+
+    expect(processes_config_apply([]))->toBe([['detach', '/units/web/daemons/ws']])
+        ->and(Daemon::query()->find($daemon->id))->not->toBeNull()
+        ->and(ConfigDetached::query()->where('resource_type', 'daemon')->exists())->toBeTrue();
 });
 
 it('validates cron, time zones, bounds, env and servers', function () {

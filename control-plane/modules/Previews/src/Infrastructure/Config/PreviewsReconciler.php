@@ -225,7 +225,8 @@ final class PreviewsReconciler implements Reconcilable, ValidatesConfig
         foreach ($changes->changes as $change) {
             if ($change->path === '/previews' && $change->op === ChangeOp::Detach) {
                 if ($settings !== null) {
-                    $this->managed->forget('preview_settings', $settings->id);
+                    // Released: previews keep today's settings, editable again (nothing to delete).
+                    $this->managed->detach($scope, $ctx, null, 'preview_settings', $settings->id, 'Preview settings');
                 }
 
                 return;

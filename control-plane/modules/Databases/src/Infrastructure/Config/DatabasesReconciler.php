@@ -409,7 +409,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             }
 
             if ($whole?->op === ChangeOp::Delete || $whole?->op === ChangeOp::Detach) {
-                $this->forget($scope, $instance);
+                $this->detachInstance($scope, $ctx, $unit, $instance);
                 $instance->forceFill(['status_message' => "Detached from {$this->fileName()} (unit {$unit}): it keeps running and keeps its data; it is no longer managed by the file."])->save();
 
                 continue;
@@ -555,9 +555,11 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             } elseif (($database = $instance->databases()->where('name', $name)->first()) !== null) {
                 if ($change->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('database', $database->id, $scope->environmentId) && ! $this->isServiceDatabase($scope, $unit, $database)) {
                     app(DeleteDatabase::class)($database);
+                    $this->managed->forget('database', $database->id, $scope->environmentId);
+                } else {
+                    $this->managed->detach($scope, $ctx, $unit, 'database', $database->id, "Database {$database->name} ({$unit})",
+                        route('databases.databases.destroy', ['database' => $database->id], false), deleteBody: ['confirm' => $database->name]);
                 }
-
-                $this->managed->forget('database', $database->id, $scope->environmentId);
             }
         }
 
@@ -598,9 +600,11 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                 if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId)) {
                     // Its backups stay in storage (pruned by retention only while a schedule exists).
                     app(DeleteBackupSchedule::class)($schedule);
+                    $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
+                } else {
+                    $this->managed->detach($scope, $ctx, $unit, 'backup_schedule', $schedule->id, "Backup schedule of {$instance->name} ({$unit})",
+                        route('databases.schedules.destroy', ['backupSchedule' => $schedule->id], false));
                 }
-
-                $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
             }
 
             return;
@@ -998,6 +1002,14 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
     private function schedule(DatabaseInstance $instance): ?BackupSchedule
     {
         return BackupSchedule::query()->with(['storageProvider', 'databases'])->where('database_instance_id', $instance->id)->where('name', self::SCHEDULE)->first();
+    }
+
+    /** Detached with its unit: the container (listed as unmanaged), its databases and its schedule (no longer managed). */
+    private function detachInstance(ConfigScope $scope, ApplyContext $ctx, string $unit, DatabaseInstance $instance): void
+    {
+        $this->forget($scope, $instance);
+        $this->managed->detach($scope, $ctx, $unit, 'database_instance', $instance->id, "Database server {$instance->name} ({$unit})",
+            route('databases.instances.destroy', ['instance' => $instance->id], false), deleteBody: ['confirm' => $instance->name]);
     }
 
     /** No longer managed: the container, its databases and its schedule. */

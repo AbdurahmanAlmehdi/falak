@@ -52,6 +52,8 @@ use RuntimeException;
  */
 final class EdgeReconciler implements Reconcilable, ValidatesConfig
 {
+    private ?ConfigScope $diffScope = null;
+
     public const DOMAINS = 'units.*(app|compose|function).domains';
 
     public const REDIRECTS = 'units.*(app|compose).redirects';
@@ -158,6 +160,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
 
     public function diff(ConfigScope $scope, array $desired, array $current): ChangeSet
     {
+        $this->diffScope = $scope; // read by removal() during this diff only
         $changes = [];
         $units = array_unique([...array_keys((array) ($desired['units'] ?? [])), ...array_keys((array) ($current['units'] ?? []))]);
 
@@ -266,7 +269,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $op = $this->managed->createdByFile('domain', $models[$host]->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $this->removal('domain', $models[$host]->id, $unit);
             $changes[] = new Change($op, "{$base}/domains/".Pointer::escape($host), $entry, null, $domainsSection, $unit);
         }
 
@@ -297,7 +300,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $op = $this->managed->createdByFile('redirect', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $this->removal('redirect', $model->id, $unit);
             $changes[] = new Change($op, "{$base}/redirects/".Pointer::escape($from), $redirect, null, $redirectsSection, $unit);
         }
 
@@ -320,7 +323,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $op = $this->managed->createdByFile('header', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $this->removal('header', $model->id, $unit);
             $changes[] = new Change($op, "{$base}/headers/".Pointer::escape((string) $name), $value, null, $headersSection, $unit);
         }
 
@@ -362,7 +365,7 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $op = $this->managed->createdByFile('mount', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $this->removal('mount', $model->id, $unit);
             $changes[] = new Change($op, "{$base}/mounts/".Pointer::escape($path), $mount, null, self::MOUNTS, $unit);
         }
 
@@ -548,11 +551,13 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
 
             if (count(Pointer::tokens($first->path)) === $depth && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
-                    if ($first->op === ChangeOp::Delete) {
+                    if ($first->op === ChangeOp::Delete && $this->deletable($scope, 'domain', $model->id, $unit)) {
                         app(RemoveDomain::class)($model);
+                        $this->managed->forget('domain', $model->id, $scope->environmentId);
+                    } else {
+                        $this->managed->detach($scope, $ctx, $unit, 'domain', $model->id, "Domain {$host} ({$unit})",
+                            route('edge.domains.destroy', ['site' => $site->id, 'domain' => $model->id], false), $site->id);
                     }
-
-                    $this->managed->forget('domain', $model->id);
                 }
 
                 continue;
@@ -615,11 +620,13 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
 
             if ($whole && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
-                    if ($first->op === ChangeOp::Delete) {
+                    if ($first->op === ChangeOp::Delete && $this->deletable($scope, 'redirect', $model->id, $unit)) {
                         app(DeleteSiteRule::class)($model, $site->organizationId);
+                        $this->managed->forget('redirect', $model->id, $scope->environmentId);
+                    } else {
+                        $this->managed->detach($scope, $ctx, $unit, 'redirect', $model->id, "Redirect {$from} ({$unit})",
+                            route('edge.redirects.destroy', ['site' => $site->id, 'redirect' => $model->id], false), $site->id);
                     }
-
-                    $this->managed->forget('redirect', $model->id);
                 }
 
                 continue;
@@ -636,12 +643,12 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             }
 
             $created = $model === null;
-            $createdByFile = $created || $this->managed->createdByFile('redirect', $model->id);
+            $createdByFile = $created || $this->managed->createdByFile('redirect', $model->id, $scope->environmentId);
 
             if ($created || $model->to !== $wanted['to'] || (int) $model->status !== (int) $wanted['status']) {
                 if ($model !== null) {
                     app(DeleteSiteRule::class)($model, $site->organizationId);
-                    $this->managed->forget('redirect', $model->id);
+                    $this->managed->forget('redirect', $model->id, $scope->environmentId);
                 }
 
                 $model = app(AddRedirect::class)($site, $from, (string) $wanted['to'], (int) $wanted['status'], $service);
@@ -678,11 +685,13 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
 
             if (in_array($change->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
-                    if ($change->op === ChangeOp::Delete) {
+                    if ($change->op === ChangeOp::Delete && $this->deletable($scope, 'header', $model->id, $unit)) {
                         app(DeleteSiteRule::class)($model, $site->organizationId);
+                        $this->managed->forget('header', $model->id, $scope->environmentId);
+                    } else {
+                        $this->managed->detach($scope, $ctx, $unit, 'header', $model->id, "Header {$name} ({$unit})",
+                            route('edge.headers.destroy', ['site' => $site->id, 'header' => $model->id], false), $site->id);
                     }
-
-                    $this->managed->forget('header', $model->id);
                 }
 
                 continue;
@@ -711,11 +720,13 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
 
             if ($whole && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
-                    if ($first->op === ChangeOp::Delete) {
+                    if ($first->op === ChangeOp::Delete && $this->deletable($scope, 'mount', $model->id, $unit)) {
                         $this->mounts->delete($model);
+                        $this->managed->forget('mount', $model->id, $scope->environmentId);
+                    } else {
+                        $this->managed->detach($scope, $ctx, $unit, 'mount', $model->id, "Mount {$path} ({$unit})",
+                            route('edge.mounts.destroy', ['site' => $site->id, 'mount' => $model->id], false), $site->id);
                     }
-
-                    $this->managed->forget('mount', $model->id);
                 }
 
                 continue;
@@ -739,12 +750,12 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             }
 
             $created = $model === null;
-            $createdByFile = $created || $this->managed->createdByFile('mount', $model->id);
+            $createdByFile = $created || $this->managed->createdByFile('mount', $model->id, $scope->environmentId);
 
             if ($created || $model->function_site_id !== $function->id || $model->strip_prefix !== (bool) $wanted['strip_prefix']) {
                 if ($model !== null) {
                     $this->mounts->delete($model);
-                    $this->managed->forget('mount', $model->id);
+                    $this->managed->forget('mount', $model->id, $scope->environmentId);
                 }
 
                 $model = $this->mounts->create($function, $site->id, $path, (bool) $wanted['strip_prefix']);
@@ -980,5 +991,23 @@ final class EdgeReconciler implements Reconcilable, ValidatesConfig
             ->pluck('name')->all();
 
         return ['certificates' => array_values(array_map('strval', $certificates)), 'dns' => array_values(array_map('strval', $dns))];
+    }
+
+    /**
+     * **[decision]** Items of a unit (domains, redirects, headers, mounts) the environment's file created are deleted
+     * when the file drops them while their unit is still the file's; otherwise (adopted, or the whole unit left the
+     * file and its site was detached) they are detached and listed as unmanaged.
+     */
+    private function removal(string $type, string $id, string $unit): ChangeOp
+    {
+        return $this->diffScope !== null && $this->deletable($this->diffScope, $type, $id, $unit) ? ChangeOp::Delete : ChangeOp::Detach;
+    }
+
+    private function deletable(ConfigScope $scope, string $type, string $id, string $unit): bool
+    {
+        $siteId = $scope->refId($unit);
+
+        return $this->managed->createdByFile($type, $id, $scope->environmentId)
+            && $siteId !== null && $this->managed->managedIn($scope->environmentId, 'site', $siteId);
     }
 }

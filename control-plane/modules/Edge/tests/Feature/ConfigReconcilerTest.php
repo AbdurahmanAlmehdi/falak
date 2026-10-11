@@ -44,6 +44,7 @@ beforeEach(function () {
         ['web' => ['kind' => 'site', 'ref_id' => $this->site->id]], [$this->web->name => $this->web->id], [$this->web->id], credentials: ['cf']);
     $this->reconciler = app(EdgeReconciler::class);
     $this->ctx = new ApplyContext($run->id, ApplyPhase::WithRelease, str_repeat('b', 40), unit: 'web');
+    app(ManagedResources::class)->record($this->scope, $this->ctx, 'web', 'site', $this->site->id, ['/type'], merge: true); // the unit is the file's
 });
 
 /**

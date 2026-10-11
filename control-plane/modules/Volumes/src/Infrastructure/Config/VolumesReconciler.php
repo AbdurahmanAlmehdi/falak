@@ -475,9 +475,11 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             if ($schedule !== null) {
                 if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId)) {
                     $schedule->delete(); // its backups stay in storage
+                    $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
+                } else {
+                    $this->managed->detach($scope, $ctx, $unit, 'backup_schedule', $schedule->id, "Backup schedule of volume {$volume->name} ({$unit})",
+                        route('volumes.schedules.destroy', ['schedule' => $schedule->id], false));
                 }
-
-                $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
             }
 
             return;
@@ -567,17 +569,18 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             return; // still managed: the deletion is pending
         }
 
-        if ($destroy) {
-            app(DeleteVolume::class)($volume->refresh(), $ctx->actorId);
-        } else {
-            $volume->forceFill(['status_message' => "Detached from falak.yaml (unit {$unit}): its data is kept; it is no longer managed by the file."])->save();
-        }
-
         foreach ($volume->schedules()->get() as $schedule) {
             $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
         }
 
-        $this->managed->forget('volume', $volume->id, $scope->environmentId);
+        if ($destroy) {
+            app(DeleteVolume::class)($volume->refresh(), $ctx->actorId);
+            $this->managed->forget('volume', $volume->id, $scope->environmentId);
+        } else {
+            $volume->forceFill(['status_message' => "Detached from falak.yaml (unit {$unit}): its data is kept; it is no longer managed by the file."])->save();
+            $this->managed->detach($scope, $ctx, $unit, 'volume', $volume->id, "Volume {$volume->name} ({$unit})",
+                route('volumes.destroy', ['volume' => $volume->id], false), deleteBody: ['confirm' => $volume->name]);
+        }
     }
 
     /**

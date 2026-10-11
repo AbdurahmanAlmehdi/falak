@@ -9,6 +9,7 @@ use Falak\Config\Application\Runs\RunEngine;
 use Falak\Config\Contracts\ConfigSources;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
@@ -184,6 +185,7 @@ final class RunOnPush implements ShouldQueue
             }
 
             $this->legacyDeploy($event, $environment->id);
+            $this->listReleased($environment->id, $applied);
             ConfigOwnership::query()->where('environment_id', $environment->id)->delete();
 
             // A run still waiting can't apply the file to it later.
@@ -247,5 +249,32 @@ final class RunOnPush implements ShouldQueue
             'started_at' => now(),
             'finished_at' => now(),
         ]);
+    }
+
+    /**
+     * What a released environment's file managed becomes its unmanaged resources (reason `environment_released`): one
+     * row per resource, deleted from its own page if no longer wanted.
+     */
+    private function listReleased(string $environmentId, ConfigRun $applied): void
+    {
+        $owned = ConfigOwnership::query()->where('environment_id', $environmentId)->where('resource_type', '!=', 'environment')
+            ->get(['organization_id', 'project_id', 'resource_type', 'resource_id', 'unit'])->unique(fn (ConfigOwnership $o) => $o->resource_type.'|'.$o->resource_id);
+
+        foreach ($owned as $row) {
+            $kind = ucfirst(str_replace('_', ' ', (string) $row->resource_type));
+            ConfigDetached::query()->updateOrCreate(
+                ['environment_id' => $environmentId, 'resource_type' => $row->resource_type, 'resource_id' => $row->resource_id],
+                [
+                    'organization_id' => $row->organization_id,
+                    'project_id' => $row->project_id,
+                    'unit' => $row->unit,
+                    'label' => $row->unit !== null ? "{$kind} ({$row->unit})" : $kind,
+                    'reason' => ConfigDetached::ENVIRONMENT_RELEASED,
+                    'delete_url' => null,
+                    'run_id' => $applied->id,
+                    'detached_at' => now(),
+                ],
+            );
+        }
     }
 }

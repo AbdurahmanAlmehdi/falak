@@ -40,6 +40,18 @@ interface ManagedResources
      */
     public function createdByFile(string $resourceType, string $resourceId, ?string $environmentId = null): bool;
 
+    /**
+     * A run detached the resource: it is gone from the environment's file but kept (not created by the file, no
+     * `allow_destroy`, or data). Forgets the environment's ownership rows of it and lists it as an unmanaged resource
+     * of the environment (Project settings → Config as code) until it is deleted, dismissed or managed again.
+     *
+     * @param  string  $label  what the dashboard shows ("Worker queue (web)", "Domain shop.example.com")
+     * @param  ?string  $deleteUrl  the module's own dashboard delete route for it (its permissions apply), if any
+     * @param  ?string  $siteId  the site it belongs to (deleting the site drops it from the list)
+     * @param  array<string, mixed>  $deleteBody  what the delete route needs in its body (a site's typed name)
+     */
+    public function detach(ConfigScope $scope, ApplyContext $ctx, ?string $unit, string $resourceType, string $resourceId, string $label, ?string $deleteUrl = null, ?string $siteId = null, array $deleteBody = []): void;
+
     /** The environment's file manages the resource (any path). */
     public function managedIn(string $environmentId, string $resourceType, string $resourceId): bool;
 

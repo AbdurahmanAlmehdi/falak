@@ -116,7 +116,7 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
                     continue;
                 }
 
-                $op = $this->managed->createdByFile('function_schedule', $model->id) ? ChangeOp::Delete : ChangeOp::Detach;
+                $op = $this->deletable($scope, $model->id, $unit) ? ChangeOp::Delete : ChangeOp::Detach;
                 $changes[] = new Change($op, $base.Pointer::escape((string) $name), $schedule, null, self::SECTION, $unit);
             }
         }
@@ -158,11 +158,13 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
 
                 if ($whole && in_array($first->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                     if ($model !== null) {
-                        if ($first->op === ChangeOp::Delete) {
+                        if ($first->op === ChangeOp::Delete && $this->deletable($scope, $model->id, $unit)) {
                             app(SaveSchedule::class)->delete($site, $model);
+                            $this->managed->forget('function_schedule', $model->id, $scope->environmentId);
+                        } else {
+                            $this->managed->detach($scope, $ctx, $unit, 'function_schedule', $model->id, "Function schedule {$name} ({$unit})",
+                                route('functions.schedules.destroy', ['site' => $site->id, 'schedule' => $model->id], false), $site->id);
                         }
-
-                        $this->managed->forget('function_schedule', $model->id);
                     }
 
                     continue;
@@ -252,5 +254,14 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
         $function = $this->functions->find($siteId);
 
         return $function === null ? [] : FunctionSchedule::query()->where('function_id', $function->id)->orderBy('name')->get()->keyBy('name')->all();
+    }
+
+    /** Created by this environment's file, and its unit is still the file's (else detached with its function). */
+    private function deletable(ConfigScope $scope, string $id, string $unit): bool
+    {
+        $siteId = $scope->refId($unit);
+
+        return $this->managed->createdByFile('function_schedule', $id, $scope->environmentId)
+            && $siteId !== null && $this->managed->managedIn($scope->environmentId, 'site', $siteId);
     }
 }

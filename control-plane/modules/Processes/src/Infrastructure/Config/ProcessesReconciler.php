@@ -151,7 +151,9 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
                         continue;
                     }
 
-                    $op = $this->managed->createdByFile($type, $models[$key]->getKey()) ? ChangeOp::Delete : ChangeOp::Detach;
+                    // An item the file created is deleted with it while its unit is still the file's; when the whole unit
+                    // left the file (its site detached), the item stays with the site: detached.
+                    $op = $this->managed->createdByFile($type, $models[$key]->getKey(), $scope->environmentId) && $this->unitManaged($scope, $unit) ? ChangeOp::Delete : ChangeOp::Detach;
                     $changes[] = new Change($op, $base.Pointer::escape($key), ProcessShapes::masked((array) $item), null, $pattern, $unit);
                 }
             }
@@ -184,11 +186,17 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
             if ($whole && in_array($itemChanges[0]->op, [ChangeOp::Delete, ChangeOp::Detach], true)) {
                 if ($model !== null) {
-                    if ($itemChanges[0]->op === ChangeOp::Delete && $site !== null) {
+                    if ($itemChanges[0]->op === ChangeOp::Delete && $site !== null && $this->unitManaged($scope, $unit)
+                        && $this->managed->createdByFile($type, (string) $model->getKey(), $scope->environmentId)) {
                         app(DeleteProcess::class)($site, $model);
+                        $this->managed->forget($type, (string) $model->getKey(), $scope->environmentId);
+                    } else {
+                        $kind = ['workers' => 'Worker', 'daemons' => 'Daemon', 'schedules' => 'Schedule'][$section];
+                        $route = ['workers' => 'processes.queues.destroy', 'daemons' => 'processes.daemons.destroy', 'schedules' => 'processes.scheduler.destroy'][$section];
+                        $param = ['workers' => 'worker', 'daemons' => 'daemon', 'schedules' => 'schedule'][$section];
+                        $this->managed->detach($scope, $ctx, $unit, $type, (string) $model->getKey(), "{$kind} {$key} ({$unit})",
+                            route($route, ['site' => $siteId, $param => $model->getKey()], false), $siteId);
                     }
-
-                    $this->managed->forget($type, (string) $model->getKey());
                 }
 
                 continue;
@@ -477,5 +485,13 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
         }
 
         return $out;
+    }
+
+    /** The unit's site is still managed by this environment's file (a unit removed from the file detaches its site first). */
+    private function unitManaged(ConfigScope $scope, string $unit): bool
+    {
+        $siteId = $scope->refId($unit);
+
+        return $siteId !== null && $this->managed->managedIn($scope->environmentId, 'site', $siteId);
     }
 }

@@ -4,6 +4,7 @@ use Falak\Config\Application\Planning\RiskRules;
 use Falak\Config\Contracts\ApplyPhase;
 use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigScope;
+use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Identity\Contracts\Role;
 use Falak\Projects\Domain\Models\Service;
@@ -194,7 +195,12 @@ it('without allow_destroy a removed unit the file created is detached: the site 
     $this->reconciler->apply($scope, $plan, config_ctx($this->env));
 
     expect(Site::query()->find($api->id))->not->toBeNull()
-        ->and(ConfigOwnership::query()->where('resource_id', $api->id)->exists())->toBeFalse();
+        ->and(ConfigOwnership::query()->where('resource_id', $api->id)->exists())->toBeFalse()
+        // Listed as an unmanaged resource of the environment, with Sites' own delete (typed name included).
+        ->and(ConfigDetached::query()->sole()->only(['resource_type', 'resource_id', 'site_id', 'label', 'delete_url', 'delete_body', 'environment_id']))->toBe([
+            'resource_type' => 'site', 'resource_id' => $api->id, 'site_id' => $api->id, 'label' => 'Site api',
+            'delete_url' => "/sites/{$api->id}", 'delete_body' => ['name' => 'api'], 'environment_id' => $this->env->id,
+        ]);
 });
 
 it('maps units to sites through the scope, not the canvas name: a renamed service is no delete + create', function () {
