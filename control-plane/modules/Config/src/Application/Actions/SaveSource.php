@@ -25,7 +25,7 @@ final class SaveSource
     ) {}
 
     /**
-     * @param  array{connection_id: string, repository: string, path?: ?string, enabled?: bool}  $data
+     * @param  array{connection_id: string, repository: string, path?: ?string, enabled?: bool, allowed_credentials?: ?list<string>}  $data
      */
     public function __invoke(ProjectData $project, array $data, ?string $userId): ConfigSource
     {
@@ -54,6 +54,8 @@ final class SaveSource
             'repository' => trim($data['repository'], '/'),
             'path' => $path,
             'enabled' => (bool) ($data['enabled'] ?? true),
+            ...(array_key_exists('allowed_credentials', $data)
+                ? ['allowed_credentials' => array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_credentials']))))] : []),
         ])->save();
 
         if ($source->enabled) {

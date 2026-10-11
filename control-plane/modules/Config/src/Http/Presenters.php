@@ -76,7 +76,7 @@ final class Presenters
             return null;
         }
 
-        if (collect((array) $run->deploy)->contains(fn (array $e) => ($e['status'] ?? null) === 'failed' && ($e['deployment_id'] ?? null) !== null && ! str_starts_with((string) ($e['error'] ?? ''), 'Phase B'))) {
+        if (collect((array) $run->deploy)->contains(fn (array $e) => in_array($e['status'] ?? null, ['failed', 'cancelled'], true) && ($e['deployment_id'] ?? null) !== null && ! str_starts_with((string) ($e['error'] ?? ''), 'Phase B'))) {
             return 'deployment_failed';
         }
 
@@ -107,6 +107,7 @@ final class Presenters
             'path' => $source->path,
             'enabled' => $source->enabled,
             'experimental' => $source->experimental,
+            'allowed_credentials' => array_values((array) ($source->allowed_credentials ?? [])),
             'created_at' => $source->created_at?->toIso8601String(),
         ];
     }

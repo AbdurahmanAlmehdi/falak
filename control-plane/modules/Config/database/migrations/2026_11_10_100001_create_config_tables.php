@@ -19,6 +19,9 @@ return new class extends Migration
             $table->boolean('enabled')->default(true);
             // Until approvals land (phase 4) risky plans are refused instead of waiting.
             $table->boolean('experimental')->default(true);
+            // Names of the organization's certificates and DNS credentials an admin lets the file use (besides those
+            // the project's domains already use).
+            $table->json('allowed_credentials')->nullable();
             $table->ulid('created_by')->nullable();
             $table->timestamps();
         });
@@ -30,7 +33,7 @@ return new class extends Migration
             $table->ulid('project_id');
             $table->ulid('environment_id')->nullable();
             $table->string('environment', 64);
-            $table->string('commit', 40)->nullable();
+            $table->string('commit', 64)->nullable(); // SHA-1 or SHA-256 repositories
             $table->string('branch')->nullable();
             // push | pr | cli | manual | rollback
             $table->string('trigger', 16);

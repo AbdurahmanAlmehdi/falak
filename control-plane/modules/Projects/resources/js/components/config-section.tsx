@@ -11,6 +11,7 @@ interface ConfigSource {
     path: string;
     enabled: boolean;
     experimental: boolean;
+    allowed_credentials: string[];
 }
 
 interface ConfigIssue {
@@ -139,7 +140,7 @@ function RunDetails({ run }: { run: ConfigRun }) {
  */
 export function ConfigSection({ projectId }: { projectId: string }) {
     const [data, setData] = useState<ConfigData | null>(null);
-    const [form, setForm] = useState({ connection_id: '', repository: '', path: 'falak.yaml', enabled: true });
+    const [form, setForm] = useState({ connection_id: '', repository: '', path: 'falak.yaml', enabled: true, credentials: '' });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [saving, setSaving] = useState(false);
     const [open, setOpen] = useState<string | null>(null);
@@ -153,6 +154,7 @@ export function ConfigSection({ projectId }: { projectId: string }) {
             repository: source?.repository ?? '',
             path: source?.path ?? 'falak.yaml',
             enabled: source?.enabled ?? true,
+            credentials: (source?.allowed_credentials ?? []).join(', '),
         });
     }, [projectId]);
 
@@ -165,7 +167,14 @@ export function ConfigSection({ projectId }: { projectId: string }) {
         setSaving(true);
         setErrors({});
         try {
-            await requestJson(`/projects/${projectId}/settings/config`, 'PUT', form);
+            const { credentials, ...rest } = form;
+            await requestJson(`/projects/${projectId}/settings/config`, 'PUT', {
+                ...rest,
+                allowed_credentials: credentials
+                    .split(',')
+                    .map((name) => name.trim())
+                    .filter((name) => name !== ''),
+            });
             await load();
         } catch (error) {
             setErrors(error instanceof HttpError ? error.errors : { repository: 'Saving failed.' });
@@ -214,6 +223,19 @@ export function ConfigSection({ projectId }: { projectId: string }) {
                         </Field>
                         <Field label="Follow the file" error={errors.enabled} inline>
                             <Switch checked={form.enabled} onCheckedChange={(enabled) => setForm({ ...form, enabled })} disabled={!canApply} />
+                        </Field>
+                        <Field
+                            label="Certificates and DNS credentials the file may use"
+                            error={errors.allowed_credentials}
+                            hint="Names, comma-separated, besides those the project's domains already use. Admins only."
+                            className="sm:col-span-2"
+                        >
+                            <Input
+                                value={form.credentials}
+                                onChange={(event) => setForm({ ...form, credentials: event.target.value })}
+                                disabled={!canApply || !data.can.approve}
+                                mono
+                            />
                         </Field>
                         {canApply && (
                             <div className="sm:col-span-2">

@@ -21,7 +21,7 @@ final class RequestRun
         private readonly RunEngine $engine,
     ) {}
 
-    public function __invoke(ConfigSource $source, EnvironmentData $environment, ?string $file, ?string $format, ?string $commit, RunTrigger $trigger, ?string $userId, bool $allowDestroy = false): ConfigRun
+    public function __invoke(ConfigSource $source, EnvironmentData $environment, ?string $file, ?string $format, ?string $commit, RunTrigger $trigger, ?string $userId, bool $allowDestroy = false, ?string $branch = null): ConfigRun
     {
         if ($file === null) {
             [$file, $problem] = $this->files->fetch($source, (string) $commit);
@@ -33,6 +33,6 @@ final class RequestRun
             $format = $source->format();
         }
 
-        return $this->engine->start($source, $environment, $file, $format === 'json' ? 'json' : 'yaml', $trigger, $commit, null, $userId, $allowDestroy);
+        return $this->engine->start($source, $environment, $file, $format === 'json' ? 'json' : 'yaml', $trigger, $commit, $branch, $userId, $allowDestroy);
     }
 }

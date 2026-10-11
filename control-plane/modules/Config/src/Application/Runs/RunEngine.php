@@ -2,6 +2,7 @@
 
 namespace Falak\Config\Application\Runs;
 
+use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Application\Validation\FileCheck;
@@ -16,6 +17,8 @@ use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Projects\Contracts\Data\EnvironmentData;
 use Falak\Projects\Contracts\ProjectDirectory;
+use Falak\Sites\Contracts\SiteDirectory;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -37,6 +40,7 @@ final class RunEngine
         private readonly AuditLog $audit,
         private readonly ProjectDirectory $projects,
         private readonly ImplicitEnvironment $implicit,
+        private readonly SiteDirectory $sites,
     ) {}
 
     /**
@@ -86,7 +90,7 @@ final class RunEngine
                 return $this->finish($run, RunStatus::Failed, $validation->summary($source->path), ['errors' => $issues, 'resolved' => $validation->resolved]);
             }
 
-            $scope = $this->scopes->make($environment, $source, $validation->resolved, $commit, $requestedBy);
+            $scope = $this->scopes->make($environment, $source, $validation->resolved, $commit, $requestedBy, $allowDestroy);
             $plan = $this->planner->plan($scope, $validation->resolved);
             $deploy = $plan->deploy;
 
@@ -97,7 +101,7 @@ final class RunEngine
                 }
             }
 
-            $planArray = [...$plan->toArray(), 'deploy' => array_values($deploy)];
+            $planArray = EnvMask::plan([...$plan->toArray(), 'deploy' => array_values($deploy)]);
             $run->forceFill(['resolved' => $validation->resolved, 'plan' => $planArray, 'errors' => $issues])->save();
 
             if ($plan->changes->isRisky()) {
@@ -129,19 +133,50 @@ final class RunEngine
      */
     public function apply(ConfigRun $run, array $commitInfo = []): ConfigRun
     {
-        $source = ConfigSource::query()->where('project_id', $run->project_id)->first();
+        // [decision] One run applies at a time per environment; a newer run supersedes the older ones not done yet.
+        return Cache::lock('config:environment:'.$run->environment_id, 600)->block(120, fn () => $this->applyLocked($run->refresh(), $commitInfo));
+    }
+
+    /**
+     * @param  array{message?: ?string, author?: ?string}  $commitInfo
+     */
+    private function applyLocked(ConfigRun $run, array $commitInfo): ConfigRun
+    {
+        if ($run->status->isTerminal()) {
+            return $run;
+        }
+
+        $source = ConfigSource::enabledFor($run->project_id);
         $environment = $this->projects->environment((string) $run->environment_id);
 
-        if ($source === null || $environment === null || $run->resolved === null) {
+        if ($source === null) {
+            return $this->finish($run, RunStatus::Cancelled, 'Config as code was disabled for this project before the run applied.');
+        }
+
+        if ($environment === null || $run->resolved === null) {
             return $this->finish($run, RunStatus::Failed, 'The project, environment or config source no longer exists.');
         }
 
-        $run->forceFill(['status' => RunStatus::Applying])->save();
-        $scope = $this->scopes->make($environment, $source, $run->resolved, $run->commit, $run->requested_by);
+        $this->supersede($run);
+        $scope = $this->scopes->make($environment, $source, $run->resolved, $run->commit, $run->requested_by, $run->allow_destroy);
+
+        // Planned again against today's state: what is applied is never older than the run, and stored plans are masked.
+        $plan = $this->planner->plan($scope, $run->resolved);
+
+        if ($plan->changes->isRisky() && $run->approved_at === null) {
+            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => (array) ($run->plan['deploy'] ?? [])])])->save();
+
+            return $source->experimental
+                ? $this->finish($run, RunStatus::Refused, 'The plan has risky changes; while config as code is experimental they are refused.')
+                : tap($run)->forceFill(['status' => RunStatus::AwaitingApproval])->save();
+        }
+
+        $deploy = array_values(array_unique([...(array) ($run->plan['deploy'] ?? []), ...$plan->deploy]));
+        $run->forceFill(['status' => RunStatus::Applying, 'plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => $deploy])])->save();
         $ctx = new ApplyContext($run->id, ApplyPhase::BeforeBuild, $run->commit, $run->requested_by, $run->allow_destroy);
 
         try {
-            $scope = DB::transaction(fn () => $this->applier->phaseA($scope, $run->changes(), $ctx));
+            $scope = DB::transaction(fn () => $this->applier->phaseA($scope, $plan->changes, $ctx));
         } catch (Throwable $e) {
             return $this->finish($run, RunStatus::Failed, 'Phase A failed: '.self::message($e).' Nothing was deployed.');
         }
@@ -154,6 +189,15 @@ final class RunEngine
 
             if ($siteId === null || ($scope->services[$unit]['kind'] ?? null) !== 'site') {
                 $entry['status'] = 'skipped';
+                $entries[] = $entry;
+
+                continue;
+            }
+
+            if ($run->trigger === RunTrigger::Push && $this->sites->find($siteId)?->pushToDeploy === false) {
+                // [decision] A push never deploys a site whose push to deploy is off; its config is applied.
+                $entry['status'] = 'skipped';
+                $entry['error'] = 'Push to deploy is off for this site: deploy it to release the change.';
                 $entries[] = $entry;
 
                 continue;
@@ -181,16 +225,38 @@ final class RunEngine
         // Units that are not deployed (no deploy source, a deployment that failed to start, or a unit the file
         // removed) get phase B now.
         $deploying = array_column(array_filter($entries, fn (array $e) => $e['status'] === 'deploying'), 'unit');
-        $units = array_unique(array_filter(array_map(fn ($c) => $c->unit, $run->changes()->actionable())));
+        $units = array_unique(array_filter(array_map(fn ($c) => $c->unit, $plan->changes->actionable())));
+        $failures = [];
 
         foreach ($units as $unit) {
             if (! in_array($unit, $deploying, true)) {
                 try {
                     $this->phaseB($run, (string) $unit, null, null);
                 } catch (Throwable $e) {
-                    return $this->finish($run, RunStatus::Failed, "Phase B of {$unit} failed: ".self::message($e));
+                    $failures[(string) $unit] = 'Phase B failed: '.self::message($e);
                 }
             }
+        }
+
+        if ($failures !== []) {
+            $this->entries($run, function (array $entries) use ($failures) {
+                foreach ($failures as $unit => $error) {
+                    $found = false;
+
+                    foreach ($entries as $i => $entry) {
+                        if ($entry['unit'] === $unit) {
+                            $entries[$i] = [...$entry, 'status' => 'failed', 'error' => $error];
+                            $found = true;
+                        }
+                    }
+
+                    if (! $found) {
+                        $entries[] = ['unit' => $unit, 'site_id' => null, 'deployment_id' => null, 'status' => 'failed', 'error' => $error];
+                    }
+                }
+
+                return $entries;
+            });
         }
 
         return $this->settle($run->refresh());
@@ -242,33 +308,66 @@ final class RunEngine
         $this->settle($run->refresh());
     }
 
-    private function entryFailed(ConfigRun $run, string $deploymentId, string $error): void
+    /** The unit's deployment was cancelled before it ran: the unit never gets its release, nor phase B. */
+    public function deploymentCancelled(ConfigRun $run, string $deploymentId): void
     {
-        DB::transaction(function () use ($run, $deploymentId, $error) {
-            $locked = ConfigRun::query()->lockForUpdate()->find($run->id);
-            $entries = (array) $locked?->deploy;
+        $this->entryFailed($run, $deploymentId, 'The deployment was cancelled.', 'cancelled');
+        $this->settle($run->refresh());
+    }
 
+    private function entryFailed(ConfigRun $run, string $deploymentId, string $error, string $status = 'failed'): void
+    {
+        $this->entries($run, function (array $entries) use ($deploymentId, $error, $status) {
             foreach ($entries as $i => $entry) {
-                if (($entry['deployment_id'] ?? null) === $deploymentId) {
-                    $entries[$i]['status'] = 'failed';
+                if (($entry['deployment_id'] ?? null) === $deploymentId && ($entry['status'] ?? null) === 'deploying') {
+                    $entries[$i]['status'] = $status;
                     $entries[$i]['error'] = $error;
                 }
             }
 
-            $locked?->forceFill(['deploy' => $entries])->save();
+            return $entries;
         });
+    }
+
+    /**
+     * Update a run's deploy entries under a row lock.
+     *
+     * @param  \Closure(list<array<string, mixed>>): list<array<string, mixed>>  $change
+     */
+    private function entries(ConfigRun $run, \Closure $change): void
+    {
+        DB::transaction(function () use ($run, $change) {
+            $locked = ConfigRun::query()->lockForUpdate()->find($run->id);
+            $locked?->forceFill(['deploy' => $change(array_values((array) $locked->deploy))])->save();
+        });
+    }
+
+    /**
+     * Older runs of the environment that haven't finished are superseded: cancelled, their deployments in flight no
+     * longer theirs (a coalesced deployment then belongs to the newer run).
+     */
+    private function supersede(ConfigRun $run): void
+    {
+        $older = ConfigRun::query()->where('environment_id', $run->environment_id)->whereKeyNot($run->id)->where('id', '<', $run->id)
+            ->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval, RunStatus::Applying])->get();
+
+        foreach ($older as $previous) {
+            $this->entries($previous, fn (array $entries) => array_map(fn (array $e) => in_array($e['status'] ?? null, ['pending', 'deploying'], true)
+                ? [...$e, 'status' => 'superseded', 'error' => "Superseded by run {$run->id}."] : $e, $entries));
+            $this->finish($previous->refresh(), RunStatus::Cancelled, "Superseded by a newer run ({$run->id}).");
+        }
     }
 
     private function phaseB(ConfigRun $run, string $unit, ?string $deploymentId, ?string $releaseId): void
     {
-        $source = ConfigSource::query()->where('project_id', $run->project_id)->first();
+        $source = ConfigSource::enabledFor($run->project_id);
         $environment = $this->projects->environment((string) $run->environment_id);
 
         if ($source === null || $environment === null || $run->resolved === null) {
             return;
         }
 
-        $scope = $this->scopes->make($environment, $source, $run->resolved, $run->commit, $run->requested_by);
+        $scope = $this->scopes->make($environment, $source, $run->resolved, $run->commit, $run->requested_by, $run->allow_destroy);
         $ctx = new ApplyContext($run->id, ApplyPhase::WithRelease, $run->commit, $run->requested_by, $run->allow_destroy, $unit, $deploymentId, $releaseId);
         DB::transaction(fn () => $this->applier->phaseB($scope, $run->resolved, $ctx, $unit));
     }
@@ -286,7 +385,7 @@ final class RunEngine
             return $run;
         }
 
-        $failed = array_values(array_filter($entries, fn (array $e) => ($e['status'] ?? null) === 'failed'));
+        $failed = array_values(array_filter($entries, fn (array $e) => in_array($e['status'] ?? null, ['failed', 'cancelled'], true)));
 
         if ($failed !== []) {
             return $this->finish($run, RunStatus::Failed, implode(' ', array_map(fn (array $e) => "{$e['unit']}: ".($e['error'] ?? 'the deployment failed.'), $failed)));

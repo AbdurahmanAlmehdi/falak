@@ -557,7 +557,7 @@ A file without `environments` binds the project's production environment to the 
 ```
 
 `code`: `parse`, `parse.*`, `schema`, `environment.unknown`, `override.type`, `reference.*`, `name.server`,
-`name.secret`, `name.unit`, `name.dns_credential`, `name.certificate`, `value.range`, `value.unsupported`,
+`name.secret`, `name.unit`, `name.dns_credential`, `name.certificate`, `value.range`, `value.unsupported`, `value.forbidden`,
 `value.conflict`, `limit.server`. `pointer` is a JSON Pointer into the file (or into the resolved file, `source` then
 says where the value is in the file); `line`/`column` are 1-based, `null` when unknown. Fields this version doesn't
 support yet (database, redis, compose and function units, volumes, previews…) come back as `value.unsupported`
@@ -604,10 +604,12 @@ Body as for plan, plus `"allow_destroy": false` (`true` needs `config.destroy`).
 to). `status`: `planning`, `awaiting_approval`, `applying`, `applied`, `failed`, `cancelled`, `refused`; the run's
 `status` alone says whether it is finished (`applied`, `failed`, `cancelled`, `refused`). `deployments[].status` is
 Config's view of each unit: `pending`, `deploying`, `released` (live, phase B applied), `skipped` (not deployed: no
-deploy source, or a unit removed from the file), `failed`; `deployment_status` is the deployment's own status.
+deploy source, push to deploy off on a push, or a unit removed from the file), `failed`, `cancelled`, `superseded` (a
+newer run of the environment took over; the run ends `cancelled`); `deployment_status` is the deployment's own status.
+Env values are `••••` in plans and runs unless the token has `sites.env.view` (plans are stored masked).
 `error_code` (only when `failed`): `invalid` (see `errors`), `unreadable` (the file couldn't be read at the commit),
 `apply_failed` (applying a phase failed; a phase A failure deploys nothing), `deployment_failed` (a unit's deployment
-failed: the entries with `status: failed`).
+failed or was cancelled: the entries with `status: failed` / `cancelled`).
 
 ### `GET /api/v1/projects/{project}/config/runs[?environment=]` · `GET /api/v1/config/runs/{run}` — `config.view`
 Newest first, `{"data": [ConfigRun], "links", "meta"}` / `{"data": ConfigRun}` (`falak apply --wait` polls it).
@@ -621,7 +623,8 @@ A run `planning` or `awaiting_approval` → `cancelled`; `409` otherwise.
 
 ### `GET /api/v1/projects/{project}/config/export?environment=production&format=yaml` — `config.view`
 `{"data": {"environment": "production", "format": "yaml", "file": "<text>"}}`: today's state of the environment as a
-file (`units` from each module's current state, the environment with its `branch`); defaults are left out.
+file (`units` from each module's current state, the environment with its `branch`). Without `sites.env.view` literal env
+values are left out (references are kept).
 
 ## Deployments
 
