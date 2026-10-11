@@ -4,6 +4,7 @@ namespace Falak\Databases\Application\Actions;
 
 use Falak\Databases\Application\AgentCommands;
 use Falak\Databases\Application\Identifiers;
+use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Enums\ResourceStatus;
 use Falak\Databases\Domain\Models\Database;
 use Falak\Databases\Domain\Models\DatabaseInstance;
@@ -74,6 +75,47 @@ final class CreateDatabase
                 'grants' => [['database_id' => $database->id, 'privileges' => ['ALL PRIVILEGES']]],
             ], $actorId);
         }
+
+        return $database;
+    }
+
+    /**
+     * Another database for falak.yaml's `databases`: the instance's owner (its oldest user, created with it) gets all
+     * privileges on it. While the instance is still starting, the row waits (pending): db.create and the grant follow
+     * its first start (HandleCommandOutcome), as for its default database.
+     *
+     * @throws ValidationException
+     */
+    public function withOwner(DatabaseInstance $instance, string $name, ?string $actorId = null): Database
+    {
+        if ($instance->status !== InstanceStatus::Pending) {
+            $database = $this($instance, ['name' => $name], $actorId);
+        } else {
+            if ($instance->engine->isKeyValue()) {
+                throw ValidationException::withMessages(['name' => "A {$instance->engine->label()} instance has one keyspace."]);
+            }
+
+            Identifiers::assertValid($instance->engine, $name, 'name');
+
+            if ($instance->databases()->where('name', $name)->exists()) {
+                throw ValidationException::withMessages(['name' => "A database named \"{$name}\" already exists in {$instance->name}."]);
+            }
+
+            $database = $instance->databases()->create([
+                'organization_id' => $instance->organization_id,
+                'server_id' => $instance->server_id,
+                'name' => $name,
+                'charset' => $instance->engine->defaultCharset(),
+                'collation' => $instance->engine->defaultCollation(),
+                'status' => ResourceStatus::Pending,
+                'created_by' => $actorId,
+            ]);
+
+            $this->audit->record('databases.database_created', 'database', $database->id, ['name' => $name, 'instance_id' => $instance->id], $instance->organization_id);
+        }
+
+        $owner = $instance->users()->reorder()->orderBy('created_at')->orderBy('id')->first();
+        $owner?->grants()->updateOrCreate(['database_id' => $database->id], ['privileges' => ['ALL PRIVILEGES']]);
 
         return $database;
     }

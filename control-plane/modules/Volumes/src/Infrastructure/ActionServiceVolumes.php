@@ -5,6 +5,7 @@ namespace Falak\Volumes\Infrastructure;
 use Falak\Volumes\Application\Actions\CreateVolume;
 use Falak\Volumes\Application\Actions\DeleteVolume;
 use Falak\Volumes\Application\Actions\ReleaseSite;
+use Falak\Volumes\Application\Actions\ResizeVolume;
 use Falak\Volumes\Application\Actions\SyncComposeVolumes;
 use Falak\Volumes\Application\Actions\SyncSharedPaths;
 use Falak\Volumes\Contracts\AttachableType;
@@ -14,6 +15,7 @@ use Falak\Volumes\Contracts\ServiceVolumes;
 use Falak\Volumes\Contracts\VolumeKind;
 use Falak\Volumes\Domain\Enums\VolumeStatus;
 use Falak\Volumes\Domain\Models\Attachment;
+use Falak\Volumes\Domain\Models\BackupSchedule;
 use Falak\Volumes\Domain\Models\Volume;
 use Illuminate\Validation\ValidationException;
 
@@ -124,6 +126,27 @@ final class ActionServiceVolumes implements ServiceVolumes
             // Busy (a backup or move of it is running): it stays, unprotected, for the Volumes page.
             $volume->forceFill(['status_message' => 'Not deleted: '.collect($e->errors())->flatten()->first()])->save();
         }
+    }
+
+    public function resize(string $volumeId, int $sizeBytes, ?string $actorId = null): void
+    {
+        $volume = Volume::query()->find(strtolower($volumeId)) ?? throw ValidationException::withMessages(['volume' => 'The volume does not exist.']);
+
+        app(ResizeVolume::class)($volume, $sizeBytes, $actorId);
+    }
+
+    public function backupStorageFor(array $siteIds): array
+    {
+        $siteIds = array_values(array_unique(array_map('strtolower', $siteIds)));
+
+        if ($siteIds === []) {
+            return [];
+        }
+
+        return BackupSchedule::query()
+            ->whereHas('volume.attachments', fn ($q) => $q->whereIn('attachable_type', [AttachableType::Site, AttachableType::ComposeService])->whereIn('attachable_id', $siteIds))
+            ->whereNotNull('storage_provider_id')
+            ->pluck('storage_provider_id')->unique()->map(fn ($id) => (string) $id)->values()->all();
     }
 
     public static function data(Volume $volume): VolumeData

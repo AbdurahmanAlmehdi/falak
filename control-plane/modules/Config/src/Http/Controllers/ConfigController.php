@@ -56,13 +56,13 @@ final class ConfigController extends Controller
             'allowed_credentials.*' => ['string', 'max:255'],
         ]);
 
-        // Letting a project's file use an organization certificate or DNS credential is an admin's call.
+        // Letting a project's file use an organization certificate, DNS credential or storage provider is an admin's call.
         if (array_key_exists('allowed_credentials', $input) && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)) {
             $current = ConfigSource::query()->where('project_id', $data->id)->value('allowed_credentials');
             $current = is_string($current) ? (array) json_decode($current, true) : (array) $current;
 
             if (array_values((array) $input['allowed_credentials']) !== array_values($current)) {
-                abort(403, 'Only admins can change the certificates and DNS credentials the file may use.');
+                abort(403, 'Only admins can change the certificates, DNS credentials and storage providers the file may use.');
             }
         }
 

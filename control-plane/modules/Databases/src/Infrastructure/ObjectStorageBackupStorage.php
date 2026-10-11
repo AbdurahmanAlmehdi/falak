@@ -5,14 +5,23 @@ namespace Falak\Databases\Infrastructure;
 use Falak\Databases\Contracts\BackupStorage;
 use Falak\Databases\Contracts\Data\StorageProviderData;
 use Falak\Databases\Contracts\Exceptions\StorageUnavailable;
+use Falak\Databases\Domain\Models\BackupSchedule;
+use Falak\Databases\Domain\Models\Database;
+use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Databases\Infrastructure\ObjectStorage\ObjectStore;
 use Falak\Databases\Infrastructure\ObjectStorage\ObjectStores;
 use Falak\Databases\Infrastructure\ObjectStorage\StorageRequestFailed;
+use Falak\Projects\Contracts\ProjectDirectory;
+use Falak\Projects\Contracts\ServiceKind;
+use Falak\Volumes\Contracts\ServiceVolumes;
 
 final class ObjectStorageBackupStorage implements BackupStorage
 {
-    public function __construct(private readonly ObjectStores $stores) {}
+    public function __construct(
+        private readonly ObjectStores $stores,
+        private readonly ProjectDirectory $projects,
+    ) {}
 
     public function providers(string $organizationId): array
     {
@@ -25,6 +34,35 @@ final class ObjectStorageBackupStorage implements BackupStorage
         $provider = $this->provider($organizationId, $providerId);
 
         return $provider !== null ? self::data($provider) : null;
+    }
+
+    public function namesForProject(string $organizationId, string $projectId, array $allowed = []): array
+    {
+        $databaseIds = [];
+        $siteIds = [];
+
+        foreach ($this->projects->environments($projectId) as $environment) {
+            foreach ($this->projects->servicesIn($environment->id) as $service) {
+                if ($service->kind === ServiceKind::Database) {
+                    $databaseIds[] = $service->refId;
+                } else {
+                    $siteIds[] = $service->refId;
+                }
+            }
+        }
+
+        $instanceIds = Database::query()->where('organization_id', $organizationId)->whereIn('id', $databaseIds ?: [''])
+            ->pluck('database_instance_id')->unique()->values()->all();
+        $ids = [
+            ...BackupSchedule::query()->whereIn('database_instance_id', $instanceIds ?: [''])->pluck('storage_provider_id')->all(),
+            ...DatabaseInstance::query()->whereIn('id', $instanceIds ?: [''])->whereNotNull('pitr_storage_provider_id')->pluck('pitr_storage_provider_id')->all(),
+            // Resolved here: Volumes' actions depend on this contract.
+            ...app(ServiceVolumes::class)->backupStorageFor($siteIds),
+        ];
+
+        return StorageProvider::query()->where('organization_id', $organizationId)
+            ->where(fn ($q) => $q->whereIn('id', array_values(array_filter($ids)) ?: [''])->orWhereIn('name', $allowed ?: ['']))
+            ->orderBy('name')->pluck('name')->map(fn ($name) => (string) $name)->values()->all();
     }
 
     public function key(string $organizationId, string $providerId, string ...$segments): string

@@ -19,8 +19,9 @@ final readonly class ConfigScope
      * @param  ?string  $actorId  the user the run is recorded as (null: a push)
      * @param  bool  $allowDestroy  the run may delete what the file created and removed (`allow_destroy`, config.destroy);
      *                              otherwise removed units and resources are only detached
-     * @param  list<string>  $credentials  names of the organization's certificates and DNS credentials an admin allowed
-     *                                     this project's file to use (besides those its domains already use)
+     * @param  list<string>  $credentials  names of the organization's certificates, DNS credentials and storage providers an
+     *                                     admin allowed this project's file to use (besides those its domains and backups
+     *                                     already use)
      */
     public function __construct(
         public string $organizationId,

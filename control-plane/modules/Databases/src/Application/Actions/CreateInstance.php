@@ -49,7 +49,9 @@ final class CreateInstance
     ) {}
 
     /**
-     * @param  array{name: string, version?: ?string, memory_mb?: ?int, cpus?: ?float, disk_gb?: ?int, environment_id?: ?string, settings?: ?array<string, mixed>, database?: ?string, username?: ?string, site_id?: ?string}  $data
+     * Access (`public_access`, `require_tls`, `allowed_sources`: falak.yaml's units) applies from the first start.
+     *
+     * @param  array{name: string, version?: ?string, memory_mb?: ?int, cpus?: ?float, disk_gb?: ?int, environment_id?: ?string, settings?: ?array<string, mixed>, database?: ?string, username?: ?string, site_id?: ?string, public_access?: ?bool, require_tls?: ?bool, allowed_sources?: ?list<string>}  $data
      *
      * @throws ValidationException
      */
@@ -81,6 +83,8 @@ final class CreateInstance
         }
 
         $settings = UpdateInstance::settings($engine, (array) ($data['settings'] ?? []));
+        $sources = isset($data['allowed_sources']) ? UpdateInstance::sources((array) $data['allowed_sources']) : [];
+        $public = (bool) ($data['public_access'] ?? false);
 
         if (DatabaseInstance::query()->where('organization_id', $organizationId)->where('server_id', $server->id)->where('name', $name)->whereNot('status', InstanceStatus::Retired)->exists()) {
             throw ValidationException::withMessages(['name' => "{$server->name} already has a database named {$name}."]);
@@ -102,7 +106,7 @@ final class CreateInstance
             Identifiers::assertValid($engine, $username, 'username', 'username');
         }
 
-        $instance = DB::transaction(function () use ($organizationId, $server, $engine, $version, $name, $memory, $disk, $settings, $data, $databaseName, $username, $actorId) {
+        $instance = DB::transaction(function () use ($organizationId, $server, $engine, $version, $name, $memory, $disk, $settings, $data, $databaseName, $username, $actorId, $sources, $public) {
             // Serializes port allocation on the server.
             DatabaseInstance::query()->where('server_id', $server->id)->lockForUpdate()->get(['id']);
 
@@ -124,6 +128,10 @@ final class CreateInstance
                 'memory_bytes' => $memory,
                 'cpus' => isset($data['cpus']) && $data['cpus'] !== null ? round((float) $data['cpus'], 2) : null,
                 'settings' => $settings !== [] ? $settings : null,
+                // Public access never goes without TLS (as UpdateInstance).
+                'public_access' => $public,
+                'require_tls' => $public || (bool) ($data['require_tls'] ?? false),
+                'allowed_sources' => $sources !== [] ? $sources : null,
                 'root_password' => Passwords::generate(),
                 'status' => InstanceStatus::Pending,
                 'created_by' => $actorId,
