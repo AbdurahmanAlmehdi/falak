@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 	"gopkg.in/yaml.v3"
@@ -60,6 +61,9 @@ type Issue struct {
 	Pointer string `json:"pointer"`
 	Source  string `json:"source,omitempty"`
 	Message string `json:"message,omitempty"`
+	// Property names the offending property when Pointer is the object holding it (an unknown property): its key
+	// is where the issue is located (Locate).
+	Property string `json:"-"`
 }
 
 func (i Issue) Error() string { return fmt.Sprintf("%s at %q: %s", i.Code, i.Pointer, i.Message) }
@@ -310,7 +314,11 @@ func Validate(doc any) ([]Issue, error) {
 			msg := e.ErrorKind.LocalizedString(printer)
 			if !seen[ptr+"\x00"+msg] {
 				seen[ptr+"\x00"+msg] = true
-				issues = append(issues, Issue{Code: CodeSchema, Pointer: ptr, Message: msg})
+				is := Issue{Code: CodeSchema, Pointer: ptr, Message: msg}
+				if k, ok := e.ErrorKind.(*kind.AdditionalProperties); ok && len(k.Properties) > 0 {
+					is.Property = k.Properties[0]
+				}
+				issues = append(issues, is)
 			}
 			return
 		}
