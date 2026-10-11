@@ -6,7 +6,6 @@ use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Edge\Domain\Models\Mount;
-use Falak\Fleet\Domain\Models\Agent;
 use Falak\Functions\Application\Actions\DeployCode;
 use Falak\Functions\Domain\Models\CloudFunction;
 use Falak\Functions\Domain\Models\FunctionSchedule;
@@ -17,51 +16,7 @@ use Falak\Sites\Domain\Models\Site;
 use Illuminate\Validation\ValidationException;
 
 require_once __DIR__.'/../Support/helpers.php';
-
-const CONFIG_FUNCTION_FILE = <<<'YAML'
-version: 1
-units:
-  web:
-    type: app
-    root: app
-    runtime: frankenphp
-    php: "8.4"
-    mounts:
-      - { path: /api, function: api }
-  api:
-    type: function
-    root: fn
-    runtime: bun
-    scaling: { min_instances: 1, max_instances: 3 }
-    memory: 512m
-    timeout: 1m
-    access: { allow: [10.0.0.0/8] }
-    env: { GREETING: hello }
-    schedules:
-      nightly: { cron: "0 3 * * *", timezone: Europe/Berlin }
-environments:
-  production: { branch: main, servers: [web-1] }
-
-YAML;
-
-const CONFIG_FN_V1 = "import { Hono } from 'hono'\nimport { db } from './lib/db'\nconst app = new Hono()\napp.get('/', (c) => c.text('v1'))\nexport default app\n";
-
-function config_function_world(): ConfigWorld
-{
-    $world = config_world();
-    Agent::factory()->create(['server_id' => $world->deploy->servers[0]->id, 'organization_id' => $world->deploy->organization->id,
-        'facts' => ['features' => ['fn.v1', 'fn.v2', 'fn.v3'], 'memory_bytes' => 4 * 1024 ** 3]]);
-    $world->file(CONFIG_FUNCTION_FILE);
-    $world->deploy->sourceControl->files += [
-        'fn/index.ts' => CONFIG_FN_V1,
-        'fn/lib/db.ts' => "export const db = 'postgres'\n",
-        'fn/.env' => "SECRET=1\n",
-        'fn/node_modules/hono/index.js' => "module.exports = {}\n",
-        'README.md' => "# shop\n",
-    ];
-
-    return $world;
-}
+require_once __DIR__.'/../Support/units.php';
 
 it('deploys a function unit\'s code from the repository at the pushed commit', function () {
     $world = config_function_world();

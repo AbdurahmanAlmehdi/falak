@@ -7,6 +7,7 @@ use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Domain\Models\Deployment;
+use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Domain\Models\Environment;
 use Falak\Projects\Domain\Models\Service;
@@ -141,4 +142,21 @@ it('an environment gone from the file is released, never deleted', function () {
         ->and(ConfigRun::query()->where('commit', config_sha('c'))->exists())->toBeFalse()
         // Released to push to deploy: the push still deploys it.
         ->and(Deployment::query()->where('site_id', $site)->where('commit', config_sha('c'))->count())->toBe(1);
+});
+
+it('falak apply creates an environment its file declares, for those who may manage projects', function () {
+    $world = config_world(actingAs: false);
+    $token = fn (array $abilities) => app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', $abilities)->plainTextToken;
+    $file = "version: 1\nunits:\n  web: { type: app, runtime: frankenphp, php: \"8.4\" }\nenvironments:\n  production: { branch: main }\n  qa: { branch: qa, servers: [web-1] }\n";
+    $url = "/api/v1/projects/{$world->environment->project_id}/config/runs";
+
+    $this->withToken($token(['config.view', 'config.apply']))->postJson($url, ['file' => $file, 'environment' => 'qa'])->assertStatus(422)->assertJsonValidationErrors('environment');
+    app('auth')->forgetGuards();
+    $this->withToken($token(['*']))->postJson($url, ['file' => $file, 'environment' => 'nope'])->assertStatus(422)->assertJsonValidationErrors('environment');
+
+    expect(Environment::query()->where('slug', 'qa')->exists())->toBeFalse();
+
+    $this->withToken($token(['*']))->postJson($url, ['file' => $file, 'environment' => 'qa'])->assertCreated()->assertJsonPath('data.environment', 'qa');
+
+    expect(Environment::query()->where('slug', 'qa')->sole()->is_production)->toBeFalse();
 });
