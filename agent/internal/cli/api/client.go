@@ -41,6 +41,13 @@ type API interface {
 	FunctionRollback(ctx context.Context, fn string, number int) (string, error)
 	FunctionRun(ctx context.Context, fn, schedule string) (string, error)
 	FunctionRunStatus(ctx context.Context, fn, run string) (FunctionRun, error)
+
+	Projects(ctx context.Context) ([]Project, error)
+	ConfigValidate(ctx context.Context, project string, r ConfigRequest) (ConfigValidation, error)
+	ConfigPlan(ctx context.Context, project string, r ConfigRequest) (ConfigPlanResult, error)
+	ConfigApply(ctx context.Context, project string, r ConfigRequest) (ConfigRun, error)
+	ConfigRun(ctx context.Context, id string) (ConfigRun, error)
+	ConfigExport(ctx context.Context, project, environment, format string) (ConfigExport, error)
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).
