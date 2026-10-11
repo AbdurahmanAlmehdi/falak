@@ -16,6 +16,7 @@ use Falak\Config\Contracts\Reconcilable;
 use Falak\Config\Contracts\Units;
 use Falak\Config\Contracts\ValidatesConfig;
 use Falak\Databases\Contracts\BackupStorage;
+use Falak\Deployments\Contracts\DeploymentDirectory;
 use Falak\Kernel\Security\BackupKeys;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\Data\SiteData;
@@ -59,6 +60,7 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         private readonly SiteDirectory $sites,
         private readonly ServerDirectory $servers,
         private readonly BackupStorage $storage,
+        private readonly DeploymentDirectory $deployments,
     ) {}
 
     public function sections(): array
@@ -234,6 +236,13 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             }
         }
 
+        // Volumes a run unmounted to delete them: deleted once their unit runs without them.
+        foreach ($this->pendingDeletes($scope) as [$unit, $key, $volume]) {
+            if (! array_key_exists($key, (array) ($desired['units'][$unit]['volumes'] ?? [])) && $scope->allowDestroy && $this->unmountedEverywhere($scope, $unit, $volume)) {
+                $changes[] = new Change(ChangeOp::Delete, '/units/'.Pointer::escape($unit).'/volumes/'.Pointer::escape($key), ['unmounted' => true], null, self::SECTION, $unit);
+            }
+        }
+
         return new ChangeSet($changes);
     }
 
@@ -248,11 +257,11 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
     {
         $volume = $this->find($scope, $unit, $key);
 
-        if ($volume === null || ! $this->managed->managed('volume', $volume->id)->any()) {
+        if ($volume === null || ! $this->managed->managedIn($scope->environmentId, 'volume', $volume->id)) {
             return [];
         }
 
-        $op = $scope->allowDestroy && $this->managed->createdByFile('volume', $volume->id) ? ChangeOp::Delete : ChangeOp::Detach;
+        $op = $scope->allowDestroy && $this->managed->createdByFile('volume', $volume->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
 
         return [new Change($op, '/units/'.Pointer::escape($unit).'/volumes/'.Pointer::escape($key), $before, null, self::SECTION, $unit)];
     }
@@ -268,11 +277,11 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         $schedule = $volume !== null ? $this->schedule($volume) : null;
 
         if ($wanted === null) {
-            if ($schedule === null || ! $this->managed->managed('backup_schedule', $schedule->id)->any()) {
+            if ($schedule === null || ! $this->managed->managedIn($scope->environmentId, 'backup_schedule', $schedule->id)) {
                 return [];
             }
 
-            $op = $scope->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $scope->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
 
             return [new Change($op, "{$base}/backups", $today['backups'] ?? null, null, self::SECTION, $unit)];
         }
@@ -340,7 +349,7 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         }
 
         if ($whole?->op === ChangeOp::Delete || $whole?->op === ChangeOp::Detach) {
-            $this->detach($scope, $ctx, $unit, $volume, destroy: $whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('volume', $volume->id));
+            $this->detach($scope, $ctx, $unit, $volume, destroy: $whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('volume', $volume->id, $scope->environmentId));
 
             return;
         }
@@ -419,6 +428,19 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             throw ValidationException::withMessages(["units.{$unit}.volumes.{$key}.server" => "{$unit}/{$key}: no server for the volume."]);
         }
 
+        $prefix = '/volumes/'.Pointer::escape($key);
+        $pending = $this->find($scope, $unit, $key);
+
+        if ($pending !== null && $pending->composeKey() === null) {
+            // The file lists again a volume a run unmounted to delete it: it is mounted again, never replaced by an
+            // empty one.
+            $pending->forceFill(['options' => array_diff_key((array) $pending->options, ['config_delete' => true]) ?: null, 'status_message' => null])->save();
+            app(AttachVolume::class)($pending, $site->id, (string) $body['mount'], (bool) ($body['read_only'] ?? false), $ctx->actorId, redeploy: false);
+            $this->managed->record($scope, $ctx, $unit, 'volume', $pending->id, self::paths($prefix, $body), merge: true);
+
+            return;
+        }
+
         $kind = VolumeKind::from((string) ($body['kind'] ?? VolumeKind::Docker->value));
         $volume = app(CreateVolume::class)(
             $scope->organizationId,
@@ -432,7 +454,6 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
 
         // The new unit (or the unit with a new volume) deploys with this run: no redeploy of its own.
         app(AttachVolume::class)($volume, $site->id, (string) $body['mount'], (bool) ($body['read_only'] ?? false), $ctx->actorId, redeploy: false);
-        $prefix = '/volumes/'.Pointer::escape($key);
         $this->managed->record($scope, $ctx, $unit, 'volume', $volume->id, self::paths($prefix, $body), createdByFile: true);
 
         if (isset($body['backups'])) {
@@ -452,11 +473,11 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
 
         if ($whole !== null && ($whole->op === ChangeOp::Delete || $whole->op === ChangeOp::Detach)) {
             if ($schedule !== null) {
-                if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id)) {
+                if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId)) {
                     $schedule->delete(); // its backups stay in storage
                 }
 
-                $this->managed->forget('backup_schedule', $schedule->id);
+                $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
             }
 
             return;
@@ -515,18 +536,35 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
-     * Unmount a volume the file no longer lists and stop managing it; its data stays. $destroy (allow_destroy, created
-     * by the file): delete it too (DeleteVolume refuses protected volumes).
+     * Unmount a volume the file no longer lists and stop managing it; its data stays (the unit deploys without it).
+     * $destroy (allow_destroy, created by the file): it is deleted, but never while a running release may still mount
+     * it: a mounted volume is unmounted and marked, and a later run with allow_destroy deletes it once the unit runs
+     * without it (DeleteVolume refuses protected volumes).
      */
     private function detach(ConfigScope $scope, ApplyContext $ctx, string $unit, Volume $volume, bool $destroy): void
     {
         $siteId = $scope->refId($unit);
+        $unmounted = false;
 
         foreach ($volume->attachments()->where('attachable_type', AttachableType::Site)->get() as $attachment) {
             /** @var Attachment $attachment */
             if ($siteId === null || $attachment->attachable_id === $siteId) {
                 app(DetachVolume::class)($attachment, $ctx->actorId, redeploy: false);
+                $unmounted = true;
             }
+        }
+
+        if ($destroy && ($unmounted || ! $this->unmountedEverywhere($scope, $unit, $volume))) {
+            if (app(DeleteVolume::class)->refusal($volume) !== null) {
+                throw ValidationException::withMessages(["units.{$unit}.volumes" => (string) app(DeleteVolume::class)->refusal($volume)]);
+            }
+
+            $volume->forceFill([
+                'options' => [...(array) $volume->options, 'config_delete' => ['unit' => $unit, 'environment_id' => $scope->environmentId, 'unmounted_at' => now()->toIso8601String()]],
+                'status_message' => "Unmounted from falak.yaml (unit {$unit}): a later run with allow_destroy deletes it once {$unit} runs without it.",
+            ])->save();
+
+            return; // still managed: the deletion is pending
         }
 
         if ($destroy) {
@@ -536,10 +574,10 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         }
 
         foreach ($volume->schedules()->get() as $schedule) {
-            $this->managed->forget('backup_schedule', $schedule->id);
+            $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
         }
 
-        $this->managed->forget('volume', $volume->id);
+        $this->managed->forget('volume', $volume->id, $scope->environmentId);
     }
 
     /**
@@ -713,6 +751,48 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         }
 
         return $out;
+    }
+
+    /**
+     * Volumes of the environment a run unmounted to delete them (still managed, marked config_delete).
+     *
+     * @return list<array{0: string, 1: string, 2: Volume}> unit, key, volume
+     */
+    private function pendingDeletes(ConfigScope $scope): array
+    {
+        $out = [];
+
+        foreach ($this->managed->resources($scope->environmentId, 'volume') as $volumeId => $unit) {
+            $volume = Volume::query()->find($volumeId);
+
+            if ($unit !== null && $volume !== null && isset($volume->options['config_delete']) && ($key = $this->keyOf($volume)) !== null && $volume->status !== VolumeStatus::Deleting) {
+                $out[] = [(string) $unit, $key, $volume];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * No running release may mount the volume any more: it has no attachment, and its unit's site is gone or its last
+     * deployment, started after the volume was unmounted, succeeded.
+     */
+    private function unmountedEverywhere(ConfigScope $scope, string $unit, Volume $volume): bool
+    {
+        if ($volume->attachments()->exists()) {
+            return false;
+        }
+
+        $siteId = $scope->refId($unit);
+
+        if ($siteId === null || $this->sites->find($siteId) === null) {
+            return true;
+        }
+
+        $since = $volume->options['config_delete']['unmounted_at'] ?? null;
+        $deployment = $this->deployments->currentForSites([$siteId])[$siteId] ?? null;
+
+        return $since !== null && $deployment !== null && $deployment->status === 'succeeded' && $deployment->createdAt->getTimestamp() >= strtotime((string) $since);
     }
 
     /** A unit's volume by key: mounted into its site, else the one the file manages under that key. */

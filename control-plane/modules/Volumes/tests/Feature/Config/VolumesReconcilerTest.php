@@ -1,8 +1,11 @@
 <?php
 
+use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\Runs\RollbackRestorer;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Domain\Enums\RunStatus;
+use Falak\Deployments\Contracts\Data\DeploymentSummary;
+use Falak\Deployments\Contracts\DeploymentDirectory;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Deployments\Domain\Models\Release;
 use Falak\Servers\Domain\Models\Server;
@@ -119,18 +122,81 @@ it('never deletes a volume the file drops: unmounted, kept with its data, flagge
         ->and(volumes_apply(['volumes' => []]))->toBe([]);
 });
 
-it('deletes with allow_destroy only what the file created, never a protected volume', function () {
+/** The site's last deployment, as Deployments reports it (status, created at). */
+function volumes_last_deployment(string $siteId, string $status, string $at): void
+{
+    app()->instance(DeploymentDirectory::class, new class($siteId, $status, $at) implements DeploymentDirectory
+    {
+        public function __construct(private string $siteId, private string $status, private string $at) {}
+
+        public function currentForSites(array $siteIds): array
+        {
+            return [$this->siteId => new DeploymentSummary('d1', $this->siteId, 9, $this->status, null, null, null, null, null, new DateTimeImmutable($this->at), null, null)];
+        }
+
+        public function recentForSites(array $siteIds, int $limit = 20): array
+        {
+            return [];
+        }
+
+        public function liveCommit(string $siteId): ?string
+        {
+            return null;
+        }
+    });
+    app()->forgetInstance(VolumesReconciler::class);
+    test()->reconciler = app(VolumesReconciler::class);
+}
+
+it('deletes with allow_destroy only what the file created, once the unit runs without it; never a protected volume', function () {
     volumes_existing('legacy');
     volumes_apply(['volumes' => ['data' => ['mount' => '/data'], 'keep' => ['mount' => '/keep', 'protected' => true], 'legacy' => ['mount' => '/srv/uploads']]]);
     Volume::query()->update(['status' => VolumeStatus::Active]);
     $data = Volume::query()->where('name', 'data')->sole();
 
+    // First: unmounted (the unit redeploys without it) and marked, never deleted while a release may mount it.
     expect(volumes_apply(['volumes' => ['keep' => ['mount' => '/keep', 'protected' => true]]], allowDestroy: true))
         ->toEqualCanonicalizing([['delete', '/units/web/volumes/data'], ['detach', '/units/web/volumes/legacy']])
-        ->and($data->refresh()->status)->toBe(VolumeStatus::Deleting);
+        ->and($data->refresh()->status)->toBe(VolumeStatus::Active)
+        ->and($data->attachments()->count())->toBe(0)
+        ->and($data->options['config_delete']['unit'] ?? null)->toBe('web')
+        ->and($this->world->deploy->agents->dispatched('volume.delete'))->toBe([]);
+
+    // The unit hasn't run without it yet: nothing to delete.
+    volumes_last_deployment($this->site->id, 'failed', now()->addMinute()->toIso8601String());
+    expect(volumes_apply(['volumes' => ['keep' => ['mount' => '/keep', 'protected' => true]]], allowDestroy: true))->toBe([]);
+
+    // Its redeploy succeeded: the next run with allow_destroy deletes it.
+    volumes_last_deployment($this->site->id, 'succeeded', now()->addMinute()->toIso8601String());
+    expect(volumes_apply(['volumes' => ['keep' => ['mount' => '/keep', 'protected' => true]]]))->toBe([])
+        ->and(volumes_apply(['volumes' => ['keep' => ['mount' => '/keep', 'protected' => true]]], allowDestroy: true))->toBe([['delete', '/units/web/volumes/data']])
+        ->and($data->refresh()->status)->toBe(VolumeStatus::Deleting)
+        ->and(app(ManagedResources::class)->managed('volume', $data->id)->any())->toBeFalse();
 
     volumes_apply([], allowDestroy: true);
-})->throws(ValidationException::class);
+})->throws(ValidationException::class, 'protected');
+
+it('mounts a volume a run unmounted to delete again when the file lists it again, never an empty new one', function () {
+    volumes_existing('legacy');
+    volumes_apply(['volumes' => ['data' => ['mount' => '/data'], 'legacy' => ['mount' => '/srv/uploads']]]);
+    $data = Volume::query()->where('name', 'data')->sole();
+    volumes_apply(['volumes' => ['legacy' => ['mount' => '/srv/uploads']]], allowDestroy: true);
+
+    expect(volumes_apply(['volumes' => ['data' => ['mount' => '/data'], 'legacy' => ['mount' => '/srv/uploads']]]))->toBe([['create', '/units/web/volumes/data']])
+        ->and(Volume::query()->where('name', 'like', '%data%')->count())->toBe(1)
+        ->and($data->refresh()->attachments()->sole()->mount_path)->toBe('/data')
+        ->and($data->options['config_delete'] ?? null)->toBeNull();
+});
+
+it('deploys the unit when a volume is unmounted from it', function () {
+    volumes_existing('legacy');
+    volumes_apply(['volumes' => ['data' => ['mount' => '/data'], 'legacy' => ['mount' => '/srv/uploads']]]);
+
+    $plan = app(Planner::class)->plan(data_scope($this->world),
+        ['units' => ['web' => ['type' => 'app', 'runtime' => 'docker', 'volumes' => ['legacy' => ['mount' => '/srv/uploads']]]], 'environments' => [$this->world->environment->slug => ['branch' => 'main', 'servers' => ['web-1']]]]);
+
+    expect($plan->deploy)->toContain('web');
+});
 
 it('refuses to apply a kind change or a move', function (array $change) {
     volumes_apply(['volumes' => ['data' => ['mount' => '/data']]]);
