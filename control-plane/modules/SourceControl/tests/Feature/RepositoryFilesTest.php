@@ -3,6 +3,7 @@
 use Falak\Identity\Contracts\Role;
 use Falak\SourceControl\Contracts\Exceptions\NoApi;
 use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
+use Falak\SourceControl\Contracts\Exceptions\TreeTruncated;
 use Falak\SourceControl\Contracts\ProviderType;
 use Falak\SourceControl\Contracts\SourceControlGateway;
 use Falak\SourceControl\Infrastructure\EloquentSourceControlGateway;
@@ -140,3 +141,12 @@ it('translates globs', function (string $glob, string $path, bool $match) {
     ['**/compose.yaml', 'a/b/compose.yaml', true],
     ['*.yml', 'a/b.yml', false],
 ]);
+
+it('says when a file list asked for whole is not', function () {
+    Http::fake(['api.github.com/repos/acme/shop/git/trees/main*' => Http::response(['truncated' => true, 'tree' => [['path' => 'fn/index.ts', 'type' => 'blob']]])]);
+    $connection = sc_connection($this->organization->id);
+
+    // Searches keep the partial list; a complete list is refused.
+    expect($this->gateway->tree($connection->id, 'acme/shop', 'main', 'fn/**'))->toBe(['fn/index.ts'])
+        ->and(fn () => $this->gateway->tree($connection->id, 'acme/shop', 'main', 'fn/**', complete: true))->toThrow(TreeTruncated::class);
+});

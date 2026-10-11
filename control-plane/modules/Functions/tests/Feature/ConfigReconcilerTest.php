@@ -141,3 +141,12 @@ it('refuses dashboard edits of what the file manages: settings, allowlist, sched
     $this->deleteJson("{$base}/schedules/{$nightly->id}")->assertStatus(422);
     $this->postJson("{$base}/schedules", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
 });
+
+it('refuses a function whose code listing the provider cut short', function () {
+    $this->git->treeTruncated = true;
+
+    $issues = $this->functions->validate($this->scope, config_doc('production', ['api' => ['type' => 'function', 'runtime' => 'python', 'root' => 'fn']]));
+
+    expect($issues[0]->code.' '.$issues[0]->pointer)->toBe('value.range /units/api/root')
+        ->and($issues[0]->message)->toContain('too long to read whole');
+});

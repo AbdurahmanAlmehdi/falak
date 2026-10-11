@@ -78,7 +78,7 @@ final class RepositoryCode
         $max = (int) config('functions.max_files', 50);
 
         try {
-            $paths = $this->git->tree($connectionId, $repository, $ref, $prefix === '' ? '**' : "{$prefix}**");
+            $paths = $this->git->tree($connectionId, $repository, $ref, $prefix === '' ? '**' : "{$prefix}**", complete: true);
         } catch (SourceControlException $e) {
             throw ValidationException::withMessages(['code' => "The code under {$root} can't be read from {$repository}: {$e->getMessage()}"]);
         }

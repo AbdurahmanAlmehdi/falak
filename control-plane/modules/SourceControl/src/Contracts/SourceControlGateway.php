@@ -119,11 +119,12 @@ interface SourceControlGateway
     /**
      * Paths of the files at a ref matching a glob (`*` within a segment, `**` across segments; matched against the
      * whole path, or against the file name when the glob has no `/`), sorted, at most {@see MAX_TREE_PATHS}.
-     * Throws {@see Exceptions\NoApi} for git servers without an API.
+     * Throws {@see Exceptions\NoApi} for git servers without an API, and with $complete
+     * {@see Exceptions\TreeTruncated} when the list is not whole (the provider truncated it or a limit was reached).
      *
      * @return list<string>
      */
-    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*'): array;
+    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*', bool $complete = false): array;
 
     /** SSH clone URL for the repository. */
     public function cloneUrl(string $connectionId, string $repository): string;

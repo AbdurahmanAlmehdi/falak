@@ -65,11 +65,12 @@ interface ProviderClient
     public function exists(Connection $connection, string $repository, string $ref, string $path): bool;
 
     /**
-     * Every file path (blob) at a ref, at most $limit.
+     * Every file path (blob) at a ref, at most $limit; $truncated says whether the list is not whole (the provider
+     * truncated it, or $limit was reached).
      *
      * @return list<string>
      */
-    public function tree(Connection $connection, string $repository, string $ref, int $limit): array;
+    public function tree(Connection $connection, string $repository, string $ref, int $limit, ?bool &$truncated = null): array;
 
     public function sshUrl(Connection $connection, string $repository): string;
 

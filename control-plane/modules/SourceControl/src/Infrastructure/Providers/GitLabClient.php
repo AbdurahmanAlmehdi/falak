@@ -125,8 +125,9 @@ class GitLabClient extends HttpProviderClient
         return ($this->json($connection, $project.'/tree', ['ref' => $ref, 'path' => trim($path, '/'), 'per_page' => 1], nullOn404: true) ?? []) !== [];
     }
 
-    public function tree(Connection $connection, string $repository, string $ref, int $limit): array
+    public function tree(Connection $connection, string $repository, string $ref, int $limit, ?bool &$truncated = null): array
     {
+        $truncated = false;
         $paths = [];
 
         foreach ($this->pages($connection, '/projects/'.$this->id($repository).'/repository/tree', ['ref' => $ref, 'recursive' => 'true', 'per_page' => 100]) as $page) {
@@ -135,6 +136,8 @@ class GitLabClient extends HttpProviderClient
                     $paths[] = (string) $entry['path'];
 
                     if (count($paths) >= $limit) {
+                        $truncated = true;
+
                         return $paths;
                     }
                 }
