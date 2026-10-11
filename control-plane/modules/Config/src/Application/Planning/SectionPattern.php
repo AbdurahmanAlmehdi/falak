@@ -4,7 +4,8 @@ namespace Falak\Config\Application\Planning;
 
 /**
  * A section pattern of the phase 0 contract ("Sections, owners and phases"): a dotted path where `*` is any unit key
- * and `*(t1|t2)` a unit key of those types, e.g. `units.*(app).workers`, `units.*.env`, `previews`.
+ * and `*(t1|t2)` a unit key of those types, e.g. `units.*(app).workers`, `units.*.env`, `previews`. Inside a unit, a
+ * `*` token is any key of a map (`units.*(compose).services.*.limits`).
  */
 final readonly class SectionPattern
 {
@@ -51,6 +52,28 @@ final readonly class SectionPattern
             return false;
         }
 
-        return array_slice($other->path, 0, count($this->path)) === $this->path;
+        return self::matches($this->path, array_slice($other->path, 0, count($this->path)));
+    }
+
+    /**
+     * Whether a pattern path matches a path of the same length (`*` in the pattern matches any one token; a `*` in
+     * $path, another pattern's, is only matched by `*`).
+     *
+     * @param  list<string>  $pattern
+     * @param  list<string>  $path
+     */
+    public static function matches(array $pattern, array $path): bool
+    {
+        if (count($pattern) !== count($path)) {
+            return false;
+        }
+
+        foreach ($pattern as $i => $token) {
+            if ($token !== '*' && $token !== $path[$i]) {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

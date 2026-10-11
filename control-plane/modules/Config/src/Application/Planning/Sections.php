@@ -69,7 +69,7 @@ final class Sections
                     continue;
                 }
 
-                $value = self::get($body, $pattern->path, $found);
+                $value = self::pick($body, $pattern->path, $found);
 
                 if (! $found) {
                     continue;
@@ -78,11 +78,13 @@ final class Sections
                 // Longer sections owned by others are not this reconciler's.
                 foreach ($this->all as $other) {
                     if ($pattern->contains($other) && $other->selects($body['type'] ?? null) && ! in_array($other, $this->of($reconciler), true)) {
-                        self::remove($value, array_slice($other->path, count($pattern->path)));
+                        self::remove($value, $other->path);
                     }
                 }
 
-                self::set($out, ['units', (string) $unit, ...$pattern->path], $value);
+                if ($value !== []) {
+                    $out['units'][(string) $unit] = self::merge($out['units'][(string) $unit] ?? [], $value);
+                }
             }
         }
 
@@ -142,12 +144,12 @@ final class Sections
             foreach ($patterns as $pattern) {
                 $n = count($pattern->path);
 
-                if ($n <= count($childPath) && array_slice($childPath, 0, $n) === $pattern->path) {
+                if ($n <= count($childPath) && SectionPattern::matches($pattern->path, array_slice($childPath, 0, $n))) {
                     $covered = true;
                     break;
                 }
 
-                if ($n > count($childPath) && array_slice($pattern->path, 0, count($childPath)) === $childPath) {
+                if ($n > count($childPath) && SectionPattern::matches(array_slice($pattern->path, 0, count($childPath)), $childPath)) {
                     $deeper = true;
                 }
             }
@@ -207,6 +209,63 @@ final class Sections
     }
 
     /**
+     * The parts of $value at $path (`*` tokens match every key), from the root of $value; $found says whether any was.
+     *
+     * @param  array<string, mixed>  $value
+     * @param  list<string>  $path
+     * @return array<string, mixed>
+     */
+    private static function pick(array $value, array $path, ?bool &$found = null): array
+    {
+        $found = false;
+        $token = array_shift($path);
+        $out = [];
+        $keys = $token === '*' ? (array_is_list($value) ? [] : array_keys($value)) : (array_key_exists((string) $token, $value) ? [(string) $token] : []);
+
+        foreach ($keys as $key) {
+            if ($path === []) {
+                $out[(string) $key] = $value[$key];
+                $found = true;
+
+                continue;
+            }
+
+            if (! is_array($value[$key])) {
+                continue;
+            }
+
+            $child = self::pick($value[$key], $path, $childFound);
+
+            if ($childFound) {
+                $out[(string) $key] = $child;
+                $found = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Two picked documents of one unit merged (maps merge key by key, anything else is replaced).
+     *
+     * @param  array<string, mixed>  $a
+     * @param  array<string, mixed>  $b
+     * @return array<string, mixed>
+     */
+    private static function merge(array $a, array $b): array
+    {
+        foreach ($b as $key => $value) {
+            $a[$key] = is_array($value) && ! array_is_list($value) && is_array($a[$key] ?? null) && ! array_is_list($a[$key])
+                ? self::merge($a[$key], $value)
+                : $value;
+        }
+
+        return $a;
+    }
+
+    /**
+     * Remove $path (`*` tokens match every key) from $value, dropping maps it leaves empty.
+     *
      * @param  list<string>  $path
      */
     private static function remove(mixed &$value, array $path): void
@@ -216,21 +275,20 @@ final class Sections
         }
 
         $key = array_shift($path);
+        $keys = $key === '*' ? array_keys($value) : (array_key_exists($key, $value) ? [$key] : []);
 
-        if (! array_key_exists($key, $value)) {
-            return;
-        }
+        foreach ($keys as $k) {
+            if ($path === []) {
+                unset($value[$k]);
 
-        if ($path === []) {
-            unset($value[$key]);
+                continue;
+            }
 
-            return;
-        }
+            self::remove($value[$k], $path);
 
-        self::remove($value[$key], $path);
-
-        if ($value[$key] === []) {
-            unset($value[$key]);
+            if ($value[$k] === []) {
+                unset($value[$k]);
+            }
         }
     }
 
