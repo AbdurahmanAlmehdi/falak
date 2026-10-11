@@ -8,6 +8,7 @@ use Falak\Builds\Events\BuildCancelled;
 use Falak\Builds\Events\BuildFailed;
 use Falak\Builds\Events\BuildOutputReceived;
 use Falak\Builds\Events\BuildSucceeded;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Deployments\Application\Jobs\EvaluateReleaseWatches;
 use Falak\Deployments\Application\Jobs\ReconcileDeployments;
 use Falak\Deployments\Application\Listeners\DeployOnPush;
@@ -36,6 +37,7 @@ use Falak\Deployments\Events\ReleaseWatchTriggered;
 use Falak\Deployments\Http\Channels\DeploymentChannel;
 use Falak\Deployments\Http\Channels\SiteDeploymentsChannel;
 use Falak\Deployments\Infrastructure\ActionDeploymentTrigger;
+use Falak\Deployments\Infrastructure\Config\DeploymentsReconciler;
 use Falak\Deployments\Infrastructure\DeploymentSiteFields;
 use Falak\Deployments\Infrastructure\EloquentConfigReleases;
 use Falak\Deployments\Infrastructure\EloquentDeploymentBadges;
@@ -93,6 +95,9 @@ class DeploymentsServiceProvider extends ModuleServiceProvider
         $this->mergeConfigFrom($this->modulePath().'/config/deployments.php', 'deployments');
 
         $this->app->tag([DeploymentSiteFields::class], SiteResourceExtension::TAG);
+
+        // falak.yaml: units.<u>.deploy (strategy, health check, watch).
+        $this->app->tag([DeploymentsReconciler::class], Reconcilable::TAG);
     }
 
     protected function bootModule(): void

@@ -2,6 +2,7 @@
 
 namespace Falak\Deployments\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Deployments\Application\Actions\UpdateDeploySettings;
 use Falak\Deployments\Application\Actions\UpdateWatchSettings;
 use Falak\Deployments\Application\Watch\Migrations;
@@ -61,6 +62,8 @@ final class DeploySettingsController extends Controller
             'hookUrl' => $manage && $settings->hook_token ? $this->hookUrl($settings->hook_token) : null,
             'hasHook' => $settings->hook_token_hash !== null,
             'watch' => self::watchResource($data, $settings),
+            // Settings the project's falak.yaml manages (/deploy/...), read-only here.
+            'config' => app(ManagedResources::class)->managed('site', $data->id)->toArray(),
             'can' => ['manage' => $manage],
         ]]);
     }
@@ -88,7 +91,9 @@ final class DeploySettingsController extends Controller
     public function updateWatch(Request $request, string $site, UpdateWatchSettings $update): RedirectResponse
     {
         $data = $this->site($request->user(), $site, DeploymentPermissions::MANAGE);
-        $update($data, $request->validate(UpdateWatchSettings::rules()), (string) $request->user()?->getAuthIdentifier());
+        $input = $request->validate(UpdateWatchSettings::rules());
+        self::guardWatch($data, $input);
+        $update($data, $input, (string) $request->user()?->getAuthIdentifier());
 
         return back();
     }
@@ -109,9 +114,38 @@ final class DeploySettingsController extends Controller
             'secrets_mode' => ['sometimes', Rule::in([SiteSettings::SECRETS_ENV, SiteSettings::SECRETS_FILES])],
         ]);
 
+        $settings = SiteSettings::for($data);
+        app(ManagedResources::class)->managed('site', $data->id)->guard([
+            'strategy' => '/deploy/strategy', 'batch_size' => '/deploy/batch_size', 'keep_releases' => '/deploy/keep_releases', 'secrets_mode' => '/deploy/secrets',
+            'health_enabled' => '/deploy/health/enabled', 'health_path' => '/deploy/health/path', 'health_status' => '/deploy/health/status',
+            'health_timeout_s' => '/deploy/health/timeout', 'health_retries' => '/deploy/health/retries', 'health_retry_delay_s' => '/deploy/health/retry_delay',
+        ], $input, [
+            'strategy' => $settings->effectiveStrategy($data)->value, 'batch_size' => $settings->batch_size, 'keep_releases' => $settings->keep_releases,
+            'secrets_mode' => $settings->secrets_mode, 'health_enabled' => $settings->health_enabled, 'health_path' => $settings->health_path,
+            'health_status' => $settings->health_status, 'health_timeout_s' => $settings->health_timeout_s, 'health_retries' => $settings->health_retries,
+            'health_retry_delay_s' => $settings->health_retry_delay_s,
+        ]);
+
         $update($data, $input, (string) $request->user()?->getAuthIdentifier());
 
         return back();
+    }
+
+    /**
+     * The watch settings the project's falak.yaml manages can't change here (422).
+     *
+     * @param  array<string, mixed>  $input
+     */
+    public static function guardWatch(SiteData $site, array $input): void
+    {
+        $watch = SiteSettings::for($site)->watch();
+        $fields = [];
+
+        foreach (['enabled', 'minutes', 'on_trigger', 'health', 'health_failures', 'crashes', 'errors', 'issues'] as $field) {
+            $fields[$field] = "/deploy/watch/{$field}";
+        }
+
+        app(ManagedResources::class)->managed('site', $site->id)->guard($fields, $input, $watch);
     }
 
     public function pushToDeploy(Request $request, string $site, SiteDeploySettings $sites): RedirectResponse

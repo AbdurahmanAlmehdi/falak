@@ -127,7 +127,9 @@ final class DeploymentApiController extends Controller
     public function updateWatch(Request $request, string $site, UpdateWatchSettings $update): JsonResponse
     {
         $data = $this->site($request->user(), $site, DeploymentPermissions::MANAGE);
-        $settings = $update($data, $request->validate(UpdateWatchSettings::rules()), (string) $request->user()?->getAuthIdentifier());
+        $input = $request->validate(UpdateWatchSettings::rules());
+        DeploySettingsController::guardWatch($data, $input);
+        $settings = $update($data, $input, (string) $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => DeploySettingsController::watchResource($data, $settings)]);
     }
