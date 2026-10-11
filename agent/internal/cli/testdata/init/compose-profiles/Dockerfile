@@ -1,0 +1,2 @@
+FROM node:22-slim
+EXPOSE 3000

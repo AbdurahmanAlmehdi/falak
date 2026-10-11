@@ -1,0 +1,6 @@
+{
+  "name": "@acme/ui",
+  "main": "dist/index.js",
+  "scripts": { "build": "tsc" },
+  "devDependencies": { "typescript": "^5.9.0" }
+}

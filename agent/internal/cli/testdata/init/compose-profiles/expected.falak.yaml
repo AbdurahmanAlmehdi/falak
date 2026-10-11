@@ -1,0 +1,25 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: compose # detected: compose.yaml
+    services:
+      web:
+        port: 3000 # detected: ports of web in compose.yaml
+      postgres:
+        replace_with: postgres # run postgres as a Falak-managed instance
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      DATABASE_URL: ${{ postgres.DATABASE_URL }}
+      # SESSION_SECRET: ${{ secrets.SESSION_SECRET }} # empty in the example env file; uncomment if used
+
+  postgres:
+    type: database
+    engine: postgresql # detected: image postgres:17-alpine of postgres in compose.yaml
+    version: "17" # detected: tag 17-alpine
+
+environments:
+  production:
+    branch: main # detected: current git branch

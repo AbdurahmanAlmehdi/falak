@@ -1,0 +1,3 @@
+Wrote falak.yaml: api (app, docker, apps/api), web (app, node, apps/web)
+Wrote apps/api/Dockerfile (a starter: check its build and start commands)
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

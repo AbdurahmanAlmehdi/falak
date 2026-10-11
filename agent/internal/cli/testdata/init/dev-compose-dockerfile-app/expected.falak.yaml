@@ -1,0 +1,27 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: docker # detected: Dockerfile
+    port: 8080 # detected: EXPOSE 8080 in Dockerfile
+    build:
+      mode: docker # detected: Dockerfile
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      DATABASE_URL: ${{ db.DATABASE_URL }}
+      REDIS_URL: ${{ redis.REDIS_URL }}
+      SERVER_PORT: "8080"
+
+  db:
+    type: database
+    engine: postgresql # detected: DATABASE_URL in .env.example
+
+  redis:
+    type: redis # detected: REDIS_URL in .env.example
+
+environments:
+  production:
+    branch: main # detected: current git branch

@@ -1,0 +1,7 @@
+{
+  "name": "@acme/api",
+  "main": "src/index.js",
+  "scripts": { "start": "node src/index.js" },
+  "dependencies": { "express": "^5.1.0", "pg": "^8.16.0" },
+  "engines": { "node": "22" }
+}

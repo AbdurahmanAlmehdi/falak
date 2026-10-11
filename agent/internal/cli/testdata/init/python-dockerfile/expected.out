@@ -1,0 +1,3 @@
+Wrote falak.yaml: web (app, docker), db (database, postgresql)
+Wrote Dockerfile (a starter: check its build and start commands)
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.
