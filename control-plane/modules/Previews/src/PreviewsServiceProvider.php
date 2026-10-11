@@ -2,6 +2,7 @@
 
 namespace Falak\Previews;
 
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Databases\Events\DatabaseCreated;
 use Falak\Databases\Events\RestoreFinished;
 use Falak\Deployments\Events\DeploymentFailed;
@@ -16,6 +17,7 @@ use Falak\Previews\Application\Listeners\HandlePreviewEvents;
 use Falak\Previews\Domain\Models\Preview;
 use Falak\Previews\Domain\Models\PreviewSettings;
 use Falak\Previews\Domain\Policies\PreviewPolicy;
+use Falak\Previews\Infrastructure\Config\PreviewsReconciler;
 use Falak\SourceControl\Events\PullRequestClosed;
 use Falak\SourceControl\Events\PullRequestCommented;
 use Falak\SourceControl\Events\PullRequestOpened;
@@ -39,6 +41,9 @@ class PreviewsServiceProvider extends ModuleServiceProvider
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register(PreviewPolicy::VIEW, [Role::Admin, Role::Developer, Role::Viewer], 'View pull request previews, their URLs and access credentials', 'previews');
         $registry->register(PreviewPolicy::MANAGE, [Role::Admin, Role::Developer], 'Configure previews, approve previews of forks, redeploy and delete previews', 'previews');
+
+        // falak.yaml's `previews` (Config, docs/plans/CONFIG_AS_CODE.md).
+        $this->app->tag([PreviewsReconciler::class], Reconcilable::TAG);
 
         Event::listen(PullRequestOpened::class, [HandlePreviewEvents::class, 'opened']);
         Event::listen(PullRequestUpdated::class, [HandlePreviewEvents::class, 'updated']);
