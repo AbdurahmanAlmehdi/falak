@@ -5,6 +5,7 @@ namespace Falak\Config\Application;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigSource;
+use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Projects\Contracts\Data\EnvironmentData;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
@@ -14,7 +15,8 @@ use Falak\Sites\Contracts\SiteDirectory;
 /**
  * Builds the {@see ConfigScope} of an environment: its canvas services by unit key, the servers attached to the
  * project (**[decision]** a server is attached to a project when it hosts one of the project's sites, in any
- * environment: what the project "already has"), and the environment's defaults from the resolved file.
+ * environment, or one of its databases: what the project "already has"), and the environment's defaults from the
+ * resolved file.
  */
 final class ScopeFactory
 {
@@ -22,6 +24,7 @@ final class ScopeFactory
         private readonly ProjectDirectory $projects,
         private readonly SiteDirectory $sites,
         private readonly ServerDirectory $servers,
+        private readonly DatabaseDirectory $databases,
     ) {}
 
     /**
@@ -69,9 +72,10 @@ final class ScopeFactory
     }
 
     /**
-     * Unit key => canvas service. **[decision]** A unit the file manages is mapped by the site recorded in
-     * config_ownership (resource id), not by the service's name, so renaming the service in the dashboard doesn't turn
-     * the next push into a delete and a create; other units map by service name.
+     * Unit key => canvas service. **[decision]** A unit the file manages is mapped by the site (or database container)
+     * recorded in config_ownership (resource id), not by the service's name, so renaming the service in the dashboard
+     * doesn't turn the next push into a delete and a create; other units map by service name. A database container is
+     * the canvas service of one of its databases.
      *
      * @return array<string, array{kind: string, ref_id: string}>
      */
@@ -85,9 +89,17 @@ final class ScopeFactory
             $byRef[$service->refId] = $service;
         }
 
-        foreach (ConfigOwnership::query()->where('environment_id', $environmentId)->where('resource_type', 'site')->whereNotNull('unit')
-            ->distinct()->get(['resource_id', 'unit']) as $owned) {
-            $service = $byRef[$owned->resource_id] ?? null;
+        $byInstance = [];
+
+        foreach ($this->databases->findMany(array_values(array_map(fn ($s) => $s->refId, array_filter($byRef, fn ($s) => $s->kind === ServiceKind::Database)))) as $database) {
+            if ($database->instanceId !== null) {
+                $byInstance[$database->instanceId] ??= $byRef[$database->id] ?? null;
+            }
+        }
+
+        foreach (ConfigOwnership::query()->where('environment_id', $environmentId)->whereIn('resource_type', ['site', 'database_instance'])->whereNotNull('unit')
+            ->distinct()->get(['resource_type', 'resource_id', 'unit']) as $owned) {
+            $service = $owned->resource_type === 'site' ? ($byRef[$owned->resource_id] ?? null) : ($byInstance[$owned->resource_id] ?? null);
 
             if ($service === null) {
                 continue;
@@ -112,7 +124,12 @@ final class ScopeFactory
 
         foreach ($this->projects->environments($projectId) as $environment) {
             foreach ($this->projects->servicesIn($environment->id) as $service) {
-                if ($service->kind !== ServiceKind::Site) {
+                if ($service->kind === ServiceKind::Database) {
+                    // [decision] Phase 3: a server running one of the project's databases is attached too.
+                    if (($database = $this->databases->find($service->refId)) !== null) {
+                        $ids[$database->serverId] = true;
+                    }
+
                     continue;
                 }
 
