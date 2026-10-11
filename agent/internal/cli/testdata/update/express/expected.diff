@@ -1,0 +1,12 @@
+--- falak.yaml
++++ falak.yaml
+@@ -3,5 +3,8 @@
+   api:
+     type: app
+     runtime: node
+-    node: "18"
++    node: "18" # falak init: the code now says "20"
+     env: {NODE_ENV: production}
++
++  redis:
++    type: redis # detected: ioredis in package.json

@@ -1,0 +1,6 @@
+note: /units/shop/php: the code now says "8.3" (detected: php ^8.3 in composer.json); the file says "8.2": kept
+note: shop: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value
+note: shop: optional secrets, commented out in env (empty in the example env file): MAIL_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, STRIPE_SECRET, PUSHER_APP_KEY
+note: shop: expanded ${VAR} in VITE_APP_NAME
+note: shop: left out local development values: LOG_LEVEL
+Not written: run `falak init --update --write` to apply this to falak.yaml.

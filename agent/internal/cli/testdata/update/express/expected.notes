@@ -1,0 +1,6 @@
+note: /units/api/node: the code now says "20" (detected: engines.node 20.x in package.json); the file says "18": kept
+note: /units/api/env/LOG_LEVEL: detected, but its parent is written inline; add it by hand
+note: /units/api/env/REDIS_URL: detected, but its parent is written inline; add it by hand
+note: /units/api/env/GITHUB_CLIENT_ID: detected, but its parent is written inline; add it by hand
+note: api: optional secrets, commented out in env (empty in the example env file): SESSION_SECRET, GITHUB_CLIENT_SECRET
+Not written: run `falak init --update --write` to apply this to falak.yaml.

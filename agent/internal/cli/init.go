@@ -22,6 +22,7 @@ const initHead = "Written by `falak init` from the code (comments say why). Chec
 
 type initOptions struct {
 	full, force, yes, stdout, dockerfile bool
+	update, write                        bool
 	project                              string
 }
 
@@ -33,8 +34,10 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 	fs.BoolVar(&o.yes, "yes", false, "accept every default; ask nothing")
 	fs.BoolVar(&o.stdout, "stdout", false, "print the file instead of writing it")
 	fs.BoolVar(&o.dockerfile, "dockerfile", false, "write a starter Dockerfile for a language Falak doesn't build natively")
+	fs.BoolVar(&o.update, "update", false, "detect again and show what to add to the existing falak.yaml (a diff)")
+	fs.BoolVar(&o.write, "write", false, "--update: write the additions to falak.yaml")
 	projectFlag(fs, &o.project)
-	pos, err := a.parse(fs, args, 0, 1, "[dir] [--yes] [--stdout] [--json] [--full] [--force] [--dockerfile]")
+	pos, err := a.parse(fs, args, 0, 1, "[dir] [--yes] [--stdout] [--json] [--full] [--force] [--dockerfile] [--update [--write]]")
 	if err != nil {
 		return err
 	}
@@ -45,7 +48,10 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return fmt.Errorf("%s is not a directory", dir)
 	}
-	writing := !o.stdout && !a.jsonOut
+	if o.write && !o.update {
+		return usagef("--write goes with --update")
+	}
+	writing := !o.stdout && !a.jsonOut && !o.update
 	if writing {
 		for _, n := range configFileNames {
 			// Lstat: a symlink (even a dangling one) counts as existing, and is never written through.
@@ -94,6 +100,9 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 			fullDefaults(u)
 		}
 		units.set(u.Key, u.fields, "")
+	}
+	if o.update {
+		return a.initUpdate(dir, o, d, doc)
 	}
 
 	branch, branchWhy := a.gitBranch(dir), "detected: current git branch"
