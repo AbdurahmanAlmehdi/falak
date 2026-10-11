@@ -286,3 +286,480 @@ only gains optional fields.
 - **Preview copying is partial today**: `DuplicateSite` doesn't copy workers, schedules, `SiteSettings`, domains or
   limits. With a file, previews are built from the file instead, which fixes this for config-managed projects.
 - **Detection drift between `init` and the builder.** Both call `builder.Detect`, and the `init` fixtures pin it.
+
+## Phase 0 contract (fixed)
+
+Both lanes build against this section: the PHP lane (Config module, reconcilers, API) and the Go lane (CLI). Where
+it differs from the sections above, this section wins. Choices made here that the sections above didn't settle are
+marked **[decision]**.
+
+### Files
+
+| Path | What |
+|---|---|
+| `contracts/config/v1.schema.json` | The schema, draft 2020-12, `$id` `https://falak.sh/schema/v1.json` (published there and on SchemaStore at release) |
+| `contracts/config/risky-changes.json` | The risky-change rules, as data ([Risky changes](#risky-changes-1)) |
+| `contracts/config/cases/{valid,invalid,parse,resolve}/` | Shared cases; `contracts/config/README.md` explains their format |
+| `agent/internal/configspec/` | Go: embedded copy of the schema (`v1.schema.json`, kept identical by tests in both suites), `Parse`, `Validate`, `Resolve` |
+| `control-plane/modules/Config/src/Contracts/` | PHP: `Reconcilable`, `ConfigScope`, `ChangeSet`, `Change`, `ChangeOp`, `ApplyContext`, `ApplyPhase` (`A` before build, `B` with the release) |
+| `control-plane/modules/Config/` | The module skeleton: `ConfigServiceProvider` (registered last in `Kernel\Modules::ALL`), tests |
+
+**[decision]** The Go package holds the reference implementation of reading, schema validation and the merge with
+its reference checks (`configspec.Parse/Validate/Resolve`); `falak validate` uses it offline, and the Pest suite will
+run the resolve cases against the PHP merge once phase 1 writes it.
+
+### Validation stages and issue codes
+
+A file goes through four stages; each stops the next on an error. Every issue is
+`{code, pointer, source?, line, column, message}`.
+
+| Stage | Where | Codes |
+|---|---|---|
+| 1. Read | CLI and control plane | `parse`, `parse.empty`, `parse.timestamp`, `parse.number`, `parse.tag`, `parse.key`, `parse.duplicate_key`, `parse.multiple_documents` |
+| 2. Schema | CLI and control plane | `schema` |
+| 3. Resolve (merge + references), per environment | CLI and control plane | `environment.unknown`, `override.type`, `reference.malformed`, `reference.secret_name`, `reference.unknown_key`, `reference.not_allowed`; warning `reference.external` |
+| 4. Semantic, per environment | control plane only (needs the organization) | `name.server`, `name.secret`, `name.storage`, `name.dns_credential`, `name.certificate`, `name.unit`, `name.environment`, `value.range`, `value.unsupported`, `value.conflict`, `limit.server` |
+
+Stage 4 in detail:
+- `name.*`: a named resource doesn't exist: a server not attached to the project (`servers`, `server`, `drill_server`,
+  `previews.server`), a secret not in the scope chain of the unit (`${{ secrets.NAME }}`), a storage provider, DNS
+  credential or certificate of the organization, a unit key (`mounts[].function` must be a `function` unit,
+  `replace_with` a `database`/`redis` unit, `previews.units` keys), an environment (`previews.base`,
+  `previews.units.*.source`). A `reference.external` warning becomes `name.unit` when the environment has no canvas
+  service by that name.
+- `value.range`: bounds the schema can't express on durations and sizes (see the mapping table), and sizes that
+  aren't a whole number of the stored unit.
+- `value.unsupported`: config-dependent lists: `php` in `sites.php_versions`, `node` in `sites.node_versions`, database
+  `version` in `databases.versions.<engine>`, function `runtime` in `functions.runtimes`, `timezone` an IANA zone,
+  `cron` a valid expression (Processes' `ProcessRules::validExpression`), `deploy.strategy` allowed for the runtime
+  (`Strategy::for`), `laravel` only on PHP runtimes, `volumes`/`port`/`image`/`deploy.secrets: files` only on the
+  `docker` runtime (and compose units), `pitr` only for `postgresql`/`mysql`/`mariadb`, `drill_query` only on SQL engines.
+- `value.conflict`: two domains with `primary: true`; a domain in two units; `memory_reservation` above `memory`;
+  `min_instances` above `max_instances`; a compose service with `domains` but no `port`; `www` on a wildcard or
+  `www.` domain; `previews.enabled` with a `base` the file doesn't deploy to.
+- `limit.server`: Limits' `LimitValidator` against the unit's servers.
+
+**Pointers** are RFC 6901 JSON Pointers into the parsed file (stage 1, 2) or into the resolved file (3, 4; `source` is
+then the pointer of the value in the file). For unknown, missing or badly named properties the pointer is the object
+holding them, and the message names the property. **line/column** are 1-based, of the value at the pointer in the
+file (of the offending key for unknown properties); `null` when unknown (e.g. the YAML parser's own errors). The Go
+side gets them from yaml.v3 nodes; the control plane needs a position-aware lookup (symfony/yaml has no positions).
+
+### Reading the file
+
+`falak.yaml` (or `falak.yml`) is YAML, `falak.json` is JSON; the path is `config_sources.path` (default `falak.yaml`).
+Both parse to the JSON data model. Rules both readers follow, pinned by `cases/parse/`:
+
+- One document; a UTF-8 BOM is ignored; an empty or comment-only file is `parse.empty`.
+- YAML 1.2 booleans and nulls: `true/false` (any case), `~`/`null`. `yes`, `no`, `on`, `off` are strings.
+- Integers: decimal (with `_` separators), `0x…`, `0o…`. Other int-looking scalars (`0755`, `08`, `-0`, `0b11`) are
+  strings. Floats need a dot or an exponent; `.inf` and `.nan` are `parse.number`.
+- Unquoted dates and timestamps (`2026-10-11`) are `parse.timestamp` (quote them). `12:30` is a string.
+- Anchors, aliases and merge keys (`<<`) work; explicit keys win over merged ones. Custom tags (`!env`) are `parse.tag`.
+- Keys are plain scalars, unique per map (`parse.duplicate_key`).
+- PHP: `Yaml::parse($raw, PARSE_OBJECT_FOR_MAP | PARSE_DATETIME | PARSE_EXCEPTION_ON_INVALID_TYPE)` then reject
+  `DateTimeInterface` and INF/NAN (see `modules/Config/tests/Support/ConfigCases.php`). Go: walk the `yaml.Node` tree
+  (`configspec.Parse`), which also yields line/column.
+
+### Units of measure
+
+- **Duration** (schema `$defs/duration`): `^([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?$`, at least 2 characters:
+  whole numbers with units from largest to smallest (`30s`, `5m`, `1h30m`, `2d`, `0s`). d = 86400 s, h = 3600 s,
+  m = 60 s. Stored as seconds (or hours where the column is hours: it must then be whole hours, else `value.range`).
+  `90s` and `1m30s` are equal. No bare numbers, no fractions, no `ms`.
+- **Size** (`$defs/size`): `^[0-9]+(\.[0-9]+)?[kKmMgGtT]([iI]?[bB])?$`: binary multiples, case-insensitive, optional
+  `b`/`ib` (`512m` = `512MiB` = `512MB` = 512 × 1024² bytes; `1.5g` = 1536 MiB). The byte value must be a whole number of
+  the stored unit (MiB for `*_mb` / MB columns, GiB for `disk_gb`, bytes for `*_bytes`), else `value.range`.
+- **CPUs**: a JSON number of cores (`0.5`, `2`). **Percent, counts, ports**: integers.
+- **Versions** (`php`, `node`, database `version`): strings; unquoted numbers fail the schema (`php: 8.4` is a number).
+- **Cron**: `cron` of backups is 5 fields (UTC); `cron` of schedules also takes `@hourly`, `@daily`, `@weekly`,
+  `@monthly`, `@yearly` and `@every <go duration>` (≥ 1s), like Processes' `Schedule.expression`.
+
+### Environments and merge rules
+
+`Resolve(file, environment)` produces the **resolved file**: the same shape as the file, with `units` merged for the
+environment, `environments` holding only that environment (without its `units` overrides), and `$schema`, `version`,
+`previews` unchanged. It is what `config_runs.resolved` stores and what reconcilers diff against.
+
+1. The environment must be a key of `environments` (`environment.unknown`, pointer `/environments`).
+2. For each key of `environments.<env>.units` (overrides):
+   - `null` removes the unit from this environment.
+   - A key not in `units` adds an environment-only unit (it needs `type`).
+   - Otherwise the override is merged into the unit: a map merges key by key (recursively); any other value (list,
+     scalar) **replaces**; `null` **removes** the key. A map replacing a non-map replaces it. An override setting a
+     `type` different from the unit's is `override.type` (pointer and source `/environments/<env>/units/<u>/type`)
+     and stops the merge.
+3. The resolved file must pass the schema again (an override can produce an invalid unit).
+4. Defaults are not filled in by the merge; reconcilers apply them. A unit's `servers` default to the environment's
+   `servers`; a `database`/`redis` unit's `server` defaults to the environment's first server.
+
+`null` is only valid inside overrides; in `units` the schema rejects it. **[decision]** Lists of keyed things
+(`workers`, `daemons`, `schedules`, `volumes`, `headers`, compose `services`) are maps so an environment can change one
+entry; `domains`, `redirects`, `mounts`, `servers` are lists and replace as a whole.
+
+Which environments a push applies to: those whose `branch` equals the pushed branch, read from the file **at the
+pushed commit**. An environment without `branch` is applied only by `falak apply` or the dashboard. Environment keys
+are the project's environment slugs; **[decision]** an environment key the project doesn't have is created by the
+Projects reconciler (phase 3) with `is_production` from `production`.
+
+### References
+
+Compatible with today's resolver (`Projects\Contracts\VariableReferences::PATTERN`, same regex in Go
+`configspec.RefPattern`):
+
+```
+\$\{\{\s*([A-Za-z0-9][A-Za-z0-9 _.\-]*?)\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}
+```
+
+- `${{ secrets.NAME }}`: the secret store, nearest scope of the unit's service (service, environment, project,
+  organization). NAME is `[A-Z_][A-Z0-9_]*` (`reference.secret_name`). Existence is checked at plan time (`name.secret`).
+- `${{ <unit>.<KEY> }}`: another unit's variable. A **`database`** unit exposes `DATABASE_URL`, `DB_CONNECTION`,
+  `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`; a **`redis`** unit `REDIS_URL`, `REDIS_CLIENT`,
+  `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` (Databases' `DatabaseConnections::KEYS` / `REDIS_KEYS`); an app,
+  compose or function unit the keys of its resolved `env`. Else `reference.unknown_key`. **[decision]** The plan's
+  `${{ db.url }}` is not valid: write `${{ db.DATABASE_URL }}` (no lower-case aliases in v1).
+- A name that is not a unit of the resolved file is `reference.external` (a warning): it must be a canvas service of
+  the environment, checked at plan time (`name.unit`). A unit removed by an override makes its references external.
+- References are resolved **only in `units.<u>.env` values**, at deploy time by today's resolver (the file stores them
+  as written; cycles are the resolver's errors). `${{` anywhere else (hooks, commands, worker and daemon `env`) is
+  `reference.not_allowed`; `${{` not starting a valid reference is `reference.malformed`. **[decision]** Worker and
+  daemon `env` are literal (Processes stores them as is; those processes already see the unit's env).
+- Integer and boolean env values are stored as their text (`true`, `false`, `42`). Floats are not allowed (`0.5` must
+  be quoted).
+
+### Field mapping
+
+Every field of the schema, the model it maps to, and its owner. Unit keys map to the canvas service `name`
+(`projects_services`) and the site's / instance's `name`. A `.` path is within the unit unless it starts at the root.
+Defaults are the module's current defaults (listed in the schema descriptions).
+
+**Units (Sites, `sites_sites` unless noted)**
+
+| Field | Column / model | Notes |
+|---|---|---|
+| `type` | `runtime` for compose (`compose`) and function (`function`); database/redis: a `DatabaseInstance` | app: `runtime` below |
+| `root` | `root_directory` | `.` → null |
+| `runtime` (app) | `runtime` (`SiteRuntime`: frankenphp, php-fpm, node, bun, deno, static, docker) | |
+| `framework` | `framework` (`Framework`) | |
+| `php` / `node` | `php_version` / `node_version` | `value.unsupported` outside config lists |
+| `web_directory` | `web_directory` | |
+| `port` | `container_port` | |
+| `image` | `docker_image` | |
+| `health_path` | `health_check_path` | |
+| `test_domain` | `test_domain_enabled` | |
+| `servers` | `sites_site_targets` (`server_id` by server name; first = `leader`) | |
+| `build.mode` / `build.dockerfile` | `build_mode` (`BuildMode`) / `dockerfile` | |
+| `laravel.scheduler`, `.horizon` | `laravel.scheduler`, `laravel.horizon` | |
+| `laravel.octane` | `laravel.octane` + `laravel.octane_server` (`OctaneServer`); port allocated by Sites | `false` → off |
+| `deploy.hooks.*` | `deploy_script`, composed as `before_fetch`, `$FALAK_FETCH`, `before_activate`, `$FALAK_ACTIVATE`, `after_activate`, `$FALAK_RESTART_PROCS`, `after_restart` (`ScriptSections`) | managed as one field |
+| `env.<K>` | a new `sites_environment_versions` row (`variables`) | per key: keys not in the file stay as they are |
+| `expose` | `sites_environment_versions.exposed` | |
+| compose `files` | `compose_files` (and `compose_file` = first), `compose_source` = `repo` | |
+| compose `profiles` | `compose_profiles` | |
+| compose `services.<s>.port`, `.health_path` | `public_services[] {service, port, health_check_path}` | |
+| compose `services.<s>.replace_with` | `compose_services.<s> = {mode: database, database_id}` | the unit's instance |
+| compose `services.<s>.limits` | `compose_limits.<s>` (Limits JSON) | owner Limits |
+
+**Deploy settings (Deployments, `deployments_site_settings`)**
+
+| Field | Column | Bounds |
+|---|---|---|
+| `deploy.strategy` | `strategy` (`Strategy`: in-place, zero-downtime, blue-green, rolling, canary, compose) | per runtime: `Strategy::for` |
+| `deploy.batch_size` / `keep_releases` | `batch_size` / `keep_releases` | 1–100 / 1–50 |
+| `deploy.secrets` | `secrets_mode` (env, files) | files: docker only |
+| `deploy.health.enabled`, `.path`, `.status` | `health_enabled`, `health_path`, `health_status` | status 100–599 |
+| `deploy.health.timeout` / `.retries` / `.retry_delay` | `health_timeout_s` / `health_retries` / `health_retry_delay_s` | 1s–2m / 1–30 / 0s–5m |
+| `deploy.watch` (present) / `.enabled` | `watch_enabled` | present ⇒ true unless `enabled: false` |
+| `deploy.watch.minutes`, `.on_trigger` | `watch_minutes`, `watch_on_trigger` (rollback, alert_only) | 1–60 |
+| `deploy.watch.health`, `.health_failures`, `.crashes`, `.errors`, `.issues` | `watch_health`, `watch_health_failures`, `watch_crashes`, `watch_errors`, `watch_issues` | failures 1–20 |
+
+**Processes**
+
+| Field | Model / column | Bounds |
+|---|---|---|
+| `workers.<key>` | `processes_workers` row; **[decision]** phase 1 adds a nullable `name` column holding the key (export uses it; unnamed rows export as `worker-<n>`) | |
+| `.connection`, `.command`, `.processes`, `.tries`, `.max_jobs` | same names | processes 1–64, tries 0–1000 |
+| `.queue` | `queue` (a list is joined with `,`) | |
+| `.timeout`, `.sleep`, `.backoff`, `.max_time` | `timeout`, `sleep`, `backoff`, `max_time` (seconds) | 0s–1d, 0s–1h, 0s–1d, 0s–7d |
+| `.memory` | `memory` (MB) | 32m–64g |
+| `.env`, `.limits`, `.servers` | `env` (encrypted), `limits` (Limits JSON), `server_ids` | env ≤ 50 keys, values ≤ 4096 |
+| `daemons.<key>` | `processes_daemons` row, `name` = key | |
+| `.command`, `.directory`, `.user`, `.instances`, `.restart`, `.stop_signal` | same names | instances 1–64 |
+| `.stop_timeout` | `stop_timeout` (seconds) | 1s–1h |
+| `.env`, `.limits`, `.servers` | `env`, `limits`, `server_ids` | |
+| `schedules.<key>` (app) | `processes_schedules` row, `name` = key | |
+| `.command`, `.timezone`, `.user`, `.overlap`, `.heartbeat`, `.enabled`, `.all_servers` | same names | |
+| `.cron` | `expression` | |
+| `.timeout` | `timeout` (seconds) | 1s–1d |
+
+**Limits** (`units.<u>.limits`, compose `services.<s>.limits`, and inside workers/daemons): the `ResourceLimits`
+JSON stored on the owner's row: `memory` → `memory_limit` (MB, ≥ 32m), `memory_reservation` → `memory_reservation`
+(MB), `cpus` → `cpus`, `pids` → `pids_limit`, `restart` → `restart_policy`, `max_restarts` → `max_restarts`,
+`log.max_size` → `log_max_size` (MB, 1m–10g), `log.max_files` → `log_max_files`, `oom` → `oom`. Unit limits are
+`sites_sites.limits`, compose service limits `sites_sites.compose_limits.<s>`.
+
+**Edge**
+
+| Field | Model / column | Notes |
+|---|---|---|
+| `domains[]` (string or `.name`) | `edge_domains.name`, `compose_service` null (compose `services.<s>.domains`: `compose_service` = s) | identity: name |
+| `.primary` | `is_primary` | default: the first |
+| `.www` | `www_redirect` (`WwwRedirect`: none, to_www, to_apex) | |
+| `.tls` | `tls_mode` (`TlsMode`: auto, dns, custom, internal, off) | |
+| `.dns_credential` / `.certificate` | `dns_credential_id` / `certificate_id` (by name) | |
+| `.cloudflare.proxied` / `.cache` | `cloudflare_proxied` / `cloudflare_cache` | |
+| `redirects[]` `.from`, `.to`, `.status` | `edge_redirects` `from`, `to`, `status` (default 301); `position` = index | identity: from |
+| `headers.<Name>` | `edge_headers` `name`, `value` | identity: name |
+| `mounts[]` `.path`, `.function`, `.strip_prefix` | `edge_mounts` `path_prefix`, `function_site_id` (the function unit's site), `strip_prefix` (default true) | identity: path |
+
+**Databases** (`database` and `redis` units)
+
+| Field | Model / column | Notes |
+|---|---|---|
+| unit | `databases_instances` row (`name` = key) | never deleted by the file |
+| `engine` | `engine` (`Engine`: postgresql, mysql, mariadb / redis, valkey; redis default `redis`) | |
+| `version` | `version` (major) | |
+| `server` | `server_id` (by name) | |
+| `memory` / `cpus` | `memory_bytes` / `cpus` | memory ≥ 16m (whole MiB); cpus 0.1–256 |
+| `disk` | a sized data volume (`volume_id`, create: `disk_gb`) | whole GiB, 1g–16t |
+| `settings` | `settings` | |
+| `public` / `allowed_sources` / `require_tls` | `public_access` / `allowed_sources` / `require_tls` | |
+| `databases` | `databases_databases` rows (`name`) | default `[<key with - as _>]`; redis: none |
+| `backups` | one `databases_backup_schedules` row, **[decision]** `name` = `falak.yaml` | |
+| `backups.cron`, `.keep`, `.keep_days` | `cron`, `retention_count`, `retention_days` | |
+| `backups.storage` | `storage_provider_id` (by name) | |
+| `backups.databases` | the schedule's databases | default: all |
+| `backups.encryption.mode` / `.recipient` | `encryption_mode` / `age_recipient` | |
+| `backups.drill`, `.drill_query`, `.drill_server`, `.enabled` | `drill`, `drill_query`, `drill_server_id`, `enabled` | |
+| `pitr.enabled`, `.storage` | `pitr_enabled`, `pitr_storage_provider_id` | present ⇒ enabled unless `enabled: false` |
+| `pitr.window_days`, `.base_interval_days` | `pitr_window_days`, `pitr_base_interval_days` | 1–35 |
+| `pitr.encryption` | `pitr_encryption_mode`, `pitr_age_recipient` | |
+
+**Volumes** (`units.<u>.volumes.<name>`)
+
+| Field | Model / column | Notes |
+|---|---|---|
+| key | `volumes_volumes.name` | `^[a-z0-9][a-z0-9_.-]{0,62}$`; never deleted by the file |
+| `kind` | `kind` (`VolumeKind`: docker, sized) | **[decision]** `bind` and `shared_path` are not in the file (host paths are admin-only) |
+| `size` | `size_limit_bytes` | sized only |
+| `protected` | `protected` | |
+| `server` | `server_id` | default: the unit's first server |
+| `mount`, `read_only`, `service` | `volumes_attachments` `mount_path`, `read_only`, `service`; `attachable_type` site / compose_service | |
+| `backups.*` | one `volumes_backup_schedules` row: `cron`, `storage_provider_id`, `retention_count` (`keep`), `retention_days` (`keep_days`), `consistency`, `encryption_mode`/`age_recipient`, `drill`, `drill_server_id`, `enabled` | |
+
+**Functions** (`function` units: a site with runtime `function` plus `functions_functions`)
+
+| Field | Column | Bounds |
+|---|---|---|
+| `runtime` / `entrypoint` | `runtime` / `entrypoint` | runtimes from `functions.runtimes` |
+| `scaling.min_instances`, `.max_instances`, `.concurrency` | same names | 0–20, 1–50, 1–10000 |
+| `scaling.idle_timeout` | `idle_timeout_s` | 10s–1d |
+| `memory` / `cpus` / `timeout` | `memory_mb` / `cpus` / `request_timeout_s` | 64m–16g / 0.1–16 / 1s–15m |
+| `access.allow` | `allow_cidrs` | API keys stay in the dashboard |
+| `schedules.<key>` | `functions_schedules` row: `name` = key, `expression` (`cron`), `timezone`, `overlap`, `timeout_s`, `enabled` | |
+| code | the files under `root`: a new `FunctionVersion` when they changed | |
+
+**Previews** (`previews_settings`, one per project) **[decision]** `domain` of the plan's example is
+`domain_pattern`, the host label under the organization's preview domain (`PreviewHosts`: holds `{number}` and
+`{service}`).
+
+| Field | Column |
+|---|---|
+| `enabled` (present ⇒ true) | `enabled` |
+| `base` | `base_environment_id` (by slug) |
+| `units.<u>`: include / share / omit | `services.<u>` |
+| `units.<u>`: `{strategy, source, sanitize}` | `services.<u>` = include; `databases.<u>` = `{strategy, source_environment_id, sanitize_kind (sql\|command), sanitize_script}` |
+| `server` / `fork_server` | `server_id` / `fork_server_id` |
+| `variables`, `domain_pattern`, `max_concurrent`, `access`, `acknowledge_shared_database` | same names |
+| `idle_ttl` | `idle_ttl_hours` (whole hours, 1h–30d) |
+
+**Environments (Projects)**: `environments.<slug>` ↔ `projects_environments.slug`; `production` ↔ `is_production`;
+`servers` is the default of every unit's `servers`; `branch` is read from the file only (no column).
+
+### Sections, owners and phases
+
+A `Reconcilable` returns `sections()` as patterns: a dotted path where `*` is any unit key and `*(t1|t2)` a unit
+key of those types. Its documents (`current`, `diff`, `apply`) are the resolved file pruned to those sections, from
+the root. One section has one owner.
+
+| Owner (module) | Sections | Phase |
+|---|---|---|
+| Projects | `environments` | A (first) |
+| Databases | `units.*(database\|redis)` (all its fields) | A |
+| Volumes | `units.*(app\|compose).volumes` | A |
+| Sites | `units.*(app\|compose\|function)` minus the sections below: `type`, `root`, `runtime`, `framework`, `php`, `node`, `web_directory`, `port`, `image`, `health_path`, `test_domain`, `servers`, `build`, `laravel`, `files`, `profiles`, `services.*.port`, `services.*.health_path`, `services.*.replace_with`; plus `units.*.env`, `units.*.expose`, `units.*.deploy.hooks` | A |
+| Deployments | `units.*(app\|compose).deploy` minus `hooks` | A |
+| Limits | `units.*(app\|compose).limits`, `units.*(compose).services.*.limits` | A |
+| Functions | `units.*(function)`: `entrypoint`, `scaling`, `memory`, `cpus`, `timeout`, `access` | A |
+| Previews | `previews` | A |
+| Functions | `units.*(function).schedules` | B |
+| Processes | `units.*(app).workers`, `units.*(app).daemons`, `units.*(app).schedules` | B |
+| Edge | `units.*.domains`, `units.*.redirects`, `units.*.headers`, `units.*.mounts`, `units.*(compose).services.*.{domains,redirects,headers}` | B |
+
+**[decision]** The interface takes `sections(): list<string>` and `phase(): ApplyPhase` on top of the plan's
+methods; a module whose sections apply in both phases registers two reconcilers (Functions). Order within a phase is
+the table's order (units exist before what hangs off them). Phase B runs per unit at its activate step
+(`ApplyContext.unit`, `.deploymentId`, `.releaseId`).
+
+### Changes
+
+`Change` = `{op, path, before, after, section, unit, risky, reason, rule}`:
+- `op`: `create | update | delete | detach | noop` (`ChangeOp`). `detach` = gone from the file but kept (not
+  created by it, or a database / volume); `noop` = managed and already right (plans list them; `ChangeSet::isEmpty`
+  ignores them).
+- `path`: a JSON Pointer into the resolved file. Items of lists are addressed by identity, not index:
+  domains by host name, redirects by `from`, mounts by `path` (`/units/web/domains/shop.example.com`,
+  `/units/web/redirects/~1old`). Granularity: one change per resource for create/delete/detach, one per field for
+  update (`/units/web/deploy/strategy`).
+- `before`/`after`: values in the file's shape; `null` = absent. Never secret values (references only).
+- `rule`/`reason`: set when a risky rule matched.
+
+`config_ownership.path` uses the same pointers, relative to the unit (`/deploy/strategy`, `/workers/queue`,
+`/domains/shop.example.com`). **[decision]** JSON Pointers rather than the plan's dotted paths (host names contain dots).
+
+### Risky changes
+
+`contracts/config/risky-changes.json` holds the rules: `{id, paths, ops, unit_types?, production_only?, condition?,
+reason}`; a change is risky when it matches one (path patterns use `*` for one token; conditions `became_true`,
+`became_false`, `decrease`, `has_volumes`). The rules: `database.engine`, `database.version` (versions are majors),
+`database.public`, `volume.delete`, `volume.shrink` (also `disk`), `unit.remove_with_data`, `unit.remove_with_volumes`,
+`production.strategy`, `production.servers`, `production.domain_removed`, as the plan lists; **[decision]** also
+`database.move` (a database's `server` changes), `database.backups_removed`, `database.pitr_off`,
+`database.pitr_removed`, `database.pitr_window` (shrinking needs an admin in the UI today) and
+`environment.production`.
+
+### Tables
+
+```
+config_sources      id ulid pk, organization_id ulid, project_id ulid unique, source_connection_id ulid,
+                    repository string, path string default 'falak.yaml', enabled bool default true,
+                    experimental bool default true, created_by ulid null, timestamps
+config_runs         id ulid pk, organization_id ulid, project_id ulid, environment_id ulid null,
+                    environment string (slug), commit string(40) null, branch string null,
+                    trigger enum(push, pr, cli, manual, rollback),
+                    status enum(planning, awaiting_approval, applying, applied, failed, cancelled, refused),
+                    file longtext (raw), format enum(yaml, json), resolved json null, plan json null
+                    (ChangeSet::toArray()), deploy json null (unit keys deployed), errors json null (issues),
+                    error text null, allow_destroy bool default false, requested_by ulid null,
+                    approved_by ulid null, approved_at null, started_at null, finished_at null, timestamps;
+                    index (project_id, created_at), index (environment_id, status)
+config_ownership    id ulid pk, organization_id ulid, project_id ulid, environment_id ulid,
+                    resource_type string (site, database_instance, volume, worker, daemon, schedule, domain,
+                    redirect, header, mount, function_schedule, backup_schedule, preview_settings, environment),
+                    resource_id ulid, unit string null, path string (pointer relative to the unit),
+                    created_by_file bool, run_id ulid, timestamps;
+                    unique (resource_type, resource_id, path), index (project_id, environment_id, unit)
+deployments_releases.config  json null   (Deployments: the unit's slice of the resolved file at release)
+```
+
+`refused`: a risky plan while the source is `experimental` (until phase 4). `created_by_file` drives deletion
+(delete when true, detach otherwise).
+
+### API (`/api/v1`, Sanctum, `auth:sanctum` + `org`)
+
+`{project}` is the project id. Permissions **[decision]**: `config.view` (validate, plan, export, read runs),
+`config.apply` (create runs), `config.approve` (approve), `config.destroy` (`allow_destroy`); admins and developers
+get view/apply, admins approve/destroy.
+
+`ConfigIssue`:
+
+```json
+{"code": "schema", "pointer": "/units/web/deploy/strategy", "source": null, "line": 12, "column": 17,
+ "message": "value must be one of 'in-place', 'zero-downtime', …", "severity": "error"}
+```
+
+Invalid files answer **422** in Laravel's shape plus the issues, so existing clients keep decoding `errors`:
+
+```json
+{"message": "falak.yaml is invalid (2 errors).",
+ "errors": {"file": ["/units/web/deploy/strategy: value must be one of …"]},
+ "config_errors": [ConfigIssue, …], "config_warnings": [ConfigIssue, …]}
+```
+
+**`POST /projects/{project}/config/validate`** (`config.view`, throttle 60/min)
+
+```json
+// request
+{"file": "<raw text>", "format": "yaml", "environment": "staging"}
+// 200, always (validity is the answer, not the status)
+{"data": {"valid": false, "environments": ["production", "staging"],
+          "errors": [ConfigIssue], "warnings": [ConfigIssue]}}
+```
+
+`format`: `yaml` (default) or `json`. Without `environment` stages 1–3 run for every environment of the file and 4
+is skipped; with it, stages 1–4 for that one.
+
+**`POST /projects/{project}/config/plan`** (`config.view`, throttle 30/min)
+
+```json
+// request: exactly one of file / commit
+{"file": "<raw text>", "format": "yaml", "environment": "production"}
+{"commit": "abc1234…", "environment": "production"}
+// 200
+{"data": {"environment": "production", "commit": null, "resolved": {…},
+          "plan": {"changes": [Change], "summary": {"create": 1, "update": 2, "delete": 0, "detach": 0, "noop": 9},
+                   "risky": true, "deploy": ["web"]},
+          "warnings": [ConfigIssue]}}
+// 422 invalid file (above); 404 unknown project; 409 {"message": "Config as code is not enabled for this project."}
+```
+
+`Change` is `Change::toArray()`. `deploy`: units whose config changed (a push adds units whose files changed).
+
+**`POST /projects/{project}/config/runs`** (`config.apply`, throttle 10/min)
+
+```json
+// request: exactly one of file / commit
+{"file": "<raw text>", "format": "yaml", "environment": "production", "allow_destroy": false}
+// 201
+{"data": ConfigRun}
+```
+
+`ConfigRun`:
+
+```json
+{"id": "01j…", "project_id": "01j…", "environment": "production", "environment_id": "01j…",
+ "commit": null, "trigger": "cli", "status": "awaiting_approval",
+ "plan": {"changes": [Change], "summary": {…}, "risky": true, "deploy": ["web"]},
+ "errors": [], "error": null, "allow_destroy": false,
+ "requested_by": "01j…", "approved_by": null, "approved_at": null,
+ "deployments": [{"unit": "web", "deployment_id": "01j…", "status": "running"}],
+ "created_at": "2026-10-11T12:00:00Z", "started_at": null, "finished_at": null,
+ "url": "https://…/projects/01j…/config/runs/01j…"}
+```
+
+A run from a `file` is applied as the file at the source's current commit plus that text (`commit` null). The run
+starts at `planning`; it answers once the plan is saved (status `applying`, `awaiting_approval`, `refused` or
+`failed`).
+
+**`GET /projects/{project}/config/runs`** (`config.view`): `{"data": [ConfigRun], "links": …, "meta": …}`, newest first,
+`?environment=` filter. **`GET /config/runs/{run}`** (`config.view`): `{"data": ConfigRun}`. **[decision]** these two
+are added for `falak apply --wait`.
+
+**`POST /config/runs/{run}/approve`** (`config.approve`): `{}` → 200 `{"data": ConfigRun}` (status `applying`); 409
+`{"message": "This run is not awaiting approval."}`. **`POST /config/runs/{run}/cancel`** (`config.apply`): awaiting
+approval or planning → `cancelled`.
+
+**`GET /projects/{project}/config/export?environment=production&format=yaml`** (`config.view`)
+
+```json
+{"data": {"environment": "production", "format": "yaml", "file": "<text>"}}
+```
+
+The file holds `units` (today's state, `Reconcilable::current`), the environment with its `branch` and `servers`,
+and `previews`; defaults are left out. Exporting then planning gives an empty plan.
+
+### CLI (`agent/internal/cli`)
+
+| Command | Flags | Does |
+|---|---|---|
+| `falak init [dir]` | `--full`, `--force`, `--yes`, `--stdout`, `--json`, `--update` (phase 4) | writes `falak.yaml` from the code |
+| `falak validate [file]` | `-e/--env <slug>`, `--json`, `--format yaml\|json` | stages 1–3 offline (embedded schema); with a login and a linked project, also stage 4 through the API |
+| `falak plan [file]` | `-e/--env` (default: the environment whose `branch` is the current git branch), `-p/--project`, `--json` | `POST …/config/plan` with the local file |
+| `falak apply [file]` | `-e/--env`, `-p/--project`, `--allow-destroy`, `--wait`, `--json` | `POST …/config/runs`; `--wait` polls the run and streams its deployments |
+| `falak config export [project]` | `-e/--env`, `-o/--output <file>`, `--format yaml\|json` | `GET …/config/export` |
+
+`[file]` defaults to `falak.yaml`, then `falak.yml`, then `falak.json` in the current directory. The project comes
+from `-p`, else `.falak/project.json` in the repository (written by `init` when logged in). Exit codes: 0 ok, 1 error,
+2 usage, 3 a deployment failed, 5 the file is invalid, 6 the run waits for an approval (`apply` without `--wait`, or
+`--wait` stopped there). `--json` prints the API's `data` (or the issues) as is. Issues print as
+`falak.yaml:12:17: schema: /units/web/deploy/strategy: value must be one of …`.
