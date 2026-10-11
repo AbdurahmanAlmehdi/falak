@@ -6,6 +6,7 @@ import {
     EmptyState,
     IconButton,
     Input,
+    ManagedBadge,
     Menu,
     RelativeTime,
     Segmented,
@@ -14,6 +15,8 @@ import {
     Tag,
     Textarea,
     Tooltip,
+    managedCovers,
+    pointer,
     toast,
 } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
@@ -208,6 +211,8 @@ export function VariablesTab({ ctx }: ServiceTabProps) {
     if (!data) return error ? <Callout tone="danger">{error}</Callout> : <SkeletonRows rows={8} />;
 
     const can = data.can;
+    const managedKey = (key: string) => managedCovers(data.config, pointer('env', key));
+    const exposeManaged = managedCovers(data.config, '/expose');
 
     const toggleShown = async (key: string) => {
         if (shown.has(key)) {
@@ -549,6 +554,7 @@ export function VariablesTab({ ctx }: ServiceTabProps) {
                                                         >
                                                             {row.key}
                                                         </span>
+                                                        {managedKey(row.key) && <ManagedBadge config={data.config} />}
                                                         {row.status && (
                                                             <Tag
                                                                 tone={
@@ -646,7 +652,7 @@ export function VariablesTab({ ctx }: ServiceTabProps) {
                                                         <Switch
                                                             aria-label={`Expose ${row.key} to the deploy script and build`}
                                                             checked={isExposed(row.key)}
-                                                            disabled={!can.update || row.status === 'removed'}
+                                                            disabled={!can.update || row.status === 'removed' || exposeManaged}
                                                             onCheckedChange={(on) => setExposed(row.key, on)}
                                                         />
                                                     </div>
@@ -674,7 +680,7 @@ export function VariablesTab({ ctx }: ServiceTabProps) {
                                                                 onClick={() => undo(row.key)}
                                                             />
                                                         ) : null}
-                                                        {can.update && !isEditing && row.status !== 'removed' && (
+                                                        {can.update && !isEditing && row.status !== 'removed' && !managedKey(row.key) && (
                                                             <Menu
                                                                 label={`${row.key} actions`}
                                                                 actions={[
@@ -825,8 +831,18 @@ function RawEditor({
         }
     };
 
+    const managedKeys = (state.config?.paths ?? [])
+        .filter((path) => path.startsWith('/env/'))
+        .map((path) => path.slice(5).replace(/~1/g, '/').replace(/~0/g, '~'));
+
     return (
         <div className="grid gap-3">
+            {managedKeys.length > 0 && (
+                <Callout tone="info" title={state.config?.badge}>
+                    {managedKeys.join(', ')} {managedKeys.length === 1 ? 'is' : 'are'} set by {state.config?.file ?? 'falak.yaml'}: changing or
+                    removing {managedKeys.length === 1 ? 'it' : 'them'} here is refused.
+                </Callout>
+            )}
             {reviewing ? (
                 <div className="border-border bg-surface-1 overflow-hidden rounded-lg border" aria-label="Changes to save">
                     <div className="border-border text-fg-muted flex items-center justify-between border-b px-3 py-2 text-xs">

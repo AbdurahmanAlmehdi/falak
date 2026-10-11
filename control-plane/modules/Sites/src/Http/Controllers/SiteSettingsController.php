@@ -5,6 +5,7 @@ namespace Falak\Sites\Http\Controllers;
 use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Kernel\Http\Controller;
 use Falak\Servers\Contracts\ServerDirectory;
+use Falak\Sites\Application\Actions\CreateSite;
 use Falak\Sites\Application\Actions\RetryTarget;
 use Falak\Sites\Application\Actions\SetSiteTargets;
 use Falak\Sites\Application\Actions\UpdateLaravelSettings;
@@ -27,6 +28,7 @@ use Illuminate\Validation\Rule;
 
 final class SiteSettingsController extends Controller
 {
+    use GuardsManagedFields;
     use PresentsSites;
 
     public function __construct(private readonly ServerDirectory $servers) {}
@@ -97,6 +99,8 @@ final class SiteSettingsController extends Controller
             'targets' => $this->targets($site, $this->serversById($this->servers, $site->serverIds())),
             'options' => $this->options($site->organization_id, $this->servers, $agents, $sourceControl),
             'warnings' => array_values((array) $request->session()->pull('sites.warnings', [])),
+            // Fields the project's falak.yaml manages (read-only here), or null.
+            'config' => $this->managedFields($site)->toArray(),
             'can' => [
                 'update' => $request->user()?->can('update', $site) ?? false,
                 'delete' => $request->user()?->can('delete', $site) ?? false,
@@ -114,6 +118,19 @@ final class SiteSettingsController extends Controller
             'runtime' => ['sometimes', Rule::enum(SiteRuntime::class)],
             'build_mode' => ['sometimes', Rule::enum(BuildMode::class)],
             ...StoreSiteRequest::siteRules(),
+        ]);
+
+        $input = $data;
+
+        if (array_key_exists('root_directory', $input)) {
+            $input['root_directory'] = CreateSite::rootDirectory($input['root_directory']);
+        }
+
+        $this->managedFields($site)->guard(self::MANAGED_SETTINGS, $input, [
+            'runtime' => $site->runtime, 'build_mode' => $site->build_mode, 'php_version' => $site->php_version, 'node_version' => $site->node_version,
+            'root_directory' => $site->root_directory, 'web_directory' => $site->web_directory, 'container_port' => $site->container_port,
+            'docker_image' => $site->docker_image, 'dockerfile' => $site->dockerfile, 'health_check_path' => $site->health_check_path,
+            'test_domain_enabled' => $site->test_domain_enabled,
         ]);
 
         $update($site, $data);
@@ -134,6 +151,12 @@ final class SiteSettingsController extends Controller
             'server_ids.*' => ['string', 'size:26'],
             'leader_server_id' => ['required', 'string', 'size:26'],
         ]);
+
+        $site->loadMissing('targets');
+        $order = fn (array $ids, ?string $leader) => [$leader, ...collect($ids)->reject(fn ($id) => $id === $leader)->sort()->values()->all()];
+        $this->managedFields($site)->guard(['server_ids' => '/servers'],
+            ['server_ids' => $order(array_map('strval', $data['server_ids']), $data['leader_server_id'])],
+            ['server_ids' => $order($site->serverIds(), $site->leaderTarget()?->server_id)]);
 
         $set($site, array_values(array_map('strval', $data['server_ids'])), $data['leader_server_id']);
 
@@ -178,8 +201,22 @@ final class SiteSettingsController extends Controller
             'octane_server' => ['nullable', Rule::enum(OctaneServer::class)],
         ]);
 
+        $this->guardLaravel($site, $data);
         $update($site, LaravelSettings::fromArray($data), $request->user()?->getAuthIdentifier());
 
         return back();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function guardLaravel(Site $site, array $data): void
+    {
+        $current = $site->laravel;
+        $octane = fn (bool $on, ?string $server) => $on ? ($server ?? 'default') : false;
+        $this->managedFields($site)->guard(['scheduler' => '/laravel/scheduler', 'horizon' => '/laravel/horizon', 'octane' => '/laravel/octane'], [
+            ...array_intersect_key($data, ['scheduler' => true, 'horizon' => true]),
+            ...(array_key_exists('octane', $data) ? ['octane' => $octane((bool) $data['octane'], $data['octane'] ? ($data['octane_server'] ?? $current->octaneServer?->value) : null)] : []),
+        ], ['scheduler' => $current->scheduler, 'horizon' => $current->horizon, 'octane' => $octane($current->octane, $current->octaneServer?->value)]);
     }
 }

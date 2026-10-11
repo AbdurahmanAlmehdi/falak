@@ -19,6 +19,15 @@ interface ManagedResources
      */
     public function record(ConfigScope $scope, ApplyContext $ctx, ?string $unit, string $resourceType, string $resourceId, array $paths, ?bool $createdByFile = null, bool $merge = false): void;
 
+    /**
+     * Forget the paths of a resource under $prefixes (e.g. ['/deploy'] for the paths one reconciler records) except
+     * those in $keep: a reconciler sharing a resource with others drops its own stale paths only.
+     *
+     * @param  list<string>  $prefixes
+     * @param  list<string>  $keep
+     */
+    public function forgetPaths(string $resourceType, string $resourceId, array $prefixes, array $keep = []): void;
+
     /** The resource is no longer managed (gone from the file, deleted or detached). */
     public function forget(string $resourceType, string $resourceId): void;
 

@@ -1,4 +1,4 @@
-import { Button, Callout, Section, SkeletonRows, Tag, Tooltip } from '@/components/falak';
+import { Button, Callout, ManagedBadge, Section, SkeletonRows, Tag, Tooltip, type ManagedConfig } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { type ServiceTabProps } from '@/lib/registry';
 import { cn } from '@/lib/utils';
@@ -19,6 +19,8 @@ interface DeployScriptData {
     variables: Item[];
     exposedEnvironment: string[];
     can: { update: boolean };
+    /** Hooks the project's falak.yaml sets (/deploy/hooks/<section>), or null. */
+    config: ManagedConfig | null;
 }
 
 /** Deploy script editor with macro / variable hints (inserted at the cursor). ⌘S saves. */
@@ -37,6 +39,7 @@ export function DeployScriptSettings({ ctx }: ServiceTabProps) {
     const dirty = script !== data.script;
     const lines = script.split('\n').length;
     const missing = ['FALAK_FETCH', 'FALAK_ACTIVATE'].filter((macro) => !new RegExp(`\\$\\{?${macro}\\b`).test(script));
+    const hooks = (data.config?.paths ?? []).filter((path) => path.startsWith('/deploy/hooks/')).map((path) => path.slice('/deploy/hooks/'.length));
     const submit = () => dirty && void save('PUT', url, { script }, 'Deploy script saved — used by the next deploy');
 
     const insert = (text: string) => {
@@ -85,16 +88,20 @@ export function DeployScriptSettings({ ctx }: ServiceTabProps) {
             title="Deploy script"
             description="Bash, run on every server as the site user. Macros expand into the deployment phases."
             aside={
-                data.can.update && (
-                    <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<RotateCcw />}
-                        disabled={script === data.defaultScript}
-                        onClick={() => setScript(data.defaultScript)}
-                    >
-                        Preset default
-                    </Button>
+                hooks.length > 0 ? (
+                    <ManagedBadge config={data.config} />
+                ) : (
+                    data.can.update && (
+                        <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={<RotateCcw />}
+                            disabled={script === data.defaultScript}
+                            onClick={() => setScript(data.defaultScript)}
+                        >
+                            Preset default
+                        </Button>
+                    )
                 )
             }
             footer={
@@ -135,6 +142,13 @@ export function DeployScriptSettings({ ctx }: ServiceTabProps) {
                 />
             </div>
             {errors.script && <p className="text-danger text-xs">{errors.script}</p>}
+            {hooks.length > 0 && (
+                <Callout tone="info">
+                    {hooks.map((hook) => hook.replace('_', ' ')).join(', ')} {hooks.length === 1 ? 'comes' : 'come'} from{' '}
+                    {data.config?.file ?? 'falak.yaml'} (deploy.hooks): edit the file to change {hooks.length === 1 ? 'it' : 'them'}. The other
+                    sections stay editable here.
+                </Callout>
+            )}
             {missing.length > 0 && (
                 <Callout tone="warning">
                     The script doesn’t use {missing.map((macro) => `$${macro}`).join(' or ')} — without them the release is never fetched or

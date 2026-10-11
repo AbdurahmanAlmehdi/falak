@@ -44,6 +44,24 @@ final class EloquentManagedResources implements ManagedResources
         }
     }
 
+    public function forgetPaths(string $resourceType, string $resourceId, array $prefixes, array $keep = []): void
+    {
+        $rows = ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))->get(['id', 'path']);
+
+        foreach ($rows as $row) {
+            if (in_array($row->path, $keep, true)) {
+                continue;
+            }
+
+            foreach ($prefixes as $prefix) {
+                if ($row->path === $prefix || str_starts_with($row->path, $prefix.'/')) {
+                    ConfigOwnership::query()->whereKey($row->id)->delete();
+                    break;
+                }
+            }
+        }
+    }
+
     public function forget(string $resourceType, string $resourceId): void
     {
         ConfigOwnership::query()->where('resource_type', $resourceType)->where('resource_id', strtolower($resourceId))->delete();
