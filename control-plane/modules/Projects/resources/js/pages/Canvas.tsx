@@ -10,6 +10,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type React
 import { ActivityRail } from '../components/activity-rail';
 import { CanvasBoard, type ComposeAction, type GroupAction, type LayoutChange } from '../components/canvas-board';
 import { absoluteOf, composeGrid } from '../components/canvas-geometry';
+import { ConfigDriftBanner } from '../components/config-drift-banner';
 import { CreatePicker } from '../components/create-picker';
 import { ServicePanel } from '../components/service-panel';
 import { EMPTY_STACK, buildStack, parseStack, type ServiceRef, type StackRoute } from '../components/stack-route';
@@ -614,6 +615,10 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                             Create
                         </Button>
                     )}
+                </div>
+
+                <div className="absolute top-14 right-3 z-10 md:right-4">
+                    <ConfigDriftBanner projectId={project.id} environment={environment.slug} />
                 </div>
 
                 {canvas.services.length === 0 && <EmptyCanvas onCreate={canCreate ? () => setPicker({ position: null, anchor: null }) : undefined} />}

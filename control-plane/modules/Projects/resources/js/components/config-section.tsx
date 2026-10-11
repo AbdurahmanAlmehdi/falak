@@ -2,6 +2,8 @@ import { Button, Callout, Field, Input, RelativeTime, Section, Select, StatusBad
 import { HttpError, requestJson } from '@/lib/http';
 import { FileCode2 } from 'lucide-react';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { RunApproval, type ConfigApproval } from './config-run-approval';
+import { UnmanagedResources } from './unmanaged-resources';
 
 /** Config as code (Config module, `GET /projects/{p}/settings/config`). */
 interface ConfigSource {
@@ -11,6 +13,7 @@ interface ConfigSource {
     path: string;
     enabled: boolean;
     experimental: boolean;
+    separate_approver: boolean;
     allowed_credentials: string[];
 }
 
@@ -46,6 +49,8 @@ interface ConfigRun {
     error: string | null;
     deployments: { unit: string; deployment_id: string | null; status: string | null; error: string | null }[];
     created_at: string;
+    approval: ConfigApproval | null;
+    cancel_reason: string | null;
 }
 
 interface ConfigData {
@@ -70,11 +75,13 @@ function show(value: unknown): string {
     return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
-function RunDetails({ run }: { run: ConfigRun }) {
+function RunDetails({ run, onChange }: { run: ConfigRun; onChange: () => void }) {
     const changes = (run.plan?.changes ?? []).filter((c) => c.op !== 'noop');
 
     return (
         <div className="grid gap-2 pt-2">
+            {run.approval && <RunApproval runId={run.id} status={run.status} approval={run.approval} onChange={onChange} />}
+            {run.cancel_reason && <p className="text-fg-muted text-sm">Cancelled: {run.cancel_reason.replace('_', ' ')}.</p>}
             {run.error && <p className="text-danger text-sm">{run.error}</p>}
             {run.errors.length > 0 && (
                 <ul className="grid gap-1 font-mono text-xs">
@@ -147,7 +154,14 @@ function RunDetails({ run }: { run: ConfigRun }) {
  */
 export function ConfigSection({ projectId }: { projectId: string }) {
     const [data, setData] = useState<ConfigData | null>(null);
-    const [form, setForm] = useState({ connection_id: '', repository: '', path: 'falak.yaml', enabled: true, credentials: '' });
+    const [form, setForm] = useState({
+        connection_id: '',
+        repository: '',
+        path: 'falak.yaml',
+        enabled: true,
+        separate_approver: false,
+        credentials: '',
+    });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [saving, setSaving] = useState(false);
     const [open, setOpen] = useState<string | null>(null);
@@ -161,6 +175,7 @@ export function ConfigSection({ projectId }: { projectId: string }) {
             repository: source?.repository ?? '',
             path: source?.path ?? 'falak.yaml',
             enabled: source?.enabled ?? true,
+            separate_approver: source?.separate_approver ?? false,
             credentials: (source?.allowed_credentials ?? []).join(', '),
         });
     }, [projectId]);
@@ -203,8 +218,8 @@ export function ConfigSection({ projectId }: { projectId: string }) {
             ) : (
                 <div className="grid gap-4">
                     <Callout tone="info" title="Experimental">
-                        Risky changes (a production deploy strategy or servers, removing a production domain, anything that touches data) are refused
-                        rather than applied until approvals arrive. Disabling the source keeps every resource and makes every field editable again.
+                        Risky changes (a production deploy strategy or servers, removing a production domain, anything that touches data) wait for an
+                        approval before they are applied. Disabling the source keeps every resource and makes every field editable again.
                     </Callout>
                     <form className="grid gap-3 sm:grid-cols-2" onSubmit={save} data-testid="config-source-form">
                         <Field label="Connection" error={errors.connection_id}>
@@ -227,6 +242,18 @@ export function ConfigSection({ projectId }: { projectId: string }) {
                         </Field>
                         <Field label="File" error={errors.path} hint="falak.yaml, falak.yml or falak.json">
                             <Input value={form.path} onChange={(event) => setForm({ ...form, path: event.target.value })} disabled={!canApply} mono />
+                        </Field>
+                        <Field
+                            label="Approver must differ from the requester"
+                            error={errors.separate_approver}
+                            hint="Risky runs wait for an approval (config.approve). Admins only."
+                            inline
+                        >
+                            <Switch
+                                checked={form.separate_approver}
+                                onCheckedChange={(separate_approver) => setForm({ ...form, separate_approver })}
+                                disabled={!canApply || !data.can.approve}
+                            />
                         </Field>
                         <Field label="Follow the file" error={errors.enabled} inline>
                             <Switch checked={form.enabled} onCheckedChange={(enabled) => setForm({ ...form, enabled })} disabled={!canApply} />
@@ -281,12 +308,14 @@ export function ConfigSection({ projectId }: { projectId: string }) {
                                                 <RelativeTime value={run.created_at} />
                                             </span>
                                         </button>
-                                        {open === run.id && <RunDetails run={run} />}
+                                        {open === run.id && <RunDetails run={run} onChange={() => void load()} />}
                                     </li>
                                 ))}
                             </ul>
                         )}
                     </div>
+
+                    <UnmanagedResources projectId={projectId} canDismiss={canApply} />
                 </div>
             )}
         </Section>
