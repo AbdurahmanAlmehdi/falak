@@ -1,13 +1,19 @@
 <?php
 
+use Falak\Config\Application\Planning\RiskRules;
+use Falak\Config\Contracts\ApplyPhase;
 use Falak\Config\Contracts\ChangeSet;
+use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Identity\Contracts\Role;
 use Falak\Projects\Domain\Models\Service;
 use Falak\Sites\Contracts\DeployScriptSections;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
 use Falak\Sites\Domain\Models\Site;
+use Falak\Sites\Events\SiteUpdated;
+use Falak\Sites\Infrastructure\Config\SitesLaravelReconciler;
 use Falak\Sites\Infrastructure\Config\SitesReconciler;
+use Illuminate\Support\Facades\Event;
 
 require_once __DIR__.'/../../Support/config.php';
 
@@ -105,15 +111,14 @@ it('applies fields through Sites\' actions and records what the file manages', f
     $sections = DeployScriptSections::split($site->deploy_script);
 
     expect($site->php_version)->toBe('8.3')
-        ->and($site->laravel->horizon)->toBeTrue()
-        ->and($site->laravel->scheduler)->toBeTrue() // absent in the file: kept
+        ->and($site->laravel->horizon)->toBeFalse() // laravel is phase B (SitesLaravelReconciler), not this reconciler's
         ->and($environment->variables)->toMatchArray(['APP_ENV' => 'staging', 'WORKERS' => '2', 'APP_KEY' => 'base64:secret'])
         ->and($environment->exposed)->toBe(['APP_ENV'])
         ->and($sections['before_fetch'])->toBe('# warm up') // untouched sections keep their text
         ->and($sections['before_activate'])->toBe('$FALAK_PHP artisan optimize')
         ->and($sections['after_activate'])->toBe('php artisan queue:restart')
         ->and(ConfigOwnership::query()->where('resource_id', $site->id)->orderBy('path')->pluck('path')->all())->toBe([
-            '/deploy/hooks/after_activate', '/env/APP_ENV', '/env/WORKERS', '/expose', '/laravel/horizon', '/php', '/runtime', '/type',
+            '/deploy/hooks/after_activate', '/env/APP_ENV', '/env/WORKERS', '/expose', '/php', '/runtime', '/type',
         ]);
 
     // A second apply with the env key gone keeps the variable but no longer manages it.
@@ -149,19 +154,63 @@ it('creates a unit the file adds, then deletes it once removed; a unit it didn\'
         ->and(EnvironmentVersion::query()->where('site_id', $api->id)->orderByDesc('version')->first()->variables)->toMatchArray(['PORT' => '3000'])
         ->and(ConfigOwnership::query()->where('resource_id', $api->id)->where('created_by_file', true)->exists())->toBeTrue();
 
-    // Both units leave the file.
+    // Both units leave the file. Without allow_destroy nothing is deleted: both are detached (sites kept).
     $scope = ($this->scope)($resolved);
     $removal = sites_changes($this->reconciler->diff($scope, ['units' => []], $this->reconciler->current($scope)));
 
-    expect($removal['/units/api'][0])->toBe('delete')
+    expect($removal['/units/api'][0])->toBe('detach')
         ->and($removal['/units/web'][0])->toBe('detach');
 
-    $this->reconciler->apply($scope, $this->reconciler->diff($scope, ['units' => []], $this->reconciler->current($scope)), config_ctx($this->env));
+    // With allow_destroy the unit the file created is deleted, and the plan flags it risky (unit.delete).
+    $destroy = config_scope($this->env, $this->source, $resolved, allowDestroy: true);
+    $plan = $this->reconciler->diff($destroy, ['units' => []], $this->reconciler->current($destroy));
+    $flagged = app(RiskRules::class)->flag($plan, false, ['api' => 'app', 'web' => 'app']);
+    $api = collect($flagged->changes)->firstWhere('path', '/units/api');
 
-    expect(Site::query()->whereKey($api->id)->exists())->toBeFalse()
-        ->and(ConfigOwnership::query()->where('resource_id', $api->id)->exists())->toBeFalse()
+    expect($api->op->value)->toBe('delete')
+        ->and($api->risky)->toBeTrue()
+        ->and($api->rule)->toBe('unit.delete')
+        ->and(collect($flagged->changes)->firstWhere('path', '/units/web')->op->value)->toBe('detach');
+
+    $this->reconciler->apply($destroy, $plan, config_ctx($this->env, allowDestroy: true));
+
+    expect(Site::query()->where('name', 'api')->exists())->toBeFalse()
         ->and(ConfigOwnership::query()->where('resource_id', $this->site->id)->exists())->toBeFalse()
         ->and(Site::query()->find($this->site->id))->not->toBeNull();
+});
+
+it('without allow_destroy a removed unit the file created is detached: the site stays, unmanaged', function () {
+    $resolved = config_doc('production', [], ['branch' => 'main', 'servers' => ['web-1']]);
+    $scope = ($this->scope)($resolved);
+    $desired = ['units' => ['api' => ['type' => 'app', 'runtime' => 'node', 'node' => '22']]];
+    $this->reconciler->apply($scope, $this->reconciler->diff($scope, $desired, $this->reconciler->current($scope)), config_ctx($this->env));
+    $api = Site::query()->where('name', 'api')->firstOrFail();
+
+    // Even a delete change (a stale plan) applied without allow_destroy only detaches.
+    $scope = config_scope($this->env, $this->source, $resolved, allowDestroy: true);
+    $plan = $this->reconciler->diff($scope, ['units' => []], $this->reconciler->current($scope));
+    expect(sites_changes($plan)['/units/api'][0])->toBe('delete');
+
+    $this->reconciler->apply($scope, $plan, config_ctx($this->env));
+
+    expect(Site::query()->find($api->id))->not->toBeNull()
+        ->and(ConfigOwnership::query()->where('resource_id', $api->id)->exists())->toBeFalse();
+});
+
+it('maps units to sites through the scope, not the canvas name: a renamed service is no delete + create', function () {
+    $scope = ($this->scope)();
+    $ctx = config_ctx($this->env);
+    $desired = ['units' => ['web' => ['type' => 'app', 'runtime' => 'frankenphp', 'php' => '8.4']]];
+    $this->reconciler->apply($scope, $this->reconciler->diff($scope, $desired, $this->reconciler->current($scope)), $ctx);
+
+    // The canvas card is renamed; Config keeps mapping the unit to its site (by the ownership's resource id).
+    Service::query()->where('ref_id', $this->site->id)->update(['name' => 'storefront']);
+    $mapped = new ConfigScope($scope->organizationId, $scope->projectId, $scope->environmentId, $scope->environment,
+        services: ['web' => ['kind' => 'site', 'ref_id' => $this->site->id]], servers: $scope->servers);
+    $changes = $this->reconciler->diff($mapped, $desired, $this->reconciler->current($mapped))->changes;
+
+    expect(collect($changes)->pluck('op')->map->value->unique()->values()->all())->toBe(['noop'])
+        ->and($mapped->unitOf($this->site->id))->toBe('web');
 });
 
 it('leaves unmanaged units alone when they are not in the file', function () {
@@ -191,4 +240,37 @@ it('splits and recomposes deploy scripts like the deployment planner', function 
         ->and(DeployScriptSections::meaningful('# done'))->toBe('')
         ->and(DeployScriptSections::split(DeployScriptSections::compose(DeployScriptSections::split($script))))->toBe(DeployScriptSections::split($script))
         ->and(DeployScriptSections::split("a\n\$FALAK_ACTIVATE\nb\n"))->toMatchArray(['before_activate' => 'a', 'after_activate' => 'b']);
+});
+
+it('laravel settings change with the release (phase B), not before the build', function () {
+    $laravel = app(SitesLaravelReconciler::class);
+    $phaseA = app(SitesReconciler::class);
+    $desired = ['units' => ['web' => ['type' => 'app', 'runtime' => 'frankenphp', 'laravel' => ['horizon' => true, 'scheduler' => false]]]];
+    $scope = ($this->scope)();
+    Event::fake([SiteUpdated::class]);
+
+    expect($laravel->phase())->toBe(ApplyPhase::WithRelease)
+        ->and($phaseA->sections())->not->toContain('units.*(app).laravel')
+        ->and($laravel->sections())->toBe(['units.*(app).laravel']);
+
+    // Phase A ignores laravel entirely: nothing planned, nothing changed.
+    $planA = $phaseA->diff($scope, $desired, $phaseA->current($scope));
+    expect(collect($planA->changes)->filter(fn ($c) => str_contains($c->path, '/laravel'))->all())->toBe([]);
+    $phaseA->apply($scope, $planA, config_ctx($this->env));
+    expect($this->site->refresh()->laravel->horizon)->toBeFalse();
+    Event::assertNotDispatched(SiteUpdated::class, fn ($e) => in_array('laravel', (array) ($e->changed ?? []), true));
+
+    // Phase B (with the release) applies it and records ownership on the same paths.
+    $planB = $laravel->diff($scope, $desired, $laravel->current($scope));
+    expect(sites_changes($planB))->toBe([
+        '/units/web/laravel/horizon' => ['update', false, true],
+        '/units/web/laravel/scheduler' => ['update', true, false],
+    ]);
+    $laravel->apply($scope, $planB, config_ctx($this->env, ApplyPhase::WithRelease));
+
+    $site = $this->site->refresh();
+    expect($site->laravel->horizon)->toBeTrue()
+        ->and($site->laravel->scheduler)->toBeFalse()
+        ->and(ConfigOwnership::query()->where('resource_id', $site->id)->orderBy('path')->pluck('path')->all())->toBe(['/laravel/horizon', '/laravel/scheduler', '/runtime', '/type'])
+        ->and($laravel->diff($scope, $desired, $laravel->current($scope))->isEmpty())->toBeTrue();
 });

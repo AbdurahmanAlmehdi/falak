@@ -2,6 +2,7 @@
 
 namespace Falak\Projects\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Projects\Application\Actions\ArrangeCompose;
@@ -90,6 +91,16 @@ final class ServiceController extends Controller
         $data = $request->validate(['name' => ['required', 'string', 'max:60', 'regex:/^[^\x00-\x1F\x7F]+$/u']]);
 
         $record = Service::query()->where('environment_id', $model->id)->find(strtolower($service)) ?? throw new NotFoundHttpException('Service not found.');
+
+        // A service falak.yaml manages is named by its unit key: renaming it would make the file look for another one.
+        if ($record->kind === ServiceKind::Site && trim((string) $data['name']) !== $record->name) {
+            $managed = app(ManagedResources::class)->managed('site', $record->ref_id);
+
+            if ($managed->any()) {
+                throw ValidationException::withMessages(['name' => $managed->badge().': the service is a unit of the file; rename it there.']);
+            }
+        }
+
         $rename($record, (string) $data['name']);
 
         return response()->json(['data' => ['id' => $record->id, 'name' => $record->name]]);

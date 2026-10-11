@@ -18,11 +18,9 @@ use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Application\Actions\SaveEnvironment;
 use Falak\Sites\Application\Actions\SetSiteTargets;
 use Falak\Sites\Application\Actions\UpdateDeployScript;
-use Falak\Sites\Application\Actions\UpdateLaravelSettings;
 use Falak\Sites\Application\Actions\UpdateSite;
 use Falak\Sites\Application\SiteRules;
 use Falak\Sites\Contracts\BuildMode;
-use Falak\Sites\Contracts\Data\LaravelSettings;
 use Falak\Sites\Contracts\Data\SitePlacement;
 use Falak\Sites\Contracts\DeployScriptSections;
 use Falak\Sites\Contracts\Framework;
@@ -44,8 +42,11 @@ use InvalidArgumentException;
  */
 final class SitesReconciler implements Reconcilable, ValidatesConfig
 {
-    /** Unit fields this reconciler owns, in phase 1 for app units only. */
-    public const FIELDS = ['type', 'root', 'runtime', 'framework', 'php', 'node', 'web_directory', 'port', 'image', 'health_path', 'test_domain', 'servers', 'build', 'laravel', 'env', 'expose', 'deploy.hooks'];
+    /**
+     * Unit fields this reconciler owns, in phase 1 for app units only. `laravel` belongs to {@see SitesLaravelReconciler}
+     * (phase B): its scheduler, Horizon and Octane change running processes, so they go live with the release.
+     */
+    public const FIELDS = ['type', 'root', 'runtime', 'framework', 'php', 'node', 'web_directory', 'port', 'image', 'health_path', 'test_domain', 'servers', 'build', 'env', 'expose', 'deploy.hooks'];
 
     /** Shown instead of a stored value that may be a secret. */
     public const REDACTED = '••••';
@@ -228,7 +229,8 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            $op = $this->managed->createdByFile('site', $siteId) ? ChangeOp::Delete : ChangeOp::Detach;
+            // Deleting a site needs the run's allow_destroy (config.destroy); otherwise the site is only detached.
+            $op = $scope->allowDestroy && $this->managed->createdByFile('site', $siteId) ? ChangeOp::Delete : ChangeOp::Detach;
             $changes[] = new Change($op, '/units/'.Pointer::escape($unit), ['type' => $body['type'] ?? 'app', 'runtime' => $body['runtime'] ?? null], null, $first, $unit);
         }
 
@@ -261,9 +263,15 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            if ($whole?->op === ChangeOp::Delete) {
+            if ($whole?->op === ChangeOp::Delete && $ctx->allowDestroy) {
                 app(SiteFactory::class)->delete($siteId, actorId: $ctx->actorId);
                 $this->managed->forget('site', $siteId);
+
+                continue;
+            }
+
+            if ($whole?->op === ChangeOp::Delete) {
+                $this->managed->forget('site', $siteId); // never deleted without allow_destroy: detached
 
                 continue;
             }
@@ -325,14 +333,14 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             'source_connection_id' => $scope->connectionId,
             'repository' => $scope->repository,
             'branch' => $scope->branch,
-            'push_to_deploy' => false,
+            'push_to_deploy' => true, // a push deploys it (through Config while the file manages it)
             'variables' => isset($body['env']) ? array_map('strval', $body['env']) : null,
         ], fn ($v) => $v !== null);
 
         $created = app(SiteFactory::class)->create($scope->organizationId, $ctx->actorId, $data, new SitePlacement($scope->projectId, $scope->environmentId, null, null, $unit));
         $site = Site::query()->with('targets')->findOrFail($created->site->id);
 
-        $rest = array_intersect_key(Diff::leaves($body), array_flip(array_filter(array_keys(Diff::leaves($body)), fn (string $p) => str_starts_with($p, '/laravel/') || str_starts_with($p, '/deploy/hooks/') || $p === '/expose')));
+        $rest = array_intersect_key(Diff::leaves($body), array_flip(array_filter(array_keys(Diff::leaves($body)), fn (string $p) => str_starts_with($p, '/deploy/hooks/') || $p === '/expose')));
 
         if ($rest !== []) {
             $this->update($site, $scope, $ctx, [], $rest);
@@ -358,7 +366,6 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             '/build/dockerfile' => 'dockerfile', '/root' => 'root_directory',
         ];
         $env = [];
-        $laravel = [];
         $hooks = [];
 
         foreach ($paths as $path) {
@@ -370,8 +377,6 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 $site->forceFill(['framework' => $framework])->save();
             } elseif (($key = self::envKey($path)) !== null) {
                 $env[$key] = (string) $value($path);
-            } elseif (str_starts_with($path, '/laravel/')) {
-                $laravel[substr($path, 9)] = $value($path);
             } elseif (str_starts_with($path, '/deploy/hooks/')) {
                 $hooks[substr($path, 14)] = (string) $value($path);
             }
@@ -385,25 +390,6 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
         if (in_array('/servers', $paths, true)) {
             $ids = $this->serverIds($scope, ['servers' => $value('/servers')]);
             app(SetSiteTargets::class)($site, $ids, $ids[0]);
-            $site->refresh();
-        }
-
-        if ($laravel !== []) {
-            $current = $site->laravel->toArray();
-            $octane = $laravel['octane'] ?? null;
-
-            if (array_key_exists('octane', $laravel)) {
-                $current['octane'] = $octane !== false;
-                $current['octane_server'] = $octane !== false ? $octane : null;
-            }
-
-            foreach (['scheduler', 'horizon'] as $flag) {
-                if (array_key_exists($flag, $laravel)) {
-                    $current[$flag] = (bool) $laravel[$flag];
-                }
-            }
-
-            app(UpdateLaravelSettings::class)($site, LaravelSettings::fromArray($current), $ctx->actorId);
             $site->refresh();
         }
 

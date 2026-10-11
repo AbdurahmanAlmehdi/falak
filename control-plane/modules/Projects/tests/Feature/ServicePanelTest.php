@@ -1,8 +1,12 @@
 <?php
 
+use Falak\Config\Domain\Models\ConfigOwnership;
+use Falak\Config\Domain\Models\ConfigRun;
+use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Identity\Contracts\Role;
 use Falak\Sites\Domain\Models\Site;
+use Illuminate\Support\Str;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -25,6 +29,32 @@ it('renames a canvas service, keeping names unique per environment', function ()
     $this->patchJson("{$this->canvas}/services/{$service->id}", ['name' => 'api'])->assertUnprocessable()->assertJsonValidationErrors('name');
     $this->patchJson("{$this->canvas}/services/{$service->id}", ['name' => '...'])->assertUnprocessable()->assertJsonValidationErrors('name');
     $this->patchJson("{$this->canvas}/services/01jnope0000000000000000000", ['name' => 'x'])->assertNotFound();
+});
+
+it('refuses renaming a service falak.yaml manages (its unit key), until the source is disabled', function () {
+    $shop = projects_site($this->organization, 'Shop', [], $this->environment);
+    $service = projects_service('site', $shop->id);
+    $service->forceFill(['name' => 'web'])->save();
+    $source = ConfigSource::query()->create([
+        'organization_id' => $this->organization->id, 'project_id' => $this->environment->project_id,
+        'source_connection_id' => strtolower((string) Str::ulid()), 'repository' => 'acme/shop', 'path' => 'falak.yaml', 'enabled' => true,
+    ]);
+    $run = ConfigRun::query()->create([
+        'organization_id' => $this->organization->id, 'project_id' => $this->environment->project_id, 'environment_id' => $this->environment->id,
+        'environment' => 'production', 'commit' => str_repeat('a', 40), 'trigger' => 'push', 'status' => 'applied', 'file' => '',
+    ]);
+    ConfigOwnership::query()->create([
+        'organization_id' => $this->organization->id, 'project_id' => $this->environment->project_id, 'environment_id' => $this->environment->id,
+        'resource_type' => 'site', 'resource_id' => $shop->id, 'unit' => 'web', 'path' => '/runtime', 'run_id' => $run->id,
+    ]);
+
+    $this->patchJson("{$this->canvas}/services/{$service->id}", ['name' => 'storefront'])->assertUnprocessable()
+        ->assertJsonValidationErrors(['name' => 'Managed by falak.yaml @ aaaaaaa']);
+    $this->patchJson("{$this->canvas}/services/{$service->id}", ['name' => 'web'])->assertOk(); // unchanged: fine
+    expect($service->refresh()->name)->toBe('web');
+
+    $source->forceFill(['enabled' => false])->save();
+    $this->patchJson("{$this->canvas}/services/{$service->id}", ['name' => 'storefront'])->assertOk();
 });
 
 it('forbids viewers from renaming services', function () {
