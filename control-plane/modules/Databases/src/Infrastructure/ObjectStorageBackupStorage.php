@@ -41,7 +41,16 @@ final class ObjectStorageBackupStorage implements BackupStorage
         $databaseIds = [];
         $siteIds = [];
 
+        $environmentIds = [];
+
+        // Previews' backups never count (a fork's pull request can shape a preview).
         foreach ($this->projects->environments($projectId) as $environment) {
+            if ($environment->isPreview) {
+                continue;
+            }
+
+            $environmentIds[] = $environment->id;
+
             foreach ($this->projects->servicesIn($environment->id) as $service) {
                 if ($service->kind === ServiceKind::Database) {
                     $databaseIds[] = $service->refId;
@@ -51,8 +60,10 @@ final class ObjectStorageBackupStorage implements BackupStorage
             }
         }
 
-        $instanceIds = Database::query()->where('organization_id', $organizationId)->whereIn('id', $databaseIds ?: [''])
-            ->pluck('database_instance_id')->unique()->values()->all();
+        // Only containers of the project: a database placed here from another project's container doesn't lend its storage.
+        $instanceIds = DatabaseInstance::query()->where('organization_id', $organizationId)->whereIn('environment_id', $environmentIds ?: [''])
+            ->whereIn('id', Database::query()->whereIn('id', $databaseIds ?: [''])->select('database_instance_id'))
+            ->pluck('id')->all();
         $ids = [
             ...BackupSchedule::query()->whereIn('database_instance_id', $instanceIds ?: [''])->pluck('storage_provider_id')->all(),
             ...DatabaseInstance::query()->whereIn('id', $instanceIds ?: [''])->whereNotNull('pitr_storage_provider_id')->pluck('pitr_storage_provider_id')->all(),

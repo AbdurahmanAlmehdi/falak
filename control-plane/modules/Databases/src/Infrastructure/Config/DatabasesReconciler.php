@@ -40,6 +40,7 @@ use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Volumes\Contracts\ServiceVolumes;
+use Falak\Volumes\Contracts\VolumeKind;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -249,6 +250,12 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             $instance = $instances[$unit] ?? null;
             $wanted = self::normalize($unit, (array) $body, creating: $instance === null);
 
+            if ($instance === null && $this->orphan($scope, $unit) !== null) {
+                // The file manages a container for this unit that no canvas service points to any more: creating
+                // another (empty) one would move the apps to it. Stage 4 reports value.conflict; nothing is planned.
+                continue;
+            }
+
             if ($instance === null) {
                 $change = new Change(ChangeOp::Create, $base, null, $wanted, self::SECTION, $unit);
                 // A new unit that is public publishes its port from the start: the database.public rule, on the whole unit.
@@ -272,7 +279,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                 $op = Diff::same($value, $before) ? ChangeOp::Noop : ($before === null ? ChangeOp::Create : ChangeOp::Update);
                 $change = new Change($op, $base.$path, $before, $value, self::SECTION, $unit);
 
-                if ($op === ChangeOp::Update && (in_array($path, self::RESTARTS, true) || str_starts_with($path, '/settings/'))) {
+                if (($op === ChangeOp::Update || $op === ChangeOp::Create) && (in_array($path, self::RESTARTS, true) || str_starts_with($path, '/settings/'))) {
                     $change = $change->withNote(self::RESTART_NOTE);
                 }
 
@@ -288,17 +295,20 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             }
 
             foreach ($instance->engine->isKeyValue() ? [] : $this->databases($instance) as $name => $database) {
-                if (in_array($name, (array) ($wanted['databases'] ?? []), true) || ! $this->managed->managed('database', $database->id)->any()) {
+                if (in_array($name, (array) ($wanted['databases'] ?? []), true) || ! $this->managed->managedIn($scope->environmentId, 'database', $database->id)) {
                     continue;
                 }
 
-                $op = $scope->allowDestroy && $this->managed->createdByFile('database', $database->id) ? ChangeOp::Delete : ChangeOp::Detach;
+                // The database the unit's canvas service points to is never deleted: the service (and every
+                // `${{ <unit>.… }}` reference) would go with it.
+                $op = $scope->allowDestroy && $this->managed->createdByFile('database', $database->id, $scope->environmentId) && ! $this->isServiceDatabase($scope, $unit, $database)
+                    ? ChangeOp::Delete : ChangeOp::Detach;
                 $changes[] = new Change($op, $base.'/databases/'.Pointer::escape($name), $name, null, self::SECTION, $unit);
             }
 
             $changes = [...$changes, ...$this->diffBackups($scope, $unit, $base, $instance, $wanted['backups'] ?? null, $today['backups'] ?? null)];
 
-            if (! isset($wanted['pitr']) && $this->managed->managed('database_instance', $instance->id)->under('/pitr') !== []) {
+            if (! isset($wanted['pitr']) && $this->managed->managedIn($scope->environmentId, 'database_instance', $instance->id) && $this->managed->managed('database_instance', $instance->id)->under('/pitr') !== []) {
                 // PITR is never turned off by removing the block: it stays as it is, no longer managed.
                 $changes[] = new Change(ChangeOp::Detach, $base.'/pitr', $today['pitr'] ?? null, null, self::SECTION, $unit);
             }
@@ -308,12 +318,12 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             $unit = (string) $unit;
             $instance = $instances[$unit] ?? null;
 
-            if (array_key_exists($unit, (array) ($desired['units'] ?? [])) || $instance === null || ! $this->managed->managed('database_instance', $instance->id)->any()) {
+            if (array_key_exists($unit, (array) ($desired['units'] ?? [])) || $instance === null || ! $this->managed->managedIn($scope->environmentId, 'database_instance', $instance->id)) {
                 continue;
             }
 
             // Never deleted on its own: detached, unless the run allows destroying and the file created it.
-            $op = $scope->allowDestroy && $this->managed->createdByFile('database_instance', $instance->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $scope->allowDestroy && $this->managed->createdByFile('database_instance', $instance->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
             $changes[] = new Change($op, '/units/'.Pointer::escape($unit), ['type' => $body['type'] ?? 'database', 'engine' => $body['engine'] ?? null], null, self::SECTION, $unit);
         }
 
@@ -330,11 +340,11 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
         $schedule = $this->schedule($instance);
 
         if ($wanted === null) {
-            if ($schedule === null || ! $this->managed->managed('backup_schedule', $schedule->id)->any()) {
+            if ($schedule === null || ! $this->managed->managedIn($scope->environmentId, 'backup_schedule', $schedule->id)) {
                 return [];
             }
 
-            $op = $scope->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id) ? ChangeOp::Delete : ChangeOp::Detach;
+            $op = $scope->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
 
             return [new Change($op, "{$base}/backups", $today, null, self::SECTION, $unit)];
         }
@@ -390,16 +400,16 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
-            if ($whole?->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('database_instance', $instance->id)) {
+            if ($whole?->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('database_instance', $instance->id, $scope->environmentId)) {
                 // The container goes; its data volume stays (deleted from the Volumes page once nobody needs it).
                 app(InstanceLifecycle::class)->delete($instance, deleteVolume: false, actorId: $ctx->actorId, background: true);
-                $this->forget($instance);
+                $this->forget($scope, $instance);
 
                 continue;
             }
 
             if ($whole?->op === ChangeOp::Delete || $whole?->op === ChangeOp::Detach) {
-                $this->forget($instance);
+                $this->forget($scope, $instance);
                 $instance->forceFill(['status_message' => "Detached from {$this->fileName()} (unit {$unit}): it keeps running and keeps its data; it is no longer managed by the file."])->save();
 
                 continue;
@@ -442,14 +452,14 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             'allowed_sources' => $body['allowed_sources'] ?? null,
         ], fn ($v) => $v !== null), $ctx->actorId);
 
-        foreach (array_slice($databases, 1) as $name) {
-            app(CreateDatabase::class)->withOwner($instance, (string) $name, $ctx->actorId);
-        }
-
         $primary = $instance->databases()->reorder()->orderBy('created_at')->orderBy('id')->firstOrFail();
         [$x, $y] = $this->freeCell($scope->environmentId);
         // On the canvas under the unit's key: `${{ <unit>.DATABASE_URL }}` references resolve to it.
         $this->placement->place($scope->environmentId, ServiceKind::Database, $primary->id, $unit, $x, $y);
+
+        foreach (array_slice($databases, 1) as $name) {
+            $this->placeDatabase($scope, $unit, app(CreateDatabase::class)->withOwner($instance, (string) $name, $ctx->actorId));
+        }
 
         $instance->refresh();
 
@@ -540,20 +550,21 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
 
             if ($change->op === ChangeOp::Create) {
                 $database = app(CreateDatabase::class)->withOwner($instance, $name, $ctx->actorId);
+                $this->placeDatabase($scope, $unit, $database);
                 $this->managed->record($scope, $ctx, $unit, 'database', $database->id, [$path], createdByFile: true);
             } elseif (($database = $instance->databases()->where('name', $name)->first()) !== null) {
-                if ($change->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('database', $database->id)) {
+                if ($change->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('database', $database->id, $scope->environmentId) && ! $this->isServiceDatabase($scope, $unit, $database)) {
                     app(DeleteDatabase::class)($database);
                 }
 
-                $this->managed->forget('database', $database->id);
+                $this->managed->forget('database', $database->id, $scope->environmentId);
             }
         }
 
         foreach ($instance->databases()->get() as $database) {
             $path = '/databases/'.Pointer::escape($database->name);
 
-            if (array_key_exists($path, $desired) && ! $this->managed->managed('database', $database->id)->any()) {
+            if (array_key_exists($path, $desired) && ! $this->managed->managedIn($scope->environmentId, 'database', $database->id)) {
                 $this->managed->record($scope, $ctx, $unit, 'database', $database->id, [$path], createdByFile: false);
             }
         }
@@ -584,12 +595,12 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
 
         if ($whole !== null && ($whole->op === ChangeOp::Delete || $whole->op === ChangeOp::Detach)) {
             if ($schedule !== null) {
-                if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id)) {
+                if ($whole->op === ChangeOp::Delete && $ctx->allowDestroy && $this->managed->createdByFile('backup_schedule', $schedule->id, $scope->environmentId)) {
                     // Its backups stay in storage (pruned by retention only while a schedule exists).
                     app(DeleteBackupSchedule::class)($schedule);
                 }
 
-                $this->managed->forget('backup_schedule', $schedule->id);
+                $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
             }
 
             return;
@@ -729,6 +740,10 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                 $issues[] = ConfigIssue::error('value.conflict', $base, "The service \"{$unit}\" of this environment is a site, not a database: rename the unit.");
             }
 
+            if ($instance === null && ($orphan = $this->orphan($scope, $unit)) !== null) {
+                $issues[] = ConfigIssue::error('value.conflict', $base, "The file manages {$unit} as the database server {$orphan->name}, but no service \"{$unit}\" of this environment points to it any more: place one of its databases on the canvas as \"{$unit}\" again (or remove the unit from the file to detach it).");
+            }
+
             if ($engine === null) {
                 continue; // the schema reports it
             }
@@ -746,6 +761,14 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                     $issues[] = ConfigIssue::error('value.unsupported', "{$base}/version", "This Falak release ships no image of {$engine->label()} {$version}.");
                 } elseif ($instance !== null && $instance->engine === $engine && version_compare($version, (string) $instance->version, '<')) {
                     $issues[] = ConfigIssue::error('value.unsupported', "{$base}/version", "{$unit} runs {$engine->label()} {$instance->version}: databases are never downgraded (restore a backup into a new unit instead).");
+                } elseif ($instance !== null && $instance->engine === $engine && $version !== (string) $instance->version) {
+                    // A major upgrade moves the data to a new container: nothing else of the unit changes with it.
+                    $others = array_filter($this->diff($scope, ['units' => [$unit => $body]], $this->current($scope))->actionable(),
+                        fn (Change $c) => $c->unit === $unit && $c->path !== "{$base}/version");
+
+                    if ($others !== []) {
+                        $issues[] = ConfigIssue::error('value.conflict', "{$base}/version", "Upgrade {$unit} to {$engine->label()} {$version} in its own push: this file also changes ".implode(', ', array_map(fn (Change $c) => substr($c->path, strlen($base) + 1), array_values($others))).'.');
+                    }
                 }
             }
 
@@ -767,6 +790,8 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                     $issues[] = ConfigIssue::error('value.range', "{$base}/disk", 'The disk must be a whole number of GiB (e.g. 20g).');
                 } elseif ($bytes < (int) config('databases.disk.min') || $bytes > (int) config('databases.disk.max')) {
                     $issues[] = ConfigIssue::error('value.range', "{$base}/disk", 'The disk must be between 1g and 16t.');
+                } elseif ($instance !== null && ($instance->volume_id === null || $this->volumes->find($instance->volume_id)?->kind !== VolumeKind::Sized)) {
+                    $issues[] = ConfigIssue::error('value.unsupported', "{$base}/disk", "{$unit}'s data is not on a sized volume: its disk has no size to set.");
                 }
             }
 
@@ -933,22 +958,59 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
         return $out;
     }
 
+    /** Whether $database is the one the unit's canvas service points to. */
+    private function isServiceDatabase(ConfigScope $scope, string $unit, Database $database): bool
+    {
+        return ($scope->services[$unit]['ref_id'] ?? null) === $database->id;
+    }
+
+    /**
+     * A live container the environment's file manages as $unit although no canvas service of that name maps to it (its
+     * service was deleted or unlinked), or null.
+     */
+    private function orphan(ConfigScope $scope, string $unit): ?DatabaseInstance
+    {
+        foreach ($this->managed->resources($scope->environmentId, 'database_instance') as $instanceId => $owner) {
+            if ($owner !== $unit) {
+                continue;
+            }
+
+            $instance = DatabaseInstance::query()->find($instanceId);
+
+            if ($instance !== null && ! in_array($instance->status, [InstanceStatus::Retired, InstanceStatus::Deleting], true)) {
+                return $instance;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Put a database a unit adds on the canvas of the unit's environment (`<unit>-<name>`), not the organization's
+     * default project where DatabaseCreated would place it.
+     */
+    private function placeDatabase(ConfigScope $scope, string $unit, Database $database): void
+    {
+        [$x, $y] = $this->freeCell($scope->environmentId);
+        $this->placement->place($scope->environmentId, ServiceKind::Database, $database->id, $unit.'-'.str_replace('_', '-', strtolower($database->name)), $x, $y);
+    }
+
     private function schedule(DatabaseInstance $instance): ?BackupSchedule
     {
         return BackupSchedule::query()->with(['storageProvider', 'databases'])->where('database_instance_id', $instance->id)->where('name', self::SCHEDULE)->first();
     }
 
     /** No longer managed: the container, its databases and its schedule. */
-    private function forget(DatabaseInstance $instance): void
+    private function forget(ConfigScope $scope, DatabaseInstance $instance): void
     {
-        $this->managed->forget('database_instance', $instance->id);
+        $this->managed->forget('database_instance', $instance->id, $scope->environmentId);
 
         foreach ($instance->databases()->get() as $database) {
-            $this->managed->forget('database', $database->id);
+            $this->managed->forget('database', $database->id, $scope->environmentId);
         }
 
         if (($schedule = $this->schedule($instance)) !== null) {
-            $this->managed->forget('backup_schedule', $schedule->id);
+            $this->managed->forget('backup_schedule', $schedule->id, $scope->environmentId);
         }
     }
 

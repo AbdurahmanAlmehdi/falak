@@ -40,7 +40,7 @@ beforeEach(function () {
 function data_existing(string $unit = 'db', string $engine = 'postgresql', array $attributes = []): array
 {
     $volume = app(ServiceVolumes::class)->createSized(test()->organization->id, test()->server->id, "db-{$unit}", 10 * 1024 ** 3, protected: true);
-    [$database, , $instance] = databases_service(test()->organization, $engine, $engine === 'postgresql' ? 'app' : $unit, test()->server, ['name' => $unit, 'volume_id' => $volume->id, ...$attributes]);
+    [$database, , $instance] = databases_service(test()->organization, $engine, $engine === 'postgresql' ? 'app' : $unit, test()->server, ['name' => $unit, 'volume_id' => $volume->id, 'environment_id' => test()->world->environment->id, ...$attributes]);
     Volume::query()->whereKey($volume->id)->update(['status' => 'active']);
     app(LinkService::class)(test()->world->environment, ServiceKind::Database, $database->id, $unit);
 

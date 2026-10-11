@@ -43,6 +43,13 @@ final class DatabaseController extends Controller
         $request->validate(['confirm' => ['required', 'string', 'in:'.$database->name]], ['confirm.in' => 'Type the database name to confirm.']);
         $this->guardManaged('database', $database->id, 'confirm', 'this database');
 
+        // The first database of a managed container is its unit's canvas service: deleting it would unlink the unit.
+        $first = $database->instance->databases()->reorder()->orderBy('created_at')->orderBy('id')->value('id');
+
+        if ($first === $database->id) {
+            $this->guardManaged('database_instance', $database->database_instance_id, 'confirm', "this database server's first database (its unit's service)");
+        }
+
         $delete($database);
 
         return back();

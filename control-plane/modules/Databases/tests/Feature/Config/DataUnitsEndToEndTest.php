@@ -74,7 +74,7 @@ it('creates database and redis units in phase A; the app\'s references resolve t
 
     expect($run->status)->toBe(RunStatus::Applying)
         ->and(collect($run->errors)->where('code', 'value.unsupported')->all())->toBe([])
-        ->and(Service::query()->where('environment_id', $world->environment->id)->pluck('name')->sort()->values()->all())->toBe(['cache', 'db', 'web']);
+        ->and(Service::query()->where('environment_id', $world->environment->id)->pluck('name')->sort()->values()->all())->toBe(['cache', 'db', 'db-analytics', 'web']); // the unit's second database stays in its environment
 
     $world->settle();
     $db = DatabaseInstance::query()->where('name', 'db')->sole();

@@ -2,7 +2,9 @@
 
 namespace Falak\Projects\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedFields;
 use Falak\Config\Contracts\ManagedResources;
+use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Projects\Application\Actions\ArrangeCompose;
@@ -93,12 +95,8 @@ final class ServiceController extends Controller
         $record = Service::query()->where('environment_id', $model->id)->find(strtolower($service)) ?? throw new NotFoundHttpException('Service not found.');
 
         // A service falak.yaml manages is named by its unit key: renaming it would make the file look for another one.
-        if ($record->kind === ServiceKind::Site && trim((string) $data['name']) !== $record->name) {
-            $managed = app(ManagedResources::class)->managed('site', $record->ref_id);
-
-            if ($managed->any()) {
-                throw ValidationException::withMessages(['name' => $managed->badge().': the service is a unit of the file; rename it there.']);
-            }
+        if (trim((string) $data['name']) !== $record->name && ($managed = $this->managedUnit($record))->any()) {
+            throw ValidationException::withMessages(['name' => $managed->badge().': the service is a unit of the file; rename it there.']);
         }
 
         $rename($record, (string) $data['name']);
@@ -122,6 +120,11 @@ final class ServiceController extends Controller
             'delete_volumes' => ['sometimes', 'array', 'max:100'],
             'delete_volumes.*' => ['string', 'size:26'],
         ], ['confirm.in' => 'Type the service name to confirm.']);
+
+        // A database container falak.yaml manages is never deleted from here: its unit would plan a new, empty one.
+        if ($record->kind === ServiceKind::Database && ($managed = $this->managedUnit($record))->any()) {
+            throw ValidationException::withMessages(['confirm' => $managed->badge().': remove the unit from the file first (it is detached, never deleted on its own).']);
+        }
 
         $delete($record, array_values($data['delete_volumes'] ?? []), $request->user()?->getAuthIdentifier());
 
@@ -184,5 +187,19 @@ final class ServiceController extends Controller
         $arrange($record, $children, isset($data['collapsed']) ? (bool) $data['collapsed'] : null);
 
         return response()->json(['data' => ['id' => $record->id, 'layout' => $record->layout]]);
+    }
+
+    /**
+     * What falak.yaml manages of the service's resource: the site, or the database container its database lives in.
+     */
+    private function managedUnit(Service $record): ManagedFields
+    {
+        if ($record->kind === ServiceKind::Site) {
+            return app(ManagedResources::class)->managed('site', $record->ref_id);
+        }
+
+        $instanceId = app(DatabaseDirectory::class)->find($record->ref_id)?->instanceId;
+
+        return $instanceId !== null ? app(ManagedResources::class)->managed('database_instance', $instanceId) : ManagedFields::none();
     }
 }
