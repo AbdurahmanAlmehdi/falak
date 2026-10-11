@@ -107,9 +107,18 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 			acct = &account{}
 		}
 	}
-	envs := doc.sub("environments", "")
 	if len(acct.envs) == 0 {
-		acct.envs = []accountEnv{{slug: "production", branch: branch, why: branchWhy, production: true}}
+		// Not linked: environment slugs are unknown, and a guessed one would be created (not production) by the next
+		// push to the production branch. Without environments the file deploys the project's production environment
+		// from the repository's default branch.
+		_ = branchWhy
+		doc.foot = "No environments: the project's production environment deploys from the repository's default branch.\n" +
+			"To bind branches, name the project's environment slugs (a push to production's branch creates the others):\n" +
+			"environments:\n  production:\n    branch: " + branch + "\n  staging:\n    branch: develop"
+	}
+	var envs *omap
+	if len(acct.envs) > 0 {
+		envs = doc.sub("environments", "")
 	}
 	for _, e := range acct.envs {
 		em := envs.sub(e.slug, "")

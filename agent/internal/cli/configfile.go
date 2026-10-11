@@ -175,10 +175,10 @@ func validateOffline(f configFile, env string) validation {
 
 	envs := fileEnvs
 	synthetic := ""
-	if env != "" {
+	if env != "" && len(fileEnvs) > 0 {
 		envs = []string{env}
 	} else if len(envs) == 0 {
-		// No environments: check the units' references on their own.
+		// No environments (production deploys from the default branch): check the units' references on their own.
 		synthetic = "-"
 		doc = shallowWith(doc, "environments", map[string]any{synthetic: map[string]any{}})
 		envs = []string{synthetic}
@@ -424,7 +424,7 @@ func (a *App) defaultEnvironment(f configFile, doc map[string]any) (string, erro
 		return sortedMapKeys(envs)[0], nil
 	}
 	if len(envs) == 0 {
-		return "", usagef("%s has no environments: pass -e <environment>", f.Display)
+		return "", nil // the project's production environment (the caller asks the control plane)
 	}
 	why := "no environment of " + f.Display + " has branch " + branch
 	if branch == "" {

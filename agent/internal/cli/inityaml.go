@@ -152,8 +152,14 @@ func valueNode(v any) *yaml.Node {
 
 // renderYAML writes the document with a head comment.
 func renderYAML(doc *omap, head string) ([]byte, error) {
+	foot := doc.foot
+	doc.foot = ""
 	root := doc.node()
+	doc.foot = foot
 	root.HeadComment = head
+	if foot != "" {
+		root.FootComment = "# " + strings.ReplaceAll(foot, "\n", "\n# ")
+	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)

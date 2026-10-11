@@ -20,6 +20,10 @@ units:
     engine: postgresql # detected: image postgres:17-alpine of postgres in compose.yaml
     version: "17" # detected: tag 17-alpine
 
-environments:
-  production:
-    branch: main # detected: current git branch
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

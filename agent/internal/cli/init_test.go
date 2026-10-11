@@ -124,7 +124,10 @@ func TestInitGolden(t *testing.T) {
 			if issues, err := configspec.Validate(doc); err != nil || len(issues) > 0 {
 				t.Fatalf("schema: %v %+v", err, issues)
 			}
-			for env := range doc.(map[string]any)["environments"].(map[string]any) {
+			if v := validateOffline(configFile{Path: "falak.yaml", Display: "falak.yaml", Format: "yaml", Raw: got}, ""); !v.Valid {
+				t.Fatalf("invalid: %+v", v.Errors)
+			}
+			for env := range asMapAny(doc.(map[string]any)["environments"]) {
 				if _, errs, _ := configspec.Resolve(doc, env); len(errs) > 0 {
 					t.Fatalf("resolve %s: %+v", env, errs)
 				}
@@ -417,14 +420,7 @@ func TestInitOptionalSecrets(t *testing.T) {
 		t.Fatalf("notes: %s", h.err.String())
 	}
 	uncommented := strings.NewReplacer("    # env:", "    env:", "    #   ", "      ").Replace(out)
-	doc, err := configspec.Parse([]byte(uncommented), "yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if issues, _ := configspec.Validate(doc); len(issues) > 0 {
-		t.Fatalf("uncommented: %+v\n%s", issues, uncommented)
-	}
-	if _, errs, _ := configspec.Resolve(doc, "production"); len(errs) > 0 {
-		t.Fatalf("uncommented: %+v", errs)
+	if v := validateOffline(configFile{Path: "falak.yaml", Display: "falak.yaml", Format: "yaml", Raw: []byte(uncommented)}, ""); !v.Valid || !strings.Contains(uncommented, "      API_TOKEN: ${{") {
+		t.Fatalf("uncommented: %+v\n%s", v.Errors, uncommented)
 	}
 }

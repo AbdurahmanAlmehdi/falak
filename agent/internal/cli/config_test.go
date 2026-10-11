@@ -212,7 +212,12 @@ func TestValidateOffline(t *testing.T) {
 	if err := json.Unmarshal(h.out.Bytes(), &v); err != nil || !v.Valid || len(v.Warnings) != 1 || v.Warnings[0].Code != "reference.external" || v.Warnings[0].Line == nil || *v.Warnings[0].Line != 1 {
 		t.Fatalf("json: %v %s", err, h.out.String())
 	}
-	if code := h.run("validate", "-e", "nope", "falak.json"); code != ExitInvalid || !strings.Contains(h.err.String(), "environment.unknown") {
+	// A file without environments deploys production only: -e is the control plane's to check.
+	if code := h.run("validate", "-e", "production", "falak.json"); code != 0 {
+		t.Fatalf("no environments: %d %s", code, h.err.String())
+	}
+	writeFile(t, h.wd, "falak.yaml", validFile)
+	if code := h.run("validate", "-e", "nope"); code != ExitInvalid || !strings.Contains(h.err.String(), "environment.unknown") {
 		t.Fatalf("unknown env: %d %s", code, h.err.String())
 	}
 	if code := h.run("validate", "missing.yaml"); code != ExitError {
@@ -337,6 +342,14 @@ func TestPlan(t *testing.T) {
 	if code := h.run("plan"); code != ExitInvalid || len(f.requests) != n {
 		t.Fatalf("invalid: %d %v", code, f.requests)
 	}
+
+	// A file without environments plans the project's production environment (asked from GET /projects).
+	writeFile(t, h.wd, "falak.yaml", "version: 1\nunits:\n  web: {type: app, runtime: node}\n")
+	h.branch = "feature/x"
+	if code := h.run("plan"); code != 0 || f.bodies[len(f.bodies)-1]["environment"] != "production" {
+		t.Fatalf("no environments: %d %s %v", code, h.err.String(), f.bodies[len(f.bodies)-1])
+	}
+	h.branch = "main"
 
 	// Empty plan.
 	writeFile(t, h.wd, "falak.yaml", validFile)

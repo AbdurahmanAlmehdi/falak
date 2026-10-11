@@ -158,7 +158,33 @@ func (a *App) prepareRun(ctx context.Context, file, env, project string) (config
 	if err != nil {
 		return f, "", "", nil, err
 	}
+	if env == "" {
+		// A file without environments binds the project's production environment to the default branch.
+		if env, err = productionSlug(ctx, c, id); err != nil {
+			return f, "", "", nil, err
+		}
+	}
 	return f, env, id, c, nil
+}
+
+// productionSlug is the slug of the project's production environment.
+func productionSlug(ctx context.Context, c api.API, project string) (string, error) {
+	projects, err := c.Projects(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range projects {
+		if p.ID != project {
+			continue
+		}
+		for _, e := range p.Environments {
+			if e.IsProduction {
+				return e.Slug, nil
+			}
+		}
+		return "", usagef("the project has no production environment: pass -e <environment>")
+	}
+	return "", fmt.Errorf("no project %s", project)
 }
 
 // configAPIError prints a 422's issues (exit 5); other errors pass through.
