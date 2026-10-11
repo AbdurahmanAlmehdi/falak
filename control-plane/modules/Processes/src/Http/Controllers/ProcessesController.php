@@ -3,6 +3,7 @@
 namespace Falak\Processes\Http\Controllers;
 
 use DateTimeZone;
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Kernel\Http\Controller;
 use Falak\Processes\Domain\Models\Daemon;
 use Falak\Processes\Domain\Models\Schedule;
@@ -38,6 +39,7 @@ final class ProcessesController extends Controller
         $leader = $site->leader();
         $jobs = $leader ? (ServerState::query()->find($leader->serverId)?->jobs ?? []) : [];
         $shared = $this->shared($request, $site);
+        $managed = app(ManagedResources::class);
         $items = [];
 
         $start = match ($site->runtime) {
@@ -70,6 +72,8 @@ final class ProcessesController extends Controller
                 'detail' => null,
                 'instances' => $worker->processes,
                 'server_ids' => $worker->server_ids ?? [],
+                // What the project's falak.yaml manages of it (read-only in the panel), null when nothing.
+                'managed' => $managed->managed('worker', $worker->id)->toArray(),
                 'config' => [
                     'connection' => $worker->connection,
                     'queue' => $worker->queue,
@@ -99,6 +103,8 @@ final class ProcessesController extends Controller
                 'detail' => null,
                 'instances' => $daemon->instances,
                 'server_ids' => $daemon->server_ids ?? [],
+                // What the project's falak.yaml manages of it (read-only in the panel), null when nothing.
+                'managed' => $managed->managed('daemon', $daemon->id)->toArray(),
                 'config' => [
                     'name' => $daemon->name,
                     'command' => $daemon->command,
@@ -132,6 +138,8 @@ final class ProcessesController extends Controller
                 'instances' => 1,
                 'server_ids' => [],
                 'deployed' => isset($jobs[$job]),
+                // What the project's falak.yaml manages of it (read-only in the panel), null when nothing.
+                'managed' => $managed->managed('schedule', $schedule->id)->toArray(),
                 'config' => [
                     'name' => $schedule->name,
                     'command' => $schedule->command,

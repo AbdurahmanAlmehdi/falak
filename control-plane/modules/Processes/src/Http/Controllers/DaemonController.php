@@ -2,6 +2,7 @@
 
 namespace Falak\Processes\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Kernel\Http\Controller;
 use Falak\Processes\Application\Actions\DeleteProcess;
 use Falak\Processes\Application\Actions\SaveDaemon;
@@ -25,7 +26,14 @@ final class DaemonController extends Controller
     public function store(Request $request, string $site, SaveDaemon $save): RedirectResponse
     {
         $site = $this->site($request, $site, 'processes.manage');
-        $save($site, null, $request->validate(ProcessRules::daemon($site)), $request->user()?->getAuthIdentifier());
+        $data = $request->validate(ProcessRules::daemon($site));
+
+        // A name falak.yaml uses is its daemon's identity: another one by that name would be ambiguous.
+        foreach (Daemon::query()->where('site_id', $site->id)->where('name', trim((string) $data['name']))->pluck('id') as $id) {
+            app(ManagedResources::class)->managed('daemon', $id)->guardWhole('name', '/daemons');
+        }
+
+        $save($site, null, $data, $request->user()?->getAuthIdentifier());
 
         return back()->with('success', 'Daemon saved; the servers are being updated.');
     }
@@ -48,6 +56,11 @@ final class DaemonController extends Controller
 
     private function daemon(SiteData $site, string $id): Daemon
     {
-        return Daemon::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+        $model = Daemon::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+
+        // Managed by the project's falak.yaml: changed through the file only.
+        app(ManagedResources::class)->managed('daemon', $model->id)->guardWhole('daemon', '/daemons');
+
+        return $model;
     }
 }

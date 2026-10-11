@@ -1,3 +1,4 @@
+import { type ManagedConfig } from '@/components/falak';
 import { type ResourceLimits } from '@/components/limits-fields';
 import { type EnvRow, type ProcessServer, type ProgramStatus } from '../types';
 
@@ -60,6 +61,8 @@ export interface ProcessItem {
     server_ids: string[];
     deployed?: boolean;
     config?: WorkerConfig | DaemonConfig | CronConfig;
+    /** Set by the project's falak.yaml: read-only here (edit the file). Null when the file doesn't manage it. */
+    managed?: ManagedConfig | null;
 }
 
 /** GET /sites/{site}/processes (JSON). */

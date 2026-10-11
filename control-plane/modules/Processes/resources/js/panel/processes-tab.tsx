@@ -2,6 +2,7 @@ import {
     Button,
     Callout,
     EmptyState,
+    ManagedBadge,
     Menu,
     MenuActions,
     MenuContent,
@@ -276,7 +277,10 @@ export function ProcessesTab({ ctx }: ServiceTabProps) {
                         const beat = isCron ? heartbeats.find((monitor) => monitor.job === item.program) : undefined;
                         const beatState = beat ? heartbeatState(beat) : null;
                         const editing = form?.item?.program === item.program;
-                        const editable = item.kind === 'worker' || item.kind === 'daemon' || item.kind === 'cron';
+                        const configurable = item.kind === 'worker' || item.kind === 'daemon' || item.kind === 'cron';
+                        // Managed by the project's falak.yaml: read-only here.
+                        const locked = Boolean(item.managed);
+                        const editable = configurable && !locked;
                         const disabled = item.kind === 'cron' && item.config && 'enabled' in item.config && !item.config.enabled;
                         const serverNames = [
                             ...new Set(
@@ -295,6 +299,7 @@ export function ProcessesTab({ ctx }: ServiceTabProps) {
                                             <span className="text-fg truncate text-sm font-medium">{item.label}</span>
                                             {item.label !== KIND[item.kind].label && <Tag>{KIND[item.kind].label}</Tag>}
                                             {item.instances > 1 && <Tag mono>×{item.instances}</Tag>}
+                                            <ManagedBadge config={item.managed} />
                                         </div>
                                         <p className="text-fg-muted truncate font-mono text-[11px]" title={item.command ?? undefined}>
                                             {item.detail && <span className="text-fg-faint">{item.detail} · </span>}
@@ -351,11 +356,12 @@ export function ProcessesTab({ ctx }: ServiceTabProps) {
                                             <Menu
                                                 label={`${item.label} actions`}
                                                 actions={[
-                                                    ...(editable
+                                                    ...(configurable
                                                         ? [
                                                               {
-                                                                  label: 'Edit',
+                                                                  label: locked ? 'Edit (managed by the config file)' : 'Edit',
                                                                   icon: <Cog />,
+                                                                  disabled: locked,
                                                                   onSelect: () => setForm({ kind: item.kind as 'worker' | 'daemon' | 'cron', item }),
                                                               },
                                                           ]

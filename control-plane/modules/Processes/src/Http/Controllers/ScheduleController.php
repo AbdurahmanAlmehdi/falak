@@ -2,6 +2,7 @@
 
 namespace Falak\Processes\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Kernel\Http\Controller;
 use Falak\Processes\Application\Actions\DeleteProcess;
 use Falak\Processes\Application\Actions\SaveSchedule;
@@ -25,7 +26,14 @@ final class ScheduleController extends Controller
     public function store(Request $request, string $site, SaveSchedule $save): RedirectResponse
     {
         $site = $this->site($request, $site, 'processes.manage');
-        $save($site, null, $request->validate(ProcessRules::schedule()), $request->user()?->getAuthIdentifier());
+        $data = $request->validate(ProcessRules::schedule());
+
+        // A name falak.yaml uses is its schedule's identity: another one by that name would be ambiguous.
+        foreach (Schedule::query()->where('site_id', $site->id)->where('name', trim((string) $data['name']))->pluck('id') as $id) {
+            app(ManagedResources::class)->managed('schedule', $id)->guardWhole('name', '/schedules');
+        }
+
+        $save($site, null, $data, $request->user()?->getAuthIdentifier());
 
         return back()->with('success', 'Scheduled job saved; the servers are being updated.');
     }
@@ -48,6 +56,11 @@ final class ScheduleController extends Controller
 
     private function schedule(SiteData $site, string $id): Schedule
     {
-        return Schedule::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+        $model = Schedule::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+
+        // Managed by the project's falak.yaml: changed through the file only.
+        app(ManagedResources::class)->managed('schedule', $model->id)->guardWhole('schedule', '/schedules');
+
+        return $model;
     }
 }

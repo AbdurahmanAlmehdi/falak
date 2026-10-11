@@ -2,6 +2,7 @@
 
 namespace Falak\Processes\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Kernel\Http\Controller;
 use Falak\Processes\Application\Actions\DeleteProcess;
 use Falak\Processes\Application\Actions\SaveWorker;
@@ -48,6 +49,11 @@ final class QueueController extends Controller
 
     private function worker(SiteData $site, string $id): Worker
     {
-        return Worker::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+        $model = Worker::query()->where('site_id', $site->id)->findOrFail(strtolower($id));
+
+        // Managed by the project's falak.yaml: changed through the file only.
+        app(ManagedResources::class)->managed('worker', $model->id)->guardWhole('worker', '/workers');
+
+        return $model;
     }
 }
