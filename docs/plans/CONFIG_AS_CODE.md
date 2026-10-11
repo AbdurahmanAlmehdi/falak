@@ -1111,9 +1111,18 @@ Contract for both lanes (control plane `feat/config-p4`, CLI `config-cli`). Choi
 - **[decision] Approvals expire** after `config_as_code.approval_days` (env `FALAK_CONFIG_APPROVAL_DAYS`, default 7):
   the run is cancelled (`cancel_reason: expired`). A newer run of the environment supersedes a waiting one
   (`superseded`), a disabled source cancels it (`source_disabled`).
-- **[decision] Approving plans again.** The approval covers the risky changes the approver saw (by `path` + `rule`). If
-  the fresh plan has a risky change not in that set, nothing is applied: the run stays `awaiting_approval` with the new
-  plan (`409`, "The plan changed since it was shown; review it again."). Otherwise it applies.
+- **[decision] Approving plans again.** The approval covers the risky changes the approver saw, by `op` + `path` +
+  `rule` (an approved `detach` never covers a `delete`). The approver sends the **`plan_hash`** they were shown: when
+  it isn't the stored plan's, nothing is approved (`409`, "The plan changed since it was shown; review it again.").
+  After approving, the run plans again; if the fresh plan has a risky change outside the approved set, nothing is
+  applied and the run waits again with the new plan (same `409`). Otherwise it applies.
+- **[decision] `plan_hash`** (review fix H1) is the hex SHA-256 of the canonical risky set of the run's stored plan:
+  the risky changes as `{"op", "path", "rule"}` objects (keys in that order, a missing rule as `""`), sorted by `path`,
+  then `rule`, then `op` (byte order), JSON-encoded without spaces or escaped slashes. Clients echo the value from the
+  run; they never compute it.
+- **[decision] One waiting run per environment** (review fix H2): a run that starts waiting supersedes the older
+  waiting runs of its environment, and a run can't be approved once a newer run of its environment exists (`409`, "This
+  run is not awaiting approval."; it is cancelled as `superseded`).
 
 `ConfigRun` gains (other fields unchanged):
 
@@ -1121,18 +1130,22 @@ Contract for both lanes (control plane `feat/config-p4`, CLI `config-cli`). Choi
 {"approval": {"required": true, "risky": [{"path": "/units/web/deploy/strategy", "rule": "production.strategy", "reason": "…"}],
               "expires_at": "2026-10-18T12:00:00Z", "approved_by": null, "approved_at": null,
               "rejected_by": null, "rejected_at": null, "comment": null,
-              "can_approve": true, "blocked_reason": null},
+              "can_approve": true, "blocked_reason": null,
+              "plan_hash": "3f1a…"},
  "cancel_reason": null}
 ```
 
 `approval` is null for a run that never needed one. `can_approve` / `blocked_reason` are for the caller (`blocked_reason`:
 "You need the config.approve permission." or "You requested this run: another approver must approve it.").
-`cancel_reason` (only when `status` is `cancelled`): `superseded`, `rejected`, `expired`, `source_disabled`, `user`.
+`cancel_reason` (only when `status` is `cancelled`): `superseded`, `rejected`, `expired`, `source_disabled`,
+`environment_released` (the file no longer declares the environment), `user`.
 
-- **`POST /api/v1/config/runs/{run}/approve`** `{"comment": "…"?}` — `config.approve` (30/min). `200 {"data": ConfigRun}`
-  (now `applying`, or already `applied`/`failed`); `403 {"message": blocked_reason}`; `409 {"message": "This run is not
-  awaiting approval."}` (superseded, expired, rejected, cancelled, done); `409 {"message": "The plan changed since it was
-  shown; review it again.", "data": ConfigRun}`.
+- **`POST /api/v1/config/runs/{run}/approve`** `{"plan_hash": "…", "comment": "…"?}` — `config.approve` (30/min).
+  `plan_hash` is required (`422` without it). `200 {"data": ConfigRun}` (now `applying`, or already
+  `applied`/`failed`); `403 {"message": blocked_reason}`; `409 {"message": "This run is not awaiting approval."}`
+  (superseded, expired, rejected, cancelled, done, or a newer run of the environment exists); `409 {"message": "The plan
+  changed since it was shown; review it again.", "data": ConfigRun}` (the hash differs, or the fresh plan has a risky
+  change the approval didn't cover).
 - **`POST /api/v1/config/runs/{run}/reject`** `{"comment": "…"?}` — `config.approve`. `200 {"data": ConfigRun}`
   (`cancelled`, `cancel_reason: rejected`, `approval.rejected_by`); `409` when not awaiting approval.
 - CLI: `falak approve <run> [--comment]`, `falak reject <run> [--comment]`; `apply --wait` keeps exiting 6 while the
@@ -1166,7 +1179,8 @@ would make to put the file back (`before` today's value, `after` the file's). A 
 `config_as_code.drift_minutes` (default 30).
 
 `unknown` is **not drift**: never checked, nothing applied yet, or a run of the environment is planning or applying
-(its phase B may still be on its way); the CLI exits 0 for it. A file without `environments` is planned, applied and
+(its phase B may still be on its way); the CLI exits 0 for it. **[decision]** `falak drift` exits **7** when the
+environment drifted (0 for `in_sync` and `unknown`). A file without `environments` is planned, applied and
 checked against the project's production environment, as for a push. The run list takes `per_page` (1–100, default 25)
 and `page`.
 
