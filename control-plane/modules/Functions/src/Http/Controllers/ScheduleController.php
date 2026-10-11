@@ -39,7 +39,7 @@ final class ScheduleController extends Controller
         $schedules = FunctionSchedule::query()->where('function_id', $function->id)->orderBy('created_at')->get();
 
         return response()->json(['data' => [
-            'schedules' => $schedules->map(fn (FunctionSchedule $s) => $s->present($data->slug))->values(),
+            'schedules' => $schedules->map(fn (FunctionSchedule $s) => [...$s->present($data->slug), 'managed' => app(ManagedResources::class)->managed('function_schedule', $s->id)->toArray()])->values(),
             'timezones' => \DateTimeZone::listIdentifiers(),
             'can' => ['manage' => $this->canDeploy($request, $data)],
         ]]);

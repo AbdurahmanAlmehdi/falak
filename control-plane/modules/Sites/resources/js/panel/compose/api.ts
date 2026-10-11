@@ -1,3 +1,4 @@
+import { type ManagedConfig } from '@/components/falak';
 import { type CanvasService } from '@/types';
 
 /** Compose sites have the `compose` icon and a "Compose · N services" subtitle (Projects canvas read model). */
@@ -55,6 +56,8 @@ export interface ComposeSettingsData {
     public_services: PublicServiceData[];
     template: { slug: string; version: string; source: string } | null;
     policy: { allow_privileged: boolean };
+    /** What the project's falak.yaml manages (files, profiles, services' ports and health paths): read-only here. */
+    managed: ManagedConfig | null;
     can: { update: boolean };
 }
 

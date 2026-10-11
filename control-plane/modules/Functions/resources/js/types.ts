@@ -1,3 +1,4 @@
+import { type ManagedConfig } from '@/components/falak';
 export interface FunctionVersionSummary {
     id: string;
     number: number;
@@ -30,6 +31,8 @@ export interface FunctionState {
     live: FunctionVersionSummary | null;
     draft: { files: FunctionFiles; base_version_id: string | null; updated_at: string } | null;
     settings: FunctionSettings;
+    /** What the project's falak.yaml manages (its code under `root`, settings): read-only here. */
+    managed: ManagedConfig | null;
     bounds: Record<keyof FunctionSettings, [number, number]>;
     limits: { max_bytes: number; max_files: number };
     can: { edit: boolean; deploy: boolean };

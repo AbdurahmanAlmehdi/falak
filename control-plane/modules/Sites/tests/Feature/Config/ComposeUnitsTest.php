@@ -251,6 +251,9 @@ it('refuses dashboard edits of compose fields the file manages', function () {
     $public = [['service' => 'web', 'port' => 80, 'health_check_path' => '/up']];
     $body = ['compose_source' => 'repo', 'compose_files' => ['compose.yaml'], 'compose_profiles' => ['dev'], 'public_services' => $public];
 
+    // The panel shows them read-only.
+    expect($this->getJson("/sites/{$site->id}/compose")->assertOk()->json('data.managed.paths'))->toContain('/files', '/services/web/port');
+
     $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_files' => ['other.yaml']])->assertStatus(422)->assertJsonValidationErrors('compose_files');
     $this->putJson("/sites/{$site->id}/compose", [...$body, 'public_services' => [['service' => 'web', 'port' => 81, 'health_check_path' => '/up']]])
         ->assertStatus(422)->assertJsonValidationErrors('public_services.web.port');

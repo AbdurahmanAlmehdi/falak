@@ -1,4 +1,4 @@
-import { type SelectOption } from '@/components/falak';
+import { type ManagedConfig, type SelectOption } from '@/components/falak';
 
 export type ServiceMode = 'include' | 'share' | 'omit';
 
@@ -25,6 +25,8 @@ export interface PreviewSettingsForm {
     max_concurrent: number;
     idle_ttl_hours: number;
     access: 'basic' | 'public';
+    /** Set by the project's falak.yaml `previews:` block: the form is read-only (edit the file). */
+    managed?: ManagedConfig | null;
 }
 
 export interface PreviewRow {

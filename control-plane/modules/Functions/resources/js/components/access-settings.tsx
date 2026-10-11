@@ -1,4 +1,19 @@
-import { Button, Callout, CopyButton, Dialog, Field, IconButton, Input, RelativeTime, SkeletonRows, Textarea, toast } from '@/components/falak';
+import {
+    Button,
+    Callout,
+    CopyButton,
+    Dialog,
+    Field,
+    IconButton,
+    Input,
+    ManagedBadge,
+    RelativeTime,
+    SkeletonRows,
+    Textarea,
+    managedCovers,
+    toast,
+    type ManagedConfig,
+} from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { type ServiceTabProps } from '@/lib/registry';
@@ -9,6 +24,7 @@ import { functionUrl } from '../types';
 interface AccessState {
     keys: { id: string; name: string; prefix: string; created_at: string }[];
     allow_cidrs: string[];
+    managed: ManagedConfig | null;
     can: { manage: boolean };
 }
 
@@ -120,6 +136,11 @@ export function AccessSettings({ ctx }: ServiceTabProps) {
                 {keys.length === 0 && <p className="text-fg-faint text-xs">No keys: anyone with the URL can call the function.</p>}
             </div>
 
+            {managedCovers(state.data.managed, '/access/allow') && (
+                <div>
+                    <ManagedBadge config={state.data.managed} />
+                </div>
+            )}
             <Field
                 label="IP allowlist"
                 hint="One IP or CIDR range per line (IPv4 or IPv6). Empty: every address. Behind Cloudflare, the visitor's address is used."
@@ -129,12 +150,12 @@ export function AccessSettings({ ctx }: ServiceTabProps) {
                     rows={4}
                     className="font-mono"
                     value={cidrs}
-                    disabled={!can.manage}
+                    disabled={!can.manage || managedCovers(state.data.managed, '/access/allow')}
                     placeholder={'203.0.113.0/24\n2001:db8::/32'}
                     onChange={(e) => setCidrs(e.target.value)}
                 />
             </Field>
-            {can.manage && (
+            {can.manage && !managedCovers(state.data.managed, '/access/allow') && (
                 <div className="flex justify-end">
                     <Button variant="primary" icon={<Save />} loading={saving} onClick={saveAllowlist}>
                         Save allowlist

@@ -7,11 +7,13 @@ import {
     IconButton,
     Input,
     LogViewer,
+    ManagedBadge,
     Select,
     SkeletonRows,
     Switch,
     Tag,
     toast,
+    type ManagedConfig,
 } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
@@ -30,6 +32,8 @@ interface Schedule {
     timeout_s: number;
     enabled: boolean;
     job: string;
+    /** Set by the project's falak.yaml: read-only here. */
+    managed: ManagedConfig | null;
 }
 
 interface SchedulesState {
@@ -191,7 +195,7 @@ export function SchedulesTab({ ctx }: ServiceTabProps) {
                         <li key={schedule.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
                             <Switch
                                 checked={schedule.enabled}
-                                disabled={!can.manage}
+                                disabled={!can.manage || schedule.managed !== null}
                                 onCheckedChange={(checked) => toggle(schedule, checked)}
                                 aria-label={`${schedule.name} enabled`}
                             />
@@ -204,28 +208,33 @@ export function SchedulesTab({ ctx }: ServiceTabProps) {
                                 </span>
                             </div>
                             {!schedule.enabled && <Tag tone="neutral">Paused</Tag>}
+                            <ManagedBadge config={schedule.managed} />
                             {can.manage && (
                                 <span className="flex items-center gap-1">
                                     <Button size="sm" icon={<Play />} onClick={() => runNow(schedule)}>
                                         Run now
                                     </Button>
-                                    <IconButton
-                                        size="sm"
-                                        label="Edit"
-                                        icon={<Pencil />}
-                                        onClick={() =>
-                                            setEditing({
-                                                id: schedule.id,
-                                                name: schedule.name,
-                                                expression: schedule.expression,
-                                                timezone: schedule.timezone,
-                                                overlap: schedule.overlap,
-                                                timeout_s: schedule.timeout_s,
-                                                enabled: schedule.enabled,
-                                            })
-                                        }
-                                    />
-                                    <IconButton size="sm" label="Remove" icon={<Trash2 />} onClick={() => setRemoving(schedule)} />
+                                    {schedule.managed === null && (
+                                        <IconButton
+                                            size="sm"
+                                            label="Edit"
+                                            icon={<Pencil />}
+                                            onClick={() =>
+                                                setEditing({
+                                                    id: schedule.id,
+                                                    name: schedule.name,
+                                                    expression: schedule.expression,
+                                                    timezone: schedule.timezone,
+                                                    overlap: schedule.overlap,
+                                                    timeout_s: schedule.timeout_s,
+                                                    enabled: schedule.enabled,
+                                                })
+                                            }
+                                        />
+                                    )}
+                                    {schedule.managed === null && (
+                                        <IconButton size="sm" label="Remove" icon={<Trash2 />} onClick={() => setRemoving(schedule)} />
+                                    )}
                                 </span>
                             )}
                         </li>

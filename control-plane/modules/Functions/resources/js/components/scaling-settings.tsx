@@ -1,4 +1,4 @@
-import { Button, Field, Input, Skeleton, toast } from '@/components/falak';
+import { Button, Field, Input, ManagedBadge, Skeleton, managedCovers, toast } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { type ServiceTabProps } from '@/lib/registry';
@@ -6,14 +6,25 @@ import { Save } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { functionUrl, type FunctionSettings, type FunctionState } from '../types';
 
-const FIELDS: { key: keyof FunctionSettings; label: string; hint: string; step?: string; unit?: string }[] = [
-    { key: 'min_instances', label: 'Min instances', hint: '0 scales to zero when idle (the next request waits for a cold start).' },
-    { key: 'max_instances', label: 'Max instances', hint: 'Upper bound under load, on this server.' },
-    { key: 'concurrency', label: 'Concurrency', hint: 'Requests one instance handles at once before another starts.' },
-    { key: 'idle_timeout_s', label: 'Idle timeout', unit: 's', hint: 'An instance without requests this long is stopped.' },
-    { key: 'memory_mb', label: 'Memory', unit: 'MB', hint: 'Per instance.' },
-    { key: 'cpus', label: 'CPU', step: '0.1', unit: 'cores', hint: 'Per instance.' },
-    { key: 'request_timeout_s', label: 'Request timeout', unit: 's', hint: 'Longer requests get a 504.' },
+const FIELDS: { key: keyof FunctionSettings; label: string; hint: string; path: string; step?: string; unit?: string }[] = [
+    {
+        key: 'min_instances',
+        path: '/scaling/min_instances',
+        label: 'Min instances',
+        hint: '0 scales to zero when idle (the next request waits for a cold start).',
+    },
+    { key: 'max_instances', path: '/scaling/max_instances', label: 'Max instances', hint: 'Upper bound under load, on this server.' },
+    { key: 'concurrency', path: '/scaling/concurrency', label: 'Concurrency', hint: 'Requests one instance handles at once before another starts.' },
+    {
+        key: 'idle_timeout_s',
+        path: '/scaling/idle_timeout',
+        label: 'Idle timeout',
+        unit: 's',
+        hint: 'An instance without requests this long is stopped.',
+    },
+    { key: 'memory_mb', path: '/memory', label: 'Memory', unit: 'MB', hint: 'Per instance.' },
+    { key: 'cpus', path: '/cpus', label: 'CPU', step: '0.1', unit: 'cores', hint: 'Per instance.' },
+    { key: 'request_timeout_s', path: '/timeout', label: 'Request timeout', unit: 's', hint: 'Longer requests get a 504.' },
 ];
 
 /** Settings → Scaling of a function: saving redeploys the live version with the new values. */
@@ -56,8 +67,13 @@ export function ScalingSettings({ ctx }: ServiceTabProps) {
 
     return (
         <form onSubmit={submit} className="grid gap-4">
+            {FIELDS.some(({ path }) => managedCovers(data.managed, path)) && (
+                <div>
+                    <ManagedBadge config={data.managed} />
+                </div>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
-                {FIELDS.map(({ key, label, hint, step, unit }) => {
+                {FIELDS.map(({ key, label, hint, path, step, unit }) => {
                     const [min, max] = data.bounds[key] ?? [0, 0];
 
                     return (
@@ -68,7 +84,7 @@ export function ScalingSettings({ ctx }: ServiceTabProps) {
                                 max={max}
                                 step={step ?? '1'}
                                 value={values[key] ?? ''}
-                                disabled={!data.can.deploy}
+                                disabled={!data.can.deploy || managedCovers(data.managed, path)}
                                 onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))}
                             />
                         </Field>

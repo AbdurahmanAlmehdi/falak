@@ -76,6 +76,8 @@ final class ComposeController extends Controller
             'public_services' => array_map(fn ($public) => $public->toArray(), $site->publicServices()),
             'template' => $site->template,
             'policy' => ['allow_privileged' => OrganizationSettings::for($site->organization_id)->allow_privileged_compose],
+            // What falak.yaml manages (files, profiles, services): shown read-only.
+            'managed' => app(ManagedResources::class)->managed('site', $site->id)->toArray(),
             'can' => ['update' => $request->user()?->can('update', $site) ?? false],
         ]])->header('Cache-Control', 'no-store');
     }

@@ -117,6 +117,9 @@ it('refuses dashboard edits of preview settings the file manages', function () {
     $body = ['enabled' => true, 'base_environment_id' => $this->staging->id, 'max_concurrent' => 3, 'services' => ['db' => 'include'], 'databases' => ['db' => ['strategy' => 'empty']]];
     $url = "/projects/{$this->staging->project_id}/previews/settings";
 
+    $this->get("/projects/{$this->staging->project_id}/previews")->assertOk()
+        ->assertInertia(fn ($page) => $page->where('settings.managed.paths', fn ($paths) => collect($paths)->contains('/previews/max_concurrent')));
+
     $this->put($url, [...$body, 'max_concurrent' => 9])->assertSessionHasErrors('max_concurrent');
     $this->put($url, [...$body, 'databases' => ['db' => ['strategy' => 'clone_backup']]])->assertSessionHasErrors('databases');
     $this->put($url, [...$body, 'idle_ttl_hours' => 24])->assertSessionHasNoErrors();
