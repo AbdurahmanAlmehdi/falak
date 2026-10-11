@@ -394,3 +394,37 @@ func TestInitYesDoesNotLinkAProject(t *testing.T) {
 		t.Fatalf("link: %v %s", err, b)
 	}
 }
+
+// Secret-looking keys left empty in the example are optional: commented out, not required references; uncommented
+// they are valid.
+func TestInitOptionalSecrets(t *testing.T) {
+	h := newHarness(t, nil)
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "nextjs"))
+	writeFile(t, h.wd, ".env.example", "API_TOKEN=\nVITE_TOKEN=${API_TOKEN}\n")
+	if code := h.run("init", "--yes", "--stdout"); code != 0 {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	out := h.out.String()
+	for _, want := range []string{
+		"    # env:\n    #   API_TOKEN: ${{ secrets.API_TOKEN }} # empty in the example env file; uncomment if used\n",
+		"    #   VITE_TOKEN: ${{ secrets.API_TOKEN }} # public variable: this value ends up in the browser bundle; uncomment with the secrets it uses\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(h.err.String(), "create these secrets") || !strings.Contains(h.err.String(), "optional secrets") {
+		t.Fatalf("notes: %s", h.err.String())
+	}
+	uncommented := strings.NewReplacer("    # env:", "    env:", "    #   ", "      ").Replace(out)
+	doc, err := configspec.Parse([]byte(uncommented), "yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues, _ := configspec.Validate(doc); len(issues) > 0 {
+		t.Fatalf("uncommented: %+v\n%s", issues, uncommented)
+	}
+	if _, errs, _ := configspec.Resolve(doc, "production"); len(errs) > 0 {
+		t.Fatalf("uncommented: %+v", errs)
+	}
+}

@@ -12,9 +12,9 @@ units:
       NODE_ENV: production
       LOG_LEVEL: info
       REDIS_URL: ${{ redis.REDIS_URL }}
-      SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       GITHUB_CLIENT_ID: abc
-      GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+      # SESSION_SECRET: ${{ secrets.SESSION_SECRET }} # empty in the example env file; uncomment if used
+      # GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }} # empty in the example env file; uncomment if used
 
   redis:
     type: redis # detected: ioredis in package.json

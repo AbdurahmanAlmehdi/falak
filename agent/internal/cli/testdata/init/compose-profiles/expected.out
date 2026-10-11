@@ -1,5 +1,5 @@
 Wrote falak.yaml: web (compose), postgres (database, postgresql)
 note: adminer only runs with the profile tools; add profiles: [tools] to the unit to run it
 note: worker only runs with the profile jobs; add profiles: [jobs] to the unit to run it
-note: web: create these secrets before applying (falak validate checks them when logged in): SESSION_SECRET
+note: web: optional secrets, commented out in env (empty in the example env file): SESSION_SECRET
 Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

@@ -11,8 +11,8 @@ units:
     env: # from the example env file; secrets are ${{ secrets.NAME }} references
       NEXT_PUBLIC_API_URL: https://api.example.com
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_x
-      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      REVALIDATE_TOKEN: ${{ secrets.REVALIDATE_TOKEN }}
+      # STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }} # empty in the example env file; uncomment if used
+      # REVALIDATE_TOKEN: ${{ secrets.REVALIDATE_TOKEN }} # empty in the example env file; uncomment if used
 
 environments:
   production:

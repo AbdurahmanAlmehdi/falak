@@ -1,4 +1,4 @@
 Wrote falak.yaml: web (app, frankenphp), db (database, mysql)
-note: web: create these secrets before applying (falak validate checks them when logged in): APP_KEY
+note: web: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value
 note: web: left out local development values: LOG_LEVEL, MAIL_HOST, MEMCACHED_HOST
 Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

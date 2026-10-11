@@ -19,7 +19,6 @@ units:
     env: # from the example env file; secrets are ${{ secrets.NAME }} references
       APP_NAME: Lina
       APP_ENV: production
-      APP_KEY: ${{ secrets.APP_KEY }}
       APP_DEBUG: "false"
       DB_CONNECTION: ${{ db.DB_CONNECTION }}
       DB_HOST: ${{ db.DB_HOST }}

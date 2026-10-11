@@ -134,6 +134,25 @@ var (
 	secretNameRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 )
 
+// publicNote is the comment of a public variable holding a secret reference.
+func publicNote(k string) string {
+	if isPublicKey(k) {
+		return "public variable: this value ends up in the browser bundle; "
+	}
+	return ""
+}
+
+// isPublicKey: a variable bundled into client code (VITE_, NEXT_PUBLIC_, …).
+func isPublicKey(key string) bool {
+	k := strings.ToUpper(key)
+	for _, p := range publicPrefixes {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // isSecretKey says whether a variable holds a secret, by its name. APP_KEY (Laravel's encryption key) is one;
 // VITE_PUSHER_APP_KEY is bundled into the browser and is not; JWT_PRIVATE_KEY_PATH is a path.
 func isSecretKey(key string) bool {
@@ -285,7 +304,7 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 	usesDB := db != nil && u.needs.db != ""
 	usesRedis := redis != nil && u.needs.redis != ""
 	vals := map[string]*envValue{}
-	var order, empty, secrets, local, valueSecrets []string
+	var order, empty, secrets, local, valueSecrets, optional, optionalLines []string
 	wiredDB, wiredRedis := false, false
 	set := func(k, v, comment string, literal bool) {
 		vals[k] = &envValue{value: v, comment: comment, literal: literal}
@@ -319,6 +338,15 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 			set(k, ref(redis.Key, "REDIS_HOST")+":"+ref(redis.Key, "REDIS_PORT"), "", false)
 			wiredRedis = true
 		case strings.HasPrefix(up, "REDIS_") && !usesRedis:
+		case isSecretKey(k) && (v == "" || v == "null"):
+			name := strings.ToUpper(k)
+			switch {
+			case !secretNameRe.MatchString(name):
+			case laravel && name == "APP_KEY":
+				d.Notes = append(d.Notes, fmt.Sprintf("%s: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value", u.Key))
+			default:
+				optional = append(optional, k)
+			}
 		case isSecretKey(k) || isSecretValue(v):
 			name := strings.ToUpper(k)
 			if !secretNameRe.MatchString(name) {
@@ -358,15 +386,25 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 		if !ev.literal || !interpRe.MatchString(ev.value) {
 			continue
 		}
-		missing := false
+		missing, usesOptional := false, false
 		out := interpRe.ReplaceAllStringFunc(ev.value, func(m string) string {
 			name := interpRe.FindStringSubmatch(m)[1]
 			if other, ok := vals[name]; ok && other != ev && !interpRe.MatchString(other.value) {
 				return other.value
 			}
+			if contains(optional, name) {
+				usesOptional = true
+				return ref("secrets", strings.ToUpper(name))
+			}
 			missing = true
 			return m
 		})
+		if usesOptional && !missing {
+			// Built from an optional secret: commented out with it.
+			delete(vals, k)
+			optionalLines = append(optionalLines, fmt.Sprintf("%s: %s # %suncomment with the secrets it uses", k, out, publicNote(k)))
+			continue
+		}
 		if missing {
 			delete(vals, k)
 			d.Notes = append(d.Notes, fmt.Sprintf("%s: left out %s (it interpolates a variable this file doesn't set)", u.Key, k))
@@ -378,15 +416,34 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 
 	env := newOmap()
 	for _, k := range order {
-		if ev, ok := vals[k]; ok {
-			env.set(k, ev.value, ev.comment)
+		ev, ok := vals[k]
+		if !ok {
+			continue
 		}
+		if isPublicKey(k) && strings.Contains(ev.value, "${{ secrets.") {
+			ev.comment = strings.TrimSuffix(publicNote(k), "; ")
+		}
+		env.set(k, ev.value, ev.comment)
 	}
 	if usesDB && !wiredDB {
 		env.set("DATABASE_URL", ref(db.Key, "DATABASE_URL"), "detected: "+u.needs.dbWhy)
 	}
 	if usesRedis && !wiredRedis {
 		env.set("REDIS_URL", ref(redis.Key, "REDIS_URL"), "detected: "+u.needs.redisWhy)
+	}
+	if len(optional) > 0 {
+		var lines []string
+		for _, k := range optional {
+			lines = append(lines, fmt.Sprintf("%s: %s # empty in the example env file; uncomment if used", k, ref("secrets", strings.ToUpper(k))))
+		}
+		lines = append(lines, optionalLines...)
+		if env.empty() {
+			// No env to hang them on: a commented env block after the unit.
+			u.fields.foot = "env:\n  " + strings.Join(lines, "\n  ")
+		} else {
+			env.foot = strings.Join(lines, "\n")
+		}
+		d.Notes = append(d.Notes, fmt.Sprintf("%s: optional secrets, commented out in env (empty in the example env file): %s", u.Key, strings.Join(optional, ", ")))
 	}
 	if len(valueSecrets) > 0 {
 		d.Notes = append(d.Notes, fmt.Sprintf("%s: the example values of %s look like credentials: they became secret references", u.Key, strings.Join(valueSecrets, ", ")))

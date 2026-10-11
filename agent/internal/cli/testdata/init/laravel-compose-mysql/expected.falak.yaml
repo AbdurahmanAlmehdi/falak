@@ -16,7 +16,6 @@ units:
     env: # from the example env file; secrets are ${{ secrets.NAME }} references
       APP_NAME: Blog
       APP_ENV: production
-      APP_KEY: ${{ secrets.APP_KEY }}
       DB_CONNECTION: ${{ mysql.DB_CONNECTION }}
       DB_HOST: ${{ mysql.DB_HOST }}
       DB_PORT: ${{ mysql.DB_PORT }}

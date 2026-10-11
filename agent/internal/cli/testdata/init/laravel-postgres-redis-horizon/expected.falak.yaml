@@ -23,7 +23,6 @@ units:
     env: # from the example env file; secrets are ${{ secrets.NAME }} references
       APP_NAME: Shop
       APP_ENV: production
-      APP_KEY: ${{ secrets.APP_KEY }}
       APP_DEBUG: "false"
       DB_CONNECTION: ${{ db.DB_CONNECTION }}
       DB_HOST: ${{ db.DB_HOST }}
@@ -39,14 +38,14 @@ units:
       REDIS_PASSWORD: ${{ redis.REDIS_PASSWORD }}
       REDIS_PORT: ${{ redis.REDIS_PORT }}
       MAIL_MAILER: log
-      MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }}
       MAIL_FROM_ADDRESS: hello@example.com
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }}
-      PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }}
       VITE_APP_NAME: Shop
-      VITE_PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }}
+      # MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }} # empty in the example env file; uncomment if used
+      # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} # empty in the example env file; uncomment if used
+      # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # empty in the example env file; uncomment if used
+      # STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }} # empty in the example env file; uncomment if used
+      # PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }} # empty in the example env file; uncomment if used
+      # VITE_PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }} # public variable: this value ends up in the browser bundle; uncomment with the secrets it uses
 
   db:
     type: database

@@ -11,8 +11,8 @@ units:
     node: "22" # detected: engines.node 22 in package.json
     env: # from the example env file; secrets are ${{ secrets.NAME }} references
       DATABASE_URL: ${{ db.DATABASE_URL }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET }}
       CORS_ORIGIN: https://acme.test
+      # JWT_SECRET: ${{ secrets.JWT_SECRET }} # empty in the example env file; uncomment if used
 
   web:
     type: app

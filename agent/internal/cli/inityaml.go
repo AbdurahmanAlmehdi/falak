@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,6 +11,7 @@ import (
 // omap is an ordered map with a comment per entry: the shape `falak init` builds before writing YAML.
 type omap struct {
 	fields []*ofield
+	foot   string // comment lines after the last entry (without "# ")
 }
 
 type ofield struct {
@@ -99,6 +101,13 @@ func (m *omap) node() *yaml.Node {
 			}
 		}
 		n.Content = append(n.Content, k, v)
+	}
+	if m.foot != "" && len(n.Content) > 0 {
+		var lines []string
+		for _, l := range strings.Split(m.foot, "\n") {
+			lines = append(lines, "# "+l)
+		}
+		n.Content[len(n.Content)-1].FootComment = strings.Join(lines, "\n")
 	}
 	return n
 }

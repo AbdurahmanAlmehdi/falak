@@ -1,3 +1,3 @@
 Wrote falak.yaml: api (app, node, apps/api), web (app, node, apps/web), db (database, postgresql)
-note: api: create these secrets before applying (falak validate checks them when logged in): JWT_SECRET
+note: api: optional secrets, commented out in env (empty in the example env file): JWT_SECRET
 Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.
