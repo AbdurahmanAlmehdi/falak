@@ -96,11 +96,43 @@ type ConfigPlanResult struct {
 	Raw         json.RawMessage `json:"-"`
 }
 
-// ConfigRunDeployment is a deployment a run triggered.
+// ConfigRunDeployment is one unit a run deploys. Status is the run's entry status (pending, deploying, released,
+// skipped, failed: the control plane's RunEngine) or, once the deployment exists, the deployment's own status
+// (queued, building, deploying, succeeded, failed, cancelled, …).
 type ConfigRunDeployment struct {
-	Unit         string `json:"unit"`
-	DeploymentID string `json:"deployment_id"`
-	Status       string `json:"status"`
+	Unit         string  `json:"unit"`
+	SiteID       *string `json:"site_id"`
+	DeploymentID *string `json:"deployment_id"`
+	Status       string  `json:"status"`
+	Error        *string `json:"error"`
+}
+
+// ID is the deployment's id ("" before it started, or when it never will).
+func (d ConfigRunDeployment) ID() string {
+	if d.DeploymentID == nil {
+		return ""
+	}
+	return *d.DeploymentID
+}
+
+// Failed reports a failed entry or deployment.
+func (d ConfigRunDeployment) Failed() bool {
+	if d.Status == "skipped" || d.Status == "released" {
+		return false
+	}
+	dep := Deployment{Status: d.Status}
+	return dep.Done() && !dep.Succeeded()
+}
+
+// Settled reports an entry that won't change any more (released, skipped, failed, or a finished deployment).
+func (d ConfigRunDeployment) Settled() bool {
+	switch d.Status {
+	case "released", "skipped":
+		return true
+	case "pending", "":
+		return false
+	}
+	return Deployment{Status: d.Status}.Done()
 }
 
 // ConfigRun is a config run (POST …/config/runs, GET /config/runs/{run}).
@@ -133,7 +165,9 @@ const (
 	RunRefused          = "refused"
 )
 
-// Done reports a status the run doesn't leave on its own (awaiting_approval waits for a person).
+// Done reports a status the run doesn't leave on its own (awaiting_approval waits for a person). The run's status
+// is authoritative: the control plane finishes it (applied, or failed when a deployment failed) once every
+// deployment settled.
 func (r ConfigRun) Done() bool {
 	switch r.Status {
 	case RunApplied, RunFailed, RunCancelled, RunRefused, RunAwaitingApproval:

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -285,7 +284,8 @@ func cmdApply(ctx context.Context, a *App, args []string) error {
 	projectFlag(fs, &project)
 	allowDestroy := fs.Bool("allow-destroy", false, "let the run delete what the file removed (databases and volumes included)")
 	wait := fs.Bool("wait", false, "wait for the run and stream its deployments")
-	pos, err := a.parse(fs, args, 0, 1, "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait]")
+	timeout := fs.Duration("timeout", 30*time.Minute, "--wait: give up after this long (the run goes on)")
+	pos, err := a.parse(fs, args, 0, 1, "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait [--timeout 30m]]")
 	if err != nil {
 		return err
 	}
@@ -313,7 +313,7 @@ func cmdApply(ctx context.Context, a *App, args []string) error {
 		}
 	}
 	if *wait && !run.Done() {
-		run, err = a.followRun(ctx, c, run, out)
+		run, err = a.followRun(ctx, c, run, out, *timeout)
 		if err != nil {
 			return err
 		}
@@ -326,7 +326,8 @@ func cmdApply(ctx context.Context, a *App, args []string) error {
 	return a.runOutcome(out, f.Display, run, *wait)
 }
 
-// runOutcome maps a run's status to the exit code.
+// runOutcome maps a run's status to the exit code: 6 waiting for an approval, 3 failed because a deployment failed,
+// 1 any other failure.
 func (a *App) runOutcome(out io.Writer, file string, run api.ConfigRun, waited bool) error {
 	msg := func() string {
 		if run.Error != nil && *run.Error != "" {
@@ -341,79 +342,82 @@ func (a *App) runOutcome(out io.Writer, file string, run api.ConfigRun, waited b
 		return fmt.Errorf("run %s refused%s (risky changes are refused while config as code is experimental)", run.ID, msg())
 	case api.RunFailed:
 		printIssues(a.Stderr, file, run.Errors)
+		var failed []string
+		for _, d := range run.Deployments {
+			if d.Failed() {
+				failed = append(failed, d.Unit)
+			}
+		}
+		if len(failed) > 0 {
+			return exitError{ExitDeployFailed, fmt.Errorf("run %s failed: deployment of %s failed%s", run.ID, strings.Join(failed, ", "), msg())}
+		}
 		return fmt.Errorf("run %s failed%s", run.ID, msg())
 	case api.RunCancelled:
 		return fmt.Errorf("run %s was cancelled", run.ID)
 	}
-	if waited {
-		var failed []string
-		for _, d := range run.Deployments {
-			if failureStatus(d.Status) {
-				failed = append(failed, d.Unit+" ("+d.Status+")")
-			}
-		}
-		if len(failed) > 0 {
-			return exitError{ExitDeployFailed, fmt.Errorf("run %s: deployment failed: %s", run.ID, strings.Join(failed, ", "))}
-		}
-		if !a.jsonOut {
-			fmt.Fprintf(out, "Run %s %s\n", run.ID, run.Status)
-		}
+	if waited && !a.jsonOut {
+		fmt.Fprintf(out, "Run %s %s\n", run.ID, run.Status)
 	}
 	return nil
 }
 
-func failureStatus(s string) bool {
-	d := api.Deployment{Status: s}
-	return d.Done() && !d.Succeeded()
-}
-
-// followRun polls the run until it stops (applied, failed, cancelled, refused, awaiting approval) and its
-// deployments finish, streaming their output prefixed with the unit.
-func (a *App) followRun(ctx context.Context, c api.API, run api.ConfigRun, out io.Writer) (api.ConfigRun, error) {
+// followRun polls the run until its status says it is finished (applied, failed, cancelled, refused) or waits for
+// an approval, streaming the output of its deployments prefixed with the unit, for at most timeout.
+func (a *App) followRun(ctx context.Context, c api.API, run api.ConfigRun, out io.Writer, timeout time.Duration) (api.ConfigRun, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	cursors := map[string]int64{}
-	status := map[string]string{}
-	errs := 0
-	for {
-		allDone := true
-		units := make([]api.ConfigRunDeployment, len(run.Deployments))
-		copy(units, run.Deployments)
-		sort.SliceStable(units, func(i, j int) bool { return units[i].Unit < units[j].Unit })
-		for _, d := range units {
-			if d.DeploymentID == "" {
+	reported := map[string]string{}
+	drain := func(final bool) {
+		for _, d := range run.Deployments {
+			id := d.ID()
+			if id == "" {
 				continue
 			}
-			if _, known := cursors[d.DeploymentID]; !known {
-				cursors[d.DeploymentID] = 0
+			if _, known := cursors[id]; !known {
+				cursors[id] = 0
 				if !a.jsonOut {
-					fmt.Fprintf(out, "[%s] deployment %s started\n", d.Unit, d.DeploymentID)
+					fmt.Fprintf(out, "[%s] deployment %s started\n", d.Unit, id)
 				}
 			}
-			lines, next, err := c.DeploymentOutput(ctx, d.DeploymentID, cursors[d.DeploymentID])
-			if err == nil {
-				cursors[d.DeploymentID] = next
-				for _, l := range lines {
-					printOutputLine(prefixWriter{out, "[" + d.Unit + "] "}, l)
+			if reported[id] == "" || final {
+				if lines, next, err := c.DeploymentOutput(ctx, id, cursors[id]); err == nil {
+					cursors[id] = next
+					for _, l := range lines {
+						printOutputLine(prefixWriter{out, "[" + d.Unit + "] "}, l)
+					}
 				}
 			}
-			done := api.Deployment{Status: d.Status}.Done()
-			if done && status[d.DeploymentID] != d.Status {
-				fmt.Fprintf(out, "[%s] deployment %s %s\n", d.Unit, d.DeploymentID, d.Status)
-			}
-			status[d.DeploymentID] = d.Status
-			if !done {
-				allDone = false
+			if d.Settled() && reported[id] == "" {
+				reported[id] = d.Status
+				line := fmt.Sprintf("[%s] deployment %s %s", d.Unit, id, d.Status)
+				if d.Error != nil && *d.Error != "" {
+					line += ": " + *d.Error
+				}
+				fmt.Fprintln(out, line)
 			}
 		}
-		if run.Done() && allDone {
+	}
+	errs := 0
+	for {
+		drain(false)
+		if run.Done() {
+			drain(true)
 			return run, nil
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return run, fmt.Errorf("gave up waiting for run %s after %s (still %s); it goes on: %s", run.ID, timeout, run.Status, dash(run.URL))
+			}
 			return run, ctx.Err()
 		case <-time.After(a.Poll):
 		}
 		next, err := c.ConfigRun(ctx, run.ID)
 		if err != nil {
+			if ctx.Err() != nil {
+				continue
+			}
 			if errs++; errs > 5 {
 				return run, err
 			}

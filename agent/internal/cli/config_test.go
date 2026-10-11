@@ -381,32 +381,58 @@ func TestApply(t *testing.T) {
 		t.Fatalf("allow_destroy %v", b)
 	}
 
-	// --wait follows the run and streams its deployments; a failed deployment → exit 3.
-	dep := func(status string) map[string]any {
-		return map[string]any{"unit": "web", "deployment_id": "01jdep0000000000000000000a", "status": status}
+	// --wait follows the run (its status decides when it is over) and streams its deployments, with the entry
+	// statuses of the control plane's RunEngine (pending, deploying, released, skipped, failed).
+	dep := func(unit, id, status string) map[string]any {
+		var depID any
+		if id != "" {
+			depID = id
+		}
+		return map[string]any{"unit": unit, "site_id": "01jsite000000000000000000a", "deployment_id": depID, "status": status, "error": nil}
 	}
-	f.run = runData("applying")
-	f.runPolls = []map[string]any{runData("applying", dep("running")), runData("applied", dep("failed"))}
+	const depID = "01jdep0000000000000000000a"
+	failedRun := runData("failed", dep("web", depID, "failed"), dep("docs", "", "skipped"))
+	failedRun["error"] = "web: the deployment failed."
+	f.run = runData("applying", dep("web", "", "pending"))
+	// A settled entry doesn't end the wait while the run is still applying.
+	f.runPolls = []map[string]any{runData("applying", dep("web", depID, "deploying")), runData("applying", dep("web", depID, "failed")), failedRun}
 	f.deployOut = []api.OutputLine{{Seq: 1, Phase: "build", Data: "npm ci\n"}}
 	code := h.run("apply", "--wait")
-	if code != ExitDeployFailed {
+	if code != ExitDeployFailed || !strings.Contains(h.err.String(), "deployment of web failed: web: the deployment failed.") {
 		t.Fatalf("wait failed: %d %s %s", code, h.out.String(), h.err.String())
 	}
-	for _, want := range []string{"[web] deployment 01jdep0000000000000000000a started", "[web] [build] npm ci", "[web] deployment 01jdep0000000000000000000a failed"} {
+	for _, want := range []string{"[web] deployment " + depID + " started", "[web] [build] npm ci", "[web] deployment " + depID + " failed", "Run 01jrun0000000000000000000a: failed"} {
 		if !strings.Contains(h.out.String(), want) {
 			t.Errorf("missing %q in\n%s", want, h.out.String())
 		}
 	}
+	if len(f.runPolls) != 0 {
+		t.Fatalf("stopped before the run finished: %d polls left", len(f.runPolls))
+	}
 
-	// Succeeded deployments → 0; --json prints the final run.
-	f.run = runData("applying")
-	f.runPolls = []map[string]any{runData("applied", dep("succeeded"))}
+	// A run that failed before deploying anything (phase A) → 1.
+	phaseA := runData("failed")
+	phaseA["error"] = "Phase A failed: no server named web-9. Nothing was deployed."
+	f.run, f.runPolls = runData("applying"), []map[string]any{phaseA}
+	if code := h.run("apply", "--wait"); code != ExitError || !strings.Contains(h.err.String(), "Phase A failed") {
+		t.Fatalf("phase A: %d %s", code, h.err.String())
+	}
+
+	// Applied (released, deployment statuses as the deployments module reports them) → 0; --json prints the run.
+	f.run = runData("applying", dep("web", depID, "building"))
+	f.runPolls = []map[string]any{runData("applied", dep("web", depID, "succeeded"), dep("db", "", "skipped"))}
 	if code := h.run("apply", "--wait", "--json"); code != 0 {
 		t.Fatalf("wait ok: %d %s", code, h.err.String())
 	}
 	var final map[string]any
 	if err := json.Unmarshal(h.out.Bytes(), &final); err != nil || final["status"] != "applied" {
 		t.Fatalf("json: %v %s", err, h.out.String())
+	}
+
+	// --timeout: the run never finishes → 1, and it says the run goes on.
+	f.run, f.runPolls = runData("applying", dep("web", depID, "deploying")), nil
+	if code := h.run("apply", "--wait", "--timeout", "20ms"); code != ExitError || !strings.Contains(h.err.String(), "gave up waiting") {
+		t.Fatalf("timeout: %d %s", code, h.err.String())
 	}
 
 	// --wait stopping at an approval → 6; refused / failed → 1.
