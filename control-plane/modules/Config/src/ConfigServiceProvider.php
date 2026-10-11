@@ -7,9 +7,11 @@ use Falak\Config\Application\Listeners\PlanPullRequest;
 use Falak\Config\Application\Listeners\RunOnPush;
 use Falak\Config\Application\Planning\Reconcilers;
 use Falak\Config\Application\Planning\RiskRules;
+use Falak\Config\Application\Previews\FilePreviews;
 use Falak\Config\Application\Validation\SchemaValidator;
 use Falak\Config\Contracts\ConfigSources;
 use Falak\Config\Contracts\ManagedResources;
+use Falak\Config\Contracts\PreviewConfig;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Config\Domain\Policies\ConfigPolicy;
@@ -46,6 +48,7 @@ class ConfigServiceProvider extends ModuleServiceProvider
     public array $singletons = [
         ConfigSources::class => EloquentConfigSources::class,
         ManagedResources::class => EloquentManagedResources::class,
+        PreviewConfig::class => FilePreviews::class,
         Reconcilers::class => Reconcilers::class,
         RiskRules::class => RiskRules::class,
         SchemaValidator::class => SchemaValidator::class,

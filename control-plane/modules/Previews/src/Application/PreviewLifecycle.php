@@ -2,6 +2,8 @@
 
 namespace Falak\Previews\Application;
 
+use Falak\Config\Contracts\PreviewConfig;
+use Falak\Config\Contracts\PreviewFile;
 use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Databases\Contracts\DatabaseProvisioner;
 use Falak\Deployments\Contracts\DeploymentTrigger;
@@ -18,6 +20,7 @@ use Falak\Projects\Contracts\ServiceKind;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteFactory;
 use Falak\SourceControl\Contracts\Data\PullRequestData;
+use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
 use Falak\SourceControl\Contracts\SourceControlGateway;
 use Falak\Volumes\Contracts\ServiceVolumes;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -41,6 +44,10 @@ use Throwable;
  *   environment), and the next queued preview starts.
  *
  * Each step reports in the pull request's one Falak comment and the `falak/preview` commit status.
+ *
+ * Projects that follow a falak.yaml build previews from the file ({@see PreviewConfig}): the pull request head's file
+ * (a fork's: the base branch's) is applied to the preview environment before each deploy, so the units' settings,
+ * processes, schedules and limits are the file's, and units the base environment doesn't have are created there.
  */
 final class PreviewLifecycle
 {
@@ -64,6 +71,7 @@ final class PreviewLifecycle
         private readonly PreviewNotifier $notifier,
         private readonly PreviewServers $servers,
         private readonly AuditLog $audit,
+        private readonly PreviewConfig $config,
     ) {}
 
     // ---- pull request events -----------------------------------------------------------------
@@ -282,7 +290,25 @@ final class PreviewLifecycle
     /** Delete what the preview holds (sites and volumes, databases and volumes, DNS records, the environment). */
     private function release(Preview $preview): void
     {
-        foreach ($preview->sites ?? [] as $service => $siteId) {
+        $sites = $preview->sites ?? [];
+
+        // Sites a falak.yaml created in the preview environment that a failed setup didn't record are the preview's too.
+        if ($preview->environment_id !== null) {
+            foreach ($this->projects->servicesIn($preview->environment_id) as $service) {
+                if ($service->kind === ServiceKind::Site && ! in_array($service->refId, $sites, true)) {
+                    $sites[$service->name.'#'.$service->refId] = $service->refId;
+                }
+            }
+        }
+
+        foreach ($sites as $service => $siteId) {
+            // Only the preview's own resources: never a site placed outside its environment.
+            if (($placed = $this->projects->projectOf(ServiceKind::Site, $siteId)) !== null && $placed->environmentId !== $preview->environment_id) {
+                Log::warning('previews: a site outside the preview environment was not deleted', ['preview' => $preview->id, 'site' => $siteId]);
+
+                continue;
+            }
+
             $this->attempt($preview, "site {$service}", function () use ($siteId) {
                 $this->domains->release($siteId);
                 $volumes = array_values(array_map(fn ($volume) => $volume->id, array_filter($this->volumes->forSite($siteId), fn ($volume) => ! $volume->protected)));
@@ -298,10 +324,11 @@ final class PreviewLifecycle
 
         if ($preview->environment_id !== null) {
             $environmentId = $preview->environment_id;
+            $this->attempt($preview, 'config', fn () => $this->config->forget($environmentId));
             $this->attempt($preview, 'environment', fn () => $this->environments->delete($environmentId));
         }
 
-        $preview->forceFill(['environment_id' => null, 'sites' => null, 'databases' => null, 'urls' => null, 'deployments' => null])->save();
+        $preview->forceFill(['environment_id' => null, 'sites' => null, 'databases' => null, 'urls' => null, 'deployments' => null, 'config_ref' => null])->save();
     }
 
     /** Previews idle (no push, approval or redeploy) longer than their project's TTL are deleted. */
@@ -510,8 +537,10 @@ final class PreviewLifecycle
      */
     private function create(Preview $preview, PreviewSettings $settings): void
     {
+        $file = $this->configFile($preview, $settings);
+        $omitted = $file->omitted ?? [];
         $services = $this->projects->servicesIn($settings->base_environment_id);
-        $include = array_values(array_filter($services, fn (ServiceData $s) => $settings->modeOf($s->name) === PreviewSettings::INCLUDE));
+        $include = array_values(array_filter($services, fn (ServiceData $s) => $settings->modeOf($s->name) === PreviewSettings::INCLUDE && ! in_array($s->name, $omitted, true)));
         $shared = array_values(array_map(fn (ServiceData $s) => $s->name, array_filter($services, fn (ServiceData $s) => $settings->modeOf($s->name) === PreviewSettings::SHARE)));
         $serverId = $preview->is_fork ? $this->forkServer($settings) : ($settings->server_id ?? $this->defaultServer($services)
             ?? throw ValidationException::withMessages(['server_id' => 'Pick the server previews run on (project → Previews → Settings).']));
@@ -565,6 +594,11 @@ final class PreviewLifecycle
         }
 
         $preview->forceFill(['databases' => $databases])->save();
+
+        if ($file !== null) {
+            $this->applyFile($preview, $settings, $file, $serverId, $services);
+        }
+
         $this->route($preview, $settings);
 
         // A database that already exists (an engine created synchronously) goes on now.
@@ -576,20 +610,25 @@ final class PreviewLifecycle
         }
     }
 
-    /** Hosts under the preview domain, behind basic auth unless the project made previews public. */
-    private function route(Preview $preview, PreviewSettings $settings): void
+    /**
+     * Hosts under the preview domain, behind basic auth unless the project made previews public ($only: the sites a
+     * redeploy added, the others keep theirs).
+     *
+     * @param  ?array<string, string>  $only
+     */
+    private function route(Preview $preview, PreviewSettings $settings, ?array $only = null): void
     {
         $domain = $this->domains->settings()
             ?? throw ValidationException::withMessages(['domain' => 'This Falak has no preview domain (Settings → Previews).']);
         $project = $this->projects->find($preview->project_id);
-        $urls = [];
+        $urls = $only !== null ? ($preview->urls ?? []) : [];
         $basic = $settings->access === 'basic';
 
         if ($basic && $preview->basic_password === null) {
             $preview->forceFill(['basic_username' => 'preview', 'basic_password' => Str::password(24, symbols: false)])->save();
         }
 
-        foreach ($preview->sites ?? [] as $service => $siteId) {
+        foreach ($only ?? $preview->sites ?? [] as $service => $siteId) {
             $host = PreviewHosts::host($settings->domain_pattern, $preview->number, $service, $project?->name ?? '', $preview->project_id, $domain->domain, fn (string $h) => $this->domains->available($h));
             $this->domains->route($siteId, $host);
             $urls[$service] = "https://{$host}";
@@ -634,6 +673,14 @@ final class PreviewLifecycle
             return;
         }
 
+        try {
+            $this->refreshFile($preview);
+        } catch (ValidationException $e) {
+            $this->fail($preview, self::message($e));
+
+            return;
+        }
+
         $deployments = [];
         $preview->forceFill(['status' => Preview::DEPLOYING, 'status_message' => null])->save();
 
@@ -650,6 +697,77 @@ final class PreviewLifecycle
 
         $preview->forceFill(['deployments' => $deployments, 'status' => $deployments === [] ? Preview::READY : Preview::DEPLOYING])->save();
         $this->notifier->update($preview);
+    }
+
+    /**
+     * The falak.yaml a preview is built from (null: the project follows none): the pull request head's, a fork's
+     * base branch's (its head commit when the provider says, so a new base commit rebuilds it).
+     *
+     * @throws ValidationException
+     */
+    private function configFile(Preview $preview, PreviewSettings $settings): ?PreviewFile
+    {
+        $ref = $preview->head_sha;
+
+        if ($preview->is_fork) {
+            try {
+                $ref = $this->sourceControl->latestCommit($preview->connection_id, $preview->repository, $preview->base_branch)?->sha ?? $preview->base_branch;
+            } catch (SourceControlException) {
+                $ref = $preview->base_branch;
+            }
+        }
+
+        return $this->config->prepare($preview->project_id, (string) $settings->base_environment_id, $ref);
+    }
+
+    /**
+     * Apply the file to the preview environment; units it creates join the preview's sites.
+     *
+     * @param  list<ServiceData>  $services  the base environment's services
+     * @return array<string, string> the units created: name => site id
+     *
+     * @throws ValidationException
+     */
+    private function applyFile(Preview $preview, PreviewSettings $settings, PreviewFile $file, string $serverId, array $services): array
+    {
+        // Shared and omitted services are not the preview's to configure.
+        $without = [...$file->omitted, ...array_map(fn (ServiceData $s) => $s->name, array_filter($services, fn (ServiceData $s) => $settings->modeOf($s->name) !== PreviewSettings::INCLUDE))];
+        $branch = $preview->is_fork || $preview->head_branch === '' ? $preview->base_branch : $preview->head_branch;
+        $result = $this->config->apply($file, (string) $preview->environment_id, $serverId, $branch, $preview->head_sha, $preview->is_fork, array_values(array_unique($without)), $preview->approved_by);
+
+        $preview->forceFill(['sites' => [...($preview->sites ?? []), ...$result['sites']], 'config_ref' => $file->ref])->save();
+
+        return $result['sites'];
+    }
+
+    /**
+     * Before a redeploy: the file at the new head (a fork: the base branch's newest) is applied when it is not the one
+     * the preview was built from; units it adds are routed.
+     *
+     * @throws ValidationException
+     */
+    private function refreshFile(Preview $preview): void
+    {
+        $settings = PreviewSettings::query()->where('project_id', $preview->project_id)->first();
+
+        if ($settings === null || $settings->base_environment_id === null || $preview->environment_id === null) {
+            return;
+        }
+
+        $file = $this->configFile($preview, $settings);
+
+        if ($file === null || $file->ref === $preview->config_ref) {
+            return;
+        }
+
+        $services = $this->projects->servicesIn($settings->base_environment_id);
+        $serverId = $preview->is_fork ? $this->forkServer($settings) : ($settings->server_id ?? $this->defaultServer($services)
+            ?? throw ValidationException::withMessages(['server_id' => 'Pick the server previews run on (project → Previews → Settings).']));
+        $created = $this->applyFile($preview, $settings, $file, $serverId, $services);
+
+        if ($created !== []) {
+            $this->route($preview, $settings, $created);
+        }
     }
 
     /**
