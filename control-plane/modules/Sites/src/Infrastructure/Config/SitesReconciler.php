@@ -352,7 +352,7 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             $this->update($site, $scope, $ctx, array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop), $desired);
             $paths = array_keys($desired);
             $this->managed->record($scope, $ctx, $unit, 'site', $siteId, $paths, merge: true);
-            $this->managed->forgetPaths('site', $siteId, [...self::prefixes(), ...$this->servicePaths($siteId)], $paths);
+            $this->managed->forgetPaths('site', $siteId, [...self::prefixes(self::typeOf($site->runtime)), ...$this->servicePaths($siteId)], $paths);
         }
     }
 
@@ -811,13 +811,15 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
     }
 
     /**
-     * Ownership prefixes this reconciler records under.
+     * Ownership prefixes this reconciler records under for a unit type (compose services' fields aside).
      *
      * @return list<string>
      */
-    public static function prefixes(): array
+    public static function prefixes(string $type = 'app'): array
     {
-        return array_map(fn (string $f) => '/'.str_replace('.', '/', $f), self::FIELDS);
+        $fields = array_filter([...self::FIELDS, 'files', 'profiles'], fn (string $f) => in_array($type, explode('|', self::TYPES[$f] ?? 'app'), true));
+
+        return array_values(array_map(fn (string $f) => '/'.str_replace('.', '/', $f), $fields));
     }
 
     /**
