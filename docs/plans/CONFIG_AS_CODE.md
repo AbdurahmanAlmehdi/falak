@@ -748,6 +748,85 @@ approval or planning → `cancelled`.
 The file holds `units` (today's state, `Reconcilable::current`), the environment with its `branch` and `servers`,
 and `previews`; defaults are left out. Exporting then planning gives an empty plan.
 
+**Runs over the API [decision]** (phase 1, pinned for the CLI): the run's `status` alone says whether it is finished
+(`applied`, `failed`, `cancelled`, `refused`). `deployments[]` entries are `{unit, site_id, deployment_id, status,
+deployment_status, error}` with `status` one of `pending`, `deploying`, `released` (the release went live and phase B
+was applied), `skipped` (not deployed: no deploy source, or a unit the file removed), `failed`; `deployment_status` is
+the deployment's own status. A failed run carries `error_code`: `invalid` (see `errors`), `unreadable` (the file couldn't
+be read at the commit), `apply_failed` (a phase failed; phase A failures deploy nothing), `deployment_failed` (a unit's
+deployment failed: its entry has `status: failed`; the CLI exits 3). `errors` and `warnings` are split by severity.
+`POST …/config/runs` answers `422` with the issues (and the stored `run`) for an invalid file.
+
+### Phase 1 decisions (control plane)
+
+Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decision]** on top of the sections above.
+
+- **[decision] The file manages only what it sets.** An absent field keeps today's value (no reset to the schema's
+  default): `laravel.scheduler` absent keeps the Laravel preset's scheduler, `deploy.health` absent keeps the site's
+  health check. Removing a field from the file makes it editable again; it is not reset. The schema's "default"
+  descriptions are what a new unit gets.
+- **[decision] Hooks merge into the deploy script's sections.** Each `deploy.hooks.<section>` the file sets replaces only
+  that section of today's `deploy_script` (`before_fetch`, `before_activate`, `after_activate`, `after_restart`); absent
+  hooks keep today's section (e.g. the Laravel preset's `optimize`, `storage:link` and leader-only `migrate`), and the
+  macros stay. Ownership is per section (`/deploy/hooks/before_activate`).
+- **[decision] A file without `environments`** binds the project's production environment to the repository's default
+  branch: a push there applies it to production, and plans for production work as if the file said
+  `environments: {<production slug>: {branch: <default branch>}}`. Other environments then have no file.
+- **[decision] Servers attached to a project** (`name.server`): the servers hosting any of the project's sites, in any
+  environment. A new project's first service is created in the dashboard; the file can then use its servers.
+- **[decision] Phase 1 supports `app` units** (sections `units.*(app)…`). Everything no reconciler owns yet (database,
+  redis, compose and function units, volumes, mounts, previews…) is a `value.unsupported` **warning** and is ignored,
+  so a file written for later phases still applies its app units.
+- **[decision] Phase B runs when the unit's release went live** (`ReleaseActivated`: every server activated and the
+  health checks passed), not inside the activate step: a failed deployment never gets the new workers, schedules,
+  domains or edge rules. Units with changes that are not deployed (no deploy source, or removed from the file) get
+  phase B right after phase A.
+- **[decision] Which units deploy:** those with an actionable change in the plan, plus (on a push) the units whose
+  `root` holds a file the push changed. The changed files come from the push payload (`commits[].added|modified|
+  removed`); when it can't list them (Bitbucket, a push of 20 commits or more, a new branch) every unit counts as changed.
+- **[decision] A rollback** (manual or the release watch's) re-applies the config saved on the release it returns to,
+  as a `rollback` run (both phases, no deployment). A deployment Config didn't start (dashboard, API) saves the last
+  applied run's unit config on its release.
+- **[decision] Pull request plans are not runs:** the plan goes to the PR comment and the `falak/config` status only
+  (`trigger: pr` stays reserved). `config_pull_requests` (`project_id`, `number`, `comment_id`, `head_sha`, `state`)
+  keeps the one comment per pull request; a head already planned isn't planned again.
+- **[decision] Plain git servers** (no provider API) can't be a config source yet: connecting one is refused, and a
+  push whose file can't be read records a failed run. (The plan's builder-side read is a later step.)
+- **[decision] An environment key the project doesn't have** fails that environment's run ("create it in the
+  dashboard") until the Projects reconciler (phase 3) creates environments.
+- **[decision] Dashboard routes** live under `/projects/{p}/settings/config` (`settings` is a reserved environment
+  slug, so they can't collide with the canvas's `/projects/{p}/{environment}`).
+- **[decision] Paths in `config_ownership`** for whole resources are the resource's pointer (`/workers/queue`,
+  `/domains/shop.example.com`); for fields of the unit's site, one row per field (`/deploy/strategy`, `/env/APP_KEY`).
+  A disabled source keeps its rows but `ManagedResources::managed()` answers nothing, so every field is editable.
+- **[decision] Env:** keys merge into today's variables (a new environment version); a key dropped from the file stays,
+  no longer managed. Integers and booleans are stored as text. A stored secret value never appears in a plan (`••••`),
+  and `export` leaves secret-looking literal values out (it never writes values, nor references the store doesn't
+  have), so export → plan stays empty. `expose` is one field (the whole list).
+- **[decision] Units the file adds** are created through `SiteFactory` (Sites' `CreateSite`, the same path as the
+  dashboard), so the framework preset applies: a Laravel unit gets a generated `APP_KEY` (and `APP_NAME`, `APP_URL`)
+  unless the file sets them; `falak init` relies on it and leaves `APP_KEY` out. A new unit needs the environment's
+  `branch` and servers (the unit's, else the environment's); `framework` defaults from the runtime. The site is named
+  after the unit key (`<unit>-<env>` when taken in the organization).
+- **[decision] Servers** compare equal when the leader (first) and the set are the same; member order doesn't matter.
+- **[decision] Limits:** a managed limit locks the whole site limits editor in the dashboard (it saves every field at
+  once); the server refuses (422) only edits that change a managed field.
+- **[decision] Guards** refuse (422, on the input key) only an edit that changes a managed value; resubmitting a form with
+  the managed values unchanged is accepted.
+- **[decision] Processes:** a worker the dashboard created without a name reads as `worker-<n>`; a file using that key
+  adopts the row and names it. Daemon and schedule names the file uses are refused (422) when created in the
+  dashboard. Worker and daemon `servers` must be among the unit's servers (`name.server`). Env values never appear in a
+  plan (`••••`); phase B re-plans right before applying, so the values come from the file then.
+- **[decision] Edge:** a listed domain's `primary`, `www` and `tls` are always managed (their defaults: the first
+  domain, `none`, `auto`); `dns_credential`/`certificate` only with their TLS mode; Cloudflare options only when set.
+  Only the site's own routes are managed (compose services' routes and `mounts` come with phase 3). A host already used
+  outside the environment is `value.conflict`.
+- **[decision] Defaults on create** are the module's (e.g. a daemon's `stop_timeout` is 30s in Processes; the schema
+  description's 10s is corrected at release).
+- **[decision] CLI compatibility** (from the CLI lane): the project comes from `-p` (id or name through `GET
+  /projects`), `FALAK_PROJECT`, or `.falak/project.json` `{"project", "name", "url"}`; `falak validate` also calls the
+  validate endpoint (stage 4) when logged in and only warns when it is unreachable. No approve command until phase 4.
+
 ### CLI (`agent/internal/cli`)
 
 | Command | Flags | Does |
