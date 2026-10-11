@@ -6,6 +6,7 @@ import {
     Field,
     IconButton,
     Input,
+    ManagedBadge,
     Menu,
     RelativeTime,
     Section,
@@ -715,6 +716,7 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                 </Tag>
                                             )}
                                             {domain.wildcard && <Tag>wildcard</Tag>}
+                                            <ManagedBadge config={domain.managed} />
                                             {domain.cloudflare && <CloudflareTag cloudflare={domain.cloudflare} />}
                                             {domain.cloudflare?.zone_rate_limit && (
                                                 <Tooltip content={<ZoneRateLimitText rule={domain.cloudflare.zone_rate_limit} />}>
@@ -758,8 +760,12 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                 ...(!domain.wildcard
                                                     ? [{ label: 'Check DNS & TLS', icon: <ShieldCheck />, onSelect: () => setChecking(domain) }]
                                                     : []),
-                                                { label: 'Edit TLS & redirect', onSelect: () => setDialog({ domain }) },
-                                                ...(domain.cloudflare
+                                                {
+                                                    label: 'Edit TLS & redirect',
+                                                    disabled: Boolean(domain.managed),
+                                                    onSelect: () => setDialog({ domain }),
+                                                },
+                                                ...(domain.cloudflare && !domain.managed
                                                     ? [
                                                           {
                                                               label: domain.cloudflare.proxied
@@ -778,7 +784,7 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                           },
                                                       ]
                                                     : []),
-                                                ...(domain.cloudflare
+                                                ...(domain.cloudflare && !domain.managed
                                                     ? (['standard', 'everything', 'bypass'] as const).map((mode) => ({
                                                           label: `Cache: ${CACHE_LABELS[mode]}${domain.cloudflare!.cache === mode ? ' ✓' : ''}`,
                                                           disabled: domain.cloudflare!.cache === mode,
@@ -815,7 +821,7 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                           },
                                                       ]
                                                     : []),
-                                                ...(!domain.is_primary
+                                                ...(!domain.is_primary && !domain.managed
                                                     ? [
                                                           {
                                                               label: 'Make primary',
@@ -836,6 +842,7 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                     label: 'Remove',
                                                     icon: <Trash2 />,
                                                     danger: true,
+                                                    disabled: Boolean(domain.managed),
                                                     onSelect: () =>
                                                         window.confirm(`Remove ${domain.name}? It stops being served immediately.`) &&
                                                         void mutate(
@@ -1239,7 +1246,7 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
                         {redirects.map((item) => (
                             <Row
                                 key={item.id}
-                                manage={manage}
+                                manage={manage && !item.managed}
                                 label={`Delete redirect ${item.from}`}
                                 onDelete={() => remove(`/sites/${siteId}/redirects/${item.id}`, `Redirect ${item.from}`)}
                             >
@@ -1247,6 +1254,7 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
                                 <span className="text-fg-faint text-xs">→</span>
                                 <code className="text-fg-muted min-w-0 flex-1 truncate font-mono text-xs">{item.to}</code>
                                 <Tag mono>{item.status}</Tag>
+                                <ManagedBadge config={item.managed} />
                             </Row>
                         ))}
                     </ul>
@@ -1382,12 +1390,13 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
                         {headers.map((item) => (
                             <Row
                                 key={item.id}
-                                manage={manage}
+                                manage={manage && !item.managed}
                                 label={`Delete header ${item.name}`}
                                 onDelete={() => remove(`/sites/${siteId}/headers/${item.id}`, `Header ${item.name}`)}
                             >
                                 <code className="text-fg font-mono text-xs font-medium">{item.name}</code>
                                 <code className="text-fg-muted min-w-0 flex-1 truncate font-mono text-xs">{item.value}</code>
+                                <ManagedBadge config={item.managed} />
                             </Row>
                         ))}
                     </ul>
