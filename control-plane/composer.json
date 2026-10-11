@@ -66,6 +66,7 @@
             "Falak\\Limits\\": "modules/Limits/src/",
             "Falak\\Security\\": "modules/Security/src/",
             "Falak\\Previews\\": "modules/Previews/src/",
+            "Falak\\Config\\": "modules/Config/src/",
             "Falak\\Identity\\Database\\Factories\\": "modules/Identity/database/factories/",
             "Falak\\Providers\\Database\\Factories\\": "modules/Providers/database/factories/",
             "Falak\\Fleet\\Database\\Factories\\": "modules/Fleet/database/factories/",
@@ -101,7 +102,8 @@
             "Falak\\Volumes\\Tests\\": "modules/Volumes/tests/",
             "Falak\\Limits\\Tests\\": "modules/Limits/tests/",
             "Falak\\Security\\Tests\\": "modules/Security/tests/",
-            "Falak\\Previews\\Tests\\": "modules/Previews/tests/"
+            "Falak\\Previews\\Tests\\": "modules/Previews/tests/",
+            "Falak\\Config\\Tests\\": "modules/Config/tests/"
         }
     },
     "scripts": {

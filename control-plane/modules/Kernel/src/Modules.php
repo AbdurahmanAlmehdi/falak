@@ -37,6 +37,7 @@ final class Modules
         'Previews',
         'Terminal',
         'Recovery',
+        'Config',
     ];
 
     /** Namespaces that are private to a module. */
