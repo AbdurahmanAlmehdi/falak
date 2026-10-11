@@ -18,6 +18,12 @@ const (
 	PathConfigRuns     = "/api/v1/projects/{project}/config/runs"     // POST {file|commit, format, environment, allow_destroy} → 201 {data:ConfigRun}
 	PathConfigExport   = "/api/v1/projects/{project}/config/export"   // GET ?environment=&format= → {data:ConfigExport}
 	PathConfigRun      = "/api/v1/config/runs/{run}"                  // GET → {data:ConfigRun}
+
+	// Phase 4: approvals, drift, unmanaged resources.
+	PathConfigRunApprove = "/api/v1/config/runs/{run}/approve"           // POST {comment?} → {data:ConfigRun}; 403 blocked; 409 not waiting, or plan changed {message, data:ConfigRun}
+	PathConfigRunReject  = "/api/v1/config/runs/{run}/reject"            // POST {comment?} → {data:ConfigRun} (cancelled, rejected); 409 not waiting
+	PathConfigDrift      = "/api/v1/projects/{project}/config/drift"     // GET ?environment= ; POST {environment} checks now → {data:ConfigDrift}
+	PathConfigUnmanaged  = "/api/v1/projects/{project}/config/unmanaged" // GET ?environment= → {data:[UnmanagedResource]}
 )
 
 // Project is one project of GET /projects.
@@ -86,14 +92,17 @@ type ConfigValidation struct {
 	Raw          json.RawMessage `json:"-"`
 }
 
-// ConfigPlanResult is POST …/config/plan.
+// ConfigPlanResult is POST …/config/plan. EnvironmentExists is false (and PreviewOnly true) for an environment the
+// file declares and the project doesn't have yet: a push to production's branch creates it.
 type ConfigPlanResult struct {
-	Environment string          `json:"environment"`
-	Commit      *string         `json:"commit"`
-	Resolved    json.RawMessage `json:"resolved"`
-	Plan        ConfigPlan      `json:"plan"`
-	Warnings    []ConfigIssue   `json:"warnings"`
-	Raw         json.RawMessage `json:"-"`
+	Environment       string          `json:"environment"`
+	EnvironmentExists *bool           `json:"environment_exists"`
+	PreviewOnly       bool            `json:"preview_only"`
+	Commit            *string         `json:"commit"`
+	Resolved          json.RawMessage `json:"resolved"`
+	Plan              ConfigPlan      `json:"plan"`
+	Warnings          []ConfigIssue   `json:"warnings"`
+	Raw               json.RawMessage `json:"-"`
 }
 
 // ConfigRunDeployment is one unit a run deploys. Status is the run's entry status (pending, deploying, released,
@@ -151,8 +160,68 @@ type ConfigRun struct {
 	CreatedAt    string                `json:"created_at,omitempty"`
 	FinishedAt   *string               `json:"finished_at"`
 	URL          string                `json:"url,omitempty"`
+	ErrorCode    *string               `json:"error_code,omitempty"`
+	Branch       *string               `json:"branch,omitempty"`
+	Approval     *ConfigApproval       `json:"approval"`
+	CancelReason *string               `json:"cancel_reason"`
 	Raw          json.RawMessage       `json:"-"`
 }
+
+// ConfigApproval is a run's approval block (null for a run that never needed one).
+type ConfigApproval struct {
+	Required      bool        `json:"required"`
+	Risky         []RiskyItem `json:"risky"`
+	ExpiresAt     *string     `json:"expires_at"`
+	ApprovedBy    *string     `json:"approved_by"`
+	ApprovedAt    *string     `json:"approved_at"`
+	RejectedBy    *string     `json:"rejected_by"`
+	RejectedAt    *string     `json:"rejected_at"`
+	Comment       *string     `json:"comment"`
+	CanApprove    bool        `json:"can_approve"`
+	BlockedReason *string     `json:"blocked_reason"`
+}
+
+// RiskyItem is one risky change an approval covers.
+type RiskyItem struct {
+	Path   string `json:"path"`
+	Rule   string `json:"rule"`
+	Reason string `json:"reason"`
+}
+
+// ConfigDrift is GET/POST …/config/drift.
+type ConfigDrift struct {
+	Environment    string          `json:"environment"`
+	Status         string          `json:"status"` // in_sync, drifted, unknown
+	CheckedAt      *string         `json:"checked_at"`
+	Since          *string         `json:"since"`
+	BaselineRunID  *string         `json:"baseline_run_id"`
+	BaselineCommit *string         `json:"baseline_commit"`
+	Signature      *string         `json:"signature"`
+	Changes        []ConfigChange  `json:"changes"`
+	Raw            json.RawMessage `json:"-"`
+}
+
+// UnmanagedResource is a resource a run detached.
+type UnmanagedResource struct {
+	ID           string  `json:"id"`
+	Environment  string  `json:"environment"`
+	Unit         *string `json:"unit"`
+	ResourceType string  `json:"resource_type"`
+	ResourceID   string  `json:"resource_id"`
+	Label        string  `json:"label"`
+	Reason       string  `json:"reason"` // removed_from_file, environment_released
+	RunID        *string `json:"run_id"`
+	DetachedAt   string  `json:"detached_at"`
+}
+
+// PlanChangedError is approve's 409 when the fresh plan has risky changes the approver didn't see; Run is the run
+// with the new plan, still awaiting approval.
+type PlanChangedError struct {
+	Message string
+	Run     ConfigRun
+}
+
+func (e *PlanChangedError) Error() string { return e.Message }
 
 // Config run statuses.
 const (
@@ -277,4 +346,78 @@ func (c *Client) ConfigExport(ctx context.Context, project, environment, format 
 	raw, err := c.rawData(ctx, http.MethodGet, Path(PathConfigExport, "project", project), q, nil, &x)
 	x.Raw = raw
 	return x, err
+}
+
+// ConfigRuns lists a project's runs, newest first (environment "" = all).
+func (c *Client) ConfigRuns(ctx context.Context, project, environment string, limit int) ([]ConfigRun, error) {
+	q := url.Values{}
+	if environment != "" {
+		q.Set("environment", environment)
+	}
+	var runs []ConfigRun
+	_, err := c.rawData(ctx, http.MethodGet, Path(PathConfigRuns, "project", project), q, nil, &runs)
+	if limit > 0 && len(runs) > limit {
+		runs = runs[:limit]
+	}
+	return runs, err
+}
+
+func (c *Client) runDecision(ctx context.Context, path, id, comment string) (ConfigRun, error) {
+	body := map[string]string{}
+	if comment != "" {
+		body["comment"] = comment
+	}
+	var run ConfigRun
+	raw, err := c.rawData(ctx, http.MethodPost, Path(path, "run", id), nil, body, &run)
+	run.Raw = raw
+	var e *Error
+	if errors.As(err, &e) && e.Status == http.StatusConflict {
+		var b struct {
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(e.Body, &b) == nil && len(b.Data) > 0 && string(b.Data) != "null" {
+			pc := &PlanChangedError{Message: b.Message}
+			if json.Unmarshal(b.Data, &pc.Run) == nil {
+				pc.Run.Raw = b.Data
+				return run, pc
+			}
+		}
+	}
+	return run, err
+}
+
+// ConfigApprove approves a run awaiting approval (PlanChangedError when its plan changed).
+func (c *Client) ConfigApprove(ctx context.Context, id, comment string) (ConfigRun, error) {
+	return c.runDecision(ctx, PathConfigRunApprove, id, comment)
+}
+
+// ConfigReject rejects a run awaiting approval (it ends cancelled, cancel_reason rejected).
+func (c *Client) ConfigReject(ctx context.Context, id, comment string) (ConfigRun, error) {
+	return c.runDecision(ctx, PathConfigRunReject, id, comment)
+}
+
+// ConfigDrift reads an environment's drift; check asks for a fresh check (POST).
+func (c *Client) ConfigDrift(ctx context.Context, project, environment string, check bool) (ConfigDrift, error) {
+	var d ConfigDrift
+	var raw json.RawMessage
+	var err error
+	if check {
+		raw, err = c.rawData(ctx, http.MethodPost, Path(PathConfigDrift, "project", project), nil, map[string]string{"environment": environment}, &d)
+	} else {
+		raw, err = c.rawData(ctx, http.MethodGet, Path(PathConfigDrift, "project", project), url.Values{"environment": {environment}}, nil, &d)
+	}
+	d.Raw = raw
+	return d, err
+}
+
+// ConfigUnmanaged lists what runs detached (environment "" = all).
+func (c *Client) ConfigUnmanaged(ctx context.Context, project, environment string) ([]UnmanagedResource, error) {
+	q := url.Values{}
+	if environment != "" {
+		q.Set("environment", environment)
+	}
+	var list []UnmanagedResource
+	_, err := c.rawData(ctx, http.MethodGet, Path(PathConfigUnmanaged, "project", project), q, nil, &list)
+	return list, err
 }
