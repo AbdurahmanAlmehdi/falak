@@ -21,6 +21,7 @@ use Falak\Deployments\Application\Listeners\RedeployOnPortChange;
 use Falak\Deployments\Application\Listeners\RestoreLostSecrets;
 use Falak\Deployments\Application\Listeners\ResumeWaitingDeployments;
 use Falak\Deployments\Application\Listeners\WatchLiveReleases;
+use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Deployments\Contracts\DeploymentBadges;
 use Falak\Deployments\Contracts\DeploymentDirectory;
 use Falak\Deployments\Contracts\DeploymentTrigger;
@@ -36,6 +37,7 @@ use Falak\Deployments\Http\Channels\DeploymentChannel;
 use Falak\Deployments\Http\Channels\SiteDeploymentsChannel;
 use Falak\Deployments\Infrastructure\ActionDeploymentTrigger;
 use Falak\Deployments\Infrastructure\DeploymentSiteFields;
+use Falak\Deployments\Infrastructure\EloquentConfigReleases;
 use Falak\Deployments\Infrastructure\EloquentDeploymentBadges;
 use Falak\Deployments\Infrastructure\EloquentDeploymentDirectory;
 use Falak\Deployments\Infrastructure\EloquentLiveReleases;
@@ -83,6 +85,7 @@ class DeploymentsServiceProvider extends ModuleServiceProvider
      */
     public array $bindings = [
         DeploymentTrigger::class => ActionDeploymentTrigger::class,
+        ConfigReleases::class => EloquentConfigReleases::class,
     ];
 
     public function register(): void

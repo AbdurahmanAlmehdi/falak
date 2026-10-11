@@ -13,6 +13,7 @@ final class ReleaseActivated
 
     /**
      * @param  list<string>  $serverIds
+     * @param  ?string  $trigger  the deployment's trigger (manual, push, rollback, …)
      */
     public function __construct(
         public string $releaseId,
@@ -22,5 +23,6 @@ final class ReleaseActivated
         public ?string $commit,
         public ?string $previousReleaseId,
         public array $serverIds,
+        public ?string $trigger = null,
     ) {}
 }
