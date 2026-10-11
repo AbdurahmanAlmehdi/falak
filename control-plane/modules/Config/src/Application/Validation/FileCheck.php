@@ -24,8 +24,9 @@ final class FileCheck
     /**
      * @param  ?string  $environment  null: stages 1-3 for every environment of the file, no stage 4
      * @param  ?\Closure(array<string, mixed>): ConfigScope  $scope  builds the stage 4 scope from the resolved file
+     * @param  ?array{slug: string, branch: ?string}  $implicit  the environment a file without `environments` binds (ImplicitEnvironment)
      */
-    public function check(string $raw, string $format = 'yaml', ?string $environment = null, ?\Closure $scope = null): Validation
+    public function check(string $raw, string $format = 'yaml', ?string $environment = null, ?\Closure $scope = null, ?array $implicit = null): Validation
     {
         $file = $this->reader->read($raw, $format);
 
@@ -37,7 +38,13 @@ final class FileCheck
         $errors = $this->schema->validate($document, $file);
 
         if ($errors !== [] || ! $document instanceof stdClass) {
-            return new Validation($file, [], null, $errors !== [] ? $errors : [ConfigIssue::error('schema', '', 'The file must be a mapping.')], []);
+            $names = $document instanceof stdClass && ($document->environments ?? null) instanceof stdClass ? array_map('strval', array_keys((array) $document->environments)) : [];
+
+            return new Validation($file, $names, null, $errors !== [] ? $errors : [ConfigIssue::error('schema', '', 'The file must be a mapping.')], []);
+        }
+
+        if ($implicit !== null && (! isset($document->environments) || ! $document->environments instanceof stdClass || (array) $document->environments === [])) {
+            $document->environments = (object) [$implicit['slug'] => (object) array_filter(['branch' => $implicit['branch']], fn ($v) => $v !== null)];
         }
 
         $environments = array_map('strval', array_keys((array) ($document->environments ?? new stdClass)));

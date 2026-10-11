@@ -4,6 +4,7 @@ namespace Falak\Config\Application\Listeners;
 
 use Falak\Config\Application\Reading\ConfigReader;
 use Falak\Config\Application\Runs\FileFetcher;
+use Falak\Config\Application\Runs\ImplicitEnvironment;
 use Falak\Config\Application\Runs\RunEngine;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
@@ -26,6 +27,7 @@ final class RunOnPush implements ShouldQueue
         private readonly ConfigReader $reader,
         private readonly RunEngine $engine,
         private readonly ProjectDirectory $projects,
+        private readonly ImplicitEnvironment $implicit,
     ) {}
 
     public function handle(PushReceived $event): void
@@ -58,7 +60,10 @@ final class RunOnPush implements ShouldQueue
         $file = $this->reader->read($raw, $format);
         $bound = [];
 
-        if ($file->ok() && $file->document instanceof stdClass && ($file->document->environments ?? null) instanceof stdClass) {
+        if ($file->ok() && ImplicitEnvironment::applies($file->document)) {
+            $production = $this->implicit->environmentFor($source, $event->branch);
+            $bound = $production !== null ? [$production->slug] : [];
+        } elseif ($file->ok() && $file->document instanceof stdClass && ($file->document->environments ?? null) instanceof stdClass) {
             foreach ((array) $file->document->environments as $slug => $env) {
                 if ($env instanceof stdClass && ($env->branch ?? null) === $event->branch) {
                     $bound[] = (string) $slug;

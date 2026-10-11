@@ -36,6 +36,7 @@ final class RunEngine
         private readonly ConfigReleases $releases,
         private readonly AuditLog $audit,
         private readonly ProjectDirectory $projects,
+        private readonly ImplicitEnvironment $implicit,
     ) {}
 
     /**
@@ -78,7 +79,7 @@ final class RunEngine
 
         try {
             $validation = $this->check->check($raw, $format, $environment->slug,
-                fn (array $resolved) => $this->scopes->make($environment, $source, $resolved, $commit, $requestedBy));
+                fn (array $resolved) => $this->scopes->make($environment, $source, $resolved, $commit, $requestedBy), $this->implicit->forCheck($source, $environment));
             $issues = array_map(fn (ConfigIssue $i) => $i->toArray(), [...$validation->errors, ...$validation->warnings]);
 
             if (! $validation->valid() || $validation->resolved === null) {
@@ -177,10 +178,18 @@ final class RunEngine
         $this->audit->record('config.run_applied', 'project', $run->project_id, ['run_id' => $run->id, 'environment' => $run->environment, 'commit' => $run->commit,
             'summary' => $run->plan['summary'] ?? []], $run->organization_id, $run->requested_by);
 
-        // Units that are not deployed (no deploy source, or a deployment that failed to start) get phase B now.
-        foreach ($entries as $entry) {
-            if ($entry['status'] === 'skipped') {
-                $this->phaseB($run, $entry['unit'], null, null);
+        // Units that are not deployed (no deploy source, a deployment that failed to start, or a unit the file
+        // removed) get phase B now.
+        $deploying = array_column(array_filter($entries, fn (array $e) => $e['status'] === 'deploying'), 'unit');
+        $units = array_unique(array_filter(array_map(fn ($c) => $c->unit, $run->changes()->actionable())));
+
+        foreach ($units as $unit) {
+            if (! in_array($unit, $deploying, true)) {
+                try {
+                    $this->phaseB($run, (string) $unit, null, null);
+                } catch (Throwable $e) {
+                    return $this->finish($run, RunStatus::Failed, "Phase B of {$unit} failed: ".self::message($e));
+                }
             }
         }
 

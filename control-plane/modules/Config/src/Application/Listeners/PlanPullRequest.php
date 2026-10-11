@@ -5,6 +5,7 @@ namespace Falak\Config\Application\Listeners;
 use Falak\Config\Application\Planning\Plan;
 use Falak\Config\Application\Reading\ConfigReader;
 use Falak\Config\Application\Runs\FileFetcher;
+use Falak\Config\Application\Runs\ImplicitEnvironment;
 use Falak\Config\Application\Runs\PlanFile;
 use Falak\Config\Application\Validation\FileCheck;
 use Falak\Config\Application\Validation\Validation;
@@ -40,6 +41,7 @@ final class PlanPullRequest implements ShouldQueue
         private readonly ProjectDirectory $projects,
         private readonly SourceControlGateway $gateway,
         private readonly FileCheck $check,
+        private readonly ImplicitEnvironment $implicit,
     ) {}
 
     public function opened(PullRequestOpened $event): void
@@ -148,6 +150,12 @@ final class PlanPullRequest implements ShouldQueue
      */
     private function environmentsFor(ConfigSource $source, ?stdClass $document, string $branch): array
     {
+        if (ImplicitEnvironment::applies($document)) {
+            $production = $this->implicit->environmentFor($source, $branch);
+
+            return $production !== null ? [$production] : [];
+        }
+
         $slugs = [];
 
         foreach ((array) ($document?->environments ?? []) as $slug => $env) {

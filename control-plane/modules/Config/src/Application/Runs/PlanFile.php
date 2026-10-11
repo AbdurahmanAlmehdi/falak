@@ -19,6 +19,7 @@ final class PlanFile
         private readonly FileCheck $check,
         private readonly Planner $planner,
         private readonly ScopeFactory $scopes,
+        private readonly ImplicitEnvironment $implicit,
     ) {}
 
     /**
@@ -27,7 +28,7 @@ final class PlanFile
     public function __invoke(ConfigSource $source, EnvironmentData $environment, string $raw, string $format, ?string $commit = null, ?string $actorId = null): array
     {
         $validation = $this->check->check($raw, $format, $environment->slug,
-            fn (array $resolved) => $this->scopes->make($environment, $source, $resolved, $commit, $actorId));
+            fn (array $resolved) => $this->scopes->make($environment, $source, $resolved, $commit, $actorId), $this->implicit->forCheck($source, $environment));
 
         if (! $validation->valid() || $validation->resolved === null) {
             return [$validation, null];

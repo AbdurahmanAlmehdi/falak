@@ -126,8 +126,20 @@ final class FakeSourceControlGateway implements SourceControlGateway
             throw NoApi::forConnection($connection->name);
         }
 
+        $this->fileReads[] = ['ref' => $ref, 'path' => trim($path, '/')];
+
+        if (isset($this->filesByRef[$ref]) && array_key_exists(trim($path, '/'), $this->filesByRef[$ref])) {
+            return $this->filesByRef[$ref][trim($path, '/')];
+        }
+
         return $this->files[trim($path, '/')] ?? null;
     }
+
+    /** @var array<string, array<string, ?string>> files of one ref (branch or commit) by path, over */
+    public array $filesByRef = [];
+
+    /** @var list<array{ref: string, path: string}> every file() read */
+    public array $fileReads = [];
 
     /** @var list<string> paths exists() answers false for (e.g. to simulate an unlisted folder) */
     public array $existsCalls = [];
