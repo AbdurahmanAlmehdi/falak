@@ -1,5 +1,21 @@
 import { DomainPicker, type DomainChoice } from '@/components/domain-picker';
-import { Button, Callout, Field, IconButton, Input, RelativeTime, Section, Segmented, Select, SkeletonRows, Tag, toast } from '@/components/falak';
+import {
+    Button,
+    Callout,
+    Field,
+    IconButton,
+    Input,
+    ManagedBadge,
+    RelativeTime,
+    Section,
+    Segmented,
+    Select,
+    SkeletonRows,
+    Tag,
+    managedCovers,
+    pointer,
+    toast,
+} from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { type ComposeServiceChoice, type ServiceTabProps } from '@/lib/registry';
@@ -146,6 +162,10 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
     if (!data) return error ? <Callout tone="danger">{error}</Callout> : <SkeletonRows rows={8} />;
 
     const canUpdate = data.can.update;
+    // Fields falak.yaml manages are read-only (the server refuses changing them).
+    const filesManaged = managedCovers(data.managed, '/files') || managedCovers(data.managed, '/profiles');
+    const servicesManaged = (data.managed?.paths ?? []).some((path) => /^\/services\/[^/]+\/(port|health_path|replace_with)$/.test(path));
+    const managedField = (service: string, field: string) => service !== '' && managedCovers(data.managed, pointer('services', service, field));
     const original = JSON.stringify({
         source: data.source,
         files: (data.files ?? []).join('\n'),
@@ -251,6 +271,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                 }
                 aside={
                     <>
+                        {filesManaged && <ManagedBadge config={data.managed} />}
                         {data.template && (
                             <Tag tone="accent" mono>
                                 template {data.template.slug}@{data.template.version}
@@ -259,7 +280,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                         <Segmented<Source>
                             label="Compose source"
                             value={source}
-                            onValueChange={(value) => canUpdate && setSource(value)}
+                            onValueChange={(value) => canUpdate && !filesManaged && setSource(value)}
                             options={[
                                 { value: 'repo', label: 'Repository' },
                                 { value: 'inline', label: 'Inline' },
@@ -312,7 +333,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                             files={files.length > 0 ? files : file ? [file] : []}
                             profiles={profiles}
                             candidates={candidates}
-                            disabled={!canUpdate}
+                            disabled={!canUpdate || filesManaged}
                             errors={{ ...errors, compose_files: errors.compose_files ?? errors.compose_file }}
                             onChange={(nextFiles, nextProfiles) => {
                                 setFiles(nextFiles);
@@ -384,21 +405,24 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                 title="Public services"
                 description="Falak publishes each on 127.0.0.1 and routes it through the edge. The first one gets the site's domains; other host ports are not published."
                 aside={
-                    canUpdate && (
-                        <Button
-                            size="sm"
-                            variant="ghost"
-                            icon={<Plus />}
-                            onClick={() =>
-                                setPublicServices((items) => [
-                                    ...items,
-                                    { service: '', port: '', domain: { type: 'generated' }, health_check_path: '' },
-                                ])
-                            }
-                        >
-                            Add
-                        </Button>
-                    )
+                    <>
+                        {servicesManaged && <ManagedBadge config={data.managed} />}
+                        {canUpdate && (
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                icon={<Plus />}
+                                onClick={() =>
+                                    setPublicServices((items) => [
+                                        ...items,
+                                        { service: '', port: '', domain: { type: 'generated' }, health_check_path: '' },
+                                    ])
+                                }
+                            >
+                                Add
+                            </Button>
+                        )}
+                    </>
                 }
             >
                 {publicServices.length === 0 ? (
@@ -449,7 +473,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                                             value={item.port}
                                             inputMode="numeric"
                                             placeholder={exposed[0] ? String(exposed[0]) : '8080'}
-                                            disabled={!canUpdate}
+                                            disabled={!canUpdate || managedField(item.service, 'port')}
                                             onChange={(event) => updatePublic(index, { port: event.target.value.replace(/\D/g, '') })}
                                             className="font-mono"
                                         />
@@ -464,7 +488,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                                                 onClick={() => window.open(known.url ?? '', '_blank', 'noopener')}
                                             />
                                         )}
-                                        {canUpdate && (
+                                        {canUpdate && !managedField(item.service, 'port') && (
                                             <IconButton
                                                 size="sm"
                                                 variant="ghost"
@@ -512,7 +536,7 @@ export function ComposeSettings({ ctx }: ServiceTabProps) {
                                             <Input
                                                 value={item.health_check_path}
                                                 placeholder="/"
-                                                disabled={!canUpdate}
+                                                disabled={!canUpdate || managedField(item.service, 'health_path')}
                                                 aria-label={`${item.service || 'service'} health check path`}
                                                 onChange={(event) => updatePublic(index, { health_check_path: event.target.value })}
                                                 className="font-mono"

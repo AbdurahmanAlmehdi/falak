@@ -117,9 +117,56 @@ it('refuses dashboard edits of preview settings the file manages', function () {
     $body = ['enabled' => true, 'base_environment_id' => $this->staging->id, 'max_concurrent' => 3, 'services' => ['db' => 'include'], 'databases' => ['db' => ['strategy' => 'empty']]];
     $url = "/projects/{$this->staging->project_id}/previews/settings";
 
+    $this->get("/projects/{$this->staging->project_id}/previews")->assertOk()
+        ->assertInertia(fn ($page) => $page->where('settings.managed.paths', fn ($paths) => collect($paths)->contains('/previews/max_concurrent')));
+
     $this->put($url, [...$body, 'max_concurrent' => 9])->assertSessionHasErrors('max_concurrent');
     $this->put($url, [...$body, 'databases' => ['db' => ['strategy' => 'clone_backup']]])->assertSessionHasErrors('databases');
     $this->put($url, [...$body, 'idle_ttl_hours' => 24])->assertSessionHasNoErrors();
 
     expect($settings->refresh()->idle_ttl_hours)->toBe(24)->and($settings->max_concurrent)->toBe(3);
+});
+
+it('flags every way a database copy comes to be production\'s, and acknowledges only approved ones', function () {
+    $staging = ($this->scope)($this->staging);
+    $ctx = config_ctx($this->staging);
+    $apply = function (array $previews) use ($staging, $ctx) {
+        $plan = app(RiskRules::class)->flag($this->reconciler->diff($staging, ['previews' => $previews], $this->reconciler->current($staging)), false, []);
+        $risky = collect($plan->risky())->pluck('rule', 'path')->all();
+
+        if ($risky === []) {
+            $this->reconciler->apply($staging, $plan, $ctx);
+        }
+
+        return [$plan, $risky];
+    };
+
+    // A staging copy: no production data, applied without acknowledgement.
+    [, $risky] = $apply(['base' => 'staging', 'units' => ['db' => ['strategy' => 'clone_backup']]]);
+    expect($risky)->toBe([])
+        ->and(PreviewSettings::query()->sole()->databases['db']['acknowledge_production'])->toBeFalse();
+
+    // The base moves to production (planned by production's run): the copy, without `source`, now clones production.
+    $production = ($this->scope)($this->production);
+    $moved = app(RiskRules::class)->flag($this->reconciler->diff($production, ['previews' => ['base' => 'production', 'units' => ['db' => ['strategy' => 'clone_backup']]]], $this->reconciler->current($production)), true, []);
+    expect(collect($moved->risky())->pluck('rule', 'path')->all())->toBe(['/previews/base' => PreviewsReconciler::RULE]);
+
+    // An explicit `source` naming production, flagged on the unit; once approved, applied with the acknowledgement.
+    [$plan, $risky] = $apply(['base' => 'staging', 'units' => ['db' => ['strategy' => 'clone_backup', 'source' => 'production']]]);
+    expect($risky)->toBe(['/previews/units/db/source' => PreviewsReconciler::RULE]);
+    $this->reconciler->apply($staging, $plan, $ctx);
+    expect(PreviewSettings::query()->sole()->databases['db']['acknowledge_production'])->toBeTrue();
+
+    // Unchanged afterwards: nothing to approve again.
+    expect($apply(['base' => 'staging', 'units' => ['db' => ['strategy' => 'clone_backup', 'source' => 'production']]])[1])->toBe([]);
+});
+
+it('needs an approval to share a database with the previews', function () {
+    $staging = ($this->scope)($this->staging);
+    $plan = app(RiskRules::class)->flag($this->reconciler->diff($staging, ['previews' => ['base' => 'staging', 'acknowledge_shared_database' => true, 'units' => ['db' => 'share', 'web' => 'share']]], $this->reconciler->current($staging)), false, []);
+
+    expect(collect($plan->risky())->pluck('rule', 'path')->all())->toBe([
+        '/previews/acknowledge_shared_database' => PreviewsReconciler::SHARED_RULE,
+        '/previews/units/db' => PreviewsReconciler::SHARED_RULE,
+    ]);
 });

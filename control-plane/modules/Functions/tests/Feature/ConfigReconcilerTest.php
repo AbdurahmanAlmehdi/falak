@@ -134,10 +134,24 @@ it('refuses dashboard edits of what the file manages: settings, allowlist, sched
     $nightly = FunctionSchedule::query()->where('name', 'nightly')->sole();
     $base = "/sites/{$this->site->id}/function";
 
+    // The panel shows them read-only.
+    expect($this->getJson($base)->assertOk()->json('data.managed.paths'))->toContain('/scaling/max_instances', '/code')
+        ->and($this->getJson("{$base}/access")->json('data.managed.paths'))->toContain('/access/allow')
+        ->and($this->getJson("{$base}/schedules")->json('data.schedules.0.managed.paths'))->toBe(['/schedules/nightly']);
+
     $this->putJson("{$base}/settings", ['max_instances' => 4])->assertStatus(422)->assertJsonValidationErrors('max_instances');
     $this->putJson("{$base}/settings", ['max_instances' => 2, 'concurrency' => 10])->assertOk();
     $this->putJson("{$base}/access/allowlist", ['allow_cidrs' => ['0.0.0.0/0']])->assertStatus(422)->assertJsonValidationErrors('allow_cidrs');
     $this->putJson("{$base}/schedules/{$nightly->id}", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
     $this->deleteJson("{$base}/schedules/{$nightly->id}")->assertStatus(422);
     $this->postJson("{$base}/schedules", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
+});
+
+it('refuses a function whose code listing the provider cut short', function () {
+    $this->git->treeTruncated = true;
+
+    $issues = $this->functions->validate($this->scope, config_doc('production', ['api' => ['type' => 'function', 'runtime' => 'python', 'root' => 'fn']]));
+
+    expect($issues[0]->code.' '.$issues[0]->pointer)->toBe('value.range /units/api/root')
+        ->and($issues[0]->message)->toContain('too long to read whole');
 });

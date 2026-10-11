@@ -7,6 +7,7 @@ import {
     EmptyState,
     Field,
     Input,
+    ManagedBadge,
     PageHeader,
     RelativeTime,
     Section,
@@ -247,15 +248,18 @@ function SettingsForm({
             <Section
                 title="Settings"
                 description="Each pull request forks the base environment: the services you include run on the preview server under the preview domain."
+                aside={<ManagedBadge config={settings.managed} />}
                 footer={
-                    canManage && (
+                    canManage &&
+                    !settings.managed && (
                         <Button type="submit" variant="primary" loading={form.processing}>
                             Save settings
                         </Button>
                     )
                 }
             >
-                <fieldset disabled={!canManage} className="grid gap-4">
+                {/* A managed block locks the whole form (it saves every field at once); the server refuses managed changes. */}
+                <fieldset disabled={!canManage || !!settings.managed} className="grid gap-4">
                     <Field label="Previews for pull requests" inline>
                         <Switch checked={form.data.enabled} onCheckedChange={(value) => form.setData('enabled', value)} />
                     </Field>

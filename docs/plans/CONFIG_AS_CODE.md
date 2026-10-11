@@ -998,17 +998,23 @@ deletes risky and only with `allow_destroy`). The `value.unsupported` warnings a
 - A push deploys app, compose and function units whose `root` holds a changed file.
 
 **Environments (Projects reconciler, section `environments`, phase A first)**
-- **[decision] A push creates an environment the file declares and the project doesn't have**, before its run: empty,
-  named after the key, **not production**. `production: true` (on a new or an existing environment) is then the run's
+- **[decision] A push creates an environment the file declares and the project doesn't have** (review fix: **only a
+  push to the production environment's branch** — its `branch` in the pushed file, else the repository's default
+  branch — creates them, every declared one, whatever branch it is bound to; a push to another branch naming an
+  unknown environment records a failed run saying so). Creating is serialized per project (two pushes create it
+  once), empty, named after the key, **not production**. `production: true` (on a new or an existing environment) is then the run's
   `environment.production` change: refused while the source is experimental, else it waits for an approval. Only
   `production` is managed (ownership `environment`, `/production`); `branch` and `servers` have no column.
-- A reserved slug (`settings`, `previews`…) is `value.forbidden`; a key taken by a preview environment's slug fails the
+- A reserved slug (`settings`, `previews`…) is `value.forbidden`, a key with capitals "must be lowercase"; a key taken by a preview environment's slug fails the
   run (never a run against another environment than the one the file names). `falak apply -e <new>` creates a declared
   environment too, for a caller who may also manage projects (`projects.manage`); `falak plan -e <new>` still answers
   that the environment doesn't exist.
 - **[decision] An environment removed from the file is released, never deleted**: on the next push to the branch the
   last applied file bound it to, its sites deploy that push the old way and its ownership rows are dropped (fields
-  editable, push to deploy takes over).
+  editable, push to deploy takes over), and its runs still planning or waiting for an approval are cancelled. A file
+  without `environments` declares production only: the other environments it bound are released the same way.
+- **[decision] A unit follows its environment's branch:** when the file moves an environment to another branch, the
+  file-managed sites deploying the source's repository take the new branch at the environment's next run.
 - Several environments: each environment bound to the pushed branch gets its own run, resolved with its overrides
   (the merge of the phase 0 contract); a unit an environment doesn't have yet is created there on the environment's
   servers with its branch.
@@ -1029,14 +1035,16 @@ deletes risky and only with `allow_destroy`). The `value.unsupported` warnings a
   actions (`value.conflict`).
 - **[decision] Host binds stay an admin's choice:** `keep_binds` (and any other adjustment) is not in the schema, so a
   file with it fails validation, and applying a file never changes a stack's adjustments.
-- The dashboard refuses (422) a compose edit that changes a managed field (files, profiles, a public service's port or
-  health path, a replaced service, switching to an inline file).
+- The dashboard shows managed compose fields read-only with the "Managed by falak.yaml" badge, and refuses (422) an
+  edit changing one (files, profiles, a public service's port or health path, a replaced service — a form resending
+  the same decision passes — and restoring an inline version).
 
 **Function units**
 - **[decision] A function unit's code is the repository's files under its `root` at the run's commit**, read by the
   control plane through the provider API (`tree` + `file`, like falak.yaml): no builder or agent change. Skipped:
   dot-files and dot-folders, `node_modules`, `__pycache__`, `.venv`, `venv`, falak.yaml, names a version can't hold and
-  non-UTF-8 files; the rest must be a valid version (≤ 50 files, ≤ 1 MB, the entrypoint present), else `value.range` on
+  non-UTF-8 files; the list must be whole (a provider listing that was truncated, or a limit reached, fails the run
+  instead of deploying part of the function: `tree(…, complete: true)` throws `TreeTruncated`); the rest must be a valid version (≤ 50 files, ≤ 1 MB, the entrypoint present), else `value.range` on
   `root` (a plain git server can't give the code either). Phase A saves the code as a new `FunctionVersion`
   ("falak.yaml @ abc1234") only when its hash changed, and **records the commit against the version**
   (`functions_version_commits`): the unit's deployment of that git commit runs exactly that version (Functions'
@@ -1052,16 +1060,20 @@ deletes risky and only with `allow_destroy`). The `value.unsupported` warnings a
   through its domains or mounts).
 - `mounts` (Edge, phase B of the host unit): identity `path`, `function` must be a function unit (`name.unit`),
   `strip_prefix` default true.
-- The dashboard refuses (422) edits of managed scaling and limits, the allowlist, and managed schedules.
+- The dashboard shows a function's managed code, scaling, allowlist and schedules read-only with the badge, and
+  refuses (422) edits of them.
 
 **Previews**
 - **[decision] `previews:` is applied by the run of its `base` environment** (production's when it names none); other
   environments' runs plan nothing for it. `PreviewSettings` is the stored copy (through `SavePreviewSettings`); fields
   the file doesn't set keep today's value, `units` replaces the map, a removed block is released (previews stay on).
   `fork_server` must be the dashboard's fork server or a server attached to the project.
-- **[decision] Production data in previews needs an approval:** a database unit cloned from production's backups
-  (`clone_backup` of production, `clone_sanitize` with the file's script) is the risky change
-  `previews.production_data`, flagged by the reconciler; the approval is the acknowledgement the dashboard asks for.
+- **[decision] Production data in previews needs an approval:** whenever a database unit's preview copy newly
+  resolves to production's backups — its `strategy`, its `source`, or the block's `base` (a copy without `source` clones
+  the base) changed — or a script run on such a copy changes, the change is the risky `previews.production_data`
+  (flagged by the reconciler, on the unit's or the base's change). **Sharing a database** with the base environment is
+  the risky `previews.shared_database`. Only an approved change sends the production acknowledgement the dashboard
+  asks for (an acknowledgement already given stays).
 - **[decision] A preview is built from the pull request's file** (`Config\Contracts\PreviewConfig`): the head's file
   for a pull request of the repository, **the base branch's newest file for a fork** (after the existing
   `/falak preview` approval; a fork never supplies config), resolved for the previews' base environment. Left out:
@@ -1069,19 +1081,20 @@ deletes risky and only with `allow_destroy`). The `value.unsupported` warnings a
   `servers` (the preview server), `volumes`, a compose service's `domains` and `replace_with`. The file's
   `previews.units: omit` leaves units out; data strategies, sharing, the server and access stay the stored settings'
   (the base branch's), so a pull request can't widen what data reaches its preview.
-- Both phases are applied to the preview environment before its first deploy and again before a redeploy whose file
+- Phase A is applied to the preview environment before its first deploy and again before a redeploy whose file
   changed (`previews_previews.config_ref`), recorded as a `pr` run of the preview environment; risky rules don't apply
-  (the preview is disposable). Units the base environment doesn't have are created in the preview (isolated, never
+  (the preview is disposable). **[decision] Phase B (workers, schedules, routes) goes live with each unit's preview
+  deployment** (`PreviewConfig::released()` when it succeeded), never before.
+- **[decision] No reads of a shared service's values:** an env value of the preview's file referencing a service the
+  preview shares (`${{ api.APP_KEY }}`) is left out (with a warning) unless `previews.variables` lists that name. Units the base environment doesn't have are created in the preview (isolated, never
   deployed on push, on the preview server, the pull request's branch) and routed like the copies; a fork's preview
-  never gets new units. The Previews settings form refuses (422) edits of fields the block manages. Workers, schedules, deploy settings, Laravel settings and limits now come from the file (the
+  never gets new units. The Previews settings form shows the badge and is read-only when the block manages it (it saves
+  every field at once); the server refuses (422) managed changes. Workers, schedules, deploy settings, Laravel settings and limits now come from the file (the
   `DuplicateSite` gap is closed for projects with a file). An invalid file fails the preview with the reason.
 - Teardown deletes only the preview's own resources: its recorded sites and any site placed in the preview
   environment, never a site placed elsewhere, then forgets what the file managed there.
 
 **Gaps (later)**
-- Moving an environment to another branch doesn't update its existing sites' `branch` column.
-- Dashboard: compose, function and previews settings show no "Managed by falak.yaml" badge yet; the server refuses
-  (422) edits of their managed fields.
 - `falak plan` for an environment the project doesn't have yet.
 
 ### CLI (`agent/internal/cli`)

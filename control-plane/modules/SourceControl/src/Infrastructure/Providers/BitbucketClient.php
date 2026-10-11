@@ -126,8 +126,9 @@ class BitbucketClient extends HttpProviderClient
         return $this->json($connection, '/repositories/'.$this->path($repository).'/src/'.rawurlencode($ref).'/'.self::encodedPath($path), ['format' => 'meta'], nullOn404: true) !== null;
     }
 
-    public function tree(Connection $connection, string $repository, string $ref, int $limit): array
+    public function tree(Connection $connection, string $repository, string $ref, int $limit, ?bool &$truncated = null): array
     {
+        $truncated = false;
         $paths = [];
 
         foreach ($this->pages($connection, '/repositories/'.$this->path($repository).'/src/'.rawurlencode($ref).'/', ['max_depth' => 20, 'pagelen' => 100]) as $entry) {
@@ -135,6 +136,7 @@ class BitbucketClient extends HttpProviderClient
                 $paths[] = (string) $entry['path'];
 
                 if (count($paths) >= $limit) {
+                    $truncated = true;
                     break;
                 }
             }

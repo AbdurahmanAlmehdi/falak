@@ -190,8 +190,9 @@ class GitHubClient extends HttpProviderClient
         return $this->json($connection, '/repos/'.$this->path($repository).'/contents/'.self::encodedPath($path), ['ref' => $ref], nullOn404: true) !== null;
     }
 
-    public function tree(Connection $connection, string $repository, string $ref, int $limit): array
+    public function tree(Connection $connection, string $repository, string $ref, int $limit, ?bool &$truncated = null): array
     {
+        $truncated = false;
         $body = $this->json($connection, '/repos/'.$this->path($repository).'/git/trees/'.rawurlencode($ref), ['recursive' => 1], nullOn404: true);
         $paths = [];
 
@@ -200,10 +201,14 @@ class GitHubClient extends HttpProviderClient
                 $paths[] = (string) $entry['path'];
 
                 if (count($paths) >= $limit) {
+                    $truncated = true;
                     break;
                 }
             }
         }
+
+        // GitHub cuts recursive listings of very large trees (`truncated`).
+        $truncated = $truncated || (bool) ($body['truncated'] ?? false);
 
         return $paths;
     }

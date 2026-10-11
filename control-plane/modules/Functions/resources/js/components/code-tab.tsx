@@ -1,4 +1,4 @@
-import { Button, Callout, Input, RelativeTime, Skeleton, Tag, toast } from '@/components/falak';
+import { Button, Callout, Input, ManagedBadge, RelativeTime, Skeleton, Tag, managedCovers, toast } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { type ServiceTabProps } from '@/lib/registry';
@@ -126,7 +126,7 @@ export function CodeTab({ ctx }: ServiceTabProps) {
 
     const deploy = useCallback(
         async (force = false) => {
-            if (!files || !data?.can.deploy || deploying || tooBig) return;
+            if (!files || !data?.can.deploy || deploying || tooBig || managedCovers(data.managed, '/code')) return;
             setDeploying(true);
             try {
                 const response = await requestJson<{
@@ -317,40 +317,47 @@ export function CodeTab({ ctx }: ServiceTabProps) {
                 </Suspense>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-                <Input
-                    className="min-w-0 flex-1"
-                    placeholder={dirty ? 'What changed? (optional)' : 'No changes'}
-                    value={message}
-                    maxLength={500}
-                    disabled={!data.can.deploy}
-                    onChange={(event) => setMessage(event.target.value)}
-                    onKeyDown={(event) => {
-                        if (event.key === 'Enter') deploy();
-                    }}
-                    aria-label="Deploy message"
-                />
-                {dirty && (
-                    <Button
-                        variant="ghost"
-                        icon={<RotateCcw />}
-                        onClick={() => {
-                            setFiles(headFiles);
-                            setBase(data.head?.id ?? null);
+            {managedCovers(data.managed, '/code') ? (
+                <div className="flex flex-wrap items-center gap-2" data-testid="function-code-managed">
+                    <ManagedBadge config={data.managed} />
+                    <span className="text-fg-muted text-xs">This function runs the repository's code: push to change it.</span>
+                </div>
+            ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                        className="min-w-0 flex-1"
+                        placeholder={dirty ? 'What changed? (optional)' : 'No changes'}
+                        value={message}
+                        maxLength={500}
+                        disabled={!data.can.deploy}
+                        onChange={(event) => setMessage(event.target.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === 'Enter') deploy();
                         }}
-                    >
-                        Discard
+                        aria-label="Deploy message"
+                    />
+                    {dirty && (
+                        <Button
+                            variant="ghost"
+                            icon={<RotateCcw />}
+                            onClick={() => {
+                                setFiles(headFiles);
+                                setBase(data.head?.id ?? null);
+                            }}
+                        >
+                            Discard
+                        </Button>
+                    )}
+                    {dirty && data.head && (
+                        <Button variant="ghost" icon={<GitCompareArrows />} onClick={() => ctx.open('versions', String(data.head!.number))}>
+                            Compare
+                        </Button>
+                    )}
+                    <Button variant="primary" icon={<Rocket />} loading={deploying} disabled={!data.can.deploy || tooBig} onClick={() => deploy()}>
+                        {dirty ? 'Deploy' : 'Redeploy'} <span className="text-on-accent/70 ml-1 text-[11px]">⌘S</span>
                     </Button>
-                )}
-                {dirty && data.head && (
-                    <Button variant="ghost" icon={<GitCompareArrows />} onClick={() => ctx.open('versions', String(data.head!.number))}>
-                        Compare
-                    </Button>
-                )}
-                <Button variant="primary" icon={<Rocket />} loading={deploying} disabled={!data.can.deploy || tooBig} onClick={() => deploy()}>
-                    {dirty ? 'Deploy' : 'Redeploy'} <span className="text-on-accent/70 ml-1 text-[11px]">⌘S</span>
-                </Button>
-            </div>
+                </div>
+            )}
 
             {data.live && <TestPanel siteId={siteId} />}
         </div>

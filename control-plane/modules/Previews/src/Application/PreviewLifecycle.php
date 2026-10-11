@@ -469,6 +469,17 @@ final class PreviewLifecycle
         $deployments = [...($preview->deployments ?? []), $siteId => $succeeded ? 'deployed' : 'failed'];
         $preview->forceFill(['deployments' => $deployments])->save();
 
+        if ($succeeded && $preview->config_ref !== null && $preview->environment_id !== null) {
+            // The file's workers, schedules and routes go live with the unit's deployment.
+            try {
+                $this->config->released($preview->environment_id, $siteId);
+            } catch (Throwable $e) {
+                $succeeded = false;
+                $error = 'falak.yaml couldn\'t be applied to the preview after its deployment: '.($e instanceof ValidationException ? self::message($e) : $e->getMessage());
+                $preview->forceFill(['deployments' => [...$deployments, $siteId => 'failed']])->save();
+            }
+        }
+
         if (! $succeeded) {
             $service = array_search($siteId, $preview->sites ?? [], true);
             $preview->forceFill(['status' => Preview::FAILED, 'status_message' => Str::limit("Deploying {$service} failed: ".($error ?? 'unknown error'), 990)])->save();
@@ -733,7 +744,9 @@ final class PreviewLifecycle
         // Shared and omitted services are not the preview's to configure.
         $without = [...$file->omitted, ...array_map(fn (ServiceData $s) => $s->name, array_filter($services, fn (ServiceData $s) => $settings->modeOf($s->name) !== PreviewSettings::INCLUDE))];
         $branch = $preview->is_fork || $preview->head_branch === '' ? $preview->base_branch : $preview->head_branch;
-        $result = $this->config->apply($file, (string) $preview->environment_id, $serverId, $branch, $preview->head_sha, $preview->is_fork, array_values(array_unique($without)), $preview->approved_by);
+        $shared = array_values(array_map(fn (ServiceData $s) => $s->name, array_filter($services, fn (ServiceData $s) => $s->kind === ServiceKind::Site && $settings->modeOf($s->name) === PreviewSettings::SHARE)));
+        $result = $this->config->apply($file, (string) $preview->environment_id, $serverId, $branch, $preview->head_sha, $preview->is_fork, array_values(array_unique($without)), $preview->approved_by,
+            $shared, array_values($settings->variables ?? []));
 
         $preview->forceFill(['sites' => [...($preview->sites ?? []), ...$result['sites']], 'config_ref' => $file->ref])->save();
 

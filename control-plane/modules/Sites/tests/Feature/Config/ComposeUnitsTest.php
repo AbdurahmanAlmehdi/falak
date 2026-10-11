@@ -7,6 +7,7 @@ use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Infrastructure\Config\EdgeReconciler;
 use Falak\Identity\Contracts\Role;
 use Falak\Limits\Infrastructure\Config\LimitsReconciler;
+use Falak\Sites\Domain\Models\ComposeVersion;
 use Falak\Sites\Domain\Models\Site;
 use Falak\Sites\Infrastructure\Config\SitesReconciler;
 
@@ -250,6 +251,9 @@ it('refuses dashboard edits of compose fields the file manages', function () {
     $public = [['service' => 'web', 'port' => 80, 'health_check_path' => '/up']];
     $body = ['compose_source' => 'repo', 'compose_files' => ['compose.yaml'], 'compose_profiles' => ['dev'], 'public_services' => $public];
 
+    // The panel shows them read-only.
+    expect($this->getJson("/sites/{$site->id}/compose")->assertOk()->json('data.managed.paths'))->toContain('/files', '/services/web/port');
+
     $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_files' => ['other.yaml']])->assertStatus(422)->assertJsonValidationErrors('compose_files');
     $this->putJson("/sites/{$site->id}/compose", [...$body, 'public_services' => [['service' => 'web', 'port' => 81, 'health_check_path' => '/up']]])
         ->assertStatus(422)->assertJsonValidationErrors('public_services.web.port');
@@ -257,4 +261,19 @@ it('refuses dashboard edits of compose fields the file manages', function () {
 
     // The managed values unchanged, another service made public: accepted.
     $this->putJson("/sites/{$site->id}/compose", [...$body, 'public_services' => [...$public, ['service' => 'api', 'port' => 8080]]])->assertOk();
+});
+
+it('lets the form save with a managed replaced service unchanged, and guards restore, not viewing versions', function () {
+    [$database] = projects_database($this->organization, 'db', $this->env, server: $this->server);
+    ($this->apply)($this->sites, ['units' => ['shop' => compose_unit(['web' => ['port' => 80, 'health_path' => '/up'], 'db' => ['replace_with' => 'db']])]]);
+    $site = Site::query()->where('name', 'shop')->sole();
+    $body = ['compose_source' => 'repo', 'compose_files' => ['compose.yaml'], 'compose_profiles' => ['dev'],
+        'public_services' => [['service' => 'web', 'port' => 80, 'health_check_path' => '/up']]];
+
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_services' => ['db' => ['mode' => 'database', 'database_id' => $database->id], 'mailpit' => ['mode' => 'keep']]])->assertOk();
+    $this->putJson("/sites/{$site->id}/compose", [...$body, 'compose_services' => ['db' => ['mode' => 'keep']]])->assertStatus(422)->assertJsonValidationErrors('compose_services.db');
+
+    ComposeVersion::query()->create(['site_id' => $site->id, 'version' => 1, 'content' => "services: {}\n", 'created_at' => now()]);
+    $this->getJson("/sites/{$site->id}/compose/versions/1")->assertOk();
+    $this->postJson("/sites/{$site->id}/compose/versions/1/restore")->assertStatus(422);
 });

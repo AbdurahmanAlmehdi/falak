@@ -57,6 +57,8 @@ final class PreviewController extends Controller
                 'max_concurrent' => $settings?->max_concurrent ?? 5,
                 'idle_ttl_hours' => $settings?->idle_ttl_hours ?? 72,
                 'access' => $settings?->access ?? 'basic',
+                // What the project's falak.yaml `previews:` block manages: shown read-only.
+                'managed' => $settings !== null ? app(ManagedResources::class)->managed('preview_settings', $settings->id)->toArray() : null,
             ],
             'environments' => array_map(fn ($e) => ['id' => $e->id, 'name' => $e->name, 'is_production' => $e->isProduction], $environments),
             'services' => $base !== null ? array_map(fn ($s) => ['name' => $s->name, 'kind' => $s->kind->value], $this->projects->servicesIn($base)) : [],

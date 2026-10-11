@@ -8,6 +8,7 @@ use Falak\Projects\Contracts\ConfigEnvironments;
 use Falak\Projects\Contracts\Data\EnvironmentData;
 use Falak\Projects\Domain\Models\Environment;
 use Falak\Projects\Domain\Models\Project;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -19,27 +20,38 @@ final class ActionConfigEnvironments implements ConfigEnvironments
     {
         $project = Project::query()->find(strtolower($projectId)) ?? throw ValidationException::withMessages(['project' => 'Unknown project.']);
 
-        if (in_array($slug, Environment::RESERVED_SLUGS, true) || Str::slug($slug) !== $slug) {
+        if (Str::slug($slug) !== $slug) {
+            throw ValidationException::withMessages(['environment' => "\"{$slug}\" can't be an environment's name: use lowercase letters, digits and dashes."]);
+        }
+
+        if (in_array($slug, Environment::RESERVED_SLUGS, true)) {
             throw ValidationException::withMessages(['environment' => "\"{$slug}\" can't be an environment's name (it is reserved)."]);
         }
 
-        $taken = Environment::query()->where('project_id', $project->id)
-            ->where(fn ($q) => $q->where('slug', $slug)->orWhereRaw('lower(name) = ?', [$slug]))->first();
+        // One at a time per project: two pushes declaring the same environment create it once.
+        return Cache::lock("projects:config-environment:{$project->id}", 30)->block(20, function () use ($project, $slug, $userId) {
+            $taken = Environment::query()->where('project_id', $project->id)
+                ->where(fn ($q) => $q->where('slug', $slug)->orWhereRaw('lower(name) = ?', [$slug]))->first();
 
-        if ($taken !== null) {
-            throw ValidationException::withMessages(['environment' => $taken->is_preview
-                ? "\"{$slug}\" is the name of a pull request's preview environment: pick another name."
-                : "The environment \"{$taken->name}\" already uses the name \"{$slug}\"."]);
-        }
+            if ($taken !== null && ! $taken->is_preview && $taken->slug === $slug) {
+                return $taken->toData(); // created meanwhile
+            }
 
-        $environment = app(CreateEnvironment::class)($project, $slug, $userId);
+            if ($taken !== null) {
+                throw ValidationException::withMessages(['environment' => $taken->is_preview
+                    ? "\"{$slug}\" is the name of a pull request's preview environment: pick another name."
+                    : "The environment \"{$taken->name}\" already uses the name \"{$slug}\"."]);
+            }
 
-        if ($environment->slug !== $slug) {
-            // Never a run against an environment the file doesn't name.
-            throw ValidationException::withMessages(['environment' => "The environment was created as \"{$environment->slug}\", not \"{$slug}\"."]);
-        }
+            $environment = app(CreateEnvironment::class)($project, $slug, $userId);
 
-        return $environment->toData();
+            if ($environment->slug !== $slug) {
+                // Never a run against an environment the file doesn't name.
+                throw ValidationException::withMessages(['environment' => "The environment was created as \"{$environment->slug}\", not \"{$slug}\"."]);
+            }
+
+            return $environment->toData();
+        });
     }
 
     public function setProduction(string $environmentId, bool $production, ?string $userId = null): EnvironmentData

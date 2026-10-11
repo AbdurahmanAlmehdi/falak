@@ -27,13 +27,18 @@ use Falak\Servers\Contracts\ServerDirectory;
  * keep today's value; a block removed from the file only stops being managed (previews are not turned off).
  *
  * A database unit cloned from production's backups (unsanitized, or with a script the file supplies) puts production
- * data in previews: such a change is risky (`previews.production_data`) and waits for an approval.
+ * data in previews: such a change is risky (`previews.production_data`) and waits for an approval, whatever made the
+ * copy come from production (its strategy, its `source`, the block's `base`); so is sharing a database with the base
+ * environment (`previews.shared_database`). The approval is the acknowledgement the dashboard asks for: only an
+ * approved change sends it.
  */
 final class PreviewsReconciler implements Reconcilable, ValidatesConfig
 {
     public const SECTION = 'previews';
 
     public const RULE = 'previews.production_data';
+
+    public const SHARED_RULE = 'previews.shared_database';
 
     public function __construct(
         private readonly ProjectDirectory $projects,
@@ -128,23 +133,89 @@ final class PreviewsReconciler implements Reconcilable, ValidatesConfig
         $changes = [];
         $wanted = self::leaves($want);
         $before = is_array($have) ? self::leaves($have) : [];
-        $production = collect($this->projects->environments($scope->projectId))->first(fn (EnvironmentData $e) => $e->isProduction && ! $e->isPreview)?->slug;
+        [$risks, $baseRisk, $ackRisk] = $this->risks($scope, $want, is_array($have) ? $have : []);
 
         foreach (Diff::fields(self::SECTION, '', '/previews', $wanted, $before, ! is_array($have)) as $change) {
             $change = new Change($change->op, $change->path, $change->before, $change->after, self::SECTION);
             $unit = preg_match('#^/previews/units/([^/]+)#', $change->path, $m) === 1 ? $m[1] : null;
-            $database = $unit !== null ? ($want['units'][$unit] ?? null) : null;
+            $risk = $unit !== null ? ($risks[$unit] ?? null) : match ($change->path) {
+                '/previews/base' => $baseRisk,
+                '/previews/acknowledge_shared_database' => $ackRisk,
+                default => null,
+            };
 
-            // Production's data in previews needs an approval (the dashboard asks for an acknowledgement).
-            if ($change->op !== ChangeOp::Noop && is_array($database) && in_array($database['strategy'] ?? null, [PreviewSettings::CLONE_BACKUP, PreviewSettings::CLONE_SANITIZE], true)
-                && ($database['source'] ?? ($database['strategy'] === PreviewSettings::CLONE_SANITIZE ? $production : ($want['base'] ?? $production))) === $production) {
-                $change = $change->withRisk(self::RULE, "Previews would hold a copy of production's {$unit}: cloning production data needs an approval.");
+            if ($change->op !== ChangeOp::Noop && $risk !== null) {
+                $change = $change->withRisk($risk[0], $risk[1]);
             }
 
             $changes[] = $change;
         }
 
         return new ChangeSet($changes);
+    }
+
+    /**
+     * Units whose previews newly get real data, and why: a database copy that now comes from production's backups
+     * (its strategy, `source` or the block's `base` changed; a script run on such a copy changed), or a database the
+     * previews now share with the base environment (they write to it).
+     *
+     * @param  array<string, mixed>  $want
+     * @param  array<string, mixed>  $have
+     * @return array{0: array<string, array{0: string, 1: string}>, 1: ?array{0: string, 1: string}, 2: ?array{0: string, 1: string}} unit => [rule, reason]; the base's and the sharing acknowledgement's risks
+     */
+    private function risks(ConfigScope $scope, array $want, array $have): array
+    {
+        $productions = array_values(array_map(fn (EnvironmentData $e) => $e->slug, array_filter($this->projects->environments($scope->projectId), fn (EnvironmentData $e) => $e->isProduction && ! $e->isPreview)));
+        $risks = [];
+        $baseRisk = null;
+        $ackRisk = null;
+        $units = array_unique([...array_keys((array) ($want['units'] ?? [])), ...array_keys($scope->services)]);
+
+        foreach ($units as $unit) {
+            $unit = (string) $unit;
+            $after = self::cloneSource($want, $unit, $productions[0] ?? null);
+            $previous = self::cloneSource($have, $unit, $productions[0] ?? null);
+
+            if ($after !== null && in_array($after, $productions, true)) {
+                $wantUnit = $want['units'][$unit] ?? null;
+                $changed = ! Diff::same($wantUnit, $have['units'][$unit] ?? null);
+
+                if ($previous === null || ! in_array($previous, $productions, true) || $changed) {
+                    $risks[$unit] = [self::RULE, "Previews would hold a copy of production's {$unit}: cloning production data needs an approval."];
+                    $baseRisk ??= $risks[$unit];
+                }
+            }
+
+            $database = ($scope->services[$unit]['kind'] ?? null) === 'database';
+            $shared = ($want['units'][$unit] ?? null) === PreviewSettings::SHARE;
+
+            if ($database && $shared && (($have['units'][$unit] ?? null) !== PreviewSettings::SHARE || ! ($have['acknowledge_shared_database'] ?? false))) {
+                $risks[$unit] = [self::SHARED_RULE, "Previews would read and write {$unit}, the base environment's database: sharing it needs an approval."];
+                $ackRisk ??= $risks[$unit];
+            }
+        }
+
+        return [$risks, $baseRisk, $ackRisk];
+    }
+
+    /**
+     * The environment a database unit's previews copy comes from (null: not a copy of backups).
+     *
+     * @param  array<string, mixed>  $previews
+     */
+    private static function cloneSource(array $previews, string $unit, ?string $production): ?string
+    {
+        $mode = $previews['units'][$unit] ?? null;
+
+        if (! is_array($mode)) {
+            return null;
+        }
+
+        return match ($mode['strategy'] ?? null) {
+            PreviewSettings::CLONE_BACKUP => $mode['source'] ?? $previews['base'] ?? $production,
+            PreviewSettings::CLONE_SANITIZE => $mode['source'] ?? $production,
+            default => null,
+        };
     }
 
     public function apply(ConfigScope $scope, ChangeSet $changes, ApplyContext $ctx): void
@@ -168,7 +239,15 @@ final class PreviewsReconciler implements Reconcilable, ValidatesConfig
         }
 
         $current = $settings !== null ? $this->shape($scope, $settings) : [];
-        $input = $this->input($scope, [...$current, ...$previews], $settings);
+        $approved = [];
+
+        foreach ($changes->changes as $change) {
+            if ($change->rule === self::RULE && preg_match('#^/previews/(?:units/([^/]+)|base)#', $change->path, $m) === 1) {
+                $approved[] = $m[1] ?? '*';
+            }
+        }
+
+        $input = $this->input($scope, [...$current, ...$previews], $settings, $approved);
 
         if (array_filter($changes->changes, fn (Change $c) => $c->op !== ChangeOp::Noop) !== []) {
             app(SavePreviewSettings::class)($scope->projectId, $input, $ctx->actorId);
@@ -184,10 +263,11 @@ final class PreviewsReconciler implements Reconcilable, ValidatesConfig
     /**
      * SavePreviewSettings' input for the block (merged over today's settings).
      *
+     * @param  list<string>  $approved  units whose production copy this run's approval acknowledges ('*': every one)
      * @param  array<string, mixed>  $previews
      * @return array<string, mixed>
      */
-    private function input(ConfigScope $scope, array $previews, ?PreviewSettings $settings): array
+    private function input(ConfigScope $scope, array $previews, ?PreviewSettings $settings, array $approved = []): array
     {
         $services = [];
         $databases = [];
@@ -206,8 +286,9 @@ final class PreviewsReconciler implements Reconcilable, ValidatesConfig
                 'source_environment_id' => isset($mode['source']) ? $this->environmentId($scope, (string) $mode['source']) : null,
                 'sanitize_kind' => $sanitize !== [] ? (string) array_key_first($sanitize) : null,
                 'sanitize_script' => $sanitize !== [] ? (string) reset($sanitize) : null,
-                // An approved plan (production data is risky) is the acknowledgement the dashboard asks for.
-                'acknowledge_production' => true,
+                // Only an approved change (production data is risky) is the acknowledgement the dashboard asks for; an
+                // acknowledgement already given stays.
+                'acknowledge_production' => in_array($unit, $approved, true) || in_array('*', $approved, true) || (bool) ($settings?->databases[$unit]['acknowledge_production'] ?? false),
             ], fn ($v) => $v !== null);
         }
 
