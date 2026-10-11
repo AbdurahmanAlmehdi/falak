@@ -85,7 +85,6 @@ final class ComposeController extends Controller
     {
         $this->authorize('view', $site);
         $row = ComposeVersion::query()->where('site_id', $site->id)->where('version', $version)->firstOrFail();
-        $this->guardManaged($site, ['compose_source' => ComposeSource::Inline->value]);
 
         return response()->json(['data' => ['version' => $row->version, 'content' => $row->content]])->header('Cache-Control', 'no-store');
     }
@@ -167,7 +166,15 @@ final class ComposeController extends Controller
         }
 
         foreach ((array) ($data['compose_services'] ?? []) as $service => $decision) {
-            $managed->guardWhole("compose_services.{$service}", '/services/'.$service.'/replace_with');
+            // The form sends every service's decision: only a changed one is an edit.
+            $current = (array) ($site->compose_services[$service] ?? []);
+            $mode = (string) ($decision['mode'] ?? 'keep');
+            $same = $mode === (string) ($current['mode'] ?? 'keep')
+                && ($mode !== 'database' || ! isset($decision['database_id']) || strtolower((string) $decision['database_id']) === strtolower((string) ($current['database_id'] ?? '')));
+
+            if (! $same) {
+                $managed->guardWhole("compose_services.{$service}", '/services/'.$service.'/replace_with');
+            }
         }
     }
 
@@ -176,6 +183,8 @@ final class ComposeController extends Controller
     {
         $this->authorize('update', $site);
         $row = ComposeVersion::query()->where('site_id', $site->id)->where('version', $version)->firstOrFail();
+        // Restoring an inline version switches the stack away from the repository files the file manages.
+        $this->guardManaged($site, ['compose_source' => ComposeSource::Inline->value]);
 
         $result = $update($site, ['compose_source' => ComposeSource::Inline->value, 'compose_content' => $row->content], $request->user()?->getAuthIdentifier());
 
