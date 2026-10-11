@@ -159,11 +159,14 @@ falak plan                                          # + create, ~ update, - dele
 falak apply --wait                                  # applies, then streams the deployments; exit 6 if it waits for an approval
 falak config export shop -e production -o falak.yaml
 ```
-`falak init` reads the repository the way the builder does (`builder.Detect`, Railpack when installed, a Dockerfile's
-`EXPOSE`, compose files, `.env.example`, package and dependency files, workspaces) and writes each value with the reason
-it was chosen. Secrets become `${{ secrets.NAME }}` references; databases and Redis become units wired with
-`${{ db.DATABASE_URL }}`-style references. It never overwrites a file without `--force`. Logged in, it also asks for
-the project, environments, servers, a domain and previews, and links the repository in `.falak/project.json`.
+`falak init` reads the repository the way the builder does (`builder.Detect`, a Dockerfile's `EXPOSE`, a compose file
+that builds the code, `.env.example`, package and dependency files, workspaces) and writes each value with the reason
+it was chosen; versions come only from the repository. Secrets (by name, or by a value that looks like a credential)
+become `${{ secrets.NAME }}` references and are never printed; databases and Redis become units wired with
+`${{ db.DATABASE_URL }}`-style references; local development values are left out. It reads and writes nothing through
+symlinks that leave the repository, and never overwrites a file without `--force`. Logged in, it asks for the project,
+environments, servers, a domain and previews; it links the repository (`.falak/project.json`) only to a project you
+pick or pass with `-p`. `apply --wait` gives up after `--timeout` (30m; the run goes on).
 `plan`, `apply` and `config export` find the project with `-p` (id or name), then `FALAK_PROJECT`, then that file; the
 environment with `-e`, else the one whose `branch` is the current git branch. `--json` prints the API's data as is.
 The file format: [`docs/plans/CONFIG_AS_CODE.md`](docs/plans/CONFIG_AS_CODE.md) and `contracts/config/`.
