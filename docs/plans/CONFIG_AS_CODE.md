@@ -868,6 +868,108 @@ Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decisi
   dashboard deploys the head of the branch the environment's last applied file binds (the default branch for
   production without environments) and labels the run with that branch and commit.
 
+### Phase 3 (units): compose, functions, environments, previews
+
+Built on `feat/config-p3-units` (the data lane, `feat/config-p3-data`, builds database and redis units, volumes and
+backups). Each choice is a **[decision]** on top of the sections above; the phase 1 safety rules apply unchanged
+(processes run as the site's user, no host paths, names-only credentials, ownership by resource id, masked env values,
+deletes risky and only with `allow_destroy`). The `value.unsupported` warnings are gone for compose and function units,
+`mounts` and `previews`; database and redis units and `volumes` keep them until the data lane lands.
+
+**Engine**
+- **[decision] A `*` inside a unit's section matches any key of a map** (`units.*(compose).services.*.limits`), so
+  Sites, Limits and Edge each own their fields of one compose service.
+- `ConfigScope` gains `preview` (a pull request's preview environment): units it creates are isolated, never deployed
+  on push.
+- A push deploys app, compose and function units whose `root` holds a changed file.
+
+**Environments (Projects reconciler, section `environments`, phase A first)**
+- **[decision] A push creates an environment the file declares and the project doesn't have**, before its run: empty,
+  named after the key, **not production**. `production: true` (on a new or an existing environment) is then the run's
+  `environment.production` change: refused while the source is experimental, else it waits for an approval. Only
+  `production` is managed (ownership `environment`, `/production`); `branch` and `servers` have no column.
+- A reserved slug (`settings`, `previews`…) is `value.forbidden`; a key taken by a preview environment's slug fails the
+  run (never a run against another environment than the one the file names). `falak apply -e <new>` creates a declared
+  environment too, for a caller who may also manage projects (`projects.manage`); `falak plan -e <new>` still answers
+  that the environment doesn't exist.
+- **[decision] An environment removed from the file is released, never deleted**: on the next push to the branch the
+  last applied file bound it to, its sites deploy that push the old way and its ownership rows are dropped (fields
+  editable, push to deploy takes over).
+- Several environments: each environment bound to the pushed branch gets its own run, resolved with its overrides
+  (the merge of the phase 0 contract); a unit an environment doesn't have yet is created there on the environment's
+  servers with its branch.
+
+**Compose units**
+- Owners: Sites (`type`, `root`, `servers`, `env`, `expose`, `test_domain`, `files`, `profiles`,
+  `services.*.port|health_path|replace_with`), Deployments (`deploy`: `compose`, `rolling` or `canary`; `deploy.hooks`
+  is `value.unsupported`), Limits (`services.*.limits` → `compose_limits.<s>`, merged over the service's own limits, the
+  `*` defaults untouched, applied on the next deploy), Edge (the unit's `domains`, `redirects`, `headers`, `mounts`: its
+  first public service's route; `services.<s>.domains|redirects|headers`: that service's, `services.<first>` being the
+  unit's own).
+- A new unit is created through `SiteFactory` from the repository (`compose_source: repo`, the unit's files relative to
+  its root, public services in the file's order). **[decision] Public services keep their order** once created: a
+  service the file makes public is added last; removing a `port` stops managing it (it stays public).
+- **[decision] `replace_with`** names a database or redis unit (or a database service of the environment): the stack's
+  service runs as that instance (Sites' extraction, through Databases' `DatabaseDirectory` contract only). Switching a
+  replaced service to another database, putting it back, and running a service as its own site stay dashboard
+  actions (`value.conflict`).
+- **[decision] Host binds stay an admin's choice:** `keep_binds` (and any other adjustment) is not in the schema, so a
+  file with it fails validation, and applying a file never changes a stack's adjustments.
+- The dashboard refuses (422) a compose edit that changes a managed field (files, profiles, a public service's port or
+  health path, a replaced service, switching to an inline file).
+
+**Function units**
+- **[decision] A function unit's code is the repository's files under its `root` at the run's commit**, read by the
+  control plane through the provider API (`tree` + `file`, like falak.yaml): no builder or agent change. Skipped:
+  dot-files and dot-folders, `node_modules`, `__pycache__`, `.venv`, `venv`, falak.yaml, names a version can't hold and
+  non-UTF-8 files; the rest must be a valid version (≤ 50 files, ≤ 1 MB, the entrypoint present), else `value.range` on
+  `root` (a plain git server can't give the code either). Phase A saves the code as a new `FunctionVersion`
+  ("falak.yaml @ abc1234") only when its hash changed, and **records the commit against the version**
+  (`functions_version_commits`): the unit's deployment of that git commit runs exactly that version (Functions'
+  `FunctionSources::find` matches a version hash or such a commit). A run without a commit (a CLI file) reads the
+  environment's branch and deploys the newest version.
+- A function site the file creates has no repository: it deploys versions, push to deploy never touches it, and Config
+  deploys it when its code or its config changed. **[decision] The editor no longer deploys** a function whose code the
+  file manages (ownership `/code`); rolling back to a version still works.
+- Functions (phase A) owns `runtime`, `entrypoint`, `root`, `scaling`, `memory`, `cpus`, `timeout`, `access` (written
+  on the function row: the run's deployment carries them, no extra redeploy); API keys stay in the dashboard.
+  `schedules` are Functions' phase B (`function_schedule` ownership: deleted when the file created them, else
+  released). A function's `domains` are Edge's; a function created by the file gets no default domain (it is reached
+  through its domains or mounts).
+- `mounts` (Edge, phase B of the host unit): identity `path`, `function` must be a function unit (`name.unit`),
+  `strip_prefix` default true.
+- The dashboard refuses (422) edits of managed scaling and limits, the allowlist, and managed schedules.
+
+**Previews**
+- **[decision] `previews:` is applied by the run of its `base` environment** (production's when it names none); other
+  environments' runs plan nothing for it. `PreviewSettings` is the stored copy (through `SavePreviewSettings`); fields
+  the file doesn't set keep today's value, `units` replaces the map, a removed block is released (previews stay on).
+  `fork_server` must be the dashboard's fork server or a server attached to the project.
+- **[decision] Production data in previews needs an approval:** a database unit cloned from production's backups
+  (`clone_backup` of production, `clone_sanitize` with the file's script) is the risky change
+  `previews.production_data`, flagged by the reconciler; the approval is the acknowledgement the dashboard asks for.
+- **[decision] A preview is built from the pull request's file** (`Config\Contracts\PreviewConfig`): the head's file
+  for a pull request of the repository, **the base branch's newest file for a fork** (after the existing
+  `/falak preview` approval; a fork never supplies config), resolved for the previews' base environment. Left out:
+  database and redis units (Previews creates their copies per data strategy), `domains` (the preview hosts),
+  `servers` (the preview server), `volumes`, a compose service's `domains` and `replace_with`. The file's
+  `previews.units: omit` leaves units out; data strategies, sharing, the server and access stay the stored settings'
+  (the base branch's), so a pull request can't widen what data reaches its preview.
+- Both phases are applied to the preview environment before its first deploy and again before a redeploy whose file
+  changed (`previews_previews.config_ref`), recorded as a `pr` run of the preview environment; risky rules don't apply
+  (the preview is disposable). Units the base environment doesn't have are created in the preview (isolated, never
+  deployed on push, on the preview server, the pull request's branch) and routed like the copies; a fork's preview
+  never gets new units. The Previews settings form refuses (422) edits of fields the block manages. Workers, schedules, deploy settings, Laravel settings and limits now come from the file (the
+  `DuplicateSite` gap is closed for projects with a file). An invalid file fails the preview with the reason.
+- Teardown deletes only the preview's own resources: its recorded sites and any site placed in the preview
+  environment, never a site placed elsewhere, then forgets what the file managed there.
+
+**Gaps (later)**
+- Moving an environment to another branch doesn't update its existing sites' `branch` column.
+- Dashboard: compose, function and previews settings show no "Managed by falak.yaml" badge yet; the server refuses
+  (422) edits of their managed fields.
+- `falak plan` for an environment the project doesn't have yet.
+
 ### CLI (`agent/internal/cli`)
 
 | Command | Flags | Does |
