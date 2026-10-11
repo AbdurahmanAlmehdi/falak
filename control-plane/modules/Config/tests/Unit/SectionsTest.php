@@ -53,3 +53,16 @@ test('a * inside a unit matches every key of a map: compose services are shared 
         ->and($sections->prune($limits, $document))->toBe(['units' => ['shop' => ['services' => ['web' => ['limits' => ['cpus' => 1]], 'db' => ['limits' => ['memory' => '1g']]]]]])
         ->and(collect($sections->unsupported($document))->pluck('pointer')->all())->toEqualCanonicalizing(['/units/shop/type', '/units/shop/services/web/keep', '/units/web']);
 });
+
+test('a section that is the whole unit selects all of it, minus longer sections owned by others', function () {
+    $databases = sections_owner(['units.*(database|redis)']);
+    $edge = sections_owner(['units.*.domains']);
+    $sections = new Sections([$databases, $edge]);
+    $document = ['units' => [
+        'db' => ['type' => 'database', 'engine' => 'postgresql', 'backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite'], 'domains' => ['x.example.com']],
+        'web' => ['type' => 'app', 'runtime' => 'docker'],
+    ]];
+
+    expect($sections->prune($databases, $document))->toBe(['units' => ['db' => ['type' => 'database', 'engine' => 'postgresql', 'backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite']]]])
+        ->and(collect($sections->unsupported($document))->pluck('pointer')->all())->not->toContain('/units/db', '/units/db/engine');
+});

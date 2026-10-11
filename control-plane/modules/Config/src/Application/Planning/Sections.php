@@ -217,6 +217,13 @@ final class Sections
      */
     private static function pick(array $value, array $path, ?bool &$found = null): array
     {
+        // A section that is the whole unit (`units.*(database|redis)`): all of it.
+        if ($path === []) {
+            $found = true;
+
+            return $value;
+        }
+
         $found = false;
         $token = array_shift($path);
         $out = [];
