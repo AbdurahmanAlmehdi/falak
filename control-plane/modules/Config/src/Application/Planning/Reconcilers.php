@@ -14,8 +14,11 @@ use Illuminate\Contracts\Container\Container;
  */
 final class Reconcilers
 {
-    /** Owner order of the phase 0 contract's section table. */
-    public const ORDER = ['Projects', 'Databases', 'Volumes', 'Sites', 'Deployments', 'Limits', 'Functions', 'Previews', 'Processes', 'Edge'];
+    /**
+     * Owner order of the phase 0 contract's section table, except Volumes after Sites **[decision]**: a volume is
+     * attached to its unit's site, which Sites creates for a unit the file adds.
+     */
+    public const ORDER = ['Projects', 'Databases', 'Sites', 'Volumes', 'Deployments', 'Limits', 'Functions', 'Previews', 'Processes', 'Edge'];
 
     /** @var ?list<Reconcilable> */
     private ?array $all = null;

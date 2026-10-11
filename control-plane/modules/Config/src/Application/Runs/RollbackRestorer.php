@@ -7,6 +7,8 @@ use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Contracts\ApplyContext;
 use Falak\Config\Contracts\ApplyPhase;
+use Falak\Config\Contracts\Change;
+use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Domain\Enums\RunStatus;
@@ -85,10 +87,14 @@ final class RollbackRestorer
         try {
             $scope = $this->scopes->make($environment, $source, $resolved, $run->commit);
             $plan = $this->planner->plan($scope, $resolved, $unit);
-            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => []]), 'deploy' => []])->save();
+            // [decision] A rollback never applies a risky change (it has no approval): e.g. a release made before a
+            // volume was added would unmount it. Those are skipped and listed as warnings.
+            $safe = new ChangeSet(array_values(array_filter($plan->changes->changes, fn (Change $c) => ! $c->risky)));
+            $skipped = array_map(fn (Change $c) => ConfigIssue::warning('rollback.risky_skipped', $c->path, "Not restored by the rollback ({$c->rule}): {$c->reason}")->toArray(), $plan->changes->risky());
+            $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => []]), 'deploy' => [], ...($skipped !== [] ? ['errors' => $skipped] : [])])->save();
 
-            DB::transaction(function () use ($scope, $plan, $run, $unit, $resolved, $releaseId) {
-                $scope = $this->applier->phaseA($scope, $plan->changes, new ApplyContext($run->id, ApplyPhase::BeforeBuild, $run->commit), $unit);
+            DB::transaction(function () use ($scope, $safe, $run, $unit, $resolved, $releaseId) {
+                $scope = $this->applier->phaseA($scope, $safe, new ApplyContext($run->id, ApplyPhase::BeforeBuild, $run->commit), $unit);
                 $this->applier->phaseB($scope, $resolved, new ApplyContext($run->id, ApplyPhase::WithRelease, $run->commit, null, false, $unit, null, $releaseId), $unit);
             });
 
