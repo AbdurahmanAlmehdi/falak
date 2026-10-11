@@ -162,6 +162,8 @@ type harness struct {
 	env      map[string]string
 	execed   []string
 	opened   string
+	wd       string // working directory of config commands ("" = the process's)
+	branch   string // current git branch config commands see
 }
 
 func newHarness(t *testing.T, cp *fakeCP) *harness {
@@ -178,11 +180,14 @@ func newHarness(t *testing.T, cp *fakeCP) *harness {
 func (h *harness) newApp(stdin string) *App {
 	return &App{
 		Stdout: h.out, Stderr: h.err, Stdin: strings.NewReader(stdin),
-		Getenv:  func(k string) string { return h.env[k] },
-		Exec:    func(argv []string) error { h.execed = argv; return nil },
-		Open:    func(u string) error { h.opened = u; return nil },
-		Poll:    time.Millisecond,
-		Version: "test",
+		Getenv:    func(k string) string { return h.env[k] },
+		Exec:      func(argv []string) error { h.execed = argv; return nil },
+		Open:      func(u string) error { h.opened = u; return nil },
+		Poll:      time.Millisecond,
+		Version:   "test",
+		Dir:       h.wd,
+		GitBranch: func(string) string { return h.branch },
+		LookPath:  func(string) (string, error) { return "", os.ErrNotExist },
 	}
 }
 
