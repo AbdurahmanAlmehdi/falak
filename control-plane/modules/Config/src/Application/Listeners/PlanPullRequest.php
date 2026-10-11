@@ -199,7 +199,7 @@ final class PlanPullRequest implements ShouldQueue
             }
 
             return sprintf('| %s | `%s` | %s | %s |%s', $c->op->value, $c->path, self::cell(EnvMask::value($c->before, $c->path)), self::cell(EnvMask::value($c->after, $c->path)),
-                $c->risky ? ' risky: '.$c->reason.' |' : ' |');
+                ($c->risky ? ' risky: '.$c->reason : '').($c->note !== null ? ' '.$c->note : '').' |');
         }, array_slice($plan->changes->actionable(), 0, 50));
 
         if ($rows !== []) {

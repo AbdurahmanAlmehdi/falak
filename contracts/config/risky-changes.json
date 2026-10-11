@@ -62,6 +62,40 @@
       "reason": "A shorter recovery window deletes older recovery points."
     },
     {
+      "id": "database.backups_disabled",
+      "paths": ["/units/*/backups/enabled"],
+      "ops": ["create", "update"],
+      "unit_types": ["database", "redis"],
+      "condition": "became_false",
+      "reason": "Disabling a database's backup schedule stops its backups."
+    },
+    {
+      "id": "database.database_removed",
+      "paths": ["/units/*/databases/*"],
+      "ops": ["delete"],
+      "unit_types": ["database"],
+      "reason": "Deleting a database drops its data."
+    },
+    {
+      "id": "volume.move",
+      "paths": ["/units/*/volumes/*/server"],
+      "ops": ["update"],
+      "reason": "Moving a volume to another server moves its data."
+    },
+    {
+      "id": "volume.backups_removed",
+      "paths": ["/units/*/volumes/*/backups"],
+      "ops": ["delete", "detach"],
+      "reason": "Removing a volume's backup schedule stops its backups."
+    },
+    {
+      "id": "volume.backups_disabled",
+      "paths": ["/units/*/volumes/*/backups/enabled"],
+      "ops": ["create", "update"],
+      "condition": "became_false",
+      "reason": "Disabling a volume's backup schedule stops its backups."
+    },
+    {
       "id": "volume.delete",
       "paths": ["/units/*/volumes/*"],
       "ops": ["delete", "detach"],

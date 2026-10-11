@@ -13,6 +13,8 @@ final readonly class Change
      * @param  string  $section  the reconciler section that planned it, e.g. "units.*.workers"
      * @param  ?string  $unit  the unit key (null for environment and previews changes)
      * @param  ?string  $rule  the risky-change rule id (contracts/config/risky-changes.json) when risky
+     * @param  ?string  $note  what applying it does besides the change itself, e.g. "Restarts the database container."
+     *                         (not risky: a heads-up shown with the plan; omitted from toArray() when null)
      */
     public function __construct(
         public ChangeOp $op,
@@ -24,20 +26,27 @@ final readonly class Change
         public bool $risky = false,
         public ?string $reason = null,
         public ?string $rule = null,
+        public ?string $note = null,
     ) {}
 
     /** This change, flagged risky by $rule. */
     public function withRisk(string $rule, string $reason): self
     {
-        return new self($this->op, $this->path, $this->before, $this->after, $this->section, $this->unit, true, $reason, $rule);
+        return new self($this->op, $this->path, $this->before, $this->after, $this->section, $this->unit, true, $reason, $rule, $this->note);
+    }
+
+    /** This change, with a note on what applying it does (e.g. a restart). */
+    public function withNote(string $note): self
+    {
+        return new self($this->op, $this->path, $this->before, $this->after, $this->section, $this->unit, $this->risky, $this->reason, $this->rule, $note);
     }
 
     /**
-     * @return array{op: string, path: string, before: mixed, after: mixed, section: string, unit: ?string, risky: bool, reason: ?string, rule: ?string}
+     * @return array{op: string, path: string, before: mixed, after: mixed, section: string, unit: ?string, risky: bool, reason: ?string, rule: ?string, note?: string}
      */
     public function toArray(): array
     {
-        return [
+        return array_filter([
             'op' => $this->op->value,
             'path' => $this->path,
             'before' => $this->before,
@@ -47,7 +56,8 @@ final readonly class Change
             'risky' => $this->risky,
             'reason' => $this->reason,
             'rule' => $this->rule,
-        ];
+            'note' => $this->note,
+        ], fn ($value, string $key) => $key !== 'note' || $value !== null, ARRAY_FILTER_USE_BOTH);
     }
 
     /**
@@ -65,6 +75,7 @@ final readonly class Change
             risky: (bool) ($data['risky'] ?? false),
             reason: isset($data['reason']) ? (string) $data['reason'] : null,
             rule: isset($data['rule']) ? (string) $data['rule'] : null,
+            note: isset($data['note']) ? (string) $data['note'] : null,
         );
     }
 }

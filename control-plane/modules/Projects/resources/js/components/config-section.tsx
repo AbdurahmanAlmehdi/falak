@@ -29,6 +29,8 @@ interface ConfigChange {
     after: unknown;
     risky: boolean;
     reason: string | null;
+    /** What applying it does besides the change, e.g. a database restart. */
+    note?: string | null;
 }
 
 interface ConfigRun {
@@ -103,6 +105,11 @@ function RunDetails({ run }: { run: ConfigRun }) {
                                     {change.risky && (
                                         <Tag tone="warning" className="ml-1" title={change.reason ?? undefined}>
                                             risky
+                                        </Tag>
+                                    )}
+                                    {change.note && (
+                                        <Tag tone="info" className="ml-1" title={change.note}>
+                                            note
                                         </Tag>
                                     )}
                                 </td>
@@ -225,9 +232,9 @@ export function ConfigSection({ projectId }: { projectId: string }) {
                             <Switch checked={form.enabled} onCheckedChange={(enabled) => setForm({ ...form, enabled })} disabled={!canApply} />
                         </Field>
                         <Field
-                            label="Certificates and DNS credentials the file may use"
+                            label="Certificates, DNS credentials and backup storage the file may use"
                             error={errors.allowed_credentials}
-                            hint="Names, comma-separated, besides those the project's domains already use. Admins only."
+                            hint="Names, comma-separated, besides those the project's domains and backups already use. Admins only."
                             className="sm:col-span-2"
                         >
                             <Input
