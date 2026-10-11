@@ -1,0 +1,6 @@
+Wrote falak.yaml: web (app, node)
+note: web: left out MISSING (it interpolates a variable this file doesn't set)
+note: web: the example values of AMQP_URL, SENTRY, ALERTS_HOOK, STRIPE, UPSTREAM_SEED look like credentials: they became secret references
+note: web: create these secrets before applying (falak validate checks them when logged in): AMQP_URL, SENTRY, ALERTS_HOOK, STRIPE, UPSTREAM_SEED, MAPS_APIKEY, BASIC_AUTH, WEBHOOK_SIGNING, PUSH_SK
+note: web: expanded ${VAR} in PUBLIC_GREETING
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

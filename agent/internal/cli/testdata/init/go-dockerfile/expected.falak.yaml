@@ -10,7 +10,7 @@ units:
     port: 9000 # detected: EXPOSE 9000 in Dockerfile
     build:
       mode: docker # detected: Dockerfile
-    env: # from .env.example; secrets are ${{ secrets.NAME }} references
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
       DATABASE_URL: ${{ db.DATABASE_URL }}
       LOG_FORMAT: json
       API_TOKEN: ${{ secrets.API_TOKEN }}

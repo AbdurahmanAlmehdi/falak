@@ -1,3 +1,5 @@
 Wrote falak.yaml: web (app, frankenphp), db (database, postgresql), redis (redis, redis)
 note: web: create these secrets before applying (falak validate checks them when logged in): APP_KEY, MAIL_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, STRIPE_SECRET, PUSHER_APP_KEY
+note: web: expanded ${VAR} in VITE_APP_NAME, VITE_PUSHER_APP_KEY
+note: web: left out local development values: LOG_LEVEL
 Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

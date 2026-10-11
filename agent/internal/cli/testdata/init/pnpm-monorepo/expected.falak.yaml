@@ -9,7 +9,7 @@ units:
     root: apps/api
     runtime: node # detected: express ^5.1.0 in package.json
     node: "22" # detected: engines.node 22 in package.json
-    env: # from .env.example; secrets are ${{ secrets.NAME }} references
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
       DATABASE_URL: ${{ db.DATABASE_URL }}
       JWT_SECRET: ${{ secrets.JWT_SECRET }}
       CORS_ORIGIN: https://acme.test

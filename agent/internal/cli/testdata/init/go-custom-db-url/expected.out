@@ -1,0 +1,3 @@
+Wrote falak.yaml: web (app, docker), db (database, postgresql), redis (redis, redis)
+note: web: left out local development values: LOG_LEVEL, SMTP_HOST
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

@@ -20,12 +20,11 @@ units:
           fi
           $FALAK_PHP artisan optimize
           $FALAK_PHP artisan storage:link --force
-    env: # from .env.example; secrets are ${{ secrets.NAME }} references
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
       APP_NAME: Shop
       APP_ENV: production
       APP_KEY: ${{ secrets.APP_KEY }}
       APP_DEBUG: "false"
-      LOG_LEVEL: debug
       DB_CONNECTION: ${{ db.DB_CONNECTION }}
       DB_HOST: ${{ db.DB_HOST }}
       DB_PORT: ${{ db.DB_PORT }}
@@ -46,8 +45,8 @@ units:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }}
       PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }}
-      VITE_APP_NAME: ${APP_NAME}
-      VITE_PUSHER_APP_KEY: ${PUSHER_APP_KEY}
+      VITE_APP_NAME: Shop
+      VITE_PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }}
 
   db:
     type: database

@@ -1,0 +1,31 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: node # detected: express ^5.1.0 in package.json
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      APP_NAME: notifier
+      AMQP_URL: ${{ secrets.AMQP_URL }}
+      SENTRY: ${{ secrets.SENTRY }}
+      ALERTS_HOOK: ${{ secrets.ALERTS_HOOK }}
+      STRIPE: ${{ secrets.STRIPE }}
+      UPSTREAM_SEED: ${{ secrets.UPSTREAM_SEED }}
+      MAPS_APIKEY: ${{ secrets.MAPS_APIKEY }}
+      BASIC_AUTH: ${{ secrets.BASIC_AUTH }}
+      WEBHOOK_SIGNING: ${{ secrets.WEBHOOK_SIGNING }}
+      PUSH_SK: ${{ secrets.PUSH_SK }}
+      JWT_PRIVATE_KEY_PATH: /run/secrets/jwt.pem
+      AUTH_URL: https://auth.example.com
+      BANNER: |-
+        Hello
+        World
+      QUOTE: it's fine
+      PUBLIC_GREETING: notifier says hi
+
+environments:
+  production:
+    branch: main # detected: current git branch

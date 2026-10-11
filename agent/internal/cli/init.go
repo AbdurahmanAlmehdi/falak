@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -47,20 +46,23 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 		return fmt.Errorf("%s is not a directory", dir)
 	}
 	writing := !o.stdout && !a.jsonOut
-	if writing && !o.force {
+	if writing {
 		for _, n := range configFileNames {
-			if _, err := os.Stat(filepath.Join(dir, n)); err == nil {
+			// Lstat: a symlink (even a dangling one) counts as existing, and is never written through.
+			st, err := os.Lstat(filepath.Join(dir, n))
+			if err != nil {
+				continue
+			}
+			if st.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symlink: refusing to write through it", n)
+			}
+			if !o.force {
 				return fmt.Errorf("%s already exists: use --force to replace it, or --stdout to compare", n)
 			}
 		}
 	}
 
-	lookPath := a.LookPath
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-	_, rerr := lookPath("railpack")
-	d, err := detect(dir, detectOptions{ctx: ctx, lookPath: lookPath, railpack: rerr == nil, dockerfile: o.dockerfile})
+	d, err := detect(dir, detectOptions{dockerfile: o.dockerfile})
 	if err != nil {
 		return err
 	}
@@ -69,7 +71,10 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 			_ = a.printJSON(d)
 		}
 		u := d.Unsupported
-		return fmt.Errorf("%s (%s) isn't built natively by Falak, there is no Dockerfile and railpack isn't installed: add a Dockerfile, or run `falak init --dockerfile` to write a starter one", langName(u.Language), u.Evidence)
+		return fmt.Errorf("%s (%s) isn't built natively by Falak and there is no Dockerfile: add one, or run `falak init --dockerfile` to write a starter one", langName(u.Language), u.Evidence)
+	}
+	if o.stdout && len(d.Dockerfiles) > 0 {
+		return usagef("--stdout can't show the starter Dockerfiles --dockerfile writes: run without --stdout (or --json)")
 	}
 
 	p := &prompter{a: a, ask: a.Interactive && !o.yes && !a.jsonOut, in: bufio.NewReader(a.Stdin)}
@@ -153,12 +158,12 @@ func cmdInit(ctx context.Context, a *App, args []string) error {
 		return nil
 	}
 
-	if d.Dockerfile != nil {
-		if err := writeStarter(dir, d.Dockerfile); err != nil {
+	for _, df := range d.Dockerfiles {
+		if err := writeInRepo(dir, df.Path, []byte(df.Content), false); err != nil {
 			return err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "falak.yaml"), content, 0o644); err != nil {
+	if err := writeInRepo(dir, "falak.yaml", content, o.force); err != nil {
 		return err
 	}
 	if acct.project != nil {
@@ -196,8 +201,8 @@ func (a *App) initSummary(w io.Writer, d *detection, acct *account) {
 		parts = append(parts, fmt.Sprintf("%s (%s)", u.Key, what))
 	}
 	fmt.Fprintf(w, "Wrote falak.yaml: %s\n", strings.Join(parts, ", "))
-	if d.Dockerfile != nil {
-		fmt.Fprintf(w, "Wrote %s (a starter: check its build and start commands)\n", d.Dockerfile.Path)
+	for _, df := range d.Dockerfiles {
+		fmt.Fprintf(w, "Wrote %s (a starter: check its build and start commands)\n", df.Path)
 	}
 	if acct.project != nil {
 		fmt.Fprintf(w, "Linked to project %s (%s)\n", acct.project.Name, projectLinkFile)
@@ -360,24 +365,27 @@ func (a *App) askAccount(ctx context.Context, p *prompter, o initOptions, d *det
 		return fmt.Errorf("no project %q", ref)
 	}
 	if pick < 0 {
-		def := 0
+		// Linking needs a choice: -p, FALAK_PROJECT or an answer here; --yes never picks a project.
+		if !p.ask {
+			d.Notes = append(d.Notes, "not linked to a project: pass -p <project> (or answer the questions without --yes) to link it")
+			return nil
+		}
+		def := ""
 		base := filepath.Base(dir)
 		for i, pr := range projects {
 			if strings.EqualFold(pr.Name, base) {
-				def = i
+				def = strconv.Itoa(i + 1)
 				break
 			}
-			if pr.IsDefault {
-				def = i
-			}
 		}
-		if p.ask {
-			fmt.Fprintln(a.Stderr, "Projects:")
-			for i, pr := range projects {
-				fmt.Fprintf(a.Stderr, "  %d) %s\n", i+1, pr.Name)
-			}
+		fmt.Fprintln(a.Stderr, "Projects:")
+		for i, pr := range projects {
+			fmt.Fprintf(a.Stderr, "  %d) %s\n", i+1, pr.Name)
 		}
-		ans := p.line("Project", strconv.Itoa(def+1))
+		ans := p.line("Link this repository to project (number; empty: don't link)", def)
+		if ans == "" {
+			return nil
+		}
 		n, err := strconv.Atoi(ans)
 		if err != nil || n < 1 || n > len(projects) {
 			return fmt.Errorf("no project %q", ans)
@@ -470,13 +478,9 @@ func (a *App) askAccount(ctx context.Context, p *prompter, o initOptions, d *det
 }
 
 func writeProjectLink(dir string, p *api.Project, url string) error {
-	path := filepath.Join(dir, filepath.FromSlash(projectLinkFile))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(projectLink{Project: p.ID, Name: p.Name, URL: url}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	return writeInRepo(dir, projectLinkFile, append(b, '\n'), true)
 }

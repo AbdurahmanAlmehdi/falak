@@ -97,13 +97,23 @@ func TestInitGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			golden(t, filepath.Join(src, "expected.falak.yaml"), got)
-			if df := filepath.Join(src, "expected.Dockerfile"); fileExists(df) || *update && fileExists(filepath.Join(h.wd, "Dockerfile")) && !fileExists(filepath.Join(src, "Dockerfile")) {
-				b, err := os.ReadFile(filepath.Join(h.wd, "Dockerfile"))
-				if err != nil {
-					t.Fatal(err)
+			// Starter Dockerfiles init wrote (not in the fixture): expected.Dockerfile, expected.apps-api.Dockerfile, …
+			_ = filepath.WalkDir(h.wd, func(p string, de fs.DirEntry, err error) error {
+				if err != nil || de.IsDir() || de.Name() != "Dockerfile" {
+					return err
 				}
-				golden(t, df, b)
-			}
+				rel, _ := filepath.Rel(h.wd, p)
+				if fileExists(filepath.Join(src, rel)) {
+					return nil
+				}
+				name := "expected.Dockerfile"
+				if dir := filepath.Dir(rel); dir != "." {
+					name = "expected." + strings.ReplaceAll(filepath.ToSlash(dir), "/", "-") + ".Dockerfile"
+				}
+				b, _ := os.ReadFile(p)
+				golden(t, filepath.Join(src, name), b)
+				return nil
+			})
 			golden(t, filepath.Join(src, "expected.out"), h.out.Bytes())
 
 			// Every generated file passes the schema and the reference checks.
@@ -187,6 +197,10 @@ func TestSecretKeys(t *testing.T) {
 		"AWS_SECRET_ACCESS_KEY": true, "AWS_ACCESS_KEY_ID": true, "SESSION_SECRET": true, "JWT_PRIVATE_KEY": true,
 		"VITE_PUSHER_APP_KEY": false, "NEXT_PUBLIC_STRIPE_KEY": false, "STRIPE_PUBLISHABLE_KEY": false, "APP_NAME": false,
 		"LOG_LEVEL": false, "CACHE_PREFIX": false, "PUBLIC_KEY": false, "MAIL_FROM_ADDRESS": false,
+		"MAPS_APIKEY": true, "PUSH_SK": true, "ATM_PIN": true, "BASIC_AUTH": true, "WEBHOOK_SIGNING": true, "SLACK_WEBHOOK_URL": true,
+		"SENTRY_DSN": true, "GOOGLE_CREDENTIALS": true, "REQUEST_SIGNING_KEY": true, "JWT_PRIVATE_KEY_PATH": false,
+		"GOOGLE_APPLICATION_CREDENTIALS_FILE": false, "AUTH_URL": false, "NEXTAUTH_URL": false, "GOOGLE_AUTH_CLIENT_ID": false,
+		"AUTH_DRIVER": false, "SIGNUP_ENABLED": false, "DESIGN_SYSTEM": false,
 	} {
 		if got := isSecretKey(k); got != want {
 			t.Errorf("%s: %v, want %v", k, got, want)
@@ -232,19 +246,151 @@ func TestInitAccountQuestions(t *testing.T) {
 	}
 }
 
-func TestInitUnsupportedWithRailpack(t *testing.T) {
+func TestSecretValues(t *testing.T) {
+	for v, want := range map[string]bool{
+		"amqp://user:hunter2@rabbit:5672/":                                true,
+		"postgres://app@db:5432/app":                                      false,
+		"https://0f1e2d3c4b5a69788796a5b4c3d2e1f0@o1.ingest.sentry.io/42": true,
+		"https://hooks.slack.com/services/T000/B000/XXXXXXXX":             true,
+		"https://discord.com/api/webhooks/1/abc":                          true,
+		"base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=":             true,
+		"sk_test_FAKE": true, "pk_live_x": true, "ghp_abc": true, "xoxb-1-2": true,
+		"Zx81kq0PLm2Vn7Tb4Rc9Wd3Y":              true,
+		"0123456789abcdef0123456789abcdef":      true,
+		"pk_test_x":                             false,
+		"https://api.example.com/v1":            false,
+		"my-application-production-bucket":      false,
+		"storage/app/public/uploads2024/images": false,
+		"inventory-reports":                     false,
+		"Hello World":                           false,
+		"${APP_KEY}":                            false,
+	} {
+		if got := isSecretValue(v); got != want {
+			t.Errorf("%q: %v, want %v", v, got, want)
+		}
+	}
+}
+
+func TestUnquoteEnv(t *testing.T) {
+	for in, want := range map[string]string{
+		`"a\nb"`:          "a\nb",
+		`"a\\nb"`:         `a\nb`,
+		`"say \"hi\""`:    `say "hi"`,
+		`'it''s'`:         "it's",
+		`'it\'s'`:         "it's",
+		`'raw \n'`:        `raw \n`,
+		`plain # comment`: "plain",
+		`""`:              "",
+		`''`:              "",
+	} {
+		if got := unquoteEnv(in); got != want {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+}
+
+// No example value that looks like a credential reaches the file, the notes or the --json report.
+func TestInitNeverPrintsSecretValues(t *testing.T) {
 	h := newHarness(t, nil)
-	h.wd = copyRepo(t, filepath.Join("testdata", "init", "python-unsupported"))
-	h.out.Reset()
-	h.err.Reset()
-	h.app = h.newApp("")
-	h.app.LookPath = func(name string) (string, error) { return filepath.Join(t.TempDir(), name), nil } // "installed"
-	if code := h.app.Run(t.Context(), []string{"init", "--yes", "--stdout"}); code != 0 {
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "secret-values"))
+	for _, args := range [][]string{{"init", "--yes", "--stdout"}, {"init", "--json"}} {
+		if code := h.run(args...); code != 0 {
+			t.Fatalf("%v: %d %s", args, code, h.err.String())
+		}
+		all := h.out.String() + h.err.String()
+		for _, secret := range []string{"hunter2", "0f1e2d3c4b5a", "XXXXXXXX", "sk_test_FAKE", "Zx81kq0", "changeme"} {
+			if strings.Contains(all, secret) {
+				t.Errorf("%v printed %q:\n%s", args, secret, all)
+			}
+		}
+	}
+}
+
+func TestInitSymlinks(t *testing.T) {
+	outside := t.TempDir()
+	writeFile(t, outside, "real.env", "LEAKED_FROM_OUTSIDE=yes\nSTOLEN_TOKEN=abc\n")
+	writeFile(t, outside, "package.json", `{"name":"outside","dependencies":{"next":"15.0.0"}}`)
+
+	// A .env.example (and a whole app directory) pointing out of the repository are not read.
+	h := newHarness(t, nil)
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "node-express"))
+	_ = os.Remove(filepath.Join(h.wd, ".env.example"))
+	if err := os.Symlink(filepath.Join(outside, "real.env"), filepath.Join(h.wd, ".env.example")); err != nil {
+		t.Fatal(err)
+	}
+	if code := h.run("init", "--yes", "--stdout"); code != 0 {
 		t.Fatalf("%d %s", code, h.err.String())
 	}
-	for _, want := range []string{"runtime: docker # detected: python (requirements.txt); no Dockerfile: built with Railpack", "port: 8000", "mode: docker"} {
-		if !strings.Contains(h.out.String(), want) {
-			t.Errorf("missing %q in\n%s", want, h.out.String())
+	if strings.Contains(h.out.String(), "LEAKED") || !strings.Contains(h.err.String(), ".env.example leads out of the repository") {
+		t.Fatalf("read through the symlink:\n%s\n%s", h.out.String(), h.err.String())
+	}
+	mono := t.TempDir()
+	writeFile(t, mono, "pnpm-workspace.yaml", "packages: [apps/*]\n")
+	writeFile(t, mono, "apps/web/package.json", `{"name":"web","scripts":{"start":"node a.js"},"dependencies":{"express":"5.0.0"}}`)
+	if err := os.Symlink(outside, filepath.Join(mono, "apps", "evil")); err != nil {
+		t.Fatal(err)
+	}
+	h.wd = mono
+	if code := h.run("init", "--yes", "--stdout"); code != 0 || strings.Contains(h.out.String(), "evil") {
+		t.Fatalf("followed a symlinked app: %d\n%s%s", code, h.out.String(), h.err.String())
+	}
+
+	// Writing: never through a symlink, dangling ones included, even with --force.
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "nextjs"))
+	target := filepath.Join(outside, "written-by-init.yaml")
+	if err := os.Symlink(target, filepath.Join(h.wd, "falak.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "--yes"}, {"init", "--yes", "--force"}} {
+		if code := h.run(args...); code == 0 || !strings.Contains(h.err.String(), "symlink") {
+			t.Fatalf("%v: %d %s", args, code, h.err.String())
 		}
+		if fileExists(target) {
+			t.Fatalf("%v wrote outside the repository", args)
+		}
+	}
+	// A symlinked .falak directory: the link file isn't written through it.
+	if err := writeInRepo(h.wd, "x/../ok.txt", []byte("ok"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(h.wd, ".falak")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInRepo(h.wd, projectLinkFile, []byte("{}"), true); err == nil || fileExists(filepath.Join(outside, "project.json")) {
+		t.Fatalf("wrote through .falak: %v", err)
+	}
+	// O_EXCL-like creation: an existing file is kept without replace.
+	if err := writeInRepo(h.wd, "ok.txt", []byte("again"), false); err == nil {
+		t.Fatal("replaced an existing file")
+	}
+}
+
+func TestInitDockerfileFlags(t *testing.T) {
+	h := newHarness(t, nil)
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "monorepo-dockerfile"))
+	if code := h.run("init", "--yes", "--stdout", "--dockerfile"); code != ExitUsage || !strings.Contains(h.err.String(), "--stdout can't show") {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	if fileExists(filepath.Join(h.wd, "apps", "api", "Dockerfile")) {
+		t.Fatal("--stdout wrote a Dockerfile")
+	}
+}
+
+func TestInitYesDoesNotLinkAProject(t *testing.T) {
+	h, _ := configHarness(t)
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "nextjs"))
+	if code := h.run("init", "--yes"); code != 0 {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	if fileExists(filepath.Join(h.wd, ".falak", "project.json")) || !strings.Contains(h.out.String(), "not linked to a project") {
+		t.Fatalf("linked without a choice: %s", h.out.String())
+	}
+	// -p links (and its environments are used).
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "nextjs"))
+	if code := h.run("init", "--yes", "-p", "shop"); code != 0 {
+		t.Fatalf("%d %s", code, h.err.String())
+	}
+	if b, err := os.ReadFile(filepath.Join(h.wd, ".falak", "project.json")); err != nil || !strings.Contains(string(b), projectID) {
+		t.Fatalf("link: %v %s", err, b)
 	}
 }

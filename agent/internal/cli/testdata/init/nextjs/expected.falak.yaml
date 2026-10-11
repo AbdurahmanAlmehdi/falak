@@ -8,7 +8,7 @@ units:
     type: app
     runtime: node # detected: next 15.5.2 in package.json
     node: "22" # detected: .nvmrc
-    env: # from .env.example; secrets are ${{ secrets.NAME }} references
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
       NEXT_PUBLIC_API_URL: https://api.example.com
       NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_x
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}

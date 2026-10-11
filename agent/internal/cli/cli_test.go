@@ -187,7 +187,6 @@ func (h *harness) newApp(stdin string) *App {
 		Version:   "test",
 		Dir:       h.wd,
 		GitBranch: func(string) string { return h.branch },
-		LookPath:  func(string) (string, error) { return "", os.ErrNotExist },
 	}
 }
 

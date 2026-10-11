@@ -1,12 +1,9 @@
 package cli
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -42,7 +39,7 @@ type detection struct {
 	Units       []*detectedUnit  `json:"units"`
 	Notes       []string         `json:"notes,omitempty"`
 	Unsupported *unsupportedLang `json:"unsupported,omitempty"`
-	Dockerfile  *starterFile     `json:"dockerfile,omitempty"` // written by --dockerfile
+	Dockerfiles []*starterFile   `json:"dockerfiles,omitempty"` // written by --dockerfile, one per unit root
 	offers      []composeOffer
 }
 
@@ -78,44 +75,119 @@ type needs struct {
 	redis, redisWhy string
 }
 
-type envEntry struct {
-	key, value string
-}
-
 type detectOptions struct {
-	railpack   bool // railpack is installed
 	dockerfile bool // --dockerfile: write a starter Dockerfile for unsupported languages
-	ctx        context.Context
-	lookPath   func(string) (string, error)
 }
 
-// fsRepo reads files of a directory.
-type fsRepo struct{ dir string }
+// fsRepo reads files of a directory inside a repository. Nothing outside the repository is read: a path whose
+// symlinks lead out of root counts as missing (and is reported once in the notes).
+type fsRepo struct {
+	root string // the repository, symlinks resolved
+	dir  string
+	seen *map[string]bool // escaping paths already reported
+	out  *[]string        // where they are reported
+}
+
+func newRepo(dir string, notes *[]string) (fsRepo, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fsRepo{}, err
+	}
+	real, err = filepath.Abs(real)
+	if err != nil {
+		return fsRepo{}, err
+	}
+	seen := map[string]bool{}
+	return fsRepo{root: real, dir: real, seen: &seen, out: notes}, nil
+}
 
 func (r fsRepo) path(rel string) string { return filepath.Join(r.dir, filepath.FromSlash(rel)) }
 
-func (r fsRepo) exists(rel string) bool {
-	_, err := os.Stat(r.path(rel))
-	return err == nil
+// within reports whether a path stays inside the repository once its symlinks are resolved.
+func within(root, p string) bool {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	return real == root || strings.HasPrefix(real, root+string(filepath.Separator))
 }
 
+// safe is the path of rel when it exists inside the repository, else "".
+func (r fsRepo) safe(rel string) string {
+	p := r.path(rel)
+	if _, err := os.Lstat(p); err != nil {
+		return ""
+	}
+	if !within(r.root, p) {
+		if r.seen != nil && !(*r.seen)[p] {
+			(*r.seen)[p] = true
+			if r.out != nil {
+				shown, _ := filepath.Rel(r.root, p)
+				*r.out = append(*r.out, fmt.Sprintf("%s leads out of the repository (symlink); not read", filepath.ToSlash(shown)))
+			}
+		}
+		return ""
+	}
+	return p
+}
+
+func (r fsRepo) exists(rel string) bool { return r.safe(rel) != "" }
+
 func (r fsRepo) isDir(rel string) bool {
-	st, err := os.Stat(r.path(rel))
+	p := r.safe(rel)
+	if p == "" {
+		return false
+	}
+	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
 }
 
 func (r fsRepo) read(rel string) string {
-	b, err := os.ReadFile(r.path(rel))
+	p := r.safe(rel)
+	if p == "" {
+		return ""
+	}
+	st, err := os.Stat(p)
+	if err != nil || !st.Mode().IsRegular() || st.Size() > 4<<20 {
+		return ""
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return ""
 	}
 	return string(b)
 }
 
-func (r fsRepo) sub(rel string) fsRepo { return fsRepo{dir: r.path(rel)} }
+func (r fsRepo) sub(rel string) fsRepo {
+	c := r
+	c.dir = r.path(rel)
+	return c
+}
+
+// glob lists rel paths matching pattern that stay inside the repository.
+func (r fsRepo) glob(pattern string) []string {
+	matches, _ := filepath.Glob(r.path(pattern))
+	sort.Strings(matches)
+	var out []string
+	for _, m := range matches {
+		rel, err := filepath.Rel(r.dir, m)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if r.exists(rel) {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
 
 func (r fsRepo) nonEmptyDir(rel string) bool {
-	entries, err := os.ReadDir(r.path(rel))
+	p := r.safe(rel)
+	if p == "" {
+		return false
+	}
+	entries, err := os.ReadDir(p)
 	if err != nil {
 		return false
 	}
@@ -127,15 +199,48 @@ func (r fsRepo) nonEmptyDir(rel string) bool {
 	return false
 }
 
+// builderInputs are the files builder.Detect reads itself.
+var builderInputs = []string{"package.json", "composer.json", "deno.json", "deno.jsonc", "artisan", "index.html", "public", "public/index.html",
+	"public/index.php", ".nvmrc", ".node-version", ".tool-versions", "bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock",
+	".yarnrc.yml", "package-lock.json", "npm-shrinkwrap.json", "deno.lock", "dist", "build", "out"}
+
+// detectable runs builder.Detect only when the files it reads stay inside the repository.
+func (r fsRepo) detect() (builder.Plan, error) {
+	if !within(r.root, r.dir) {
+		return builder.Plan{}, errors.New("the directory leads out of the repository")
+	}
+	for _, f := range builderInputs {
+		if _, err := os.Lstat(r.path(f)); err == nil && r.safe(f) == "" {
+			return builder.Plan{}, fmt.Errorf("%s leads out of the repository", f)
+		}
+	}
+	return builder.Detect(r.dir, "")
+}
+
 // ---- top level -------------------------------------------------------------------------------------------------
 
 func detect(dir string, opt detectOptions) (*detection, error) {
-	repo := fsRepo{dir: dir}
 	d := &detection{Dir: dir}
+	repo, err := newRepo(dir, &d.Notes)
+	if err != nil {
+		return d, err
+	}
 
 	if c := composeFile(repo); c != "" {
-		if ok, err := d.detectCompose(repo, c); err != nil || ok {
+		ok, err := d.detectCompose(repo, c)
+		if err != nil {
 			return d, err
+		}
+		if ok {
+			// The stack's env and needs come from the repository like an app's.
+			u := d.Units[0]
+			if plan, err := repo.detect(); err == nil {
+				u.plan = &plan
+			}
+			u.needs = repoNeeds(repo)
+			u.envFile = readEnvExample(repo)
+			d.wireNeeds(repo)
+			return d, nil
 		}
 	}
 	if apps := workspaceApps(repo); len(apps) > 0 {
@@ -215,15 +320,8 @@ func workspaceApps(repo fsRepo) []string {
 		if strings.HasPrefix(g, "!") || g == "" {
 			continue
 		}
-		matches, _ := filepath.Glob(repo.path(g))
-		sort.Strings(matches)
-		for _, m := range matches {
-			rel, err := filepath.Rel(repo.dir, m)
-			if err != nil || seen[rel] {
-				continue
-			}
-			rel = filepath.ToSlash(rel)
-			if st, err := os.Stat(m); err != nil || !st.IsDir() {
+		for _, rel := range repo.glob(g) {
+			if seen[rel] || !repo.isDir(rel) {
 				continue
 			}
 			seen[rel] = true
@@ -243,7 +341,7 @@ func isApp(r fsRepo, appDir bool) bool {
 	if !r.exists("package.json") {
 		return appDir && (r.exists("go.mod") || r.exists("requirements.txt") || r.exists("pyproject.toml") || r.exists("Gemfile") || r.exists("Cargo.toml"))
 	}
-	p, err := builder.Detect(r.dir, "")
+	p, err := r.detect()
 	if err != nil {
 		return false
 	}
@@ -334,7 +432,7 @@ func detectApp(repo fsRepo, rel string, opt detectOptions, d *detection) (*detec
 		}
 		f.sub("build", "").set("mode", "docker", "detected: Dockerfile")
 		u.Reasons = append(u.Reasons, "Dockerfile")
-		if plan, err := builder.Detect(r.dir, ""); err == nil {
+		if plan, err := r.detect(); err == nil {
 			u.plan = &plan
 			if plan.Framework == "laravel" {
 				d.Notes = append(d.Notes, fmt.Sprintf("%s: Laravel in a Dockerfile: migrations, queue workers and the scheduler run as your image runs them", key))
@@ -345,7 +443,9 @@ func detectApp(repo fsRepo, rel string, opt detectOptions, d *detection) (*detec
 		return u, nil
 	}
 
-	plan, err := (&builder.Builder{LookPath: opt.lookPath}).Plan(opt.ctx, r.dir, "", nil, io.Discard)
+	// Only the built-in detector: versions come from the repository (engines, .nvmrc, composer.json), never from a
+	// tool's defaults, so the file doesn't depend on what is installed locally.
+	plan, err := r.detect()
 	if err != nil {
 		lang, evidence := sniffLanguage(r)
 		if lang == "" {
@@ -417,9 +517,6 @@ func detectApp(repo fsRepo, rel string, opt detectOptions, d *detection) (*detec
 	default:
 		return nil, fmt.Errorf("%s: unexpected runtime %q", key, plan.Runtime)
 	}
-	if plan.DetectedBy == "railpack" {
-		u.Reasons = append(u.Reasons, "railpack")
-	}
 	u.Reasons = append(u.Reasons, firstNonEmpty(plan.Framework, plan.Provider))
 	return u, nil
 }
@@ -473,7 +570,6 @@ func dockerfilePort(content string) (int, string) {
 var (
 	healthRe    = regexp.MustCompile(`health:\s*['"](/[^'"]*)['"]`)
 	scheduleRe  = regexp.MustCompile(`Schedule::|\$schedule->`)
-	envValueRe  = regexp.MustCompile(`^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$`)
 	migrateHook = "if [ \"$FALAK_IS_LEADER\" = \"1\" ]; then\n  $FALAK_PHP artisan migrate --force\nfi\n$FALAK_PHP artisan optimize\n$FALAK_PHP artisan storage:link --force\n"
 )
 
@@ -518,52 +614,6 @@ func laravelConventions(r fsRepo, u *detectedUnit, composer composerFile, d *det
 
 // ---- needs: databases and Redis --------------------------------------------------------------------------------
 
-func readEnvExample(r fsRepo) []envEntry {
-	content := ""
-	for _, n := range []string{".env.example", ".env.sample", ".env.dist", "example.env"} {
-		if content = r.read(n); content != "" {
-			break
-		}
-	}
-	var out []envEntry
-	seen := map[string]bool{}
-	sc := bufio.NewScanner(strings.NewReader(content))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		m := envValueRe.FindStringSubmatch(line)
-		if m == nil || seen[m[1]] {
-			continue
-		}
-		seen[m[1]] = true
-		out = append(out, envEntry{key: m[1], value: unquoteEnv(m[2])})
-	}
-	return out
-}
-
-func unquoteEnv(v string) string {
-	v = strings.TrimSpace(v)
-	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
-		if i := strings.IndexByte(v[1:], v[0]); i >= 0 {
-			return v[1 : i+1]
-		}
-	}
-	if i := strings.Index(v, " #"); i >= 0 {
-		v = strings.TrimSpace(v[:i])
-	}
-	return v
-}
-
-func envMap(entries []envEntry) map[string]string {
-	m := map[string]string{}
-	for _, e := range entries {
-		m[e.key] = e.value
-	}
-	return m
-}
-
 var (
 	pgPackages    = []string{"pg", "postgres", "pg-promise", "@neondatabase/serverless", "@vercel/postgres"}
 	mysqlPackages = []string{"mysql2", "mysql", "mariadb"}
@@ -571,6 +621,15 @@ var (
 	prismaRe      = regexp.MustCompile(`provider\s*=\s*"(postgresql|postgres|mysql)"`)
 	schemeRe      = regexp.MustCompile(`^(postgres|postgresql|mysql|mariadb)://`)
 )
+
+// repoNeeds reads package.json and composer.json of r for detectNeeds.
+func repoNeeds(r fsRepo) needs {
+	var pkg packageFile
+	var composer composerFile
+	_ = json.Unmarshal([]byte(r.read("package.json")), &pkg)
+	_ = json.Unmarshal([]byte(r.read("composer.json")), &composer)
+	return detectNeeds(r, pkg, composer)
+}
 
 func detectNeeds(r fsRepo, pkg packageFile, composer composerFile) needs {
 	var n needs
@@ -595,9 +654,19 @@ func detectNeeds(r fsRepo, pkg packageFile, composer composerFile) needs {
 	case "mariadb":
 		setDB("mariadb", "DB_CONNECTION=mariadb in .env.example")
 	}
-	if m := schemeRe.FindStringSubmatch(env["DATABASE_URL"]); m != nil {
-		engine := map[string]string{"postgres": "postgresql", "postgresql": "postgresql", "mysql": "mysql", "mariadb": "mariadb"}[m[1]]
-		setDB(engine, "DATABASE_URL in .env.example")
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if !dbURLKeyRe.MatchString(strings.ToUpper(k)) {
+			continue
+		}
+		if m := schemeRe.FindStringSubmatch(env[k]); m != nil {
+			engine := map[string]string{"postgres": "postgresql", "postgresql": "postgresql", "mysql": "mysql", "mariadb": "mariadb"}[m[1]]
+			setDB(engine, k+" in .env.example")
+		}
 	}
 	if _, ok := pkg.dep("prisma"); ok || r.exists("prisma/schema.prisma") {
 		if m := prismaRe.FindStringSubmatch(r.read("prisma/schema.prisma")); m != nil {
@@ -675,8 +744,9 @@ func detectNeeds(r fsRepo, pkg packageFile, composer composerFile) needs {
 			}
 		}
 	} else {
-		for _, k := range []string{"REDIS_URL", "REDIS_HOST"} {
-			if _, ok := env[k]; ok {
+		for _, k := range keys {
+			up := strings.ToUpper(k)
+			if redisURLKeyRe.MatchString(up) || redisAddrRe.MatchString(up) || up == "REDIS_HOST" {
 				setRedis(k + " in .env.example")
 			}
 		}
@@ -690,6 +760,13 @@ func (d *detection) wireNeeds(repo fsRepo) {
 	taken := map[string]bool{}
 	for _, u := range d.Units {
 		taken[u.Key] = true
+		// Units a compose file already brought (replace_with) serve the needs first.
+		if u.Type == "database" && db == nil {
+			db = u
+		}
+		if u.Type == "redis" && redis == nil {
+			redis = u
+		}
 	}
 	free := func(k string) string {
 		if !taken[k] {
@@ -706,7 +783,7 @@ func (d *detection) wireNeeds(repo fsRepo) {
 	}
 	apps := append([]*detectedUnit(nil), d.Units...)
 	for _, u := range apps {
-		if u.Type != "app" {
+		if u.Type != "app" && u.Type != "compose" {
 			continue
 		}
 		if u.needs.db != "" && db == nil {
@@ -724,7 +801,7 @@ func (d *detection) wireNeeds(repo fsRepo) {
 		}
 	}
 	for _, u := range apps {
-		if u.Type == "app" {
+		if u.Type == "app" || u.Type == "compose" {
 			buildEnv(u, db, redis, d)
 		}
 	}

@@ -46,8 +46,6 @@ type App struct {
 	Dir string
 	// GitBranch returns the current branch of the repository holding dir (nil: runs git).
 	GitBranch func(dir string) string
-	// LookPath finds programs (railpack for `falak init`; nil: exec.LookPath).
-	LookPath func(string) (string, error)
 
 	// resolved global options
 	jsonOut bool

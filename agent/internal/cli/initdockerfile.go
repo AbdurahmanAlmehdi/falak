@@ -2,11 +2,8 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -21,8 +18,8 @@ func sniffLanguage(r fsRepo) (lang, evidence string) {
 			return c.lang, c.file
 		}
 	}
-	if m, _ := filepath.Glob(filepath.Join(r.dir, "*.csproj")); len(m) > 0 {
-		return "dotnet", filepath.Base(m[0])
+	if m := r.glob("*.csproj"); len(m) > 0 {
+		return "dotnet", m[0]
 	}
 	return "", ""
 }
@@ -35,17 +32,12 @@ func unsupportedApp(r fsRepo, rel string, u *detectedUnit, lang, evidence string
 	port := defaultPorts[lang]
 	u.Runtime = "docker"
 	switch {
-	case opt.railpack:
-		f.set("runtime", "docker", fmt.Sprintf("detected: %s (%s); no Dockerfile: built with Railpack", lang, evidence))
-		f.set("port", port, "Railpack images listen on $PORT; set it if the app uses another port")
-		f.sub("build", "").set("mode", "docker", "the builder needs railpack installed")
-		u.Reasons = append(u.Reasons, lang, "railpack")
 	case opt.dockerfile:
 		content, ok := starterDockerfile(lang, r)
 		if !ok {
 			return nil, fmt.Errorf("%s (%s): no starter Dockerfile for %s; write one and run `falak init` again", relOrRoot(rel), evidence, lang)
 		}
-		d.Dockerfile = &starterFile{Path: path.Join(rel, "Dockerfile"), Content: content}
+		d.Dockerfiles = append(d.Dockerfiles, &starterFile{Path: path.Join(rel, "Dockerfile"), Content: content})
 		f.set("runtime", "docker", fmt.Sprintf("detected: %s (%s); starter Dockerfile written by falak init", lang, evidence))
 		f.set("port", port, "EXPOSE "+fmt.Sprint(port)+" in the starter Dockerfile")
 		f.sub("build", "").set("mode", "docker", "")
@@ -90,9 +82,8 @@ func starterDockerfile(lang string, r fsRepo) (string, bool) {
 		}
 		pkg := "."
 		if !r.exists("main.go") {
-			if mains, _ := filepath.Glob(filepath.Join(r.dir, "cmd", "*", "main.go")); len(mains) > 0 {
-				sort.Strings(mains)
-				pkg = "./cmd/" + filepath.Base(filepath.Dir(mains[0]))
+			if mains := r.glob("cmd/*/main.go"); len(mains) > 0 {
+				pkg = "./" + path.Dir(mains[0])
 			}
 		}
 		w("FROM golang:"+ver+" AS build", "WORKDIR /src", "COPY go.mod go.sum* ./", "RUN go mod download", "COPY . .",
@@ -111,8 +102,8 @@ func starterDockerfile(lang string, r fsRepo) (string, bool) {
 		switch {
 		case r.exists("manage.py"):
 			project := "app"
-			if m, _ := filepath.Glob(filepath.Join(r.dir, "*", "wsgi.py")); len(m) > 0 {
-				project = filepath.Base(filepath.Dir(m[0]))
+			if m := r.glob("*/wsgi.py"); len(m) > 0 {
+				project = path.Dir(m[0])
 			}
 			if !strings.Contains(reqs, "gunicorn") {
 				server = "gunicorn"
@@ -160,8 +151,9 @@ func starterDockerfile(lang string, r fsRepo) (string, bool) {
 			w("FROM maven:3-eclipse-temurin-21 AS build", "WORKDIR /src", "COPY . .", "RUN mvn -q -DskipTests package", "",
 				"FROM eclipse-temurin:21-jre", "COPY --from=build /src/target/*.jar /app/app.jar")
 		} else {
-			w("FROM gradle:8-jdk21 AS build", "WORKDIR /src", "COPY . .", "RUN gradle --no-daemon -q bootJar || gradle --no-daemon -q build -x test", "",
-				"FROM eclipse-temurin:21-jre", "COPY --from=build /src/build/libs/*.jar /app/app.jar")
+			w("FROM gradle:8-jdk21 AS build", "WORKDIR /src", "COPY . .", "RUN gradle --no-daemon -q bootJar || gradle --no-daemon -q build -x test",
+				"# the runnable jar, not Gradle's *-plain.jar", `RUN find build/libs -name '*.jar' ! -name '*-plain.jar' | head -n 1 | xargs -I{} cp {} /src/app.jar`, "",
+				"FROM eclipse-temurin:21-jre", "COPY --from=build /src/app.jar /app/app.jar")
 		}
 		w("ENV PORT=8080 SERVER_PORT=8080", "EXPOSE 8080", "USER nobody", `CMD ["java", "-jar", "/app/app.jar"]`)
 	default:
@@ -178,13 +170,4 @@ func pyModule(r fsRepo) string {
 		}
 	}
 	return "main"
-}
-
-// writeStarter writes the starter Dockerfile, refusing to replace one.
-func writeStarter(dir string, s *starterFile) error {
-	p := filepath.Join(dir, filepath.FromSlash(s.Path))
-	if _, err := os.Stat(p); err == nil {
-		return fmt.Errorf("%s exists", s.Path)
-	}
-	return os.WriteFile(p, []byte(s.Content), 0o644)
 }

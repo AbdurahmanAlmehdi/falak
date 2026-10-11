@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -39,10 +40,11 @@ var composeEngines = []struct {
 var devTools = map[string]bool{"mailpit": true, "mailhog": true, "adminer": true, "phpmyadmin": true, "pgadmin4": true, "redis-commander": true, "selenium": true, "standalone-chrome": true}
 
 type composeService struct {
-	Image string         `yaml:"image"`
-	Build any            `yaml:"build"`
-	Ports []any          `yaml:"ports"`
-	Extra map[string]any `yaml:",inline"`
+	Image    string         `yaml:"image"`
+	Build    any            `yaml:"build"`
+	Ports    []any          `yaml:"ports"`
+	Profiles []string       `yaml:"profiles"`
+	Extra    map[string]any `yaml:",inline"`
 }
 
 func imageEngine(image string) string {
@@ -119,24 +121,39 @@ func (d *detection) detectCompose(repo fsRepo, file string) (bool, error) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	var apps, dbs []string
+	var apps, dbs, notes []string
+	built := false
+	repoImage := unitKey(filepath.Base(repo.root), "")
 	for _, n := range names {
 		s := doc.Services[n]
 		if strings.HasPrefix(path.Base(s.Image), "sail-") || strings.Contains(fmt.Sprint(s.Build), "vendor/laravel/sail") {
 			return false, nil // Laravel Sail: a local environment, not the deployment
 		}
-		switch base, _, _ := strings.Cut(path.Base(s.Image), ":"); {
+		if len(s.Profiles) > 0 {
+			// Not in the default profile: it only runs when a profile is enabled.
+			notes = append(notes, fmt.Sprintf("%s only runs with the profile %s; add profiles: [%s] to the unit to run it", n, strings.Join(s.Profiles, " or "), s.Profiles[0]))
+			continue
+		}
+		base, _, _ := strings.Cut(path.Base(s.Image), ":")
+		base, _, _ = strings.Cut(base, "@")
+		switch {
 		case imageEngine(s.Image) != "":
 			dbs = append(dbs, n)
 		case devTools[base]:
-			d.Notes = append(d.Notes, fmt.Sprintf("%s (%s) looks like a development tool: it runs with the stack unless a profile keeps it out", n, s.Image))
+			notes = append(notes, fmt.Sprintf("%s (%s) looks like a development tool: it runs with the stack unless a profile keeps it out", n, s.Image))
 		default:
 			apps = append(apps, n)
+			if s.Build != nil || (repoImage != "" && base == repoImage) {
+				built = true
+			}
 		}
 	}
-	if len(apps) == 0 {
+	// Only a compose file that builds (or runs) the repository's own code deploys it; one that only runs databases
+	// and tools for development is ignored.
+	if len(apps) == 0 || !built {
 		return false, nil
 	}
+	d.Notes = append(d.Notes, notes...)
 	d.Kind = "compose"
 	u := &detectedUnit{Key: "web", Type: "compose", fields: newOmap(), Reasons: []string{file}}
 	u.fields.set("type", "compose", "detected: "+file)
