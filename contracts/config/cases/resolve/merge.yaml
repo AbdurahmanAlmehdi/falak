@@ -1,0 +1,38 @@
+# Merge rules: maps merge key by key, lists replace, null removes (a key, or a whole unit), a new key adds a unit.
+$schema: https://falak.sh/schema/v1.json
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { LOG_LEVEL: info, FEATURE_X: "on", WORKERS: 2 }
+    domains: [example.com, www.example.com]
+    deploy:
+      strategy: rolling
+      health: { path: /up, timeout: 10s }
+    limits: { memory: 1g, cpus: 1 }
+    workers:
+      queue: { processes: 2, queue: [high, default] }
+  docs: { type: app, runtime: static }
+environments:
+  production:
+    branch: main
+    production: true
+    servers: [web-1, web-2]
+  staging:
+    branch: develop
+    servers: [staging-1]
+    units:
+      web:
+        env: { LOG_LEVEL: debug, FEATURE_X: null }
+        domains: [staging.example.com]
+        deploy:
+          strategy: in-place
+          health: { timeout: 30s }
+        limits: null
+        workers:
+          queue: { queue: [default] }
+      docs: null
+      mailpit: { type: app, runtime: docker, image: "axllent/mailpit:v1.20", port: 8025 }
+previews:
+  base: staging

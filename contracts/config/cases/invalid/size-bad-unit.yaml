@@ -1,0 +1,7 @@
+# Size units are k, m, g, t (optionally b or ib).
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    limits: { memory: 1gigabyte }

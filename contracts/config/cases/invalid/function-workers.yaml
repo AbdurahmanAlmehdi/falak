@@ -1,0 +1,4 @@
+# Functions have no queue workers.
+version: 1
+units:
+  api: { type: function, runtime: bun, workers: { q: {} } }

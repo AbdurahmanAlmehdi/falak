@@ -1,0 +1,21 @@
+# How both parsers read YAML scalars into JSON values (the "Reading the file" rules).
+strings: [yes, no, on, off, Yes, "true", 12:30, 0755, 08, -0, 0b11, ~foo, "2026-10-11"]
+integers: [0, 42, -7, +12, 1_000, 0x1F, 0o17]
+floats: [0.5, -1.25, 1.5e3]
+booleans: [true, false, True, FALSE]
+nulls: [~, null, Null, ""]
+empty_map: {}
+empty_list: []
+"200": numeric key
+anchors:
+  base: &base { a: 1, b: 2 }
+  merged:
+    <<: *base
+    b: 3
+  alias: *base
+block: |
+  line one
+  line two
+folded: >
+  one
+  two

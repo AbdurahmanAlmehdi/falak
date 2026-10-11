@@ -1,0 +1,7 @@
+# Custom YAML tags are not supported.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { HOME: !env HOME }

@@ -1,0 +1,7 @@
+# Hook sections are before_fetch, before_activate, after_activate, after_restart.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { hooks: { after_deploy: echo done } }

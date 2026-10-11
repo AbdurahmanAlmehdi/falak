@@ -1,0 +1,26 @@
+# YAML both parsers read alike: anchors, aliases and merge keys (explicit keys win); 0755 stays a string;
+# booleans and integers in env become their text.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    workers:
+      a: &worker { processes: 2, memory: 256m, timeout: 30s }
+      b:
+        <<: *worker
+        processes: 4
+    env:
+      UMASK: 0755
+      ZERO: 0
+      HEX: 0x1F
+      ENABLED: true
+      RETRIES: 3
+      QUOTED_DATE: "2026-10-11"
+      TIME_OF_DAY: 12:30
+      ANSWER: yes
+    limits: &lim { memory: 1g }
+  web2:
+    type: app
+    runtime: node
+    limits: *lim

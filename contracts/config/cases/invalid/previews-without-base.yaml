@@ -1,0 +1,7 @@
+# Enabled previews need their base environment.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+previews: { enabled: true }

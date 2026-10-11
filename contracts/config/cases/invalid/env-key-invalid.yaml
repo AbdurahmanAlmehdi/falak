@@ -1,0 +1,7 @@
+# Variable names start with a letter or _.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { 1FOO: bar }

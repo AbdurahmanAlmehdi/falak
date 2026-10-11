@@ -1,0 +1,31 @@
+# One repository, several app units, each with its own root.
+version: 1
+units:
+  web:
+    type: app
+    root: apps/web
+    runtime: node
+    node: "24"
+    framework: next
+    env: { API_URL: "https://api.example.com" }
+  docs:
+    type: app
+    root: apps/docs
+    runtime: static
+    web_directory: dist
+  api:
+    type: app
+    root: services/api
+    runtime: docker
+    port: 8080
+    build: { mode: docker, dockerfile: deploy/Dockerfile.prod }
+    deploy: { strategy: blue-green, secrets: files }
+  worker-image:
+    type: app
+    runtime: docker
+    image: ghcr.io/acme/worker:1.4.2
+environments:
+  production:
+    branch: main
+    production: true
+    servers: [web-1]

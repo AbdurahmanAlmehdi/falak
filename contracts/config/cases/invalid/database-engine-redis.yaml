@@ -1,0 +1,4 @@
+# Redis is its own unit type.
+version: 1
+units:
+  db: { type: database, engine: redis }

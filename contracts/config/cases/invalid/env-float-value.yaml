@@ -1,0 +1,7 @@
+# Floats are not allowed in env (their text differs between parsers): quote them.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { RATIO: 0.5 }

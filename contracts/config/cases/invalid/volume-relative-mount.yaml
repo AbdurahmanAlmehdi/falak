@@ -1,0 +1,7 @@
+# Mount paths are absolute.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    volumes: { data: { mount: data } }

@@ -1,0 +1,7 @@
+# Durations carry a unit: 10s, not 10.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { health: { timeout: 10 } }

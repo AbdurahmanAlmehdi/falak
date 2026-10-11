@@ -1,0 +1,7 @@
+# www is none, to_www or to_apex.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    domains: [{ name: example.com, www: yes-please }]

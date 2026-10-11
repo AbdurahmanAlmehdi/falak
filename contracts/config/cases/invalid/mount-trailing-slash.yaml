@@ -1,0 +1,7 @@
+# Mount paths have no trailing slash.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    mounts: [{ path: /api/, function: api }]

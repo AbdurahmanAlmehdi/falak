@@ -1,0 +1,7 @@
+# engine belongs to database units.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    engine: postgresql

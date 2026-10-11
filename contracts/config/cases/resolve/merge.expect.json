@@ -1,0 +1,47 @@
+{
+  "environments": {
+    "production": {
+      "resolved": {
+        "$schema": "https://falak.sh/schema/v1.json",
+        "version": 1,
+        "units": {
+          "web": {
+            "type": "app",
+            "runtime": "node",
+            "env": {"LOG_LEVEL": "info", "FEATURE_X": "on", "WORKERS": 2},
+            "domains": ["example.com", "www.example.com"],
+            "deploy": {"strategy": "rolling", "health": {"path": "/up", "timeout": "10s"}},
+            "limits": {"memory": "1g", "cpus": 1},
+            "workers": {"queue": {"processes": 2, "queue": ["high", "default"]}}
+          },
+          "docs": {"type": "app", "runtime": "static"}
+        },
+        "environments": {"production": {"branch": "main", "production": true, "servers": ["web-1", "web-2"]}},
+        "previews": {"base": "staging"}
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "staging": {
+      "resolved": {
+        "$schema": "https://falak.sh/schema/v1.json",
+        "version": 1,
+        "units": {
+          "web": {
+            "type": "app",
+            "runtime": "node",
+            "env": {"LOG_LEVEL": "debug", "WORKERS": 2},
+            "domains": ["staging.example.com"],
+            "deploy": {"strategy": "in-place", "health": {"path": "/up", "timeout": "30s"}},
+            "workers": {"queue": {"processes": 2, "queue": ["default"]}}
+          },
+          "mailpit": {"type": "app", "runtime": "docker", "image": "axllent/mailpit:v1.20", "port": 8025}
+        },
+        "environments": {"staging": {"branch": "develop", "servers": ["staging-1"]}},
+        "previews": {"base": "staging"}
+      },
+      "errors": [],
+      "warnings": []
+    }
+  }
+}

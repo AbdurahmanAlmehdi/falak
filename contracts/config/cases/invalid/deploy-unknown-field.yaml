@@ -1,0 +1,7 @@
+# hooks live under deploy.hooks, not deploy.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { before_activate: php artisan migrate }

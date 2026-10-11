@@ -1,0 +1,7 @@
+# Preview modes: include, share, omit (or a database strategy object).
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+previews: { base: staging, units: { web: copy } }

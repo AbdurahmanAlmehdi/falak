@@ -1,0 +1,7 @@
+# Strategies are Falak's (Deployments Strategy enum).
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { strategy: big-bang }

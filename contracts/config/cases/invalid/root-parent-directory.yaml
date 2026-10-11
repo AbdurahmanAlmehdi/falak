@@ -1,0 +1,7 @@
+# root stays inside the repository.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    root: ../other

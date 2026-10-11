@@ -1,0 +1,7 @@
+# root is relative to the repository.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    root: /srv/app

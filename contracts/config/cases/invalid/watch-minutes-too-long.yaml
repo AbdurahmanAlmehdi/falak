@@ -1,0 +1,7 @@
+# watch.minutes is 1 to 60.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { watch: { minutes: 120 } }

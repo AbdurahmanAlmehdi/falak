@@ -1,0 +1,7 @@
+# A daemon needs its command.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    daemons: { reverb: { instances: 1 } }

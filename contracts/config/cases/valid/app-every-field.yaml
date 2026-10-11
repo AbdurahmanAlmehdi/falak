@@ -1,0 +1,131 @@
+# Every field of an app unit.
+version: 1
+units:
+  shop:
+    type: app
+    root: apps/shop
+    runtime: php-fpm
+    framework: laravel
+    php: "8.3"
+    node: "22"
+    web_directory: public
+    health_path: /up
+    test_domain: false
+    servers: [web-1, "web 2"]
+    build: { mode: native }
+    laravel: { scheduler: true, horizon: true, octane: false }
+    deploy:
+      strategy: zero-downtime
+      batch_size: 2
+      keep_releases: 10
+      secrets: env
+      health: { enabled: true, path: /health, status: 204, timeout: 30s, retries: 5, retry_delay: 0s }
+      watch: { enabled: true, minutes: 30, on_trigger: alert_only, health: true, health_failures: 5, crashes: true, errors: false, issues: true }
+      hooks:
+        before_fetch: echo starting
+        before_activate: |
+          php artisan migrate --force
+          php artisan config:cache
+        after_activate: php artisan queue:restart
+        after_restart: curl -fsS https://hc.example.com/ping
+    env:
+      APP_ENV: production
+      APP_DEBUG: false
+      WORKERS: 4
+      APP_KEY: ${{ secrets.APP_KEY }}
+      MAIL_FROM: "shop@example.com"
+      CACHE_URL: ${{ cache.REDIS_URL }}
+      MIXED: "redis://${{ cache.REDIS_HOST }}:${{ cache.REDIS_PORT }}/0"
+    expose: [APP_URL, VITE_APP_NAME]
+    domains:
+      - shop.example.com
+      - name: www.shop.example.com
+        www: to_apex
+      - name: "*.shops.example.com"
+        tls: dns
+        dns_credential: Cloudflare main
+      - name: legacy.example.org
+        primary: false
+        tls: custom
+        certificate: legacy-2026
+        cloudflare: { proxied: true, cache: bypass }
+    redirects:
+      - { from: /old, to: /new }
+      - { from: "/blog/*", to: "https://blog.example.com/", status: 302 }
+    headers:
+      X-Frame-Options: DENY
+      Strict-Transport-Security: max-age=31536000
+    mounts:
+      - { path: /api, function: api }
+      - { path: /hooks/stripe, function: api, strip_prefix: false }
+    workers:
+      default: {}
+      emails:
+        connection: redis
+        queue: [high, default]
+        processes: 4
+        timeout: 2m
+        sleep: 3s
+        tries: 3
+        backoff: 10s
+        max_jobs: 1000
+        max_time: 1h
+        memory: 256m
+        env: { WORKER_ROLE: emails }
+        limits: { memory: 512m, cpus: 0.5 }
+        servers: [web-1]
+    daemons:
+      reverb:
+        command: php artisan reverb:start --port=8080
+        directory: /srv/falak/sites/shop/current
+        user: shop
+        instances: 1
+        restart: on-failure
+        stop_signal: INT
+        stop_timeout: 30s
+        env: { REVERB_PORT: 8080 }
+        limits: { memory: 256m, restart: on-failure, max_restarts: 5 }
+    schedules:
+      reports:
+        command: php artisan reports:send
+        cron: "0 7 * * 1"
+        timezone: Europe/Berlin
+        overlap: allow
+        timeout: 30m
+        heartbeat: false
+        enabled: true
+        all_servers: false
+      cleanup: { command: php artisan cleanup, cron: "@daily" }
+      sync: { command: php artisan sync, cron: "@every 90s" }
+    limits:
+      memory: 2g
+      memory_reservation: 512m
+      cpus: 1.5
+      pids: 512
+      restart: unless-stopped
+      log: { max_size: 50m, max_files: 3 }
+      oom: protect
+    volumes:
+      uploads: { mount: /var/www/storage/app/public }
+      exports:
+        kind: sized
+        size: 20GiB
+        mount: /exports
+        read_only: false
+        protected: true
+        server: web-1
+        backups:
+          cron: "0 2 * * *"
+          storage: offsite
+          keep: 7
+          keep_days: 30
+          consistency: pause
+          encryption: { mode: cp }
+          drill: monthly
+          drill_server: drill-1
+          enabled: true
+  api:
+    type: function
+    runtime: bun
+  cache:
+    type: redis

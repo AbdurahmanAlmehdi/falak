@@ -1,0 +1,4 @@
+# runtime belongs to app and function units.
+version: 1
+units:
+  db: { type: database, engine: postgresql, runtime: node }

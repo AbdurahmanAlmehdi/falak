@@ -1,0 +1,3 @@
+# A file needs at least one unit.
+version: 1
+units: {}

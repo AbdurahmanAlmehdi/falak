@@ -1,0 +1,8 @@
+# An environment's server list is not empty.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+environments:
+  production: { servers: [] }

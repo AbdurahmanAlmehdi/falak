@@ -1,0 +1,4 @@
+# type is one of app, compose, function, database, redis.
+version: 1
+units:
+  web: { type: lambda }

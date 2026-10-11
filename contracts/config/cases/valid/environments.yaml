@@ -1,0 +1,29 @@
+# Environments: branches, servers, overrides (maps merge, lists replace, null removes), an environment-only unit.
+version: 1
+units:
+  web:
+    type: app
+    runtime: bun
+    env: { LOG_LEVEL: info, FEATURE_X: "on" }
+    domains: [example.com]
+  mailpit-free: { type: app, runtime: static }
+environments:
+  production:
+    branch: main
+    production: true
+    servers: [web-1, web-2]
+  staging:
+    branch: release/next
+    servers: [staging-1]
+    units:
+      web:
+        env: { LOG_LEVEL: debug, FEATURE_X: null }
+        domains: [staging.example.com]
+        limits: null
+      mailpit-free: null
+      mailpit:
+        type: app
+        runtime: docker
+        image: axllent/mailpit:v1.20
+        port: 8025
+  qa: {}

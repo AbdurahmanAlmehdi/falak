@@ -1,0 +1,10 @@
+# Errors that stop the merge: an override changing a unit's type; an environment the file doesn't have.
+version: 1
+units:
+  web: { type: app, runtime: node }
+  cache: { type: redis }
+environments:
+  production: { branch: main }
+  staging:
+    units:
+      cache: { type: database, engine: postgresql }

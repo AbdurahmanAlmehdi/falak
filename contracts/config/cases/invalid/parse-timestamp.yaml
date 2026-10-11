@@ -1,0 +1,7 @@
+# Dates must be quoted: both parsers would read them as timestamps.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { RELEASED: 2026-10-11 }

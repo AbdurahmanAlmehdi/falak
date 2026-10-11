@@ -1,0 +1,8 @@
+# An environment is a map (use {} for one without settings).
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+environments:
+  production:

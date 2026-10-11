@@ -1,0 +1,23 @@
+{
+  "environments": {
+    "production": {
+      "resolved": {
+        "version": 1,
+        "units": {"web": {"type": "app", "runtime": "node"}, "cache": {"type": "redis"}},
+        "environments": {"production": {"branch": "main"}}
+      },
+      "errors": [],
+      "warnings": []
+    },
+    "staging": {
+      "resolved": null,
+      "errors": [{"code": "override.type", "pointer": "/environments/staging/units/cache/type", "source": "/environments/staging/units/cache/type"}],
+      "warnings": []
+    },
+    "preview": {
+      "resolved": null,
+      "errors": [{"code": "environment.unknown", "pointer": "/environments", "source": "/environments"}],
+      "warnings": []
+    }
+  }
+}

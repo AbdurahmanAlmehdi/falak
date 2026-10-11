@@ -1,0 +1,7 @@
+# Schedules are a map by name (phase 0 contract), not a list.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    schedules: [{ command: php artisan schedule:run, cron: "* * * * *" }]

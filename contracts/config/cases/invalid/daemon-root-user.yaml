@@ -1,0 +1,7 @@
+# Processes never run as root.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    daemons: { d: { command: run, user: root } }

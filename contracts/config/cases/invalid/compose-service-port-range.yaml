@@ -1,0 +1,4 @@
+# Ports are 1 to 65535.
+version: 1
+units:
+  stack: { type: compose, services: { web: { port: 70000 } } }

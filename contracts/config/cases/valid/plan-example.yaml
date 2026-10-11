@@ -1,0 +1,54 @@
+# The example of docs/plans/CONFIG_AS_CODE.md, in the phase 0 contract's shape (schedules by name,
+# ${{ db.DATABASE_URL }}, previews.domain_pattern).
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    root: apps/web
+    runtime: frankenphp
+    php: "8.4"
+    build: { mode: docker, dockerfile: Dockerfile }
+    deploy:
+      strategy: rolling
+      batch_size: 1
+      health: { path: /up, timeout: 10s, retries: 3 }
+      watch: { minutes: 15, on_trigger: rollback }
+      hooks:
+        before_activate: php artisan migrate --force
+    env:
+      APP_ENV: production
+      DATABASE_URL: ${{ db.DATABASE_URL }}
+      STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }}
+    domains: [shop.example.com]
+    workers:
+      queue: { command: php artisan queue:work, processes: 2 }
+    schedules:
+      scheduler: { command: php artisan schedule:run, cron: "* * * * *" }
+    limits: { memory: 1g, cpus: 1 }
+
+  db:
+    type: database
+    engine: postgresql
+    version: "17"
+    memory: 1g
+    backups: { cron: "0 3 * * *", storage: offsite, keep: 14 }
+
+environments:
+  production:
+    branch: main
+    servers: [web-1, web-2]
+  staging:
+    branch: develop
+    servers: [staging-1]
+    units:
+      web:
+        domains: [staging.shop.example.com]
+        deploy: { strategy: in-place }
+
+previews:
+  enabled: true
+  base: staging
+  units: { web: include, db: { strategy: clone_backup } }
+  domain_pattern: "pr-{number}-{service}"

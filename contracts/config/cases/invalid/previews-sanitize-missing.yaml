@@ -1,0 +1,7 @@
+# clone_sanitize needs sanitize.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+previews: { base: staging, units: { web: { strategy: clone_sanitize } } }

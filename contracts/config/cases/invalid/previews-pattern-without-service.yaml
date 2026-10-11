@@ -1,0 +1,7 @@
+# A preview host pattern holds {number} and {service}.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+previews: { base: staging, domain_pattern: "pr-{number}" }

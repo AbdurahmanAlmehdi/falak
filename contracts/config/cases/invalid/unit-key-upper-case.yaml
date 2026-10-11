@@ -1,0 +1,4 @@
+# Unit keys are lower-case slugs.
+version: 1
+units:
+  Web_App: { type: app, runtime: node }

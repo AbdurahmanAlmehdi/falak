@@ -1,0 +1,43 @@
+# Reference checks on the resolved file: only unit env values hold references (worker and daemon env is literal);
+# their syntax, and what they point at.
+version: 1
+units:
+  web:
+    type: app
+    runtime: frankenphp
+    env:
+      APP_KEY: ${{ secrets.APP_KEY }}
+      SPACED: ${{secrets.APP_KEY}} and ${{   db.DB_HOST   }}
+      DATABASE_URL: ${{ db.DATABASE_URL }}
+      DB_URL_LOWER: ${{ db.url }}
+      CACHE: ${{ cache.REDIS_URL }}
+      CACHE_SQL_KEY: ${{ cache.DATABASE_URL }}
+      API_URL: ${{ api.PUBLIC_URL }}
+      API_MISSING: ${{ api.NOPE }}
+      LOWER_SECRET: ${{ secrets.stripe_key }}
+      MALFORMED: ${{ secrets }}
+      UNCLOSED: "${{ secrets.APP_KEY"
+      LEGACY: ${{ legacy-api.TOKEN }}
+      LITERAL: "price: $5 {{ not a reference }}"
+    deploy:
+      hooks:
+        before_activate: echo ${{ secrets.APP_KEY }}
+    workers:
+      queue:
+        env: { QUEUE_DB: "${{ db.DB_DATABASE }}", BAD: "${{ db.PASSWORD }}" }
+    daemons:
+      ws: { command: run, env: { WS_KEY: "${{ secrets.WS_KEY }}" } }
+  api:
+    type: app
+    runtime: node
+    env: { PUBLIC_URL: https://api.example.com }
+  db: { type: database, engine: postgresql }
+  cache: { type: redis, engine: valkey }
+environments:
+  production: { branch: main }
+  staging:
+    branch: develop
+    units:
+      api: null
+      web:
+        env: { EXTRA: "${{ cache.NOPE }}" }
