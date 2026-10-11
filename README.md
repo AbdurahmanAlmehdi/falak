@@ -150,7 +150,23 @@ falak fn versions hooks && falak fn rollback hooks v3 --wait
 falak fn run hooks "Nightly cleanup"                # run a schedule now, streams its output
 falak fn invoke hooks /hello/ada -H 'X-Falak-Key: …'
 falak fn logs hooks --follow
+
+# Config as code (falak.yaml)
+falak init                                          # writes falak.yaml from the code; --stdout, --json, --full, --yes
+falak init --dockerfile                             # Go, Python, Ruby, Rust, Java: also a starter Dockerfile
+falak validate                                      # offline: schema, overrides, references; exit 5 if invalid
+falak plan                                          # + create, ~ update, - delete, ! risky (with the reason)
+falak apply --wait                                  # applies, then streams the deployments; exit 6 if it waits for an approval
+falak config export shop -e production -o falak.yaml
 ```
+`falak init` reads the repository the way the builder does (`builder.Detect`, Railpack when installed, a Dockerfile's
+`EXPOSE`, compose files, `.env.example`, package and dependency files, workspaces) and writes each value with the reason
+it was chosen. Secrets become `${{ secrets.NAME }}` references; databases and Redis become units wired with
+`${{ db.DATABASE_URL }}`-style references. It never overwrites a file without `--force`. Logged in, it also asks for
+the project, environments, servers, a domain and previews, and links the repository in `.falak/project.json`.
+`plan`, `apply` and `config export` find the project with `-p` (id or name), then `FALAK_PROJECT`, then that file; the
+environment with `-e`, else the one whose `branch` is the current git branch. `--json` prints the API's data as is.
+The file format: [`docs/plans/CONFIG_AS_CODE.md`](docs/plans/CONFIG_AS_CODE.md) and `contracts/config/`.
 
 ### API
 Sanctum bearer tokens scoped to one organization. Endpoints and payloads: [`docs/API.md`](docs/API.md).
