@@ -1,0 +1,3 @@
+Wrote falak.yaml: web (app, node)
+note: web: create these secrets before applying (falak validate checks them when logged in): STRIPE_SECRET_KEY, REVALIDATE_TOKEN
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

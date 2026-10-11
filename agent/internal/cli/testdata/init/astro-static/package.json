@@ -1,0 +1,7 @@
+{
+  "name": "docs",
+  "type": "module",
+  "scripts": { "dev": "astro dev", "build": "astro build" },
+  "dependencies": { "astro": "^5.13.0" },
+  "engines": { "node": ">=20" }
+}

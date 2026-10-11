@@ -77,6 +77,8 @@ func (f *fakeConfig) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	p := r.URL.Path
 	switch {
+	case p == api.PathServers:
+		f.json(w, 200, map[string]any{"data": servers})
 	case p == api.PathProjects:
 		f.json(w, 200, map[string]any{"data": []map[string]any{{"id": projectID, "name": "Shop", "environments": []map[string]any{
 			{"id": "01jenv0000000000000000000a", "name": "Production", "slug": "production", "is_production": true},

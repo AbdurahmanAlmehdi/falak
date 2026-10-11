@@ -1,0 +1,3 @@
+Wrote falak.yaml: web (compose), cache (redis, redis), postgres (database, postgresql)
+note: mailpit (axllent/mailpit:latest) looks like a development tool: it runs with the stack unless a profile keeps it out
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

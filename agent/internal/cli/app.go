@@ -105,6 +105,7 @@ func (a *App) commands() []*command {
 		{name: "ssh", args: "<server> [--user USER] [-- ssh args]", summary: "open an SSH session to a server", run: cmdSSH},
 		{name: "open", args: "<site> [--panel]", summary: "open a site (or its panel page) in the browser", run: cmdOpen},
 		functionCommands(),
+		{name: "init", args: "[dir] [--yes] [--stdout] [--json] [--full] [--force] [--dockerfile] [-p PROJECT]", summary: "write a falak.yaml from the code", run: cmdInit},
 		{name: "validate", args: "[file] [-e ENV] [--format yaml|json] [--offline]", summary: "check a falak.yaml (offline; names too when logged in)", run: cmdValidate},
 		{name: "plan", args: "[file] [-e ENV] [-p PROJECT]", summary: "show what applying a falak.yaml would change", run: cmdPlan},
 		{name: "apply", args: "[file] [-e ENV] [-p PROJECT] [--allow-destroy] [--wait]", summary: "apply a falak.yaml (and deploy what changed)", run: cmdApply},

@@ -1,0 +1,2 @@
+Wrote falak.yaml: web (app, static)
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.
