@@ -4,6 +4,7 @@ namespace Falak\Limits;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Fleet\Events\AgentServiceEventsReported;
 use Falak\Identity\Events\OrganizationDeleted;
 use Falak\Kernel\Support\ModuleServiceProvider;
@@ -15,6 +16,7 @@ use Falak\Limits\Contracts\ServiceHealth;
 use Falak\Limits\Domain\Models\ServiceState;
 use Falak\Limits\Events\ServiceOomKilled;
 use Falak\Limits\Events\ServiceRestartLoop;
+use Falak\Limits\Infrastructure\Config\LimitsReconciler;
 use Falak\Limits\Infrastructure\DatabaseCapacity;
 use Falak\Limits\Infrastructure\EloquentServiceHealth;
 use Falak\Limits\Infrastructure\EnvironmentLimitDefaults;
@@ -45,6 +47,9 @@ class LimitsServiceProvider extends ModuleServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom($this->modulePath().'/config/limits.php', 'limits');
+
+        // falak.yaml: units.<u>.limits.
+        $this->app->tag([LimitsReconciler::class], Reconcilable::TAG);
     }
 
     protected function bootModule(): void
