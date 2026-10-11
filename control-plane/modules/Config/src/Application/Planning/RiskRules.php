@@ -96,6 +96,9 @@ final class RiskRules
             'became_true' => $change->before !== true && $change->after === true,
             'became_false' => $change->before === true && $change->after !== true,
             'decrease' => ($b = self::magnitude($change->before)) !== null && ($a = self::magnitude($change->after)) !== null && $a < $b,
+            // A limit where there was none (unlimited), or a lower one.
+            'tightens' => ($a = self::magnitude($change->after)) !== null && (($b = self::magnitude($change->before)) === null || $a < $b),
+            'removes_items' => is_array($change->before) && is_array($change->after) && array_diff(array_map('strval', $change->before), array_map('strval', $change->after)) !== [],
             'has_volumes' => $hasVolumes || (is_array($change->before) && ! empty($change->before['volumes'])),
             default => false,
         };

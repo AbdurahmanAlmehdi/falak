@@ -2,10 +2,12 @@
 
 namespace Falak\Config\Application\Planning;
 
+use Falak\Config\Contracts\ApplyPhase;
 use Falak\Config\Contracts\Change;
 use Falak\Config\Contracts\ChangeOp;
 use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigScope;
+use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
 
 /**
@@ -54,8 +56,24 @@ final class Planner
         $changes = $this->risks->flag($changes, $scope->production, $types, $withVolumes);
         $deploy = [];
 
+        $phaseA = [];
+
+        foreach ($this->reconcilers->forPhase(ApplyPhase::BeforeBuild) as $reconciler) {
+            foreach ($reconciler->sections() as $section) {
+                $phaseA[$section] = true;
+            }
+        }
+
         foreach ($changes->actionable() as $change) {
-            if ($change->unit !== null && $change->op !== ChangeOp::Delete && $change->op !== ChangeOp::Detach && isset($resolved['units'][$change->unit])) {
+            if ($change->unit === null || ! isset($resolved['units'][$change->unit])) {
+                continue;
+            }
+
+            // A removal deploys the unit when it changes what the release runs with (phase A: e.g. an unmounted
+            // volume); removals applied with the release (phase B: workers, domains) don't need one.
+            $removal = $change->op === ChangeOp::Delete || $change->op === ChangeOp::Detach;
+
+            if (! $removal || ($change->path !== '/units/'.Pointer::escape($change->unit) && isset($phaseA[$change->section]))) {
                 $deploy[$change->unit] = true;
             }
         }

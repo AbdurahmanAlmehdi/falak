@@ -1,5 +1,5 @@
 {
-  "$comment": "Risky changes of a config plan (docs/plans/CONFIG_AS_CODE.md, \"Phase 0 contract\": Risky changes). A plan with any change matching a rule waits for an approval (config.approve). A change matches a rule when its op is in `ops`, its path matches one of `paths` (JSON Pointers into the resolved file; * matches one reference token), the unit's type is in `unit_types` (when given), the environment is a production one (when `production_only`), and `condition` holds (when given). Conditions: became_true (before is not true, after is true), became_false (before is true, after is not), decrease (after < before; sizes compared in bytes, durations in seconds), has_volumes (the removed unit had volumes). The first matching rule sets Change.rule and Change.reason.",
+  "$comment": "Risky changes of a config plan (docs/plans/CONFIG_AS_CODE.md, \"Phase 0 contract\": Risky changes). A plan with any change matching a rule waits for an approval (config.approve). A change matches a rule when its op is in `ops`, its path matches one of `paths` (JSON Pointers into the resolved file; * matches one reference token), the unit's type is in `unit_types` (when given), the environment is a production one (when `production_only`), and `condition` holds (when given). Conditions: became_true (before is not true, after is true), became_false (before is true, after is not), decrease (after < before; sizes compared in bytes, durations in seconds), tightens (a limit set where there was none, or a lower one), removes_items (after, a list, lacks items before had), has_volumes (the removed unit had volumes). The first matching rule sets Change.rule and Change.reason.",
   "version": 1,
   "rules": [
     {
@@ -94,6 +94,36 @@
       "ops": ["create", "update"],
       "condition": "became_false",
       "reason": "Disabling a volume's backup schedule stops its backups."
+    },
+    {
+      "id": "database.backups_retention",
+      "paths": ["/units/*/backups/keep", "/units/*/backups/keep_days"],
+      "ops": ["create", "update"],
+      "unit_types": ["database", "redis"],
+      "condition": "tightens",
+      "reason": "Keeping fewer backups (or for fewer days) deletes older ones."
+    },
+    {
+      "id": "database.backups_databases_removed",
+      "paths": ["/units/*/backups/databases"],
+      "ops": ["create", "update"],
+      "unit_types": ["database"],
+      "condition": "removes_items",
+      "reason": "A database dropped from the backup schedule is no longer backed up."
+    },
+    {
+      "id": "volume.backups_retention",
+      "paths": ["/units/*/volumes/*/backups/keep", "/units/*/volumes/*/backups/keep_days"],
+      "ops": ["create", "update"],
+      "condition": "tightens",
+      "reason": "Keeping fewer backups (or for fewer days) deletes older ones."
+    },
+    {
+      "id": "production.drill_server",
+      "paths": ["/units/*/backups/drill_server", "/units/*/volumes/*/backups/drill_server"],
+      "ops": ["create", "update"],
+      "production_only": true,
+      "reason": "Restore drills put a copy of production data on the drill server."
     },
     {
       "id": "volume.delete",

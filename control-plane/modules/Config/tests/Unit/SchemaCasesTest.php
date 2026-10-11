@@ -118,7 +118,7 @@ test('the risky-change rules are well formed', function () {
             ->and($rule['paths'])->each->toStartWith('/')
             ->and(array_diff($rule['ops'], ['create', 'update', 'delete', 'detach']))->toBe([])
             ->and(array_diff($rule['unit_types'] ?? [], ['app', 'compose', 'function', 'database', 'redis']))->toBe([])
-            ->and($rule['condition'] ?? null)->toBeIn([null, 'became_true', 'became_false', 'decrease', 'has_volumes'])
+            ->and($rule['condition'] ?? null)->toBeIn([null, 'became_true', 'became_false', 'decrease', 'tightens', 'removes_items', 'has_volumes'])
             ->and($rule['reason'])->not->toBe('');
     }
 });
