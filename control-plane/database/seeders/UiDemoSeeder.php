@@ -2,6 +2,9 @@
 
 namespace Database\Seeders;
 
+use Falak\Config\Domain\Models\ConfigOwnership;
+use Falak\Config\Domain\Models\ConfigRun;
+use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Databases\Application\Passwords;
 use Falak\Databases\Domain\Enums\Engine;
 use Falak\Databases\Domain\Enums\InstanceStatus;
@@ -53,6 +56,7 @@ use Falak\Sites\Domain\Models\ComposeVersion;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
 use Falak\Sites\Domain\Models\Site;
 use Falak\Sites\Domain\Models\SiteTarget;
+use Falak\SourceControl\Domain\Models\Connection;
 use Falak\Templates\Application\Actions\SaveCustomTemplate;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Carbon;
@@ -154,6 +158,8 @@ class UiDemoSeeder extends Seeder
 
         $this->call(ObservabilityDemoSeeder::class, false, ['organizationId' => $organization->id, 'userId' => $admin->id]);
 
+        $this->configAsCode($organization->id, $created['storefront']);
+
         // Settings → Templates: an organization template next to the catalog.
         app(SaveCustomTemplate::class)($organization->id, $admin->id, self::CUSTOM_TEMPLATE, self::CUSTOM_COMPOSE);
     }
@@ -184,6 +190,62 @@ class UiDemoSeeder extends Seeder
         }
 
         app(ToggleFavorite::class)($content, $userId, true);
+    }
+
+    /**
+     * Config as code: the Default project follows acme/storefront's falak.yaml, which manages Storefront's deploy
+     * strategy, health check path and APP_ENV (read-only in the dashboard with the "Managed by falak.yaml" badge).
+     */
+    private function configAsCode(string $organizationId, Site $storefront): void
+    {
+        $default = Project::query()->where('organization_id', $organizationId)->where('is_default', true)->firstOrFail();
+        $production = $default->production() ?? throw new \RuntimeException('Default project without production');
+        $connection = Connection::query()->where('organization_id', $organizationId)->value('id') ?? strtolower((string) Str::ulid());
+        $commit = '4be09d2'.str_repeat('a', 33);
+
+        ConfigSource::query()->create([
+            'organization_id' => $organizationId,
+            'project_id' => $default->id,
+            'source_connection_id' => $connection,
+            'repository' => 'acme/storefront',
+            'path' => 'falak.yaml',
+            'enabled' => true,
+            'experimental' => true,
+        ]);
+
+        $file = "version: 1\nunits:\n  storefront:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    env: { APP_ENV: production }\n    deploy:\n      strategy: zero-downtime\n      health: { path: /up }\nenvironments:\n  production: { branch: main }\n";
+        $run = ConfigRun::query()->create([
+            'organization_id' => $organizationId,
+            'project_id' => $default->id,
+            'environment_id' => $production->id,
+            'environment' => $production->slug,
+            'commit' => $commit,
+            'branch' => 'main',
+            'trigger' => 'push',
+            'status' => 'applied',
+            'file' => $file,
+            'format' => 'yaml',
+            'plan' => ['changes' => [
+                ['op' => 'update', 'path' => '/units/storefront/deploy/health/path', 'before' => '/', 'after' => '/up', 'section' => 'units.*(app).deploy', 'unit' => 'storefront', 'risky' => false, 'reason' => null, 'rule' => null],
+            ], 'summary' => ['create' => 0, 'update' => 1, 'delete' => 0, 'detach' => 0, 'noop' => 3], 'risky' => false, 'deploy' => ['storefront']],
+            'deploy' => [['unit' => 'storefront', 'site_id' => $storefront->id, 'deployment_id' => null, 'status' => 'released', 'error' => null]],
+            'started_at' => now()->subHours(2),
+            'finished_at' => now()->subHours(2)->addMinutes(2),
+        ]);
+
+        foreach (['/deploy/strategy', '/deploy/health/path', '/env/APP_ENV'] as $path) {
+            ConfigOwnership::query()->create([
+                'organization_id' => $organizationId,
+                'project_id' => $default->id,
+                'environment_id' => $production->id,
+                'resource_type' => 'site',
+                'resource_id' => $storefront->id,
+                'unit' => 'storefront',
+                'path' => $path,
+                'created_by_file' => false,
+                'run_id' => $run->id,
+            ]);
+        }
     }
 
     private const CUSTOM_TEMPLATE = <<<'YAML'
