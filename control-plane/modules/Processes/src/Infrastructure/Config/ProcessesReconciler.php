@@ -99,6 +99,8 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
     public function diff(ConfigScope $scope, array $desired, array $current): ChangeSet
     {
+        // Env values of THIS plan only: a previous plan (another unit, site or run) never leaks into this one.
+        $this->env = [];
         $this->rememberEnv($scope, $desired);
         $changes = [];
         $units = array_unique([...array_keys((array) ($desired['units'] ?? [])), ...array_keys((array) ($current['units'] ?? []))]);
@@ -218,11 +220,19 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
             }
 
             $unitServers = (array) ($body['servers'] ?? $resolved['environments'][$scope->environment]['servers'] ?? []);
+            $siteId = $scope->refId((string) $unit);
+            $siteUser = $siteId !== null ? $this->sites->find($siteId)?->unixUser : null;
 
             foreach (['workers', 'daemons', 'schedules'] as $section) {
                 foreach ((array) ($body[$section] ?? []) as $key => $item) {
                     $base = '/units/'.Pointer::escape((string) $unit).'/'.$section.'/'.Pointer::escape((string) $key);
                     $item = (array) $item;
+
+                    if (array_key_exists('user', $item) && $item['user'] !== $siteUser) {
+                        $issues[] = ConfigIssue::error('value.forbidden', "{$base}/user", $siteUser !== null
+                            ? "Processes run as the site's user \"{$siteUser}\": leave `user` out or set it to that user."
+                            : "Processes run as the site's user: leave `user` out (the unit has no site yet).");
+                    }
 
                     foreach (self::bounds($section) as $field => [$min, $max]) {
                         if (! array_key_exists($field, $item)) {
@@ -313,11 +323,12 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
      */
     private function save(ConfigScope $scope, SiteData $site, string $section, string $key, ?Model $model, array $desired, ApplyContext $ctx): Model
     {
-        $env = $this->env[$scope->environmentId][$site->id][$section][$key] ?? null;
+        $env = null;
 
-        if ($env === null && array_key_exists('env', $desired)) {
+        if (array_key_exists('env', $desired)) {
             // Plans carry env keys only; apply() runs right after diff() of the same plan (phase B re-plans).
-            throw new RuntimeException("The env of {$section}.{$key} is not known: plan the unit again before applying it.");
+            $env = $this->env[$scope->environmentId][$site->id][$section][$key]
+                ?? throw new RuntimeException("The env of {$section}.{$key} is not known: plan the unit again before applying it.");
         }
         $serverIds = isset($desired['servers']) ? array_values(array_map(fn ($name) => $scope->serverId((string) $name) ?? (string) $name, (array) $desired['servers'])) : null;
         $envRows = fn (?array $current) => array_map(fn ($k, $v) => ['key' => (string) $k, 'value' => (string) $v], array_keys($env ?? $current ?? []), array_values($env ?? $current ?? []));
@@ -353,7 +364,8 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
                 'name' => $key,
                 'command' => $desired['command'] ?? $model->command,
                 'directory' => $desired['directory'] ?? $model->directory,
-                'user' => $desired['user'] ?? $model->user,
+                // Processes from the file always run as the site's own user (validate() refuses any other).
+                'user' => $site->unixUser,
                 'instances' => $desired['instances'] ?? $model->instances ?? 1,
                 'restart' => $desired['restart'] ?? $model->restart ?? 'always',
                 'stop_signal' => $desired['stop_signal'] ?? $model->stop_signal ?? 'TERM',
@@ -372,7 +384,7 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
             'command' => $desired['command'] ?? $model?->command,
             'expression' => $desired['cron'] ?? $model?->expression,
             'timezone' => $desired['timezone'] ?? $model?->timezone,
-            'user' => $desired['user'] ?? $model?->user,
+            'user' => $site->unixUser,
             'overlap' => $desired['overlap'] ?? $model?->overlap,
             'timeout' => isset($desired['timeout']) ? Units::seconds($desired['timeout']) : ($model?->timeout ?? 3600),
             'heartbeat' => $desired['heartbeat'] ?? $model?->heartbeat ?? true,
