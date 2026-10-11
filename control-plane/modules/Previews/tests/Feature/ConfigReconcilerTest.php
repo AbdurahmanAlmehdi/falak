@@ -108,3 +108,18 @@ it('validates names in the block', function () {
         'value.range /previews/idle_ttl',
     ]);
 });
+
+it('refuses dashboard edits of preview settings the file manages', function () {
+    $staging = ($this->scope)($this->staging);
+    $desired = ['previews' => ['base' => 'staging', 'max_concurrent' => 3, 'units' => ['db' => ['strategy' => 'empty']]]];
+    $this->reconciler->apply($staging, $this->reconciler->diff($staging, $desired, $this->reconciler->current($staging)), config_ctx($this->staging));
+    $settings = PreviewSettings::query()->sole();
+    $body = ['enabled' => true, 'base_environment_id' => $this->staging->id, 'max_concurrent' => 3, 'services' => ['db' => 'include'], 'databases' => ['db' => ['strategy' => 'empty']]];
+    $url = "/projects/{$this->staging->project_id}/previews/settings";
+
+    $this->put($url, [...$body, 'max_concurrent' => 9])->assertSessionHasErrors('max_concurrent');
+    $this->put($url, [...$body, 'databases' => ['db' => ['strategy' => 'clone_backup']]])->assertSessionHasErrors('databases');
+    $this->put($url, [...$body, 'idle_ttl_hours' => 24])->assertSessionHasNoErrors();
+
+    expect($settings->refresh()->idle_ttl_hours)->toBe(24)->and($settings->max_concurrent)->toBe(3);
+});
