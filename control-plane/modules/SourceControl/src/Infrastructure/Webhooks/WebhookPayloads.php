@@ -97,7 +97,10 @@ class WebhookPayloads
             pusher: $payload['pusher']['name'] ?? $payload['pusher']['login'] ?? $payload['pusher']['username'] ?? $payload['sender']['login'] ?? null,
             beforeSha: self::isZero((string) ($payload['before'] ?? '')) ? null : ($payload['before'] ?? null),
             // GitHub lists at most 20 commits (2048 with `size`): beyond that the files are unknown.
-            changedPaths: count($commits) < 20 && (int) ($payload['size'] ?? count($commits)) <= count($commits) && ! self::isZero((string) ($payload['before'] ?? '')) ? self::changedPaths($commits) : null,
+            // A force push, an empty commit list (new branch, branch reset) or a truncated one: unknown, every file may
+            // have changed.
+            changedPaths: $commits !== [] && count($commits) < 20 && (int) ($payload['size'] ?? count($commits)) <= count($commits)
+                && ($payload['forced'] ?? false) !== true && ! self::isZero((string) ($payload['before'] ?? '')) ? self::changedPaths($commits) : null,
         )];
     }
 
@@ -129,7 +132,8 @@ class WebhookPayloads
             pusher: $payload['user_username'] ?? $payload['user_name'] ?? null,
             beforeSha: self::isZero((string) ($payload['before'] ?? '')) ? null : ($payload['before'] ?? null),
             // GitLab lists at most 20 commits; total_commits_count says when some were left out.
-            changedPaths: (int) ($payload['total_commits_count'] ?? 0) <= count((array) ($payload['commits'] ?? [])) && ! self::isZero((string) ($payload['before'] ?? ''))
+            changedPaths: ($payload['commits'] ?? []) !== [] && count((array) $payload['commits']) < 20
+                && (int) ($payload['total_commits_count'] ?? 0) <= count((array) ($payload['commits'] ?? [])) && ! self::isZero((string) ($payload['before'] ?? ''))
                 ? self::changedPaths((array) ($payload['commits'] ?? [])) : null,
         )];
     }
