@@ -5,6 +5,7 @@ use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Domain\Models\SiteSettings;
+use Falak\Deployments\Events\DeploymentSucceeded;
 use Falak\Identity\Contracts\Role;
 use Falak\Previews\Application\PreviewLifecycle;
 use Falak\Previews\Domain\Models\Preview;
@@ -74,6 +75,11 @@ beforeEach(function () {
     $this->sc->filesByRef[str_repeat('c', 40)]['falak.yaml'] = PREVIEW_PR_FILE;
 });
 
+function config_preview_deployed(object $test, string $siteId, string $sha = 'c'): void
+{
+    DeploymentSucceeded::dispatch('dep', $test->organization->id, $siteId, 'manual', str_repeat($sha, 40), 'rel', [$test->server->id], 10);
+}
+
 function config_preview_open(object $test, bool $fork = false, string $sha = 'c'): Preview
 {
     PullRequestOpened::dispatch($test->organization->id, $test->connection->id, 'github', previews_pr(sha: $sha, fork: $fork));
@@ -92,6 +98,10 @@ it('builds a preview from the pull request\'s file: processes, settings, limits 
     $copy = Site::query()->findOrFail($preview->sites['web']);
     $api = Site::query()->with('targets')->findOrFail($preview->sites['api']);
     $variables = fn (Site $site) => EnvironmentVersion::query()->where('site_id', $site->id)->orderByDesc('version')->first()?->variables ?? [];
+
+    // Workers and schedules go live with the preview's deployment, never before it.
+    expect(Worker::query()->where('site_id', $copy->id)->exists())->toBeFalse();
+    config_preview_deployed($this, $copy->id);
 
     expect(Worker::query()->where('site_id', $copy->id)->sole()->only(['name', 'command', 'processes']))
         ->toBe(['name' => 'queue', 'command' => 'php artisan queue:work', 'processes' => 2])
@@ -124,6 +134,8 @@ it('builds a preview from the pull request\'s file: processes, settings, limits 
     // A new head with a changed file: applied before the redeploy.
     $this->sc->filesByRef[str_repeat('d', 40)]['falak.yaml'] = str_replace('processes: 2', 'processes: 3', PREVIEW_PR_FILE);
     PullRequestUpdated::dispatch($this->organization->id, $this->connection->id, 'github', previews_pr(sha: 'd'));
+    expect(Worker::query()->where('site_id', $copy->id)->sole()->processes)->toBe(2);
+    config_preview_deployed($this, $copy->id, 'd');
 
     expect(Worker::query()->where('site_id', $copy->id)->sole()->processes)->toBe(3)
         ->and($preview->refresh()->config_ref)->toBe(str_repeat('d', 40));
@@ -173,4 +185,16 @@ it('builds a fork\'s preview from the base branch\'s file, after the approval, a
         ->and(EnvironmentVersion::query()->where('site_id', $copy->id)->orderByDesc('version')->first()->variables)->toMatchArray(['FROM_FILE' => 'base'])
         ->and(SiteSettings::query()->find($copy->id)?->strategy?->value)->toBe('rolling')
         ->and(Environment::query()->findOrFail($preview->environment_id)->is_fork_preview)->toBeTrue();
+});
+
+it('leaves out env values reading a shared service, unless previews copy that name', function () {
+    projects_site($this->organization, 'auth', ['APP_KEY' => 'base64:auth-secret', 'APP_URL' => 'https://auth.test'], $this->staging, [$this->server]);
+    $this->settings->forceFill(['services' => ['auth' => 'share'], 'variables' => ['APP_URL']])->save();
+    $this->sc->filesByRef[str_repeat('c', 40)]['falak.yaml'] = str_replace('env: { FEATURE_CHECKOUT: "v2" }',
+        'env: { FEATURE_CHECKOUT: "v2", LEAK: "${{ auth.APP_KEY }}", AUTH_URL: "${{ auth.APP_URL }}" }', PREVIEW_PR_FILE);
+
+    $preview = config_preview_open($this);
+    $variables = EnvironmentVersion::query()->where('site_id', $preview->sites['web'])->orderByDesc('version')->first()->variables;
+
+    expect($variables)->toHaveKey('AUTH_URL')->not->toHaveKey('LEAK');
 });
