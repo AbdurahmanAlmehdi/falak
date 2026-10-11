@@ -96,6 +96,8 @@ class WebhookPayloads
             ),
             pusher: $payload['pusher']['name'] ?? $payload['pusher']['login'] ?? $payload['pusher']['username'] ?? $payload['sender']['login'] ?? null,
             beforeSha: self::isZero((string) ($payload['before'] ?? '')) ? null : ($payload['before'] ?? null),
+            // GitHub lists at most 20 commits (2048 with `size`): beyond that the files are unknown.
+            changedPaths: count($commits) < 20 && (int) ($payload['size'] ?? count($commits)) <= count($commits) && ! self::isZero((string) ($payload['before'] ?? '')) ? self::changedPaths($commits) : null,
         )];
     }
 
@@ -126,7 +128,36 @@ class WebhookPayloads
             ),
             pusher: $payload['user_username'] ?? $payload['user_name'] ?? null,
             beforeSha: self::isZero((string) ($payload['before'] ?? '')) ? null : ($payload['before'] ?? null),
+            // GitLab lists at most 20 commits; total_commits_count says when some were left out.
+            changedPaths: (int) ($payload['total_commits_count'] ?? 0) <= count((array) ($payload['commits'] ?? [])) && ! self::isZero((string) ($payload['before'] ?? ''))
+                ? self::changedPaths((array) ($payload['commits'] ?? [])) : null,
         )];
+    }
+
+    /**
+     * Files the commits of a push added, modified or removed, sorted (`commits[].added|modified|removed`).
+     *
+     * @param  array<int|string, mixed>  $commits
+     * @return list<string>
+     */
+    private static function changedPaths(array $commits): array
+    {
+        $paths = [];
+
+        foreach ($commits as $commit) {
+            foreach (['added', 'modified', 'removed'] as $kind) {
+                foreach ((array) (is_array($commit) ? ($commit[$kind] ?? []) : []) as $path) {
+                    if (is_string($path) && $path !== '') {
+                        $paths[$path] = true;
+                    }
+                }
+            }
+        }
+
+        $paths = array_keys($paths);
+        sort($paths);
+
+        return $paths;
     }
 
     /**

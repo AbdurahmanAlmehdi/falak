@@ -11,5 +11,7 @@ final readonly class ParsedPush
         public CommitData $commit,
         public ?string $pusher,
         public ?string $beforeSha,
+        /** @var ?list<string> files the push changed (null: unknown) */
+        public ?array $changedPaths = null,
     ) {}
 }
