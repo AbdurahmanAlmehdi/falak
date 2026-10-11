@@ -65,7 +65,7 @@ final class ScopeFactory
     {
         return new ConfigScope($scope->organizationId, $scope->projectId, $scope->environmentId, $scope->environment, $scope->production,
             $scope->commit, $this->services($scope->environmentId), $scope->servers, $scope->defaultServers, $scope->connectionId, $scope->repository,
-            $scope->branch, $scope->actorId, $scope->allowDestroy, $scope->credentials);
+            $scope->branch, $scope->actorId, $scope->allowDestroy, $scope->credentials, $scope->preview);
     }
 
     /**

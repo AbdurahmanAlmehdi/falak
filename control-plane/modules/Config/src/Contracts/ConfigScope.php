@@ -21,6 +21,8 @@ final readonly class ConfigScope
      *                              otherwise removed units and resources are only detached
      * @param  list<string>  $credentials  names of the organization's certificates and DNS credentials an admin allowed
      *                                     this project's file to use (besides those its domains already use)
+     * @param  bool  $preview  a pull request's preview environment (Previews): units it creates are isolated, never
+     *                         deployed on push, and only the preview's own resources are touched
      */
     public function __construct(
         public string $organizationId,
@@ -38,6 +40,7 @@ final readonly class ConfigScope
         public ?string $actorId = null,
         public bool $allowDestroy = false,
         public array $credentials = [],
+        public bool $preview = false,
     ) {}
 
     /** A server id by name (null: not attached to the project). */
@@ -76,6 +79,6 @@ final readonly class ConfigScope
     {
         return new self($this->organizationId, $this->projectId, $this->environmentId, $this->environment, $this->production, $this->commit,
             [...$this->services, $unit => ['kind' => $kind, 'ref_id' => $refId]], $this->servers, $this->defaultServers, $this->connectionId,
-            $this->repository, $this->branch, $this->actorId, $this->allowDestroy, $this->credentials);
+            $this->repository, $this->branch, $this->actorId, $this->allowDestroy, $this->credentials, $this->preview);
     }
 }
