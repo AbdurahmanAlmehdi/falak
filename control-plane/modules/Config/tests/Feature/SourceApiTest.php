@@ -105,3 +105,21 @@ it('disabling over the API cancels the waiting runs', function () {
 
     expect($run->refresh()->status)->toBe(RunStatus::Cancelled)->and($run->cancel_reason)->toBe('source_disabled');
 });
+
+it('only admins move a source with allowed servers or credentials to another repository', function () {
+    $world = config_world(actingAs: false);
+    $project = $world->environment->project_id;
+    $world->source->forceFill(['allowed_credentials' => ['cf-acme']])->save();
+    $body = ['connection_id' => $world->source->source_connection_id, 'enabled' => true, 'allowed_credentials' => ['cf-acme']];
+
+    [$developer] = memberOf($world->deploy->organization, Role::Developer);
+    $this->withToken(config_source_token($world, $developer))->putJson("/api/v1/projects/{$project}/config/source", $body + ['repository' => 'acme/other'])
+        ->assertForbidden()->assertJsonPath('message', "Admins allowed servers or credentials for this repository's file: only an admin can change the repository or connection.");
+    $this->putJson("/api/v1/projects/{$project}/config/source", $body + ['repository' => 'acme/shop'])->assertOk();
+
+    $this->withToken(config_source_token($world))->putJson("/api/v1/projects/{$project}/config/source", $body + ['repository' => 'acme/other'])->assertOk();
+
+    // Without grants a developer may move it.
+    $world->source->refresh()->forceFill(['allowed_credentials' => []])->save();
+    $this->withToken(config_source_token($world, $developer))->putJson("/api/v1/projects/{$project}/config/source", [...$body, 'allowed_credentials' => [], 'repository' => 'acme/shop'])->assertOk();
+});

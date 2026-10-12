@@ -65,6 +65,16 @@ final class ConfigController extends Controller
             abort(403, 'Only admins can change who may approve runs.');
         }
 
+        // [decision] The admin grants (servers, credentials) were given to this repository's file: pointing the source
+        // at another repository or connection while it has any is an admin's call too.
+        $existing = ConfigSource::query()->where('project_id', $data->id)->first();
+
+        if ($existing !== null && ((array) $existing->allowed_servers !== [] || (array) $existing->allowed_credentials !== [])
+            && (strcasecmp(trim($input['repository'], '/'), $existing->repository) !== 0 || $input['connection_id'] !== $existing->source_connection_id)
+            && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)) {
+            abort(403, 'Admins allowed servers or credentials for this repository\'s file: only an admin can change the repository or connection.');
+        }
+
         // Letting a project's file use an organization certificate, DNS credential, storage provider or server is an
         // admin's call.
         foreach (['allowed_credentials' => 'certificates, DNS credentials and storage providers', 'allowed_servers' => 'servers'] as $field => $what) {
