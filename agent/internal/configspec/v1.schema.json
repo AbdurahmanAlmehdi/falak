@@ -1716,7 +1716,7 @@
           "const": "database"
         },
         "engine": {
-          "description": "postgresql, mysql or mariadb. Changing it needs an approval.",
+          "description": "postgresql, mysql or mariadb. A run never changes it (a new engine is a new unit).",
           "enum": [
             "postgresql",
             "mysql",
@@ -1791,7 +1791,7 @@
           "const": "redis"
         },
         "engine": {
-          "description": "redis (default) or valkey. Changing it needs an approval.",
+          "description": "redis (default) or valkey. A run never changes it (a new engine is a new unit).",
           "enum": [
             "redis",
             "valkey"
