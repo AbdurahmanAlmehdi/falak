@@ -511,17 +511,24 @@ func TestApply(t *testing.T) {
 		t.Fatalf("timeout: %d %s", code, h.err.String())
 	}
 
-	// --wait stopping at an approval → 6; refused / failed → 1.
+	// --wait stopping at an approval → 6; refused / failed → 1. The timed-out wait may still have a request in
+	// flight, so these writes take the fake server's lock.
+	f.mu.Lock()
 	f.run = runData("planning")
 	f.runPolls = []map[string]any{runData("awaiting_approval")}
+	f.mu.Unlock()
 	if code := h.run("apply", "--wait"); code != ExitApproval {
 		t.Fatalf("wait approval: %d", code)
 	}
+	f.mu.Lock()
 	f.run, f.runPolls = runData("refused"), nil
+	f.mu.Unlock()
 	if code := h.run("apply"); code != ExitError || !strings.Contains(h.err.String(), "refused") {
 		t.Fatalf("refused: %d %s", code, h.err.String())
 	}
+	f.mu.Lock()
 	f.invalid = true
+	f.mu.Unlock()
 	if code := h.run("apply"); code != ExitInvalid {
 		t.Fatalf("422: %d", code)
 	}
