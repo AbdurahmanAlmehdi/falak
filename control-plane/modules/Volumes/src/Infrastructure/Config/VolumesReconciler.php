@@ -650,6 +650,15 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
                     }
                 }
 
+                // [decision] What a run never does is a validation error, not a risk an approval could wave through.
+                if ($today !== null && isset($volume['server'], $today['server']) && $volume['server'] !== $today['server']) {
+                    $issues[] = ConfigIssue::error('value.forbidden', "{$pointer}/server", "{$key} is on {$today['server']}: move it from the Volumes page; the file can't move a volume.");
+                }
+
+                if ($today !== null && isset($volume['size'], $today['size']) && ($want = Units::bytes($volume['size'])) !== null && ($have = Units::bytes($today['size'])) !== null && $want < $have) {
+                    $issues[] = ConfigIssue::error('value.forbidden', "{$pointer}/size", "{$key} holds {$today['size']}: volumes only grow. Keep {$today['size']} or more.");
+                }
+
                 if ($today !== null && ($today['kind'] ?? 'docker') !== $kind) {
                     $issues[] = ConfigIssue::error('value.conflict', "{$pointer}/kind", "{$key} is a ".($today['kind'] ?? 'docker').' volume: its kind can\'t change (use a new key).');
                 }

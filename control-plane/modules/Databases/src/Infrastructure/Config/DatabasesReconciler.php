@@ -720,6 +720,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
     public function validate(ConfigScope $scope, array $resolved): array
     {
         $issues = [];
+        $current = null;
         $instances = $this->instances($scope);
         $storage = null;
         $services = [];
@@ -754,6 +755,21 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
 
             if ($instance !== null && $instance->engine->isKeyValue() !== $engine->isKeyValue()) {
                 $issues[] = ConfigIssue::error('value.conflict', "{$base}/type", "\"{$unit}\" is a {$instance->engine->label()} database: its type can't change.");
+            }
+
+            // [decision] What a run never does is a validation error, not a risk an approval could wave through.
+            $today = $instance !== null ? ($current ??= (array) ($this->current($scope)['units'] ?? []))[$unit] ?? null : null;
+
+            if ($today !== null && isset($body['engine'], $today['engine']) && $body['engine'] !== $today['engine'] && $instance->engine->isKeyValue() === $engine->isKeyValue()) {
+                $issues[] = ConfigIssue::error('value.forbidden', "{$base}/engine", "{$unit} runs {$instance->engine->label()}: a new engine is a new unit. Add one, restore a backup into it from the Databases page, then remove {$unit}.");
+            }
+
+            if ($today !== null && isset($body['server'], $today['server']) && $body['server'] !== $today['server']) {
+                $issues[] = ConfigIssue::error('value.forbidden', "{$base}/server", "{$unit} runs on {$today['server']}: move it from the Databases page (relocation restores it from its backups); the file can't move a database.");
+            }
+
+            if ($today !== null && isset($body['disk'], $today['disk']) && ($want = Units::bytes($body['disk'])) !== null && ($have = Units::bytes($today['disk'])) !== null && $want < $have) {
+                $issues[] = ConfigIssue::error('value.forbidden', "{$base}/disk", "{$unit}'s disk is {$today['disk']}: disks only grow. Keep {$today['disk']} or more (a smaller disk is a new unit restored from a backup).");
             }
 
             if (isset($body['version'])) {

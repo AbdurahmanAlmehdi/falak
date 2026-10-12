@@ -906,8 +906,9 @@ item is a **[decision]** on top of the sections above; they replace phase 1's `v
   (`database.version`), and once approved it runs `UpgradeInstance` (PostgreSQL / MySQL / MariaDB: a new container and a
   copy; Redis / Valkey: in place). A downgrade is `value.unsupported` at stage 4. After a SQL major upgrade the unit
   follows its canvas service to the new container and the next apply records ownership on it.
-- **[decision] Engine changes and moves are never applied by a run.** They stay risky (`database.engine`,
-  `database.move`), and an approved run fails phase A with a message: a new engine is a new unit, a move is the
+- **[decision] Engine changes and moves are never applied by a run.** (Phase 4 review fix: they are stage 4
+  `value.forbidden` errors, no longer the risky rules `database.engine`, `database.move`, `volume.move`,
+  `volume.shrink`, which are gone; the text below is phase 3's.) An approved run fails phase A with a message: a new engine is a new unit, a move is the
   Databases page's (relocation restores from backups). A volume's `kind` can't change (`value.conflict`); its `server`
   change is the new risky rule **`volume.move`** and is not applied either.
 - **[decision] Restarts are notes, not risks.** `Change` gets an optional **`note`** (omitted when null; API, PR comments

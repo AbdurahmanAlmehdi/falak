@@ -3,13 +3,6 @@
   "version": 1,
   "rules": [
     {
-      "id": "database.engine",
-      "paths": ["/units/*/engine"],
-      "ops": ["update"],
-      "unit_types": ["database", "redis"],
-      "reason": "Changing a database engine replaces the instance and its data."
-    },
-    {
       "id": "database.version",
       "paths": ["/units/*/version"],
       "ops": ["update"],
@@ -23,13 +16,6 @@
       "unit_types": ["database", "redis"],
       "condition": "became_true",
       "reason": "Making a database public publishes its port to the internet."
-    },
-    {
-      "id": "database.move",
-      "paths": ["/units/*/server"],
-      "ops": ["update"],
-      "unit_types": ["database", "redis"],
-      "reason": "Moving a database to another server moves its data."
     },
     {
       "id": "database.backups_removed",
@@ -75,12 +61,6 @@
       "ops": ["delete"],
       "unit_types": ["database"],
       "reason": "Deleting a database drops its data."
-    },
-    {
-      "id": "volume.move",
-      "paths": ["/units/*/volumes/*/server"],
-      "ops": ["update"],
-      "reason": "Moving a volume to another server moves its data."
     },
     {
       "id": "volume.backups_removed",
@@ -130,13 +110,6 @@
       "paths": ["/units/*/volumes/*"],
       "ops": ["delete", "detach"],
       "reason": "A volume removed from the file holds data."
-    },
-    {
-      "id": "volume.shrink",
-      "paths": ["/units/*/volumes/*/size", "/units/*/disk"],
-      "ops": ["update"],
-      "condition": "decrease",
-      "reason": "Shrinking a sized volume can lose data that no longer fits."
     },
     {
       "id": "unit.remove_with_data",

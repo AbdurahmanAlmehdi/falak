@@ -351,17 +351,28 @@ it('flags the risky changes of the contract', function (array $before, array $af
 
     expect(data_rule($plan, $path))->toBe($rule)->and($plan->isRisky())->toBeTrue();
 })->with([
-    'engine' => [[], ['engine' => 'mysql'], '/units/db/engine', 'database.engine'],
     'major version' => [[], ['version' => '18'], '/units/db/version', 'database.version'],
     'public on' => [[], ['public' => true], '/units/db/public', 'database.public'],
-    'move' => [['server' => 'web-1'], ['server' => 'web-2'], '/units/db/server', 'database.move'],
-    'disk shrink' => [['disk' => '10g'], ['disk' => '5g'], '/units/db/disk', 'volume.shrink'],
     'backups removed' => [['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite']], ['memory' => '512m'], '/units/db/backups', 'database.backups_removed'],
     'backups disabled' => [['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite']], ['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite', 'enabled' => false]], '/units/db/backups/enabled', 'database.backups_disabled'],
     'pitr off' => [['pitr' => ['storage' => 'offsite']], ['pitr' => ['storage' => 'offsite', 'enabled' => false]], '/units/db/pitr/enabled', 'database.pitr_off'],
     'pitr removed' => [['pitr' => ['storage' => 'offsite']], ['memory' => '512m'], '/units/db/pitr', 'database.pitr_removed'],
     'pitr window shrinks' => [['pitr' => ['storage' => 'offsite', 'window_days' => 14]], ['pitr' => ['storage' => 'offsite', 'window_days' => 7]], '/units/db/pitr/window_days', 'database.pitr_window'],
     'unit removed' => [['memory' => '512m'], [], '/units/db', 'unit.remove_with_data'],
+]);
+
+it('refuses at validation what a run never does: an engine change, a move, a smaller disk', function (array $before, array $after, string $path) {
+    data_existing();
+    data_apply($this->world, ['db' => ['type' => 'database', ...$before]]);
+
+    $issues = collect($this->reconciler->validate(data_scope($this->world), ['units' => ['db' => ['type' => 'database', ...$before, ...$after]]]))
+        ->map(fn ($i) => [$i->code, $i->pointer])->all();
+
+    expect($issues)->toContain(['value.forbidden', $path]);
+})->with([
+    'engine' => [[], ['engine' => 'mysql'], '/units/db/engine'],
+    'move' => [['server' => 'web-1'], ['server' => 'web-2'], '/units/db/server'],
+    'disk shrink' => [['disk' => '10g'], ['disk' => '5g'], '/units/db/disk'],
 ]);
 
 it('flags a new public unit and a database dropped with allow_destroy', function () {

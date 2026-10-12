@@ -219,10 +219,22 @@ it('flags the risky volume changes', function (array $before, ?array $after, str
     expect(data_rule($plan, $path))->toBe($rule);
 })->with([
     'removed' => [[], null, '/units/web/volumes/data', 'volume.delete'],
-    'shrink' => [[], ['size' => '1g'], '/units/web/volumes/data/size', 'volume.shrink'],
-    'move' => [['server' => 'web-1'], ['server' => 'web-2'], '/units/web/volumes/data/server', 'volume.move'],
     'backups removed' => [['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite']], [], '/units/web/volumes/data/backups', 'volume.backups_removed'],
     'backups disabled' => [['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite']], ['backups' => ['cron' => '0 3 * * *', 'storage' => 'offsite', 'enabled' => false]], '/units/web/volumes/data/backups/enabled', 'volume.backups_disabled'],
+]);
+
+it('refuses at validation a smaller volume or a move', function (array $change, string $path) {
+    volumes_existing('legacy');
+    sites_server($this->organization->id, ['name' => 'web-2'], docker: true);
+    volumes_apply(['volumes' => ['data' => ['kind' => 'sized', 'size' => '2g', 'mount' => '/data', 'server' => 'web-1']]]);
+
+    $issues = collect($this->reconciler->validate(data_scope($this->world), ['units' => ['web' => ['type' => 'app', 'runtime' => 'docker', 'servers' => ['web-1', 'web-2'],
+        'volumes' => ['data' => ['kind' => 'sized', 'size' => '2g', 'mount' => '/data', 'server' => 'web-1', ...$change]]]]]))->map(fn ($i) => [$i->code, $i->pointer])->all();
+
+    expect($issues)->toContain(['value.forbidden', $path]);
+})->with([
+    'shrink' => [['size' => '1g'], '/units/web/volumes/data/size'],
+    'move' => [['server' => 'web-2'], '/units/web/volumes/data/server'],
 ]);
 
 it('validates runtimes, sizes, mounts, servers and storage (names only)', function () {
