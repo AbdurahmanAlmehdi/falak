@@ -59,3 +59,19 @@ it('creates a compose unit on push, deploys it, and exporting then planning give
         ->and($plan?->changes->actionable())->toBe([])
         ->and($yaml)->toContain('compose.yaml')->not->toContain('keep_binds');
 });
+
+it('a compose unit without files reads the default compose file of its root, and takes its services\' limits', function () {
+    $world = config_world();
+    $compose = "services:\n  front: { image: nginx:1.27-alpine }\n";
+    $world->deploy->sourceControl->files['stack/compose.yaml'] = $compose;
+    $world->deploy->builds->composeContent = $compose;
+    $world->file("version: 1\nunits:\n  shop:\n    type: compose\n    root: stack\n    services:\n      front: { port: 80, limits: { memory: 256m } }\nenvironments:\n  production: { branch: main, servers: [web-1] }\n");
+
+    $world->push(config_sha('b'));
+    $run = ConfigRun::query()->sole();
+    $shop = Site::query()->where('name', 'shop')->sole();
+
+    expect($run->status)->toBe(RunStatus::Applying, (string) $run->error)
+        ->and($shop->compose_snapshot)->toContain('nginx:1.27-alpine')
+        ->and($shop->compose_limits['front'] ?? null)->toMatchArray(['memory_limit' => 256]);
+});

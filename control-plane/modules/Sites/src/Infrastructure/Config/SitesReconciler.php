@@ -525,7 +525,8 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
 
         return array_filter([
             'compose_source' => ComposeSource::Repo->value,
-            'compose_files' => isset($body['files']) ? array_values($body['files']) : null,
+            // Always present (empty: the default compose file), so CreateSite reads and checks the repository's project.
+            'compose_files' => array_values((array) ($body['files'] ?? [])),
             'compose_profiles' => isset($body['profiles']) ? array_values($body['profiles']) : null,
             'public_services' => $public,
             'compose_services' => $replaced ?: null,
