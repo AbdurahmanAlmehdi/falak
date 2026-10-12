@@ -463,11 +463,11 @@ func detectApp(repo fsRepo, rel string, opt detectOptions, d *detection) (*detec
 	switch plan.Runtime {
 	case "php":
 		u.Runtime = "frankenphp"
-		why := "detected: composer.json"
+		f.set("runtime", "frankenphp", "detected: composer.json")
 		if plan.Framework == "laravel" {
-			why = "detected: laravel/framework " + composer.Require["laravel/framework"] + " in composer.json"
+			// Explicit, so a new site is created as Laravel (its deploy steps, queue:work workers, the scheduler).
+			f.set("framework", "laravel", "detected: laravel/framework "+composer.Require["laravel/framework"]+" in composer.json")
 		}
-		f.set("runtime", "frankenphp", why)
 		if v := plan.PHPVersion; v != "" {
 			src := "php " + composer.Require["php"] + " in composer.json"
 			if p := composer.Config.Platform["php"]; p != "" {

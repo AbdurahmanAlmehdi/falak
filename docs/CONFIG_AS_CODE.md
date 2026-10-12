@@ -201,7 +201,7 @@ units:
 | Field | What | Default |
 |---|---|---|
 | `runtime` | `frankenphp`, `php-fpm`, `node`, `bun`, `deno`, `static` or `docker` | — (required for a new unit) |
-| `framework` | Sets defaults such as the web directory and the deploy script | from the runtime |
+| `framework` | Sets defaults such as the web directory and the deploy script | from the runtime; `laravel` for a new unit on a PHP runtime with a `laravel` block |
 | `php` / `node` | PHP version (`"8.4"`) / Node.js major version (`"22"`), among the versions the installation offers | the installation's |
 | `web_directory` | The public directory served, relative to `root` (`public`, `dist`) | the framework's |
 | `port` | `docker` runtime: the port the app listens on inside its container | — |

@@ -8,6 +8,7 @@ units:
     laravel:
       scheduler: true
       horizon: true # detected: laravel/horizon in composer.json
+    framework: laravel # detected: laravel/framework ^12.0 in composer.json
     deploy:
       hooks:
         before_activate: | # detected: database/migrations (Falak's Laravel deploy steps, migrations on the leader)

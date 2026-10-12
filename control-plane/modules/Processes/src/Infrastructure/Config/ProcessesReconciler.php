@@ -236,10 +236,10 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
             $siteId = $scope->refId((string) $unit);
             $site = $siteId !== null ? $this->sites->find($siteId) : null;
             $siteUser = $site?->unixUser;
-            // SaveWorker's rule: a worker without a command runs queue:work, which only Laravel units have. A new unit
-            // without `framework` gets its runtime's default, never Laravel.
+            // SaveWorker's rule: a worker without a command runs queue:work, which only Laravel units have. An existing
+            // site keeps its framework unless the file sets one; a new unit is Laravel as SitesReconciler creates it.
             $runtime = isset($body['runtime']) ? SiteRuntime::tryFrom((string) $body['runtime']) : $site?->runtime;
-            $framework = isset($body['framework']) ? Framework::tryFrom((string) $body['framework']) : $site?->framework;
+            $framework = $site !== null && ! isset($body['framework']) ? $site->framework : Framework::declaredBy($body, $runtime);
             $queueWork = $framework?->isLaravel() === true && $runtime?->isPhp() === true;
 
             foreach (['workers', 'daemons', 'schedules'] as $section) {

@@ -1338,6 +1338,13 @@ Found testing v0.11.0-rc.1 on a live install.
   `422` for a name the organization lacks) that `ScopeFactory::attachedServers` adds to what the project hosts. A
   pusher still can't reach a server an admin didn't allow. Dashboard field, `PUT …/config/source`, `falak config
   source set --allow-server`.
+- **`falak init`'s Laravel file failed validation.** A new Laravel unit without `framework` (init wrote none) was
+  created as plain PHP, so its `workers.queue` without `command` was `value.unsupported` and its `laravel` block did
+  nothing. **[decision]** A new unit on a PHP runtime with a `laravel` block and no `framework` is Laravel
+  (`Framework::declaredBy`: the Planner adds `framework: laravel` to the unit's create, ProcessesReconciler checks
+  workers the same way; an existing site keeps its framework unless the file sets one), and `falak init` now writes
+  `framework: laravel` for a Laravel repository. A test validates every `testdata/init/*laravel*/expected.falak.yaml`
+  (with production's servers added) on a new project, so init's output and the server's checks can't diverge again.
 
 ## Release notes (draft): v0.11.0
 

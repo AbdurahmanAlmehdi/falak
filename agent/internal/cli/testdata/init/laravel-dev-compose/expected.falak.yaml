@@ -6,7 +6,8 @@ version: 1
 units:
   web:
     type: app
-    runtime: frankenphp # detected: laravel/framework ^12.0 in composer.json
+    runtime: frankenphp # detected: composer.json
+    framework: laravel # detected: laravel/framework ^12.0 in composer.json
     php: "8.4" # detected: php ^8.4 in composer.json
     deploy:
       hooks:

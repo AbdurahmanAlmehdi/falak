@@ -1,10 +1,14 @@
 <?php
 
+use Falak\Config\Domain\Enums\RunStatus;
+use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Identity\Contracts\Role;
+use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Application\Actions\CreateProject;
 use Falak\Projects\Domain\Models\Environment;
+use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Domain\Models\Site;
 
 require_once __DIR__.'/../Support/helpers.php';
@@ -69,4 +73,36 @@ it('only admins change the allowed servers, and only to servers of the organizat
     $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken)
         ->putJson("/api/v1/projects/{$project}/config/source", $body + ['allowed_servers' => ['nope']])
         ->assertStatus(422)->assertJsonValidationErrors(['allowed_servers']);
+});
+
+// What `falak init` writes for a Laravel repository validates on the server too (they diverged in rc.1: a new unit's
+// queue worker was refused because the unit wasn't known to be Laravel).
+it('validates falak init\'s Laravel files on a new project', function (string $golden) {
+    [$world, $environment, $server] = config_new_project();
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
+
+    // The one step the user adds: where production runs.
+    $file = file_get_contents($golden)."environments:\n  production:\n    branch: main\n    servers: [{$server}]\n";
+    $response = $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file, 'environment' => 'production'])->assertOk();
+
+    expect($response->json('data.errors'))->toBe([]);
+})->with(fn () => array_map(fn (string $f) => [$f], glob(__DIR__.'/../../../../../agent/internal/cli/testdata/init/*laravel*/expected.falak.yaml') ?: []));
+
+it('creates a unit with a `laravel` block on a PHP runtime as Laravel, with its queue worker', function () {
+    [$world, $environment, $server] = config_new_project();
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
+    // What rc.1's `falak init` wrote: no `framework`.
+    $file = "version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    laravel: { scheduler: true }\n"
+        ."    workers:\n      queue: { connection: database }\nenvironments:\n  production: { branch: main, servers: [{$server}] }\n";
+
+    $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file, 'environment' => 'production'])->assertOk()->assertJsonPath('data.errors', []);
+    $this->postJson("/api/v1/projects/{$environment->project_id}/config/runs", ['file' => $file, 'environment' => 'production'])->assertStatus(201);
+    $world->settle();
+
+    $site = Site::query()->where('name', 'web')->whereKeyNot($world->deploy->site->id)->sole();
+    expect($site->framework)->toBe(Framework::Laravel)
+        ->and(Worker::query()->where('site_id', $site->id)->count())->toBe(1)
+        ->and(ConfigRun::query()->where('project_id', $environment->project_id)->sole()->status)->toBe(RunStatus::Applied);
 });

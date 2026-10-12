@@ -9,7 +9,9 @@ use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
+use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Contracts\SiteDirectory;
+use Falak\Sites\Contracts\SiteRuntime;
 
 /**
  * Plans a resolved file for one environment: every registered {@see Reconcilable::diff()} on its sections, then the
@@ -45,6 +47,13 @@ final class Planner
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
             $types[(string) $unit] = (string) ($body['type'] ?? '');
+
+            // A new unit is created with the framework the file implies (a `laravel` block on a PHP runtime: what
+            // `falak init` wrote before it wrote `framework`), and the plan shows it.
+            if (is_array($body) && ! isset($body['framework']) && ! isset($scope->services[(string) $unit])
+                && ($framework = Framework::declaredBy($body, SiteRuntime::tryFrom((string) ($body['runtime'] ?? '')))) !== null) {
+                $resolved['units'][$unit]['framework'] = $framework->value;
+            }
         }
 
         foreach ($this->reconcilers->all() as $reconciler) {
