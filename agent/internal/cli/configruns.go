@@ -145,13 +145,24 @@ func printRisky(w io.Writer, run api.ConfigRun) {
 	if len(items) == 0 && run.Plan != nil {
 		for _, ch := range run.Plan.Changes {
 			if ch.Risky {
-				items = append(items, api.RiskyItem{Path: ch.Path, Rule: ch.Rule, Reason: ch.Reason})
+				items = append(items, api.RiskyItem{Op: ch.Op, Path: ch.Path, Rule: ch.Rule, Reason: ch.Reason})
+			}
+		}
+	}
+	for i, it := range items {
+		// The approval names path + rule; the op comes from the plan when the item doesn't carry it.
+		if it.Op == "" && run.Plan != nil {
+			for _, ch := range run.Plan.Changes {
+				if ch.Risky && ch.Path == it.Path && ch.Rule == it.Rule {
+					items[i].Op = ch.Op
+					break
+				}
 			}
 		}
 	}
 	fmt.Fprintf(w, "Run %s (%s) waits for an approval of %d risky change(s):\n", run.ID, dash(run.Environment), len(items))
 	for _, it := range items {
-		fmt.Fprintf(w, "  ! %s", it.Path)
+		fmt.Fprintf(w, "  ! %-6s %s", dash(it.Op), it.Path)
 		if it.Rule != "" {
 			fmt.Fprintf(w, " (%s)", it.Rule)
 		}
@@ -195,6 +206,14 @@ func (a *App) approve(ctx context.Context, c api.API, run api.ConfigRun, comment
 			}
 			return run, exitError{ExitApproval, fmt.Errorf("run %s waits for an approval: %s %s", run.ID, reason, run.URL)}
 		}
+		// The hash of exactly what is shown below: never re-fetched between showing and sending.
+		hash := ""
+		if run.Approval != nil {
+			hash = run.Approval.PlanHash
+		}
+		if hash == "" {
+			return run, fmt.Errorf("run %s has no plan_hash to approve (the control plane is older than this CLI): approve it in the dashboard %s", run.ID, run.URL)
+		}
 		printRisky(out, run)
 		ok, err := a.confirm(fmt.Sprintf("Approve run %s?", run.ID), yes)
 		if err != nil {
@@ -203,7 +222,7 @@ func (a *App) approve(ctx context.Context, c api.API, run api.ConfigRun, comment
 		if !ok {
 			return run, exitError{ExitApproval, fmt.Errorf("run %s not approved: it still waits", run.ID)}
 		}
-		next, err := c.ConfigApprove(ctx, run.ID, comment)
+		next, err := c.ConfigApprove(ctx, run.ID, hash, comment)
 		var pc *api.PlanChangedError
 		if errors.As(err, &pc) {
 			fmt.Fprintf(a.Stderr, "falak: %s\n", pc.Message)
@@ -368,6 +387,12 @@ func cmdConfigUnmanaged(ctx context.Context, a *App, args []string) error {
 	id, err := a.requireProject(ctx, c, project, "")
 	if err != nil {
 		return err
+	}
+	if env == "" {
+		// The API needs an environment: the project's production one, as for plan and drift.
+		if env, err = productionSlug(ctx, c, id); err != nil {
+			return err
+		}
 	}
 	list, err := c.ConfigUnmanaged(ctx, id, env)
 	if err != nil {

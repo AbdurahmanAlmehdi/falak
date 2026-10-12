@@ -405,7 +405,7 @@ func (a *App) runOutcome(out io.Writer, file string, run api.ConfigRun, waited b
 		return fmt.Errorf("run %s failed%s", run.ID, msg())
 	case api.RunCancelled:
 		why := map[string]string{"superseded": "a newer run of the environment took over", "rejected": "its approval was rejected",
-			"expired": "nobody approved it in time", "source_disabled": "config as code was turned off", "user": "cancelled by a user"}[deref(run.CancelReason)]
+			"expired": "nobody approved it in time", "source_disabled": "config as code was turned off", "environment_released": "the file no longer declares the environment", "user": "cancelled by a user"}[deref(run.CancelReason)]
 		if why == "" {
 			why = "cancelled" + msg()
 		}
