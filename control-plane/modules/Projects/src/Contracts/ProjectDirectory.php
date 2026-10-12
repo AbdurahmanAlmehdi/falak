@@ -40,6 +40,13 @@ interface ProjectDirectory
     public function servicesIn(string $environmentId): array;
 
     /**
+     * Every canvas service of a project, all environments (one query).
+     *
+     * @return list<ServiceData>
+     */
+    public function servicesInProject(string $projectId): array;
+
+    /**
      * Canvas URL of a service's panel: /projects/{project}/{environment}/service/{kind}/{refId}[/{tab}].
      * Null when the site / database is not placed in any environment.
      */

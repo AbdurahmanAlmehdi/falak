@@ -31,6 +31,16 @@ final class FakeSiteDirectory implements SiteDirectory, SiteHeaders
         return $this->sites[$siteId] ?? null;
     }
 
+    public function findMany(array $siteIds): array
+    {
+        return array_intersect_key($this->sites, array_flip($siteIds));
+    }
+
+    public function remembering(callable $callback): mixed
+    {
+        return $callback();
+    }
+
     public function forOrganization(string $organizationId): array
     {
         return array_values(array_filter($this->sites, fn (SiteData $site) => $site->organizationId === $organizationId));

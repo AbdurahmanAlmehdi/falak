@@ -37,6 +37,25 @@ interface SiteDirectory
      */
     public function targets(string $siteId): array;
 
+    /**
+     * Several sites at once (one query), by id; unknown ids are left out.
+     *
+     * @param  list<string>  $siteIds
+     * @return array<string, SiteData>
+     */
+    public function findMany(array $siteIds): array;
+
+    /**
+     * Run $callback with find() answers remembered (a config plan reads the same sites again and again). Only for
+     * code that writes no site meanwhile.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    public function remembering(callable $callback): mixed;
+
     /** The target that runs migrations / the scheduler. */
     public function leader(string $siteId): ?SiteTargetData;
 

@@ -2,6 +2,8 @@
 
 use Falak\Config\Application\Drift\DriftChecker;
 use Falak\Config\Application\Jobs\CheckDrift;
+use Falak\Config\Application\ScopeFactory;
+use Falak\Config\ConfigServiceProvider;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigDrift;
 use Falak\Config\Domain\Models\ConfigRun;
@@ -10,6 +12,7 @@ use Falak\Deployments\Domain\Models\SiteSettings;
 use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 
 require_once __DIR__.'/../Support/helpers.php';
@@ -37,7 +40,7 @@ it('finds drift against the last applied run, alerts once per signature, and aga
     EnvironmentVersion::query()->create(['site_id' => $world->deploy->site->id, 'version' => 99,
         'variables' => [...EnvironmentVersion::query()->where('site_id', $world->deploy->site->id)->orderByDesc('version')->first()->variables, 'FEATURE' => 'tampered'],
         'exposed' => [], 'changed_keys' => [], 'created_at' => now()]);
-    (new CheckDrift)->handle(app(DriftChecker::class), app(ProjectDirectory::class));
+    (new CheckDrift)->handle(app(ProjectDirectory::class));
 
     $drift = $this->getJson("/api/v1/projects/{$project}/config/drift?environment=production")->assertOk()
         ->assertJsonPath('data.status', 'drifted')->json('data');
@@ -88,4 +91,23 @@ it('drift\'s baseline is the file whose phase A committed, even when its deploym
     $drift = app(DriftChecker::class)->check($environment);
 
     expect($drift->status)->toBe(ConfigDrift::IN_SYNC)->and($drift->baseline_run_id)->toBe($failed->id);
+});
+
+it('schedules drift with a valid cron for any interval', function (int $minutes, string $cron) {
+    expect(ConfigServiceProvider::driftCron($minutes))->toBe($cron);
+})->with([[1, '*/5 * * * *'], [30, '*/30 * * * *'], [59, '*/59 * * * *'], [60, '0 */1 * * *'], [90, '0 */1 * * *'], [180, '0 */3 * * *'], [2000, '0 0 * * *']]);
+
+it('finds a project\'s attached servers in a constant number of queries', function () {
+    $world = config_world(servers: 2);
+    foreach (['staging', 'qa', 'dev'] as $name) {
+        $environment = projects_environment($world->deploy->organization, $name);
+        projects_site($world->deploy->organization, "Site {$name}", [], $environment, $world->deploy->servers);
+    }
+
+    $factory = app(ScopeFactory::class);
+    DB::enableQueryLog();
+    $servers = $factory->attachedServers($world->environment->project_id);
+    $queries = count(DB::getQueryLog());
+
+    expect(array_keys($servers))->toBe(['web-1', 'web-2'])->and($queries)->toBeLessThanOrEqual(7);
 });

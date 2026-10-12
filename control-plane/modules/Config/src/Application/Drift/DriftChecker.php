@@ -61,12 +61,20 @@ final class DriftChecker
                 'changes' => $masked,
                 'since' => $signature === null ? null : ($was === ConfigDrift::DRIFTED && $drift->since !== null ? $drift->since : now()),
                 'checked_at' => now(),
-                // Back in sync: a later drift alerts again, even with the same signature.
-                'alerted_signature' => $signature === null ? null : $drift->alerted_signature,
             ])->save();
 
-            if ($signature !== null && $drift->alerted_signature !== $signature) {
-                $drift->forceFill(['alerted_signature' => $signature])->save();
+            if ($signature === null) {
+                // Back in sync: a later drift alerts again, even with the same signature.
+                ConfigDrift::query()->whereKey($drift->id)->update(['alerted_signature' => null]);
+            }
+
+            // Once per signature, even with two checks racing: only the one whose conditional update wins alerts.
+            $won = $signature !== null && ConfigDrift::query()->whereKey($drift->id)
+                ->where(fn ($q) => $q->whereNull('alerted_signature')->orWhere('alerted_signature', '!=', $signature))
+                ->update(['alerted_signature' => $signature]) === 1;
+
+            if ($won) {
+                $drift->alerted_signature = $signature;
                 $paths = array_values(array_unique(array_map(fn (array $c) => (string) $c['path'], $masked)));
                 DB::afterCommit(fn () => ConfigDriftDetected::dispatch($environment->organizationId, $environment->projectId, $environment->id, $environment->slug,
                     $signature, $paths, url('/projects/'.$environment->projectId.'/settings').'#config'));

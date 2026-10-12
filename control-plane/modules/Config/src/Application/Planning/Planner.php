@@ -9,6 +9,7 @@ use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
+use Falak\Sites\Contracts\SiteDirectory;
 
 /**
  * Plans a resolved file for one environment: every registered {@see Reconcilable::diff()} on its sections, then the
@@ -19,6 +20,7 @@ final class Planner
     public function __construct(
         private readonly Reconcilers $reconcilers,
         private readonly RiskRules $risks,
+        private readonly SiteDirectory $sites,
     ) {}
 
     /**
@@ -26,6 +28,15 @@ final class Planner
      * @param  ?string  $onlyUnit  plan one unit only (a rollback restores one unit's config)
      */
     public function plan(ConfigScope $scope, array $resolved, ?string $onlyUnit = null): Plan
+    {
+        // A plan writes nothing: the reconcilers' many reads of the same sites are remembered for its length.
+        return $this->sites->remembering(fn () => $this->planFresh($scope, $resolved, $onlyUnit));
+    }
+
+    /**
+     * @param  array<string, mixed>  $resolved
+     */
+    private function planFresh(ConfigScope $scope, array $resolved, ?string $onlyUnit): Plan
     {
         $changes = new ChangeSet;
         $sections = $this->reconcilers->sections();

@@ -126,34 +126,32 @@ final class ScopeFactory
      */
     public function attachedServers(string $projectId, bool $withPreviews = false): array
     {
-        $ids = [];
+        // ponytail: a constant number of queries per project (environments, services, databases, sites, servers).
         $environments = array_values(array_filter($this->projects->environments($projectId), fn (EnvironmentData $e) => $withPreviews || ! $e->isPreview));
         $own = array_map(fn (EnvironmentData $e) => $e->id, $environments);
+        $services = array_values(array_filter($this->projects->servicesInProject($projectId), fn ($s) => in_array($s->environmentId, $own, true)));
+        $ids = [];
 
-        foreach ($environments as $environment) {
-            foreach ($this->projects->servicesIn($environment->id) as $service) {
-                if ($service->kind === ServiceKind::Database) {
-                    // [decision] Phase 3: a server running one of the project's databases is attached too.
-                    if (($database = $this->databases->find($service->refId)) !== null && in_array($database->environmentId, $own, true)) {
-                        $ids[$database->serverId] = true;
-                    }
+        // [decision] Phase 3: a server running one of the project's databases is attached too.
+        foreach ($this->databases->findMany(array_values(array_map(fn ($s) => $s->refId, array_filter($services, fn ($s) => $s->kind === ServiceKind::Database)))) as $database) {
+            if (in_array($database->environmentId, $own, true)) {
+                $ids[$database->serverId] = true;
+            }
+        }
 
-                    continue;
-                }
-
-                foreach ($this->sites->targets($service->refId) as $target) {
-                    $ids[$target->serverId] = true;
-                }
+        foreach ($this->sites->findMany(array_values(array_map(fn ($s) => $s->refId, array_filter($services, fn ($s) => $s->kind === ServiceKind::Site)))) as $site) {
+            foreach ($site->targets as $target) {
+                $ids[$target->serverId] = true;
             }
         }
 
         $out = [];
 
-        foreach (array_keys($ids) as $id) {
-            $server = $this->servers->find((string) $id);
-
-            if ($server !== null) {
-                $out[$server->name] = $server->id;
+        if ($ids !== [] && $environments !== []) {
+            foreach ($this->servers->forOrganization($environments[0]->organizationId) as $server) {
+                if (isset($ids[$server->id])) {
+                    $out[$server->name] = $server->id;
+                }
             }
         }
 

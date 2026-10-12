@@ -74,6 +74,23 @@ class ConfigServiceProvider extends ModuleServiceProvider
         return rtrim(is_string($path) && $path !== '' ? $path : dirname(__DIR__, 4).'/contracts/config', '/');
     }
 
+    /**
+     * The drift schedule for an interval in minutes (at least 5): `*\/N` below an hour, whole hours above (rounded
+     * down, at most daily), so 90 never makes an invalid or surprising cron.
+     */
+    public static function driftCron(int $minutes): string
+    {
+        $minutes = max(5, $minutes);
+
+        if ($minutes < 60) {
+            return "*/{$minutes} * * * *";
+        }
+
+        $hours = min(24, intdiv($minutes, 60));
+
+        return $hours >= 24 ? '0 0 * * *' : "0 */{$hours} * * *";
+    }
+
     public static function schemaPath(): string
     {
         return self::contractsPath().'/v1.schema.json';
@@ -96,8 +113,7 @@ class ConfigServiceProvider extends ModuleServiceProvider
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->job(new ExpireApprovals)->hourly()->name('config:expire-approvals')->withoutOverlapping();
-            $minutes = max(5, (int) config('config_as_code.drift_minutes', 30));
-            $schedule->job(new CheckDrift)->cron("*/{$minutes} * * * *")->name('config:check-drift')->withoutOverlapping();
+            $schedule->job(new CheckDrift)->cron(self::driftCron((int) config('config_as_code.drift_minutes', 30)))->name('config:check-drift')->withoutOverlapping();
         });
 
         $registry = $this->app->make(PermissionRegistry::class);
