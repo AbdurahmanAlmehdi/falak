@@ -34,8 +34,10 @@ final class DriftChecker
         $source = ConfigSource::enabledFor($environment->projectId);
         $busy = ConfigRun::query()->where('environment_id', $environment->id)
             ->whereIn('status', [RunStatus::Planning, RunStatus::Applying])->exists();
-        $baseline = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->whereNotNull('resolved')
-            ->latest('finished_at')->orderByDesc('id')->first();
+        // [decision] The baseline is the resolved file last committed by a phase A (a run whose deployment then failed
+        // included): what the environment is configured with, not the last fully applied run.
+        $baseline = ConfigRun::query()->where('environment_id', $environment->id)->whereNotNull('phase_a_at')->whereNotNull('resolved')
+            ->latest('phase_a_at')->orderByDesc('id')->first();
 
         if ($source === null || $baseline === null || $busy) {
             // Nothing applied yet, or a run is on its way: no verdict (a run in flight isn't drift).

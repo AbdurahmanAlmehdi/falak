@@ -386,3 +386,17 @@ it('flags a new public unit and a database dropped with allow_destroy', function
     expect(data_rule($plan, '/units/db/databases/extra'))->toBe('database.database_removed')
         ->and(collect($plan->changes)->firstWhere('path', '/units/db/databases/extra')->op)->toBe(ChangeOp::Delete);
 });
+
+it('plans nothing for a unit while its major upgrade runs, and says so', function () {
+    [, $instance] = data_existing();
+    data_apply($this->world, ['db' => ['type' => 'database', 'memory' => '512m']]);
+    $instance->forceFill(['status' => InstanceStatus::Upgrading])->save();
+
+    $plan = data_plan($this->world, ['db' => ['type' => 'database', 'version' => '18', 'memory' => '1g']]);
+    $mine = collect($plan->changes)->where('unit', 'db')->values();
+
+    expect($plan->actionable())->toBe([])
+        ->and($plan->isRisky())->toBeFalse()
+        ->and($mine)->toHaveCount(1)
+        ->and($mine[0]->note)->toContain('Upgrade in progress');
+});

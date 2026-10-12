@@ -2,7 +2,9 @@
 
 use Falak\Config\Application\Drift\DriftChecker;
 use Falak\Config\Application\Jobs\CheckDrift;
+use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigDrift;
+use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Events\ConfigDriftDetected;
 use Falak\Deployments\Domain\Models\SiteSettings;
 use Falak\Identity\Application\Actions\CreateApiToken;
@@ -67,4 +69,23 @@ it('reports no verdict while a run is applying', function () {
 
     $environment = app(ProjectDirectory::class)->environment($world->environment->id);
     expect(app(DriftChecker::class)->check($environment)->status)->toBe(ConfigDrift::UNKNOWN);
+});
+
+it('drift\'s baseline is the file whose phase A committed, even when its deployment failed', function () {
+    $world = config_world();
+    $world->file(CONFIG_DRIFT_FILE);
+    $world->push(config_sha('b'));
+    $world->settle();
+
+    $world->file(str_replace('/healthz', '/ready', CONFIG_DRIFT_FILE));
+    $world->push(config_sha('c'));
+    $world->deploy->builds->fail();
+    deploy_run_all($world->deploy->agents);
+    $failed = ConfigRun::query()->where('commit', config_sha('c'))->sole();
+    expect($failed->status)->toBe(RunStatus::Failed)->and($failed->phase_a_at)->not->toBeNull();
+
+    $environment = app(ProjectDirectory::class)->environment($world->environment->id);
+    $drift = app(DriftChecker::class)->check($environment);
+
+    expect($drift->status)->toBe(ConfigDrift::IN_SYNC)->and($drift->baseline_run_id)->toBe($failed->id);
 });

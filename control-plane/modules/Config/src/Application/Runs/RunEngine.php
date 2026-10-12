@@ -179,6 +179,7 @@ final class RunEngine
 
         try {
             $scope = DB::transaction(fn () => $this->applier->phaseA($scope, $plan->changes, $ctx));
+            $run->forceFill(['phase_a_at' => now()])->save();
         } catch (Throwable $e) {
             return $this->finish($run, RunStatus::Failed, 'Phase A failed: '.self::message($e).' Nothing was deployed.');
         }

@@ -35,6 +35,7 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $started_at
  * @property ?Carbon $finished_at
  * @property ?Carbon $approval_expires_at
+ * @property ?Carbon $phase_a_at when phase A committed (drift's baseline)
  * @property ?list<array{path: string, rule: ?string}> $approved_risky
  * @property ?string $approval_comment
  * @property ?string $rejected_by
@@ -68,6 +69,7 @@ class ConfigRun extends Model
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
             'approval_expires_at' => 'datetime',
+            'phase_a_at' => 'datetime',
             'approved_risky' => 'array',
             'rejected_at' => 'datetime',
         ];

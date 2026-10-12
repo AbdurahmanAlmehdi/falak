@@ -104,7 +104,7 @@ final class RollbackRestorer
                 $this->applier->phaseB($scope, $resolved, new ApplyContext($run->id, ApplyPhase::WithRelease, $run->commit, null, false, $unit, null, $releaseId), $unit);
             });
 
-            $run->forceFill(['status' => RunStatus::Applied, 'finished_at' => now()])->save();
+            $run->forceFill(['status' => RunStatus::Applied, 'phase_a_at' => now(), 'finished_at' => now()])->save();
         } catch (Throwable $e) {
             Log::warning('config: restoring a release config failed', ['run' => $run->id, 'error' => $e->getMessage()]);
             $run->forceFill(['status' => RunStatus::Failed, 'error' => 'Restoring the release\'s config failed: '.$e->getMessage(), 'finished_at' => now()])->save();

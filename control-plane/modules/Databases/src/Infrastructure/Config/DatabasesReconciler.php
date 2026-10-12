@@ -266,6 +266,15 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
+            if ($instance->status === InstanceStatus::Upgrading) {
+                // [decision] A major upgrade in progress: nothing is planned for the unit (no new risky version change,
+                // no field updates), so drift checks and new runs don't churn on it; the plan says why.
+                $changes[] = (new Change(ChangeOp::Noop, "{$base}/version", $wanted['version'] ?? null, $wanted['version'] ?? null, self::SECTION, $unit))
+                    ->withNote('Upgrade in progress: the unit is planned again once it is done.');
+
+                continue;
+            }
+
             $today = self::comparable((array) ($current['units'][$unit] ?? []));
             $haveLeaves = Diff::leaves(array_diff_key($today, ['databases' => true, 'backups' => true]));
 
