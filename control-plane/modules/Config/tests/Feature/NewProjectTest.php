@@ -83,7 +83,7 @@ it('only admins change the allowed servers, and only to servers of the organizat
 // queue worker was refused because the unit wasn't known to be Laravel).
 it('validates falak init\'s Laravel files on a new project', function (string $golden) {
     [$world, $environment, $server] = config_new_project();
-    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$world->deploy->servers[0]->id])]);
     $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
 
     // The server has what the file asks for (the next test covers a server that doesn't).
@@ -109,7 +109,7 @@ it('validates falak init\'s Laravel files on a new project', function (string $g
 
 it('creates a unit with a `laravel` block on a PHP runtime as Laravel, with its queue worker', function () {
     [$world, $environment, $server] = config_new_project();
-    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$world->deploy->servers[0]->id])]);
     $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
     // What rc.1's `falak init` wrote: no `framework`.
     $file = "version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    laravel: { scheduler: true }\n"
@@ -127,7 +127,7 @@ it('creates a unit with a `laravel` block on a PHP runtime as Laravel, with its 
 
 it('reports a PHP version the unit\'s servers lack when validating and planning, not in phase A', function () {
     [$world, $environment, $server] = config_new_project();
-    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$world->deploy->servers[0]->id])]);
     $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
     $file = fn (string $php) => "version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"{$php}\"\nenvironments:\n  production: { branch: main, servers: [{$server}] }\n";
 
@@ -138,4 +138,35 @@ it('reports a PHP version the unit\'s servers lack when validating and planning,
     $this->postJson("/api/v1/projects/{$environment->project_id}/config/plan", ['file' => $file('8.3'), 'environment' => 'production'])->assertStatus(422);
 
     $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file('8.4'), 'environment' => 'production'])->assertOk()->assertJsonPath('data.errors', []);
+});
+
+it('keeps allowed servers by id: a renamed server stays allowed, a deleted one drops out and saving still works', function () {
+    [$world, $environment, $server] = config_new_project();
+    $project = $environment->project_id;
+    $body = ['connection_id' => $world->source->source_connection_id, 'repository' => 'acme/fresh', 'enabled' => true];
+    $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
+    $this->putJson("/api/v1/projects/{$project}/config/source", $body + ['allowed_servers' => [$server]])->assertOk();
+
+    expect(ConfigSource::query()->where('project_id', $project)->value('allowed_servers'))->toContain($world->deploy->servers[0]->id);
+
+    $world->deploy->servers[0]->forceFill(['name' => 'renamed'])->save();
+    $this->getJson("/api/v1/projects/{$project}/config/source")->assertJsonPath('data.allowed_servers', ['renamed']);
+
+    $world->deploy->servers[0]->delete();
+    $shown = $this->getJson("/api/v1/projects/{$project}/config/source")->assertJsonPath('data.allowed_servers', [])->json('data.allowed_servers');
+
+    // A developer disables the source with the list as the dashboard shows it.
+    app('auth')->forgetGuards();
+    [$developer] = memberOf($world->deploy->organization, Role::Developer);
+    $this->withToken(app(CreateApiToken::class)($developer, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken)
+        ->putJson("/api/v1/projects/{$project}/config/source", [...$body, 'enabled' => false, 'allowed_servers' => $shown])->assertOk();
+});
+
+it('converts the release candidates\' allowed server names to ids', function () {
+    [$world, $environment, $server] = config_new_project();
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server, 'gone'])]);
+
+    (require __DIR__.'/../../database/migrations/2026_11_25_100001_config_allowed_servers_by_id.php')->up();
+
+    expect(ConfigSource::query()->where('project_id', $environment->project_id)->first()->allowed_servers)->toBe([$world->deploy->servers[0]->id]);
 });

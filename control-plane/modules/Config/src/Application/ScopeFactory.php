@@ -151,7 +151,7 @@ final class ScopeFactory
 
         if (($ids !== [] || $allowed !== []) && $environments !== []) {
             foreach ($this->servers->forOrganization($environments[0]->organizationId) as $server) {
-                if (isset($ids[$server->id]) || isset($allowed[$server->name])) {
+                if (isset($ids[$server->id]) || isset($allowed[$server->id])) {
                     $out[$server->name] = $server->id;
                 }
             }

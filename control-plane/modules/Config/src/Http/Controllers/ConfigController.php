@@ -69,10 +69,13 @@ final class ConfigController extends Controller
         // admin's call.
         foreach (['allowed_credentials' => 'certificates, DNS credentials and storage providers', 'allowed_servers' => 'servers'] as $field => $what) {
             if (array_key_exists($field, $input) && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)) {
-                $current = ConfigSource::query()->where('project_id', $data->id)->value($field);
-                $current = is_string($current) ? (array) json_decode($current, true) : (array) $current;
+                $source = ConfigSource::query()->where('project_id', $data->id)->first();
+                $current = $field === 'allowed_servers' ? ($source?->allowedServerNames() ?? []) : (array) ($source?->allowed_credentials ?? []);
+                $given = array_values(array_unique(array_filter(array_map('trim', (array) $input[$field]))));
+                sort($given);
+                sort($current);
 
-                if (array_values((array) $input[$field]) !== array_values($current)) {
+                if ($given !== $current) {
                     abort(403, "Only admins can change the {$what} the file may use.");
                 }
             }

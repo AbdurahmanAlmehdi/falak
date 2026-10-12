@@ -156,7 +156,7 @@ final class Presenters
             'experimental' => $source->experimental,
             'separate_approver' => $source->separate_approver,
             'allowed_credentials' => array_values((array) ($source->allowed_credentials ?? [])),
-            'allowed_servers' => array_values((array) ($source->allowed_servers ?? [])),
+            'allowed_servers' => $source->allowedServerNames(),
             'created_at' => $source->created_at?->toIso8601String(),
             'updated_at' => $source->updated_at?->toIso8601String(),
         ];

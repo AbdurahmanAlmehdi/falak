@@ -52,14 +52,24 @@ final class SaveSource
             throw ValidationException::withMessages(['path' => 'The file must be named falak.yaml, falak.yml or falak.json (in the repository or a folder of it).']);
         }
 
-        $servers = array_key_exists('allowed_servers', $data) ? array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_servers'])))) : null;
+        $servers = null;
 
-        if ($servers !== null) {
-            $known = array_map(fn ($s) => $s->name, $this->servers->forOrganization($project->organizationId));
+        if (array_key_exists('allowed_servers', $data)) {
+            // [decision] Given and shown as names, stored as ids: a renamed server stays allowed, a deleted one drops
+            // out (the list shown no longer has it), and only a name that matches no server is refused.
+            $byName = [];
 
-            if (($unknown = array_values(array_diff($servers, $known))) !== []) {
+            foreach ($this->servers->forOrganization($project->organizationId) as $server) {
+                $byName[$server->name] = $server->id;
+            }
+
+            $names = array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_servers']))));
+
+            if (($unknown = array_values(array_diff($names, array_keys($byName)))) !== []) {
                 throw ValidationException::withMessages(['allowed_servers' => 'The organization has no server named "'.implode('", "', $unknown).'".']);
             }
+
+            $servers = array_values(array_map(fn (string $name) => $byName[$name], $names));
         }
 
         $source = ConfigSource::query()->firstOrNew(['project_id' => $project->id], ['organization_id' => $project->organizationId, 'created_by' => $userId]);
@@ -96,7 +106,7 @@ final class SaveSource
         }
 
         $this->audit->record($wasEnabled && ! $source->enabled ? 'config.source_disabled' : 'config.source_saved', 'project', $project->id,
-            ['repository' => $source->repository, 'path' => $source->path, 'enabled' => $source->enabled, 'allowed_servers' => $source->allowed_servers], $project->organizationId, $userId);
+            ['repository' => $source->repository, 'path' => $source->path, 'enabled' => $source->enabled, 'allowed_servers' => $source->allowedServerNames()], $project->organizationId, $userId);
 
         return $source;
     }

@@ -2,6 +2,7 @@
 
 namespace Falak\Config\Domain\Models;
 
+use Falak\Servers\Contracts\ServerDirectory;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 
@@ -18,7 +19,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property bool $experimental
  * @property bool $separate_approver
  * @property ?list<string> $allowed_credentials
- * @property ?list<string> $allowed_servers
+ * @property ?list<string> $allowed_servers server ids (shown and given as names: {@see allowedServerNames()})
  * @property ?string $created_by
  */
 class ConfigSource extends Model
@@ -41,6 +42,32 @@ class ConfigSource extends Model
     public static function enabledFor(string $projectId): ?self
     {
         return self::query()->where('project_id', strtolower($projectId))->where('enabled', true)->first();
+    }
+
+    /**
+     * The allowed servers' current names (a renamed server shows its new name; a deleted one is gone).
+     *
+     * @return list<string>
+     */
+    public function allowedServerNames(): array
+    {
+        $ids = array_flip(array_map('strval', (array) ($this->allowed_servers ?? [])));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $names = [];
+
+        foreach (app(ServerDirectory::class)->forOrganization($this->organization_id) as $server) {
+            if (isset($ids[$server->id])) {
+                $names[] = $server->name;
+            }
+        }
+
+        sort($names);
+
+        return $names;
     }
 
     public function format(): string

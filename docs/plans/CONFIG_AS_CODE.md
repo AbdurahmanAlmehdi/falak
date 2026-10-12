@@ -1334,8 +1334,9 @@ Found testing v0.11.0-rc.1 on a live install.
 - **A new project could never place a unit.** Attached servers were only those hosting the project's services, so a
   project made for the file had none and every `servers:` was `name.server`. **[decision]** The dashboard has no
   "attach a server to a project" concept to reuse (a project owns services; servers are the organization's), so the
-  source gets an admin-set `allowed_servers` (server names, like `allowed_credentials`; `config.approve` to change,
-  `422` for a name the organization lacks) that `ScopeFactory::attachedServers` adds to what the project hosts. A
+  source gets an admin-set `allowed_servers` (given and shown as server names, stored as ids so a renamed server stays
+  allowed and a deleted one drops out instead of failing every save; `config.approve` to change, `422` for a name the
+  organization lacks) that `ScopeFactory::attachedServers` adds to what the project hosts. A
   pusher still can't reach a server an admin didn't allow. Dashboard field, `PUT …/config/source`, `falak config
   source set --allow-server`.
 - **`falak init`'s Laravel file failed validation.** A new Laravel unit without `framework` (init wrote none) was
