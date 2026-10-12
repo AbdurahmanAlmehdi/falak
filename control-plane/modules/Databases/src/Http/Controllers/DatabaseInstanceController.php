@@ -23,6 +23,7 @@ use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Servers\Contracts\ServerDirectory;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -53,11 +54,7 @@ final class DatabaseInstanceController extends Controller
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, DatabasesPolicy::VIEW);
 
-        $instances = DatabaseInstance::query()
-            ->where('organization_id', $organizationId)
-            ->withCount(['databases', 'users'])
-            ->orderBy('name')
-            ->get();
+        $instances = $this->instances($organizationId);
 
         $options = $this->createOptions($organizationId, $servers);
 
@@ -217,6 +214,48 @@ final class DatabaseInstanceController extends Controller
      */
     public function destroy(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): RedirectResponse|JsonResponse
     {
+        $this->delete($request, $instance, $lifecycle);
+
+        return $request->wantsJson() && $request->header('X-Inertia') === null
+            ? response()->json(['data' => $this->presentInstance($instance)])
+            : redirect('/databases');
+    }
+
+    /**
+     * GET /api/v1/databases/instances: the organization's containers (never a password).
+     */
+    public function indexApi(Request $request): JsonResponse
+    {
+        $organizationId = $this->organization->requireId();
+        $this->access->authorize($request->user(), $organizationId, DatabasesPolicy::VIEW);
+
+        return response()->json(['data' => $this->instances($organizationId)->map(fn (DatabaseInstance $instance) => $this->presentInstance($instance))->values()]);
+    }
+
+    /**
+     * GET /api/v1/databases/instances/{instance}
+     */
+    public function showApi(DatabaseInstance $instance): JsonResponse
+    {
+        $this->authorize('view', $instance);
+
+        return response()->json(['data' => $this->presentInstance($instance->loadCount(['databases', 'users']))]);
+    }
+
+    /**
+     * DELETE /api/v1/databases/instances/{instance} {confirm, delete_volume?}: 202, the agent removes the container
+     * (status `deleting` until it reports back).
+     */
+    public function destroyApi(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): JsonResponse
+    {
+        $this->delete($request, $instance, $lifecycle);
+
+        return response()->json(['data' => $this->presentInstance($instance)], 202);
+    }
+
+    /** The dashboard's and the API's delete: same permission, typed confirmation and falak.yaml guard. */
+    private function delete(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): void
+    {
         $this->authorize('manage', $instance);
         $data = $request->validate([
             'confirm' => ['required', 'string', 'in:'.$instance->name],
@@ -225,10 +264,18 @@ final class DatabaseInstanceController extends Controller
         $this->guardManaged('database_instance', $instance->id, 'confirm', 'this database server');
 
         $lifecycle->delete($instance, (bool) ($data['delete_volume'] ?? false), $request->user()?->getAuthIdentifier());
+    }
 
-        return $request->wantsJson() && $request->header('X-Inertia') === null
-            ? response()->json(['data' => $this->presentInstance($instance)])
-            : redirect('/databases');
+    /**
+     * @return Collection<int, DatabaseInstance>
+     */
+    private function instances(string $organizationId): Collection
+    {
+        return DatabaseInstance::query()
+            ->where('organization_id', $organizationId)
+            ->withCount(['databases', 'users'])
+            ->orderBy('name')
+            ->get();
     }
 
     /**
