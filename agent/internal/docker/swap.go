@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
+	"github.com/OthmanHaba/falak/agent/internal/redact"
 )
 
 // SwapPayload is deploy.container.swap.
@@ -324,7 +325,12 @@ func (s *Service) reportContainer(ctx context.Context, id string, st commands.St
 		fmt.Fprintf(out, "container output: unavailable (%v)\n", err)
 		return
 	}
-	text := strings.TrimRight(strings.ReplaceAll(b.String(), "\r\n", "\n"), "\n")
+	text := b.String()
+	if b.cut {
+		// The front was cut mid-line: start at the next whole line (a secret straddling the cut can't be masked).
+		_, text, _ = strings.Cut(text, "\n")
+	}
+	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
 		fmt.Fprintln(out, "container output: (none)")
 		return
@@ -334,7 +340,10 @@ func (s *Service) reportContainer(ctx context.Context, id string, st commands.St
 		lines = lines[len(lines)-reportLines:]
 	}
 	fmt.Fprintf(out, "container output (last %d lines):\n", len(lines))
+	secrets := redact.FromContext(ctx)
 	for _, l := range lines {
+		// Masked whole, then cut: a cut must not split a secret the masker would no longer recognize.
+		l = secrets.String(l)
 		if len(l) > reportLineMax {
 			l = strings.ToValidUTF8(l[:reportLineMax], "") + " …"
 		}
@@ -364,16 +373,18 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// limitedBuffer keeps the last max bytes written to it.
+// limitedBuffer keeps the last max bytes written to it; cut says the front was dropped.
 type limitedBuffer struct {
 	buf []byte
 	max int
+	cut bool
 }
 
 func (l *limitedBuffer) Write(p []byte) (int, error) {
 	l.buf = append(l.buf, p...)
 	if len(l.buf) > l.max {
 		l.buf = l.buf[len(l.buf)-l.max:]
+		l.cut = true
 	}
 	return len(p), nil
 }

@@ -881,3 +881,26 @@ func TestContainerSwapReportsTheFailedContainer(t *testing.T) {
 		t.Fatalf("error %q output %q", fin.Error, col.Output("stdout"))
 	}
 }
+
+// A secret across the line-length cut, or across the front of the bounded buffer, never shows in part.
+func TestContainerSwapReportMasksBeforeCutting(t *testing.T) {
+	s, e, _, _, _ := newSvc(t)
+	bad := 503
+	p := swapPayload(healthServer(t, &bad), healthServer(t, &bad))
+	p.Env["DB_PASSWORD"] = "hunter2-secret"
+	p.Mask = []string{"DB_PASSWORD"}
+	straddle := strings.Repeat("a", reportLineMax-6) + "hunter2-secret tail\n"
+	front := strings.Repeat("b", reportLines*(reportLineMax+64)) + "hunter2-secret\n"
+	e.logs = map[string][2]string{"falak-shop-blue": {front + straddle + "last line\n", ""}}
+
+	_, col := exec1(t, s, "deploy.container.swap", p)
+	out := col.Output("stdout")
+	for _, part := range []string{"hunter2", "-secret", "secret"} {
+		if strings.Contains(out, part) {
+			t.Fatalf("%q leaked: %q", part, out)
+		}
+	}
+	if !strings.Contains(out, "  | last line") || !strings.Contains(out, "  | "+strings.Repeat("a", 100)) || strings.Contains(out, "bbbb") {
+		t.Fatalf("output %q", out)
+	}
+}
