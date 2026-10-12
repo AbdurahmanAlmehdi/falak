@@ -248,7 +248,20 @@ final class LimitsReconciler implements Reconcilable, ValidatesConfig
             $sets = [];
 
             if ($type === 'app' && is_array($body['limits'] ?? null)) {
-                $sets["{$base}/limits"] = $body['limits'];
+                // What Sites refuses when applying (UpdateSiteLimits): say so at validation, not as a failed phase A.
+                $runtime = isset($body['runtime']) ? SiteRuntime::tryFrom((string) $body['runtime'])
+                    : (($siteId = $scope->refId((string) $unit)) !== null ? $this->sites->find($siteId)?->runtime : null);
+                $refused = match (true) {
+                    $runtime === SiteRuntime::Static => 'Static sites are served by the edge and have nothing to limit.',
+                    $runtime === SiteRuntime::FrankenPhp && ResourceLimits::fromArray(self::toInput($body['limits']))->hasCgroupLimits() => 'FrankenPHP sites run inside the shared edge: limit memory and CPUs through Octane workers, or use the php-fpm runtime.',
+                    default => null,
+                };
+
+                if ($refused !== null) {
+                    $issues[] = ConfigIssue::error('value.unsupported', "{$base}/limits", $refused);
+                } else {
+                    $sets["{$base}/limits"] = $body['limits'];
+                }
             }
 
             if ($type === 'compose') {

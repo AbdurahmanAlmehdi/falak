@@ -54,3 +54,17 @@ it('validates sizes and the unit\'s servers', function () {
         'limit.server /units/big/limits',
     ]);
 });
+
+it('refuses at validation the limits Sites can\'t apply: static sites, and cgroup limits on FrankenPHP', function () {
+    $issues = $this->reconciler->validate($this->scope, config_doc('production', [
+        'web' => ['type' => 'app', 'limits' => ['memory' => '1g']],                               // php-fpm today: fine
+        'edge' => ['type' => 'app', 'runtime' => 'frankenphp', 'limits' => ['memory' => '1g']],
+        'logs' => ['type' => 'app', 'runtime' => 'frankenphp', 'limits' => ['oom' => 'protect']],  // not a cgroup limit
+        'docs' => ['type' => 'app', 'runtime' => 'static', 'limits' => ['oom' => 'protect']],
+    ]));
+
+    expect(collect($issues)->map(fn ($i) => $i->code.' '.$i->pointer)->all())->toEqualCanonicalizing([
+        'value.unsupported /units/edge/limits',
+        'value.unsupported /units/docs/limits',
+    ]);
+});
