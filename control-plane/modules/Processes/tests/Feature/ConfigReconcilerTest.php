@@ -183,6 +183,23 @@ it('validates cron, time zones, bounds, env and servers', function () {
     ]);
 });
 
+it('refuses workers without a command on units that aren\'t Laravel (queue:work), at validation', function () {
+    $new = new ConfigScope($this->scope->organizationId, $this->scope->projectId, $this->scope->environmentId, $this->scope->environment);
+    $issues = $this->reconciler->validate($new, ['units' => [
+        'api' => ['type' => 'app', 'runtime' => 'php-fpm', 'workers' => ['q' => ['queue' => ['mail']], 'ok' => ['command' => 'php jobs.php']]],
+        'shop' => ['type' => 'app', 'runtime' => 'php-fpm', 'framework' => 'laravel', 'workers' => ['q' => ['queue' => ['mail']]]],
+        'node' => ['type' => 'app', 'runtime' => 'node', 'framework' => 'laravel', 'workers' => ['q' => ['processes' => 2]]],
+    ]]);
+
+    expect(collect($issues)->map(fn ($i) => [$i->code, $i->pointer])->all())->toEqualCanonicalizing([
+        ['value.unsupported', '/units/api/workers/q'],
+        ['value.unsupported', '/units/node/workers/q'],
+    ]);
+
+    // An existing Laravel site (the unit's site) runs queue:work without a command.
+    expect($this->reconciler->validate($this->scope, ['units' => ['web' => ['type' => 'app', 'workers' => ['q' => ['processes' => 1]]]]]))->toBe([]);
+});
+
 it('runs file processes only as the site\'s own unix user', function () {
     $issues = $this->reconciler->validate($this->scope, ['units' => ['web' => ['type' => 'app',
         'daemons' => ['ws' => ['command' => 'run', 'user' => 'ubuntu'], 'ok' => ['command' => 'run', 'user' => 'shop'], 'default' => ['command' => 'run']],

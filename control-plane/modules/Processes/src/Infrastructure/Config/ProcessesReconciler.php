@@ -25,6 +25,7 @@ use Falak\Processes\Domain\Models\Schedule;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Processes\Http\Requests\ProcessRules;
 use Falak\Sites\Contracts\Data\SiteData;
+use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteRuntime;
 use Illuminate\Database\Eloquent\Model;
@@ -229,7 +230,13 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
             $unitServers = (array) ($body['servers'] ?? $resolved['environments'][$scope->environment]['servers'] ?? []);
             $siteId = $scope->refId((string) $unit);
-            $siteUser = $siteId !== null ? $this->sites->find($siteId)?->unixUser : null;
+            $site = $siteId !== null ? $this->sites->find($siteId) : null;
+            $siteUser = $site?->unixUser;
+            // SaveWorker's rule: a worker without a command runs queue:work, which only Laravel units have. A new unit
+            // without `framework` gets its runtime's default, never Laravel.
+            $runtime = isset($body['runtime']) ? SiteRuntime::tryFrom((string) $body['runtime']) : $site?->runtime;
+            $framework = isset($body['framework']) ? Framework::tryFrom((string) $body['framework']) : $site?->framework;
+            $queueWork = $framework?->isLaravel() === true && $runtime?->isPhp() === true;
 
             foreach (['workers', 'daemons', 'schedules'] as $section) {
                 foreach ((array) ($body[$section] ?? []) as $key => $item) {
@@ -240,6 +247,10 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
                         $issues[] = ConfigIssue::error('value.forbidden', "{$base}/user", $siteUser !== null
                             ? "Processes run as the site's user \"{$siteUser}\": leave `user` out or set it to that user."
                             : "Processes run as the site's user: leave `user` out (the unit has no site yet).");
+                    }
+
+                    if ($section === 'workers' && trim((string) ($item['command'] ?? '')) === '' && ! $queueWork) {
+                        $issues[] = ConfigIssue::error('value.unsupported', $base, 'Only Laravel units run queue:work: give this worker a `command`.');
                     }
 
                     foreach (self::bounds($section) as $field => [$min, $max]) {
