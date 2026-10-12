@@ -7,6 +7,7 @@ use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Projects\Contracts\Data\EnvironmentData;
+use Falak\Sites\Contracts\SiteDirectory;
 use Symfony\Component\Yaml\Yaml;
 
 /**
@@ -18,6 +19,7 @@ final class Exporter
     public function __construct(
         private readonly Reconcilers $reconcilers,
         private readonly ScopeFactory $scopes,
+        private readonly SiteDirectory $sites,
     ) {}
 
     /**
@@ -28,10 +30,16 @@ final class Exporter
         $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->latest('finished_at')->first();
         $branch = $applied?->resolved['environments'][$environment->slug]['branch'] ?? null;
         $scope = $this->scopes->make($environment, $source, $applied?->resolved);
+        // Before a first apply: the branch the environment's sites deploy the source's repository from, so pushing the
+        // export applies it.
+        $branch ??= $source === null ? null : collect($this->sites->findMany(array_column(array_filter($scope->services, fn (array $s) => $s['kind'] === 'site'), 'ref_id')))
+            ->first(fn ($site) => $site->sourceConnectionId === $source->source_connection_id && strcasecmp((string) $site->repository, $source->repository) === 0 && $site->branch !== null)?->branch;
         $units = [];
+        $previews = null;
 
         foreach ($this->reconcilers->all() as $reconciler) {
             $current = $this->reconcilers->sections()->prune($reconciler, self::typed($reconciler->current($scope)));
+            $previews ??= is_array($current['previews'] ?? null) ? $current['previews'] : null;
 
             foreach ((array) ($current['units'] ?? []) as $unit => $body) {
                 $units[$unit] = array_replace_recursive($units[$unit] ?? [], (array) $body);
@@ -61,11 +69,15 @@ final class Exporter
 
         $env = array_filter(['branch' => $branch, 'production' => $environment->isProduction ? true : null], fn ($v) => $v !== null);
 
+        // The previews block belongs to the run of its base environment (production's when it names none).
+        $ownsPreviews = $previews !== null && (isset($previews['base']) ? $previews['base'] === $environment->slug : $environment->isProduction);
+
         return [
             '$schema' => 'https://falak.sh/schema/v1.json',
             'version' => 1,
             'units' => $units,
             'environments' => [$environment->slug => $env],
+            ...($ownsPreviews ? ['previews' => $previews] : []),
         ];
     }
 

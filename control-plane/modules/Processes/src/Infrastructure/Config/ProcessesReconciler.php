@@ -213,6 +213,10 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
             if ($changed) {
                 $model = $this->save($scope, $site, $section, $key, $model, $desired, $ctx);
+            } elseif ($model instanceof Worker && ($model->name ?? '') === '') {
+                // An unnamed worker the file adopts unchanged (an export's `worker-<n>`) takes the key, so a worker added
+                // in the dashboard later can't shift which row `worker-<n>` means.
+                $model->forceFill(['name' => $key])->save();
             }
 
             $this->managed->record($scope, $ctx, $unit, $type, (string) $model->getKey(), ['/'.$section.'/'.Pointer::escape($key)], $created ? true : null);
