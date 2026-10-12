@@ -418,7 +418,8 @@ to the environment's network. SQL engines get a database and a user named after 
 major this release ships no pinned image of is a `422` on `version`. Sites: the `POST /sites` body with
 `kind: "site"`. `201 {data: <canvas service>, warnings[]}`; the service is `provisioning` until the container runs.
 
-Database containers and backups have no `/api/v1` endpoints yet; the session routes (CSRF, `Accept: application/json`
+Database containers can be listed, read and deleted over `/api/v1` (see Databases); the rest of their lifecycle and
+backups have no `/api/v1` endpoints yet. The session routes (CSRF, `Accept: application/json`
 for errors as JSON): `POST /databases/instances {engine, server_id, name, version?, memory_mb?, cpus?, disk_gb?,
 settings?}`, `PUT /databases/instances/{instance} {memory_mb?, cpus?, settings?, public_access?, require_tls?,
 allowed_sources?}` (a setting given as `null` returns to its default; `allowed_sources`: IPv4 CIDRs allowed to reach a
@@ -469,6 +470,33 @@ current version of the nearest secret `NAME` of the service owning the variable 
 then organization secrets. A missing secret fails the deployment (`STRIPE_KEY: secret STRIPE_KEY is not defined for
 this service …`), as does a linked secret whose provider is not configured. Each read is in the secret's access log
 (once per deployment and version).
+
+## Databases
+
+Database containers (instances). Responses never carry a password: `rotating_password` and `password_overlap_until`
+only say a rotation is pending.
+
+### `GET /api/v1/databases/instances` · `GET /api/v1/databases/instances/{instance}` — `databases.view`
+```json
+{"data": {
+  "id": "01k…", "name": "shop", "server_id": "01k…", "server_name": "db-1", "environment_id": "01k…",
+  "engine": "postgresql", "engine_label": "PostgreSQL", "kind": "sql", "version": "17",
+  "image": "ghcr.io/othmanhaba/falak-postgres:17", "image_digest": "sha256:…",
+  "hostname": "falak-db-01k…", "port": 5432, "host_port": 20000, "published_addresses": [], "public_access": false,
+  "require_tls": true, "memory_mb": 512, "cpus": null, "settings": {}, "pitr_enabled": false, "volume_id": "01k…",
+  "status": "active", "status_message": null, "health": "healthy", "rotating_password": false,
+  "databases_count": 1, "users_count": 1, "managed": null, "created_at": "2026-10-01T10:00:00+00:00", "…": "…"
+}}
+```
+The list is the organization's instances by name; `404` for an instance of another organization. `managed` is what
+`falak.yaml` manages on it (`null` when nothing).
+
+### `DELETE /api/v1/databases/instances/{instance}` `{"confirm": "<name>", "delete_volume": false}` — `databases.manage`
+The dashboard's delete: `confirm` must be the instance's name (`422` otherwise). `202 {data: <instance>}` with
+`status: deleting`; the agent removes the container, then the instance is gone. Its data volume stays unless
+`delete_volume: true`. `422` on `confirm` when a `falak.yaml` declares the instance (remove it from the file first),
+`422` on `instance` during a major upgrade or when the server's agent is not connected. The token needs
+`databases.view` as well.
 
 ## Secrets
 
