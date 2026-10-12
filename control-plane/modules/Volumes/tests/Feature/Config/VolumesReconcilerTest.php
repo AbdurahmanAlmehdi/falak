@@ -2,6 +2,7 @@
 
 use Falak\Config\Application\Planning\Planner;
 use Falak\Config\Application\Runs\RollbackRestorer;
+use Falak\Config\Contracts\ChangeOp;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Deployments\Contracts\Data\DeploymentSummary;
@@ -306,4 +307,23 @@ it('a rollback to a release made before a volume never unmounts it (risky change
         ->and(collect($run->errors)->pluck('code')->all())->toContain('rollback.risky_skipped')
         ->and($volume->attachments()->count())->toBe(1)
         ->and(app(ManagedResources::class)->managed('volume', $volume->id)->any())->toBeTrue();
+});
+
+it('never deletes a volume another site still mounts: detached, its other users named in the risk', function () {
+    volumes_apply(['volumes' => ['data' => ['mount' => '/data']]]);
+    $data = Volume::query()->where('name', 'data')->sole();
+    $other = projects_site($this->organization, 'Other', [], null, [$this->server]);
+    $data->attachments()->create(['attachable_type' => AttachableType::Site, 'attachable_id' => $other->id, 'mount_path' => '/shared', 'read_only' => true]);
+
+    $plan = data_plan($this->world, ['web' => ['type' => 'app', 'runtime' => 'docker', 'volumes' => []]], allowDestroy: true);
+    $change = collect($plan->changes)->firstWhere('path', '/units/web/volumes/data');
+
+    expect($change->op)->toBe(ChangeOp::Detach)
+        ->and($change->rule)->toBe('volume.delete')
+        ->and($change->reason)->toContain('Other');
+
+    expect(volumes_apply(['volumes' => []], allowDestroy: true))->toBe([['detach', '/units/web/volumes/data']])
+        ->and($data->refresh()->attachments()->pluck('attachable_id')->all())->toBe([$other->id])
+        ->and($data->options['config_delete'] ?? null)->toBeNull()
+        ->and($data->status_message)->toContain('still mounted by Other');
 });

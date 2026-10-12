@@ -261,9 +261,13 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             return [];
         }
 
-        $op = $scope->allowDestroy && $this->managed->createdByFile('volume', $volume->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
+        // [decision] A volume another site or service still mounts is never deleted by the file: detached, and the
+        // risky reason names its other users.
+        $others = $this->otherUsers($scope, $unit, $volume);
+        $op = $scope->allowDestroy && $others === [] && $this->managed->createdByFile('volume', $volume->id, $scope->environmentId) ? ChangeOp::Delete : ChangeOp::Detach;
+        $change = new Change($op, '/units/'.Pointer::escape($unit).'/volumes/'.Pointer::escape($key), $before, null, self::SECTION, $unit);
 
-        return [new Change($op, '/units/'.Pointer::escape($unit).'/volumes/'.Pointer::escape($key), $before, null, self::SECTION, $unit)];
+        return [$others === [] ? $change : $change->withRisk('volume.delete', 'A volume removed from the file holds data. It is also mounted by: '.implode(', ', $others).'.')];
     }
 
     /**
@@ -548,12 +552,20 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         $siteId = $scope->refId($unit);
         $unmounted = false;
 
+        $own = $this->ownSites($scope, $unit);
+
         foreach ($volume->attachments()->where('attachable_type', AttachableType::Site)->get() as $attachment) {
             /** @var Attachment $attachment */
-            if ($siteId === null || $attachment->attachable_id === $siteId) {
+            if (in_array($attachment->attachable_id, $own, true)) {
                 app(DetachVolume::class)($attachment, $ctx->actorId, redeploy: false);
                 $unmounted = true;
             }
+        }
+
+        $others = $this->otherUsers($scope, $unit, $volume);
+
+        if ($destroy && $others !== []) {
+            $destroy = false; // still mounted elsewhere: detached only
         }
 
         if ($destroy && ($unmounted || ! $this->unmountedEverywhere($scope, $unit, $volume))) {
@@ -577,7 +589,8 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
             app(DeleteVolume::class)($volume->refresh(), $ctx->actorId);
             $this->managed->forget('volume', $volume->id, $scope->environmentId);
         } else {
-            $volume->forceFill(['status_message' => "Detached from falak.yaml (unit {$unit}): its data is kept; it is no longer managed by the file."])->save();
+            $volume->forceFill(['status_message' => "Detached from falak.yaml (unit {$unit}): its data is kept; it is no longer managed by the file."
+                .($others !== [] ? ' Not deleted: it is still mounted by '.implode(', ', $others).'.' : '')])->save();
             $this->managed->detach($scope, $ctx, $unit, 'volume', $volume->id, "Volume {$volume->name} ({$unit})",
                 route('volumes.destroy', ['volume' => $volume->id], false), deleteBody: ['confirm' => $volume->name]);
         }
@@ -783,6 +796,44 @@ final class VolumesReconciler implements Reconcilable, ValidatesConfig
         }
 
         return $out;
+    }
+
+    /**
+     * The sites a unit owns in the environment: its site now, and any site the file manages under that unit key (its
+     * site may be gone from the scope).
+     *
+     * @return list<string>
+     */
+    private function ownSites(ConfigScope $scope, string $unit): array
+    {
+        $own = array_keys(array_filter($this->managed->resources($scope->environmentId, 'site'), fn (?string $owner) => $owner === $unit));
+
+        return array_values(array_unique(array_filter([$scope->refId($unit), ...$own])));
+    }
+
+    /**
+     * Who else mounts a volume (sites, compose services or databases that aren't the unit's own).
+     *
+     * @return list<string>
+     */
+    private function otherUsers(ConfigScope $scope, string $unit, Volume $volume): array
+    {
+        $own = $this->ownSites($scope, $unit);
+        $out = [];
+
+        foreach ($volume->attachments()->get() as $attachment) {
+            /** @var Attachment $attachment */
+            if ($attachment->attachable_type !== AttachableType::Database && in_array($attachment->attachable_id, $own, true)) {
+                continue;
+            }
+
+            $out[] = match ($attachment->attachable_type) {
+                AttachableType::Database => 'a database',
+                default => ($this->sites->find($attachment->attachable_id)?->name ?? 'a deleted site').($attachment->service ? " ({$attachment->service})" : ''),
+            };
+        }
+
+        return array_values(array_unique($out));
     }
 
     /**
