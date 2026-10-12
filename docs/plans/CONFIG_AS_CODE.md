@@ -1219,6 +1219,31 @@ and `page`.
 - **[decision] The dashboard's "Unmanaged resources"** (Project settings → Config as code) deletes through the module's
   own route (its permissions, its confirmations, its 403/422 shown), then dismisses the row (`config.apply`).
 
+**Phase 4 review fixes.**
+- **[decision] Approval claims are atomic.** Approving is one conditional update (`awaiting_approval` → `planning`,
+  only if the run is still as read), and only a run in `planning` applies: two approvals, an approval racing the
+  expiry job (itself one conditional update on `awaiting_approval` runs) or a repeated apply never apply twice.
+- **[decision] A run sent back to waiting** (its fresh plan gained a risky change) alerts and updates the pull request
+  again (the alert's dedup key carries the plan hash). The pull request notice matches only the merge commit's subject
+  ("Merge pull request #N …", or a squash's trailing "(#N)") or the run's commit as a head sha.
+- **[decision] Disabling the source / releasing an environment** cancels its waiting runs (`source_disabled`,
+  `environment_released`) under the environment's run lock.
+- **[decision] What a run never does is a validation error**: a database engine change, moving a database or a
+  volume, a smaller database disk or volume are stage 4 `value.forbidden` errors naming the dashboard action. The
+  risky rules `database.engine`, `database.move`, `volume.move`, `volume.shrink` are removed.
+- **[decision] A volume another site, service or database still mounts is never deleted** by the file (detached, its
+  other users named in the `volume.delete` reason); removing a unit's volume unmounts only the unit's own sites (its
+  site and those the file managed under that unit key).
+- **[decision] Drift is read-only and cheap**: `ConfigScope::$drift`; function units compare settings, not code (no
+  provider reads, never a branch head); the repository code reader caches successes only. The baseline is the last
+  run whose phase A committed (`config_runs.phase_a_at`), a run whose deployment then failed included. A database unit
+  whose major upgrade runs plans only a noop noting "Upgrade in progress". Checks fan out as one unique job per
+  environment; a drift alerts once per signature through a conditional update; intervals of an hour or more schedule
+  whole hours (`0 */N * * *`, daily at most).
+- **[decision] Cheaper plans**: a project's attached servers take a constant number of queries
+  (`ProjectDirectory::servicesInProject`, `SiteDirectory::findMany`), and a plan remembers `SiteDirectory::find`
+  answers for its length (`SiteDirectory::remembering`, plans write nothing). Web approve/reject are throttled (30/min).
+
 **Unmanaged resources.** What a run detached (removed from the file but kept, or released with its environment).
 - **`GET /api/v1/projects/{project}/config/unmanaged?environment=production`** — `config.view`:
   `{"data": [{"id", "environment", "unit", "resource_type", "resource_id", "label", "reason": "removed_from_file" |

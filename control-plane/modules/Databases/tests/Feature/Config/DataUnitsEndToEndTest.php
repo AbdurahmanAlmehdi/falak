@@ -1,6 +1,5 @@
 <?php
 
-use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Application\Exporter;
 use Falak\Config\Application\Runs\PlanFile;
 use Falak\Config\Domain\Enums\RunStatus;

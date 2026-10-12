@@ -1,6 +1,5 @@
 <?php
 
-use Falak\Config\Application\Actions\ApproveRun;
 use Falak\Config\Application\Runs\RollbackRestorer;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Contracts\ManagedResources;
