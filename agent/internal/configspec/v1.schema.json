@@ -487,7 +487,7 @@
           "type": "boolean"
         },
         "path": {
-          "description": "Path requested on the new release. Default: the unit's health path, else /.",
+          "description": "Path the deploy (and a blue/green swap) requests on the new release before it goes live; the edge doesn't use it. Default: the unit's health_path, else /.",
           "$ref": "#/$defs/urlPath"
         },
         "status": {
@@ -1463,7 +1463,7 @@
           "pattern": "^[a-z0-9][a-z0-9._\\-/:@]*$"
         },
         "health_path": {
-          "description": "The unit's health path (deploy checks, previews). Default /.",
+          "description": "The unit's health path: deploys wait for it on the new release (unless deploy.health.path is set), and the edge checks it to keep each server in rotation (2xx only). Default: deploys check /, the edge checks nothing.",
           "$ref": "#/$defs/urlPath"
         },
         "test_domain": {

@@ -294,3 +294,13 @@ it('a push deployment queued before phase A is replaced by one queued after it',
         ->and($run->deploy[0]['deployment_id'])->not->toBe($legacy->id)
         ->and(strcmp($run->deploy[0]['deployment_id'], $legacy->id))->toBeGreaterThan(0);
 });
+
+it('the deploy health check uses the unit health_path when deploy.health.path is unset', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file("version: 1\nunits:\n  web: { type: app, runtime: frankenphp, php: \"8.4\", health_path: /up }\nenvironments:\n  production: { branch: main }\n");
+    $world->push(config_sha('b'));
+    $run = ConfigRun::query()->sole();
+
+    expect(Deployment::query()->findOrFail($run->deploy[0]['deployment_id'])->setting('health')['path'])->toBe('/up');
+});

@@ -1366,6 +1366,13 @@ Found testing v0.11.0-rc.1 on a live install.
   enabling, which keeps H2's intent: sites the file doesn't manage yet still deploy) is cancelled and replaced by one
   queued after phase A (`ConfigReleases::deploy(after: <ULID taken after phase A>)`) when phase A changed that unit;
   otherwise (an export pushed as is) it is reused, so an unchanged push still deploys once.
+- **Two health paths.** Unit `health_path` (Site `health_check_path`: the edge's active check, `health_uri`) and
+  `deploy.health.path` (SiteSettings `health_path`: the deploy / blue-green swap check). **[decision]** Kept as they
+  are: the deploy check already defaults to the unit's `health_path` (`SiteSettings::healthPath`), so `falak init`'s
+  `health_path: /up` is checked by deploys and the edge alike; `deploy.health.path` is for a deploy-only path. The live
+  swap checking `/` was a deployment queued by push to deploy before phase A set `/up` (the settings are snapshotted
+  when a deployment is queued): the fix above. A test pins the fallback; the schema and guide now say which check
+  each field drives.
 
 ## Release notes (draft): v0.11.0
 

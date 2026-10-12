@@ -206,7 +206,7 @@ units:
 | `web_directory` | The public directory served, relative to `root` (`public`, `dist`) | the framework's |
 | `port` | `docker` runtime: the port the app listens on inside its container | — |
 | `image` | `docker` runtime: deploy this prebuilt image instead of building (`ghcr.io/acme/web:1.2`) | — |
-| `health_path` | The unit's health path (deploy checks, previews) | `/` |
+| `health_path` | The unit's health path: deploys wait for it on the new release (unless `deploy.health.path` is set), and the edge checks it to keep each server in rotation (2xx only, so not a path that redirects) | deploys check `/`; no edge check |
 | `test_domain` | Also serve on the installation's test domain | `true` |
 | `build.mode` | `native` (Railpack on a builder), `docker` (an image from a Dockerfile) or `on-server` (built on each server) | `native` |
 | `build.dockerfile` | `docker` mode: the Dockerfile, relative to `root` | `Dockerfile` |
@@ -377,7 +377,7 @@ deploy:
 | `batch_size` | `rolling`: servers switched at a time (1–100) | `1` |
 | `keep_releases` | Releases kept on each server for rollbacks (1–50) | `5` |
 | `secrets` | `docker` runtime: `env`, or `files` (secret variables as `/run/secrets` files) | `env` |
-| `health.enabled` / `path` / `status` | The check on the new release | `true` / the unit's health path / `200` |
+| `health.enabled` / `path` / `status` | The check on the new release before it goes live (blue/green swaps too); `path` only for deploys, not the edge | `true` / the unit's `health_path`, else `/` / `200` |
 | `health.timeout` / `retries` / `retry_delay` | One attempt (1s–2m) / attempts (1–30) / wait between (0s–5m) | `10s` / `3` / `5s` |
 | `watch.enabled` | Watch the release after it went live | `true` when the block is present |
 | `watch.minutes` / `on_trigger` | How long (1–60) / `rollback` or `alert_only` | `5` / `rollback` |
