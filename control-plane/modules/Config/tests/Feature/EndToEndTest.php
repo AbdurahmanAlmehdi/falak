@@ -228,3 +228,21 @@ it('a unit the file adds becomes a site through the Laravel preset: APP_KEY is g
     $world->settle();
     expect($run->refresh()->status)->toBe(RunStatus::Applied);
 });
+
+it('a phase B that fails when the release is live fails the run (it never ends applied without phase B)', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file("version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    workers:\n      queue: { processes: 2 }\nenvironments:\n  production: { branch: main }\n");
+
+    $world->push(config_sha('b'));
+    // Valid when planned (a Laravel site runs queue:work); no longer by the time the release is live.
+    Site::query()->whereKey($site->id)->update(['framework' => 'php']);
+    $world->settle();
+    $run = ConfigRun::query()->sole();
+
+    expect($run->status)->toBe(RunStatus::Failed)
+        ->and($run->deploy[0])->toMatchArray(['unit' => 'web', 'status' => 'failed'])
+        ->and($run->deploy[0]['error'])->toStartWith('Phase B failed: Only Laravel sites run queue:work')
+        ->and(Presenters::run($run)['error_code'])->toBe('apply_failed')
+        ->and(Worker::query()->where('site_id', $site->id)->exists())->toBeFalse();
+});

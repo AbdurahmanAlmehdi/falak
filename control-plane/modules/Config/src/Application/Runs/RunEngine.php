@@ -299,7 +299,8 @@ final class RunEngine
         try {
             $this->phaseB($run, $unit, $deploymentId, $releaseId);
         } catch (Throwable $e) {
-            $this->entryFailed($run, $deploymentId, 'Phase B failed: '.self::message($e));
+            // The entry is already `released`: mark that one failed, or the run would end applied without phase B.
+            $this->entryFailed($run, $deploymentId, 'Phase B failed: '.self::message($e), from: 'released');
         }
 
         $this->settle($run->refresh());
@@ -318,11 +319,11 @@ final class RunEngine
         $this->settle($run->refresh());
     }
 
-    private function entryFailed(ConfigRun $run, string $deploymentId, string $error, string $status = 'failed'): void
+    private function entryFailed(ConfigRun $run, string $deploymentId, string $error, string $status = 'failed', string $from = 'deploying'): void
     {
-        $this->entries($run, function (array $entries) use ($deploymentId, $error, $status) {
+        $this->entries($run, function (array $entries) use ($deploymentId, $error, $status, $from) {
             foreach ($entries as $i => $entry) {
-                if (($entry['deployment_id'] ?? null) === $deploymentId && ($entry['status'] ?? null) === 'deploying') {
+                if (($entry['deployment_id'] ?? null) === $deploymentId && ($entry['status'] ?? null) === $from) {
                     $entries[$i]['status'] = $status;
                     $entries[$i]['error'] = $error;
                 }
