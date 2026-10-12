@@ -6,6 +6,7 @@ The schema of `falak.yaml` / `falak.json` and the cases both implementations run
 | File | What |
 |---|---|
 | `v1.schema.json` | JSON Schema (draft 2020-12), `$id` `https://falak.sh/schema/v1.json`. Every object is closed (`additionalProperties: false`); descriptions are the editor tooltips. |
+| `v1.baseline.json` | The v1 schema as released, frozen. The Go suite (`agent/internal/configspec/versioning_test.go`) fails when `v1.schema.json` narrows it: a property removed, a type narrowed, an enum value removed or a new required field. |
 | `risky-changes.json` | The rules that make a plan wait for an approval, as data. |
 | `cases/valid/` | Files that must parse and pass the schema. |
 | `cases/invalid/` | Files that must fail, each with `<name>.expect.json`. |
@@ -53,4 +54,6 @@ After editing the schema: `cp contracts/config/v1.schema.json agent/internal/con
 
 - One reason to fail per invalid case, said in its first comment line.
 - Patterns stay inside the regex syntax both engines share (RE2 and PCRE): no lookarounds, no backreferences.
-- After v0.11.0 the schema only gains optional fields: a valid case never becomes invalid.
+- After v0.11.0 the schema only gains optional fields: a valid case never becomes invalid. A breaking change is a new
+  schema (`v2.schema.json`, `version: 2`, `$id` `https://falak.sh/schema/v2.json`); the control plane keeps accepting
+  every version it knows. Never edit `v1.baseline.json` to make the check pass, except to freeze a widening that shipped.
