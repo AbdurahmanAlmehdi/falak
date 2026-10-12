@@ -2,11 +2,15 @@
 
 use Falak\Config\Http\Controllers\Api\ConfigApiController;
 use Falak\Config\Http\Controllers\Api\DriftApiController;
+use Falak\Config\Http\Controllers\ConfigController;
 use Falak\Config\Http\Controllers\UnmanagedController;
 use Illuminate\Support\Facades\Route;
 
 // Mounted under /api (docs/API.md "Config as code").
 Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.config.')->group(function () {
+    Route::get('projects/{project}/config/source', [ConfigApiController::class, 'showSource'])->name('source.show');
+    // The dashboard's own action (same validation and admin checks); disabling cancels the waiting runs.
+    Route::put('projects/{project}/config/source', [ConfigController::class, 'update'])->middleware('throttle:30,1')->name('source.update');
     Route::post('projects/{project}/config/validate', [ConfigApiController::class, 'validateFile'])->middleware('throttle:60,1')->name('validate');
     Route::post('projects/{project}/config/plan', [ConfigApiController::class, 'plan'])->middleware('throttle:30,1')->name('plan');
     Route::post('projects/{project}/config/runs', [ConfigApiController::class, 'store'])->middleware('throttle:10,1')->name('runs.store');

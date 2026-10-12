@@ -45,6 +45,16 @@ final class ConfigApiController extends Controller
 
     private const FILE_RULES = ['nullable', 'string', 'max:1048576'];
 
+    public function showSource(Request $request, string $project): JsonResponse
+    {
+        $data = $this->project($request->user(), $project);
+        $source = ConfigSource::query()->where('project_id', $data->id)->first();
+
+        abort_if($source === null, 404, 'Config as code is not connected for this project.');
+
+        return response()->json(['data' => Presenters::source($source)]);
+    }
+
     public function validateFile(Request $request, string $project, FileCheck $check, ScopeFactory $scopes, ImplicitEnvironment $implicit): JsonResponse
     {
         $data = $this->project($request->user(), $project);

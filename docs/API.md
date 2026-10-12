@@ -542,7 +542,8 @@ other connection and can be used as `source_connection_id` for sites.
 
 A project can follow one file in its repository (`falak.yaml`, `falak.yml` or `falak.json`; schema
 `https://falak.sh/schema/v1.json`; guide: [CONFIG_AS_CODE.md](CONFIG_AS_CODE.md), design: [plans/CONFIG_AS_CODE.md](plans/CONFIG_AS_CODE.md)). The source (connection,
-repository, path, on/off) is set in the dashboard (Project settings → Config as code). A push to a branch an
+repository, path, on/off) is set in the dashboard (Project settings → Config as code) or with `PUT …/config/source`
+(`falak config source set`). A push to a branch an
 environment of the file names (`environments.<slug>.branch`) creates one **config run** per environment: the file is read
 at the pushed commit, validated, planned, applied, and the units that changed (their files, or their config) are
 deployed; phase B (workers, schedules, domains…) is applied when each unit's release goes live. A plan with risky
@@ -569,6 +570,24 @@ An invalid file answers **422** in Laravel's shape plus the issues:
  "errors": {"file": ["/units/web/deploy/strategy: The data should match one item from enum."]},
  "config_errors": [ConfigIssue], "config_warnings": [ConfigIssue]}
 ```
+
+### `GET /api/v1/projects/{project}/config/source` — `config.view`
+`{"data": ConfigSource}`; `404 {"message": "Config as code is not connected for this project."}` when the project has
+none.
+
+```json
+{"id": "01j…", "connection_id": "01j…", "repository": "acme/shop", "path": "falak.yaml", "enabled": true,
+ "experimental": false, "separate_approver": false, "allowed_credentials": [], "created_at": "…", "updated_at": "…"}
+```
+
+### `PUT /api/v1/projects/{project}/config/source` — `config.apply` (30/min)
+Connects, changes, enables or disables the source, exactly as the dashboard does. Body `{"connection_id", "repository":
+"owner/name", "path"?: "falak.yaml", "enabled": true, "separate_approver"?: bool, "allowed_credentials"?: [name]}`
+(`path` defaults to `falak.yaml`; `falak.yml`/`falak.json`, in a folder or not). → `200 {"data": ConfigSource}`.
+`separate_approver` and `allowed_credentials` can only be changed with `config.approve` (`403` otherwise; sending the
+current value is fine). `422` for an unknown connection (or one of a plain git server), a repository not `owner/name`
+or a path not named `falak.*`. `enabled: false` keeps every resource, makes every field editable again and cancels the
+runs `planning` or `awaiting_approval` (`cancel_reason: source_disabled`). Enabling registers the repository's webhook.
 
 ### `POST /api/v1/projects/{project}/config/validate` — `config.view` (60/min)
 Body `{"file": "<raw text>", "format": "yaml"|"json", "environment": "staging"?}`. Without `environment`: reading, schema

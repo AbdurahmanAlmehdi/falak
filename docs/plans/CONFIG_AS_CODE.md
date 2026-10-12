@@ -1322,6 +1322,14 @@ what it sets, one deployment); existing preview settings through export and appl
 - Compose units can't mount Falak volumes; plain git servers can't be a config source; the Playwright check of
   read-only fields.
 
+### Live test fixes (rc.2)
+
+Found testing v0.11.0-rc.1 on a live install.
+- **The source over the API.** Only the dashboard's session route could connect or enable a project's file, so the
+  CLI and automation couldn't turn the feature on. `GET /api/v1/projects/{project}/config/source` (`404` when none)
+  and `PUT …/config/source` (the dashboard's `ConfigController::update` itself: same validation, the same admin checks
+  for `separate_approver` / `allowed_credentials`, disabling cancels the waiting runs); `falak config source`.
+
 ## Release notes (draft): v0.11.0
 
 **Config as code.** A project can now be described in one file at the root of its repository, `falak.yaml` (or

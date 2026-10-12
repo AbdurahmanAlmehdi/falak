@@ -157,6 +157,7 @@ final class Presenters
             'separate_approver' => $source->separate_approver,
             'allowed_credentials' => array_values((array) ($source->allowed_credentials ?? [])),
             'created_at' => $source->created_at?->toIso8601String(),
+            'updated_at' => $source->updated_at?->toIso8601String(),
         ];
     }
 }
