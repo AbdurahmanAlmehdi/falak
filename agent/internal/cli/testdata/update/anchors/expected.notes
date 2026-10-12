@@ -1,0 +1,6 @@
+note: /units/web/node: detected, but it would go inside the anchored map &web, which aliases share; add it by hand
+note: /units/web/env/LOG_LEVEL: detected, but it would go inside the anchored map &web, which aliases share; add it by hand
+note: /units/web/env/REDIS_URL: detected, but it would go inside the anchored map &web, which aliases share; add it by hand
+note: /units/web/env/GITHUB_CLIENT_ID: detected, but it would go inside the anchored map &web, which aliases share; add it by hand
+note: web: optional secrets, commented out in env (empty in the example env file): SESSION_SECRET, GITHUB_CLIENT_SECRET
+Not written: run `falak init --update --write` to apply this to falak.yaml.

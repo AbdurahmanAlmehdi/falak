@@ -1,0 +1,13 @@
+version: 1
+units:
+  web: &web
+    type: app
+    runtime: node
+    env:
+      NODE_ENV: production
+  api:
+    <<: *web
+    root: api
+
+  redis:
+    type: redis # detected: ioredis in package.json

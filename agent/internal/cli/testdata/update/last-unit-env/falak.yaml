@@ -1,0 +1,9 @@
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    node: "20"
+    env:
+      NODE_ENV: production
+      LOG_LEVEL: info

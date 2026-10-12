@@ -36,6 +36,7 @@ type fakeConfig struct {
 	export    map[string]any
 	runsList  []map[string]any
 	approveAs []string // successive answers of POST approve: ok, changed, forbidden, not_waiting
+	hashes    []any    // plan_hash of each POST approve
 	drift     map[string]any
 	unmanaged []map[string]any
 }
@@ -112,6 +113,15 @@ func (f *fakeConfig) serve(w http.ResponseWriter, r *http.Request) {
 		if len(f.approveAs) > 0 {
 			answer, f.approveAs = f.approveAs[0], f.approveAs[1:]
 		}
+		f.hashes = append(f.hashes, body["plan_hash"])
+		stored, _ := f.run["approval"].(map[string]any)
+		switch {
+		case body["plan_hash"] == nil:
+			f.json(w, 422, map[string]any{"message": "The plan hash field is required.", "errors": map[string][]string{"plan_hash": {"The plan hash field is required."}}})
+			return
+		case answer == "ok" && stored != nil && body["plan_hash"] != stored["plan_hash"]:
+			answer = "changed"
+		}
 		switch answer {
 		case "forbidden":
 			f.json(w, 403, map[string]string{"message": "You requested this run: another approver must approve it."})
@@ -119,7 +129,8 @@ func (f *fakeConfig) serve(w http.ResponseWriter, r *http.Request) {
 			f.json(w, 409, map[string]string{"message": "This run is not awaiting approval."})
 		case "changed":
 			changed := waitingRun(true)
-			changed["approval"].(map[string]any)["risky"] = []map[string]any{{"path": "/units/db/version", "rule": "database.version", "reason": "A major upgrade."}}
+			changed["approval"].(map[string]any)["risky"] = []map[string]any{{"op": "update", "path": "/units/db/version", "rule": "database.version", "reason": "A major upgrade."}}
+			changed["approval"].(map[string]any)["plan_hash"] = "h2"
 			f.run = changed
 			f.json(w, 409, map[string]any{"message": "The plan changed since it was shown; review it again.", "data": changed})
 		default:
@@ -537,7 +548,8 @@ func waitingRun(canApprove bool) map[string]any {
 	}
 	r["approval"] = map[string]any{"required": true, "risky": []map[string]any{{"path": "/units/web/deploy/strategy", "rule": "production.strategy",
 		"reason": "Changing the deploy strategy of a production environment needs an approval."}}, "expires_at": "2026-10-18T12:00:00Z",
-		"approved_by": nil, "approved_at": nil, "rejected_by": nil, "rejected_at": nil, "comment": nil, "can_approve": canApprove, "blocked_reason": blocked}
+		"approved_by": nil, "approved_at": nil, "rejected_by": nil, "rejected_at": nil, "comment": nil, "can_approve": canApprove, "blocked_reason": blocked,
+		"plan_hash": "h1"}
 	r["cancel_reason"] = nil
 	return r
 }
@@ -557,7 +569,7 @@ func TestRunsListAndShow(t *testing.T) {
 	if code := h.run("runs", "list", "-e", "staging", "--limit", "1"); code != 0 || strings.Count(h.out.String(), "01jrun") != 1 {
 		t.Fatalf("limit: %d %s", code, h.out.String())
 	}
-	if q := f.queries[len(f.queries)-1]; q != "environment=staging" {
+	if q := f.queries[len(f.queries)-1]; q != "environment=staging&per_page=1" {
 		t.Fatalf("query %q", q)
 	}
 	f.run = waitingRun(false)
@@ -587,7 +599,10 @@ func TestApproveAndReject(t *testing.T) {
 	if f.requests[len(f.requests)-1] != "POST /api/v1/config/runs/"+run+"/approve" || f.bodies[len(f.bodies)-1]["comment"] != "ok by me" || len(f.requests) != n+2 {
 		t.Fatalf("requests %v %v", f.requests[n:], f.bodies[len(f.bodies)-1])
 	}
-	if !strings.Contains(h.out.String(), "! /units/web/deploy/strategy (production.strategy)") {
+	if f.hashes[len(f.hashes)-1] != "h1" {
+		t.Fatalf("plan_hash sent: %v", f.hashes)
+	}
+	if !strings.Contains(h.out.String(), "! update /units/web/deploy/strategy (production.strategy)") {
 		t.Fatalf("risky items not shown:\n%s", h.out.String())
 	}
 
@@ -599,7 +614,7 @@ func TestApproveAndReject(t *testing.T) {
 	}
 	// The server refuses anyway (403) → 1.
 	f.run, f.approveAs = waitingRun(true), []string{"forbidden"}
-	if code := h.run("approve", run, "--yes"); code != ExitError || !strings.Contains(h.err.String(), "another approver") {
+	if code := h.run("approve", run, "--yes"); code != ExitError || !strings.Contains(h.err.String(), "another approver") || strings.Contains(h.err.String(), "token lacks") {
 		t.Fatalf("403: %d %s", code, h.err.String())
 	}
 	// The plan changed: never approved blindly, even with --yes (not a terminal → 6).
@@ -613,8 +628,20 @@ func TestApproveAndReject(t *testing.T) {
 	h.err.Reset()
 	h.app = h.newApp("y\ny\n")
 	h.app.Interactive = true
-	if code := h.app.Run(t.Context(), []string{"approve", run}); code != 0 || !strings.Contains(h.out.String(), "/units/db/version (database.version)") {
+	f.hashes = nil
+	if code := h.app.Run(t.Context(), []string{"approve", run}); code != 0 || !strings.Contains(h.out.String(), "! update /units/db/version (database.version)") {
 		t.Fatalf("interactive: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	// Each POST carries the hash of the run shown just before it: h1, then the 409's run (h2), no re-fetch.
+	if len(f.hashes) != 2 || f.hashes[0] != "h1" || f.hashes[1] != "h2" {
+		t.Fatalf("hashes %v", f.hashes)
+	}
+	// A run without a plan_hash (an older control plane) is not approved blindly.
+	old := waitingRun(true)
+	delete(old["approval"].(map[string]any), "plan_hash")
+	f.run, f.hashes = old, nil
+	if code := h.run("approve", run, "--yes"); code != ExitError || len(f.hashes) != 0 || !strings.Contains(h.err.String(), "no plan_hash") {
+		t.Fatalf("no hash: %d %s %v", code, h.err.String(), f.hashes)
 	}
 	// Not waiting.
 	f.run = runData("applied")
@@ -693,6 +720,10 @@ func TestDriftAndUnmanaged(t *testing.T) {
 		"resource_id": "01jdb", "label": "old-db (PostgreSQL 17)", "reason": "removed_from_file", "run_id": "01jrun", "detached_at": "2026-10-11T12:00:00Z"}}
 	if code := h.run("config", "unmanaged"); code != 0 || !strings.Contains(h.out.String(), "old-db (PostgreSQL 17)") || !strings.Contains(h.out.String(), "removed_from_file") {
 		t.Fatalf("unmanaged: %d %s", code, h.out.String())
+	}
+	// Without -e: the project's production environment (the API requires one).
+	if q := f.queries[len(f.queries)-1]; q != "environment=production" {
+		t.Fatalf("unmanaged query %q", q)
 	}
 }
 

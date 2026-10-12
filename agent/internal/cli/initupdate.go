@@ -64,7 +64,13 @@ func (a *App) initUpdate(dir string, o initOptions, d *detection, doc *omap) err
 	}
 	top := root.Content[0]
 
-	text := strings.TrimSuffix(string(raw), "\n")
+	// CRLF files are edited as LF and written back with CRLF.
+	crlf := bytes.Contains(raw, []byte("\r\n"))
+	norm := raw
+	if crlf {
+		norm = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	}
+	text := strings.TrimSuffix(string(norm), "\n")
 	u := &updater{lines: strings.Split(text, "\n"), inserts: map[*yaml.Node]*insertion{}, flags: map[int]string{}}
 	newUnits, _ := doc.get("units").(*omap)
 	_, existingUnits := mapChild(top, "units")
@@ -74,7 +80,7 @@ func (a *App) initUpdate(dir string, o initOptions, d *detection, doc *omap) err
 	u.units = existingUnits
 	renames := u.matchUnits(existingUnits, newUnits)
 	renameUnits(newUnits, renames)
-	u.merge(existingUnits, newUnits, "/units")
+	u.merge(existingUnits, newUnits, "/units", "")
 
 	updated := u.render()
 	if !bytes.HasSuffix(updated, []byte("\n")) {
@@ -88,16 +94,34 @@ func (a *App) initUpdate(dir string, o initOptions, d *detection, doc *omap) err
 		}
 		notes = append(notes, n)
 	}
-	changed := !bytes.Equal(updated, raw) || len(d.Dockerfiles) > 0
-	diff := unifiedDiff(string(raw), string(updated), name, name)
-	if changed && !bytes.Equal(updated, raw) {
+	textChanged := !bytes.Equal(updated, norm)
+	changed := textChanged || len(d.Dockerfiles) > 0
+	diff := unifiedDiff(string(norm), string(updated), name, name)
+	if textChanged {
 		if v := validateOffline(configFile{Path: name, Display: name, Format: "yaml", Raw: updated}, ""); !v.Valid {
 			printIssues(a.Stderr, name+" (updated)", v.Errors)
 			return errors.New("the update would make the file invalid; nothing written (please report it)")
 		}
 	}
+	if crlf {
+		updated = bytes.ReplaceAll(updated, []byte("\n"), []byte("\r\n"))
+	}
+	written := false
+	if changed && o.write {
+		for _, df := range d.Dockerfiles {
+			if err := writeInRepo(dir, df.Path, []byte(df.Content), false); err != nil {
+				return err
+			}
+		}
+		if textChanged {
+			if err := writeInRepo(dir, name, updated, true); err != nil {
+				return err
+			}
+		}
+		written = true
+	}
 	if a.jsonOut {
-		return a.printJSON(map[string]any{"changed": changed, "diff": diff, "file": string(updated), "notes": notes, "written": changed && o.write})
+		return a.printJSON(map[string]any{"changed": changed, "diff": diff, "file": string(updated), "notes": notes, "written": written})
 	}
 	for _, n := range notes {
 		fmt.Fprintln(a.Stderr, "note:", n)
@@ -110,17 +134,9 @@ func (a *App) initUpdate(dir string, o initOptions, d *detection, doc *omap) err
 	for _, df := range d.Dockerfiles {
 		fmt.Fprintf(a.Stdout, "+ %s (a starter Dockerfile)\n", df.Path)
 	}
-	if !o.write {
+	if !written {
 		fmt.Fprintf(a.Stderr, "Not written: run `falak init --update --write` to apply this to %s.\n", name)
 		return nil
-	}
-	for _, df := range d.Dockerfiles {
-		if err := writeInRepo(dir, df.Path, []byte(df.Content), false); err != nil {
-			return err
-		}
-	}
-	if err := writeInRepo(dir, name, updated, true); err != nil {
-		return err
 	}
 	fmt.Fprintf(a.Stderr, "Updated %s.\n", name)
 	return nil
@@ -247,18 +263,25 @@ func renameUnits(units *omap, renames map[string]string) {
 var configRefRe = regexp.MustCompile(`(\$\{\{\s*)([A-Za-z0-9][A-Za-z0-9 _.\-]*?)(\.[A-Za-z_][A-Za-z0-9_]*\s*\}\})`)
 
 // merge collects what detected has that the file's mapping lacks, recursively, and flags values that differ.
-func (u *updater) merge(existing *yaml.Node, detected *omap, ptr string) {
+func (u *updater) merge(existing *yaml.Node, detected *omap, ptr string, anchor string) {
+	if existing.Anchor != "" {
+		anchor = existing.Anchor
+	}
 	for _, f := range detected.fields {
 		k, v := mapChild(existing, f.key)
 		path := ptr + "/" + escapeToken(f.key)
 		if k == nil {
-			u.add(existing, f, path)
+			u.add(existing, f, path, anchor)
+			continue
+		}
+		if v.Kind == yaml.AliasNode {
+			u.notes = append(u.notes, fmt.Sprintf("%s is an alias (*%s): not changed; add what the code shows to the anchored map by hand", path, v.Value))
 			continue
 		}
 		switch nv := f.val.(type) {
 		case *omap:
 			if v.Kind == yaml.MappingNode {
-				u.merge(v, nv, path)
+				u.merge(v, nv, path, anchor)
 			} else {
 				u.notes = append(u.notes, fmt.Sprintf("%s: the code suggests a map here; kept the file's value", path))
 			}
@@ -282,10 +305,22 @@ func (u *updater) merge(existing *yaml.Node, detected *omap, ptr string) {
 	}
 }
 
-func (u *updater) add(parent *yaml.Node, f *ofield, path string) {
+func (u *updater) add(parent *yaml.Node, f *ofield, path, anchor string) {
 	if parent.Kind != yaml.MappingNode || parent.Style&yaml.FlowStyle != 0 || len(parent.Content) == 0 {
 		u.notes = append(u.notes, fmt.Sprintf("%s: detected, but its parent is written inline; add it by hand", path))
 		return
+	}
+	// A map shared through an anchor (&x … *x) or built with << merges: an insertion would change every alias, or
+	// override a merged value. Left to the user.
+	if anchor != "" {
+		u.notes = append(u.notes, fmt.Sprintf("%s: detected, but it would go inside the anchored map &%s, which aliases share; add it by hand", path, anchor))
+		return
+	}
+	for i := 0; i+1 < len(parent.Content); i += 2 {
+		if parent.Content[i].ShortTag() == "!!merge" {
+			u.notes = append(u.notes, fmt.Sprintf("%s: detected, but its map merges another (<<); add it by hand", path))
+			return
+		}
 	}
 	ins := u.inserts[parent]
 	if ins == nil {
@@ -319,6 +354,7 @@ func (u *updater) end(m *yaml.Node) int {
 func (u *updater) render() []byte {
 	type block struct {
 		after int
+		col   int // the column of the map's keys
 		text  []string
 	}
 	var blocks []block
@@ -341,9 +377,16 @@ func (u *updater) render() []byte {
 				lines = append(lines, pad+l)
 			}
 		}
-		blocks = append(blocks, block{after: u.end(parent), text: lines})
+		blocks = append(blocks, block{after: u.end(parent), col: parent.Content[0].Column, text: lines})
 	}
-	sort.SliceStable(blocks, func(i, j int) bool { return blocks[i].after > blocks[j].after })
+	// Bottom up. Blocks sharing an anchor line (a new key at the end of the last unit's env, and a new unit after it)
+	// go in outer first: each is inserted right after the anchor, so the inner one ends up first, inside its map.
+	sort.SliceStable(blocks, func(i, j int) bool {
+		if blocks[i].after != blocks[j].after {
+			return blocks[i].after > blocks[j].after
+		}
+		return blocks[i].col < blocks[j].col
+	})
 	lines := append([]string(nil), u.lines...)
 	for n, c := range u.flags {
 		lines[n-1] += " # " + c

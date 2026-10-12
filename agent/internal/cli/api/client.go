@@ -49,7 +49,7 @@ type API interface {
 	ConfigRun(ctx context.Context, id string) (ConfigRun, error)
 	ConfigExport(ctx context.Context, project, environment, format string) (ConfigExport, error)
 	ConfigRuns(ctx context.Context, project, environment string, limit int) ([]ConfigRun, error)
-	ConfigApprove(ctx context.Context, id, comment string) (ConfigRun, error)
+	ConfigApprove(ctx context.Context, id, planHash, comment string) (ConfigRun, error)
 	ConfigReject(ctx context.Context, id, comment string) (ConfigRun, error)
 	ConfigDrift(ctx context.Context, project, environment string, check bool) (ConfigDrift, error)
 	ConfigUnmanaged(ctx context.Context, project, environment string) ([]UnmanagedResource, error)
@@ -84,7 +84,10 @@ func (e *Error) Error() string {
 	case http.StatusUnauthorized:
 		s += " — run `falak login` or set FALAK_TOKEN"
 	case http.StatusForbidden:
-		s += " — the token lacks the required ability"
+		// The token's abilities, unless the server said why (e.g. an approval's blocked reason).
+		if e.Message == "" || e.Message == "This action is unauthorized." || e.Message == "Invalid ability provided." {
+			s += " — the token lacks the required ability"
+		}
 	}
 	return s
 }

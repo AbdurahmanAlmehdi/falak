@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 // Config as code endpoints (docs/plans/CONFIG_AS_CODE.md, "Phase 0 contract (fixed)", API). {project} is the
@@ -179,10 +180,13 @@ type ConfigApproval struct {
 	Comment       *string     `json:"comment"`
 	CanApprove    bool        `json:"can_approve"`
 	BlockedReason *string     `json:"blocked_reason"`
+	// PlanHash identifies the risky set of the run's stored plan; approving sends back the one that was shown.
+	PlanHash string `json:"plan_hash"`
 }
 
 // RiskyItem is one risky change an approval covers.
 type RiskyItem struct {
+	Op     string `json:"op,omitempty"`
 	Path   string `json:"path"`
 	Rule   string `json:"rule"`
 	Reason string `json:"reason"`
@@ -354,6 +358,9 @@ func (c *Client) ConfigRuns(ctx context.Context, project, environment string, li
 	if environment != "" {
 		q.Set("environment", environment)
 	}
+	if limit > 0 {
+		q.Set("per_page", strconv.Itoa(min(limit, 100)))
+	}
 	var runs []ConfigRun
 	_, err := c.rawData(ctx, http.MethodGet, Path(PathConfigRuns, "project", project), q, nil, &runs)
 	if limit > 0 && len(runs) > limit {
@@ -362,8 +369,11 @@ func (c *Client) ConfigRuns(ctx context.Context, project, environment string, li
 	return runs, err
 }
 
-func (c *Client) runDecision(ctx context.Context, path, id, comment string) (ConfigRun, error) {
+func (c *Client) runDecision(ctx context.Context, path, id, planHash, comment string) (ConfigRun, error) {
 	body := map[string]string{}
+	if planHash != "" {
+		body["plan_hash"] = planHash
+	}
 	if comment != "" {
 		body["comment"] = comment
 	}
@@ -387,14 +397,15 @@ func (c *Client) runDecision(ctx context.Context, path, id, comment string) (Con
 	return run, err
 }
 
-// ConfigApprove approves a run awaiting approval (PlanChangedError when its plan changed).
-func (c *Client) ConfigApprove(ctx context.Context, id, comment string) (ConfigRun, error) {
-	return c.runDecision(ctx, PathConfigRunApprove, id, comment)
+// ConfigApprove approves a run awaiting approval. planHash is the approval's plan_hash of the run as it was shown
+// (PlanChangedError when the server's differs, or the fresh plan has a risky change it doesn't cover).
+func (c *Client) ConfigApprove(ctx context.Context, id, planHash, comment string) (ConfigRun, error) {
+	return c.runDecision(ctx, PathConfigRunApprove, id, planHash, comment)
 }
 
 // ConfigReject rejects a run awaiting approval (it ends cancelled, cancel_reason rejected).
 func (c *Client) ConfigReject(ctx context.Context, id, comment string) (ConfigRun, error) {
-	return c.runDecision(ctx, PathConfigRunReject, id, comment)
+	return c.runDecision(ctx, PathConfigRunReject, id, "", comment)
 }
 
 // ConfigDrift reads an environment's drift; check asks for a fresh check (POST).

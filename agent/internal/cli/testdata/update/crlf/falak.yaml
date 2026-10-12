@@ -1,0 +1,7 @@
+version: 1
+units:
+  # the API
+  web:
+    type: app
+    runtime: node
+    node: "20"
