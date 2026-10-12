@@ -42,6 +42,10 @@ type API interface {
 	FunctionRun(ctx context.Context, fn, schedule string) (string, error)
 	FunctionRunStatus(ctx context.Context, fn, run string) (FunctionRun, error)
 
+	DatabaseInstances(ctx context.Context) ([]DatabaseInstance, error)
+	DatabaseInstance(ctx context.Context, id string) (DatabaseInstance, error)
+	DeleteDatabaseInstance(ctx context.Context, id, confirm string, deleteVolume bool) (DatabaseInstance, error)
+
 	Projects(ctx context.Context) ([]Project, error)
 	ConfigValidate(ctx context.Context, project string, r ConfigRequest) (ConfigValidation, error)
 	ConfigPlan(ctx context.Context, project string, r ConfigRequest) (ConfigPlanResult, error)

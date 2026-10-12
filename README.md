@@ -151,6 +151,10 @@ falak fn run hooks "Nightly cleanup"                # run a schedule now, stream
 falak fn invoke hooks /hello/ada -H 'X-Falak-Key: …'
 falak fn logs hooks --follow
 
+# Database containers
+falak db list
+falak db delete shop --confirm shop                 # the data volume stays; add --delete-volume to remove it too
+
 # Config as code (falak.yaml)
 falak init                                          # writes falak.yaml from the code; --stdout, --json, --full, --yes
 falak init --dockerfile                             # Go, Python, Ruby, Rust, Java: also a starter Dockerfile
