@@ -263,6 +263,7 @@ type Container struct {
 		Status    string `json:"Status"`
 		Running   bool   `json:"Running"`
 		ExitCode  int    `json:"ExitCode"`
+		OOMKilled bool   `json:"OOMKilled"`
 		StartedAt string `json:"StartedAt"`
 		Health    *struct {
 			Status string `json:"Status"`
@@ -583,6 +584,15 @@ func (c *Client) ContainerLogs(ctx context.Context, id string, follow bool, tail
 	if tail > 0 {
 		q.Set("tail", strconv.Itoa(tail))
 	}
+	return c.logs(ctx, id, q, w)
+}
+
+// ContainerLogTail copies the last tail lines of stdout+stderr, each prefixed with its RFC 3339 timestamp.
+func (c *Client) ContainerLogTail(ctx context.Context, id string, tail int, w io.Writer) error {
+	return c.logs(ctx, id, url.Values{"stdout": {"1"}, "stderr": {"1"}, "timestamps": {"1"}, "tail": {strconv.Itoa(tail)}}, w)
+}
+
+func (c *Client) logs(ctx context.Context, id string, q url.Values, w io.Writer) error {
 	resp, err := c.raw(ctx, http.MethodGet, "/v"+c.apiVersion(ctx)+"/containers/"+id+"/logs", q, nil, nil)
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/envlinks"
@@ -45,6 +47,11 @@ type fakeEngine struct {
 	updates map[string][]UpdateBody
 	// served by GET /events (then the stream ends)
 	events []EngineEvent
+	// container name → what GET logs serves (stdout and stderr frames) and the query it was asked with
+	logs     map[string][2]string
+	logQuery []string
+	// container name → exit code: the container stops right after it starts (127+ means OOM killed)
+	exitOnStart map[string]int
 }
 
 type fcont struct {
@@ -55,6 +62,8 @@ type fcont struct {
 	health                   string
 	restarts                 int
 	ports                    map[string][]PortBinding
+	exitCode                 int
+	oom                      bool
 }
 
 func newEngine() *fakeEngine {
@@ -187,6 +196,7 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ct.ID, ct.Name, ct.Image = c.id, "/"+c.name, c.imageID
 			ct.State.Running = c.running
 			ct.State.Status = map[bool]string{true: "running", false: "exited"}[c.running]
+			ct.State.ExitCode, ct.State.OOMKilled = c.exitCode, c.oom
 			ct.RestartCount = c.restarts
 			if c.health != "" {
 				ct.State.Health = &struct {
@@ -207,7 +217,20 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			c.running = true
+			if code, ok := e.exitOnStart[c.name]; ok {
+				c.running, c.exitCode, c.oom = false, code, code == 137
+			}
 			w.WriteHeader(204)
+		case r.Method == "GET" && action == "logs":
+			e.logQuery = append(e.logQuery, r.URL.RawQuery)
+			w.WriteHeader(200)
+			for i, text := range e.logs[c.name] {
+				if text != "" {
+					hdr := []byte{byte(i + 1), 0, 0, 0, 0, 0, 0, 0}
+					binary.BigEndian.PutUint32(hdr[4:], uint32(len(text)))
+					w.Write(append(hdr, text...))
+				}
+			}
 		case r.Method == "POST" && action == "update":
 			var b UpdateBody
 			json.NewDecoder(r.Body).Decode(&b)
@@ -813,5 +836,48 @@ func TestComposeDownForgetsTheProjectsEnvFiles(t *testing.T) {
 	}
 	if !strings.Contains(col.Output(""), "removed compose-shop.env") {
 		t.Fatalf("output %q", col.Output(""))
+	}
+}
+
+// A swap whose new container never gets healthy streams the container's state and last lines (secrets masked) before
+// removing it; one that stops while waiting fails at once, with its exit code.
+func TestContainerSwapReportsTheFailedContainer(t *testing.T) {
+	s, e, _, _, _ := newSvc(t)
+	bad := 503
+	p := swapPayload(healthServer(t, &bad), healthServer(t, &bad))
+	p.Env["DB_PASSWORD"] = "hunter2-secret"
+	p.Mask = []string{"DB_PASSWORD"}
+	var many strings.Builder
+	for i := 1; i <= 60; i++ {
+		fmt.Fprintf(&many, "2026-10-12T10:00:%02dZ line %d\n", i%60, i)
+	}
+	e.logs = map[string][2]string{"falak-shop-blue": {many.String() + "2026-10-12T10:01:00Z " + strings.Repeat("x", 900) + "\n",
+		"2026-10-12T10:01:01Z SQLSTATE[08006] connecting with password hunter2-secret\n"}}
+
+	fin, col := exec1(t, s, "deploy.container.swap", p)
+	out := col.Output("stdout")
+	if !strings.Contains(fin.Error, "health check /up") || !strings.Contains(out, "container state: running") ||
+		!strings.Contains(out, "container output (last 50 lines):") || !strings.Contains(out, "  | 2026-10-12T10:01:01Z SQLSTATE[08006]") {
+		t.Fatalf("error %q output %q", fin.Error, out)
+	}
+	if strings.Contains(out, "hunter2-secret") || strings.Contains(out, "line 12\n") || !strings.Contains(out, "line 13\n") || !strings.Contains(out, strings.Repeat("x", 400)) || strings.Contains(out, strings.Repeat("x", 600)) {
+		t.Fatalf("output not bounded or masked: %q", out)
+	}
+	if q := e.logQuery[len(e.logQuery)-1]; !strings.Contains(q, "timestamps=1") || !strings.Contains(q, "tail=50") {
+		t.Fatalf("logs query %q", q)
+	}
+	if e.byName("falak-shop-blue") != nil {
+		t.Fatal("failed container left behind")
+	}
+
+	// Stopped during the wait (out of memory): reported right away, not at the deadline.
+	e.exitOnStart = map[string]int{"falak-shop-blue": 137}
+	e.logs = nil
+	p.Health.TimeoutS = 30
+	start := time.Now()
+	fin, col = exec1(t, s, "deploy.container.swap", p)
+	if time.Since(start) > 10*time.Second || !strings.Contains(fin.Error, "the container stopped before the health check /up passed (exited with code 137, killed: out of memory)") ||
+		!strings.Contains(col.Output("stdout"), "container output: (none)") {
+		t.Fatalf("error %q output %q", fin.Error, col.Output("stdout"))
 	}
 }
