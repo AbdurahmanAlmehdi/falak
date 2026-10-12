@@ -15,9 +15,9 @@ require_once __DIR__.'/../Support/helpers.php';
 
 /*
 | A monorepo's falak.yaml: 40 units (apps with workers, schedules and domains, docker apps with volumes, compose
-| stacks, functions, databases, Redis) in 3 environments with overrides and previews, through validate → plan → apply
-| → drift with the fake gateways. The query ceilings are the measured counts plus headroom: a plan or a drift check
-| that starts querying per unit and field (an N+1) fails here.
+| stacks, functions, databases, Redis) in 3 environments with overrides and previews: production and QA through
+| validate → plan → apply → drift, staging planned, with the fake gateways. The query ceilings are the measured
+| counts plus headroom: a plan or a drift check that starts querying per unit and field (an N+1) fails here.
 */
 
 const MONOREPO_APPS = 16;
@@ -95,7 +95,7 @@ function monorepo_document(): array
             'staging' => ['branch' => 'develop', 'servers' => ['web-1'], 'units' => $staging],
             'qa' => ['branch' => 'main', 'servers' => ['web-2'], 'units' => $qa],
         ],
-        'previews' => ['enabled' => true, 'base' => 'staging', 'units' => ['db1' => ['strategy' => 'empty'], 'app16' => 'omit']],
+        'previews' => ['enabled' => true, 'base' => 'production', 'units' => ['db1' => ['strategy' => 'empty'], 'app16' => 'omit']],
     ];
 }
 
@@ -158,15 +158,18 @@ it('validates, plans, applies and drift-checks a 40-unit monorepo in 3 environme
             ->and(count($runs[$env]->plan['deploy']))->toBe(count(monorepo_document()['units']));
     }
 
-    $world->push(config_sha('c'), 'develop');
-    $world->settle();
-    $staging = ConfigRun::query()->where('environment', 'staging')->sole();
-    expect($staging->status)->toBe(RunStatus::Applied, json_encode([$staging->error, $staging->errors]))
-        ->and(PreviewSettings::query()->where('project_id', $world->environment->project_id)->sole()->only(['enabled', 'base_environment_id']))
-        ->toBe(['enabled' => true, 'base_environment_id' => $staging->environment_id]);
+    expect(PreviewSettings::query()->where('project_id', $world->environment->project_id)->sole()->only(['enabled', 'base_environment_id']))
+        ->toBe(['enabled' => true, 'base_environment_id' => $world->environment->id]);
+
+    // Staging (created empty by that push, fed by develop): its plan creates all 41 of its units. Planned, not applied,
+    // to keep the test's time down; production and QA cover applying.
+    $directory = app(ProjectDirectory::class);
+    $stagingEnv = $directory->environment(Environment::query()->where('slug', 'staging')->value('id'));
+    [[$stagingValidation, $stagingPlan], $stagingPlanQueries] = monorepo_count(fn () => app(PlanFile::class)($world->source, $stagingEnv, Yaml::dump(monorepo_document(), 8, 2), 'yaml'));
+    expect($stagingValidation->errors)->toBe([])
+        ->and(collect($stagingPlan->changes->actionable())->filter(fn ($c) => preg_match('#^/units/[^/]+$#', $c->path) === 1)->count())->toBe(count(monorepo_document()['units']) + 1);
 
     // Plan the same file again: nothing to do, in a bounded number of queries.
-    $directory = app(ProjectDirectory::class);
     $production = $directory->environment($world->environment->id);
     [[$validation, $plan], $planQueries, $planMs] = monorepo_count(fn () => app(PlanFile::class)($world->source, $production, Yaml::dump(monorepo_document(), 8, 2), 'yaml'));
 
@@ -180,10 +183,12 @@ it('validates, plans, applies and drift-checks a 40-unit monorepo in 3 environme
     expect($drift->status)->toBe('in_sync', json_encode($drift->changes))
         ->and($qaDrift->status)->toBe('in_sync', json_encode($qaDrift->changes));
 
-    // ponytail: ceilings are the counts measured on 2026-10-12 (plan 1537 queries / ~200 ms, drift 1060 / ~115 ms,
-    // QA drift 1041; the push 29911 and phase B 85251, mostly the fake deployments) plus ~30%. Both grow linearly with
-    // the units (~38 queries per unit); a jump past the ceiling is a new per-field or per-unit-pair query.
+    // ponytail: ceilings are the counts measured on 2026-10-12 plus ~30%: plan 1539 queries (~190 ms), staging's
+    // all-create plan 164, drift 1061 (~100 ms), QA drift 1041, the push 30022 and phase B 85305 (mostly the fake
+    // deployments). Plans and drift grow linearly (~38 queries per unit); a jump past a ceiling is a new per-field or
+    // per-unit-pair query.
     expect($planQueries)->toBeLessThan(2000)
+        ->and($stagingPlanQueries)->toBeLessThan(250)
         ->and($driftQueries)->toBeLessThan(1400)
         ->and($qaDriftQueries)->toBeLessThan(1400)
         ->and($applyQueries)->toBeLessThan(40000)
