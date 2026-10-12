@@ -631,7 +631,7 @@ A run that needed an approval carries `approval` (null otherwise), and a cancell
 
 `can_approve`/`blocked_reason` are the caller's ("You need the config.approve permission.", "You requested this run:
 another approver must approve it." when the project's admins require a different approver). `cancel_reason`:
-`superseded`, `rejected`, `expired`, `source_disabled`, `user`.
+`superseded`, `rejected`, `expired`, `source_disabled`, `environment_released`, `user`.
 
 ### `POST /api/v1/config/runs/{run}/approve` `{"comment"?}` — `config.approve` (30/min)
 The run plans again and applies: `200 {"data": ConfigRun}` (`applying`, or already `applied`/`failed`). `403

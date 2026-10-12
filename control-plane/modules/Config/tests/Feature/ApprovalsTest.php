@@ -284,3 +284,15 @@ it('the approval notice finds the pull request only by the merge subject or its 
         ->and($world->deploy->sourceControl->comments['8']['body'])->toContain('Waiting for an approval')
         ->and($world->deploy->sourceControl->comments['9']['body'])->toContain('Waiting for an approval');
 });
+
+it('disabling the source cancels the runs waiting for an approval', function () {
+    $world = config_world();
+    $world->file(config_risky_file());
+    $world->push(config_sha('b'));
+    $run = ConfigRun::query()->sole();
+
+    $this->putJson("/projects/{$world->environment->project_id}/settings/config", ['connection_id' => $world->source->source_connection_id, 'repository' => 'acme/shop', 'enabled' => false])
+        ->assertOk();
+
+    expect($run->refresh()->status)->toBe(RunStatus::Cancelled)->and($run->cancel_reason)->toBe('source_disabled');
+});

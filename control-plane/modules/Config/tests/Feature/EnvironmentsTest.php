@@ -208,6 +208,7 @@ it('cancels a waiting run of an environment the file releases', function () {
     $world->push(config_sha('e'), 'develop');
 
     expect($pending->refresh()->status)->toBe(RunStatus::Cancelled)
+        ->and($pending->cancel_reason)->toBe('environment_released')
         ->and(config_approve($pending->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING);
 });
 

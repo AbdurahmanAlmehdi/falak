@@ -2,11 +2,14 @@
 
 namespace Falak\Config\Application\Actions;
 
+use Falak\Config\Domain\Enums\RunStatus;
+use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Projects\Contracts\Data\ProjectData;
 use Falak\SourceControl\Contracts\ProviderType;
 use Falak\SourceControl\Contracts\SourceControlGateway;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Throwable;
@@ -58,6 +61,17 @@ final class SaveSource
             ...(array_key_exists('allowed_credentials', $data)
                 ? ['allowed_credentials' => array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_credentials']))))] : []),
         ])->save();
+
+        if ($wasEnabled && ! $source->enabled) {
+            // Disabling cancels the runs that wait, each under its environment's run lock (none is mid-apply then).
+            foreach (ConfigRun::query()->where('project_id', $project->id)->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval])
+                ->distinct()->pluck('environment_id') as $environmentId) {
+                Cache::lock('config:environment:'.$environmentId, 600)->block(120, fn () => ConfigRun::query()
+                    ->where('environment_id', $environmentId)->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval])
+                    ->update(['status' => RunStatus::Cancelled->value, 'cancel_reason' => 'source_disabled', 'error' => 'Config as code was disabled for this project.',
+                        'finished_at' => now(), 'updated_at' => now()]));
+            }
+        }
 
         if ($source->enabled) {
             try {

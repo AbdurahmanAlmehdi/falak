@@ -21,6 +21,7 @@ use Falak\Projects\Contracts\ServiceKind;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\SourceControl\Events\PushReceived;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use stdClass;
@@ -184,13 +185,17 @@ final class RunOnPush implements ShouldQueue
                 continue;
             }
 
-            $this->legacyDeploy($event, $environment->id);
-            $this->listReleased($environment->id, $applied);
-            ConfigOwnership::query()->where('environment_id', $environment->id)->delete();
+            // Under the environment's run lock: a run applying now finishes first, and none starts mid-release.
+            Cache::lock('config:environment:'.$environment->id, 600)->block(120, function () use ($event, $environment, $applied) {
+                $this->legacyDeploy($event, $environment->id);
+                $this->listReleased($environment->id, $applied);
+                ConfigOwnership::query()->where('environment_id', $environment->id)->delete();
 
-            // A run still waiting can't apply the file to it later.
-            ConfigRun::query()->where('environment_id', $environment->id)->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval])
-                ->update(['status' => RunStatus::Cancelled, 'error' => 'The environment is no longer in the file: it was released.', 'finished_at' => now()]);
+                // A run still waiting can't apply the file to it later.
+                ConfigRun::query()->where('environment_id', $environment->id)->whereIn('status', [RunStatus::Planning, RunStatus::AwaitingApproval])
+                    ->update(['status' => RunStatus::Cancelled, 'cancel_reason' => 'environment_released', 'error' => 'The environment is no longer in the file: it was released.',
+                        'finished_at' => now(), 'updated_at' => now()]);
+            });
         }
     }
 
