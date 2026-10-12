@@ -138,6 +138,12 @@ agents get the plan directly. `202` `{"data": {"status", "status_message", "stag
 (`status_message` starts with "Re-provisioning stopped."); it never goes to `needs_attention`. `422` while the server is
 being deleted. Rate limited to 10/min.
 
+### `POST /api/v1/servers/{server}/php` `{"version": "8.3"}` — update permission on the server (`servers.manage`)
+Installs a PHP version (Servers → server → PHP → Install), e.g. one a falak.yaml unit's `php` needs. The agent installs
+it (`runtime.php.install`); `202 {"data": {"version": "8.3", "status": "installing", "command_id": "01k…"}}`. `422` on
+`version` for a version Falak doesn't offer or the server's OS can't install, one already installed or installing, a
+server that doesn't run PHP or isn't active. `404` for a server of another organization. Rate limited to 10/min.
+
 ### `GET /api/v1/servers/{server}/capacity` — `servers.view`
 What every service on the server may use against what it has (the agent's facts): each site, compose service,
 worker, daemon, database instance and function with its effective limits (memory in MB, `null` = unlimited), the

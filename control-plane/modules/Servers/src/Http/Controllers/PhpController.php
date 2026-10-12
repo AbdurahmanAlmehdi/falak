@@ -9,6 +9,7 @@ use Falak\Servers\Application\Actions\SetDefaultPhpVersion;
 use Falak\Servers\Application\Actions\UpdatePhpSettings;
 use Falak\Servers\Domain\Models\PhpVersion;
 use Falak\Servers\Domain\Models\Server;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -17,12 +18,26 @@ final class PhpController extends Controller
 {
     public function store(Request $request, Server $server, InstallPhpVersion $install): RedirectResponse
     {
+        $this->install($request, $server, $install);
+
+        return back();
+    }
+
+    /** `POST /api/v1/servers/{server}/php`: the install runs on the agent; poll the server for its PHP versions. */
+    public function storeApi(Request $request, Server $server, InstallPhpVersion $install): JsonResponse
+    {
+        $php = $this->install($request, $server, $install);
+
+        return response()->json(['data' => ['version' => $php->version, 'status' => $php->status->value, 'command_id' => $php->command_id]], 202);
+    }
+
+    private function install(Request $request, Server $server, InstallPhpVersion $install): PhpVersion
+    {
         $this->authorize('update', $server);
 
         $data = $request->validate(['version' => ['required', 'string', Rule::in((array) config('servers.php_versions'))]]);
-        $install($server, $data['version']);
 
-        return back();
+        return $install($server, $data['version']);
     }
 
     public function default(Server $server, string $version, SetDefaultPhpVersion $setDefault): RedirectResponse
