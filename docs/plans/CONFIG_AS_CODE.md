@@ -1,6 +1,7 @@
 # Config as code (`falak.yaml`): plan
 
-Status: designed 2026-10-11; building all phases end to end on `feat/config-as-code` (target v0.11.0).
+Status: designed 2026-10-11; phases 0–4 built on `feat/config-as-code`, phase 5's local part on `feat/config-p5`
+(target v0.11.0; release notes draft at the end).
 
 A project's whole deployment pipeline is described in **one file at the root of its repository**: `falak.yaml` (or
 `falak.json`, same schema). The file declares several **deployable units** (apps, compose stacks, functions,
@@ -1265,3 +1266,116 @@ from `-p`, else `.falak/project.json` in the repository (written by `init` when 
 2 usage, 3 a deployment failed, 5 the file is invalid, 6 the run waits for an approval (`apply` without `--wait`, or
 `--wait` stopped there). `--json` prints the API's `data` (or the issues) as is. Issues print as
 `falak.yaml:12:17: schema: /units/web/deploy/strategy: value must be one of …`.
+
+### Phase 5: hardening (local part)
+
+Built on `feat/config-p5`. The user guide is [`docs/CONFIG_AS_CODE.md`](../CONFIG_AS_CODE.md) (Go's `TestUserDocCoversEveryProperty`
+fails when a schema property isn't in it). Still to do for phase 5: the live test on test servers with real
+repositories, publishing the schema on falak.sh and SchemaStore, the website docs, the tagged release.
+
+**Schema versioning [decision].**
+- v1 only gains **optional** fields: a valid v1 file stays valid and means the same in every later release.
+- A breaking change (a property removed or renamed, a type narrowed, an enum value removed, a new required field, a
+  tighter bound that rejects a valid file) is a new schema: `contracts/config/v2.schema.json`, `version: 2`, `$id`
+  `https://falak.sh/schema/v2.json`. The control plane and the CLI accept every published version they know (the
+  reader picks the schema by `version`); v1 is never edited into v2.
+- `contracts/config/v1.baseline.json` freezes v1 as released. `agent/internal/configspec/versioning_test.go` compares
+  `v1.schema.json` with it at every schema node both have and fails on a removed property (or `$defs` entry), a
+  narrowed `type`, a removed `enum` value, a new `required` name, or a changed `$id`. Descriptions and new optional
+  properties pass. After shipping a widening, copy the schema over the baseline in the release commit.
+
+**Monorepo load test** (`modules/Config/tests/Feature/MonorepoLoadTest.php`): 40 units (16 Laravel apps with workers,
+daemons, schedules, domains, redirects, headers and limits; 4 docker apps with 2 volumes each; 4 compose stacks; 6
+functions; 6 databases; 4 Redis) in production, QA and staging with overrides and previews, through the fake gateways.
+Measured (2026-10-12, SQLite): the push applying production and QA 30,022 queries (phase A, 80 deployments started),
+phase B when the releases went live 85,305 (mostly the fake agents' deploy steps), a plan of the applied file 1,539
+queries (~190 ms; empty), staging's all-create plan 164, a drift check 1,061 (~100 ms; in sync). The test fails when
+a plan or a drift check goes ~30% above those counts. Plans and drift grow linearly (~38 queries per unit: each
+reconciler reads its unit's rows); no quadratic path was found. Not fixed (not hot): Sites and Laravel reconcilers
+read sites through Eloquent outside `SiteDirectory::remembering`, Volumes reads each site twice (validate and plan),
+and `ManagedResources::managed()` costs 3 queries per resource.
+
+**Fixes found by the load and upgrade tests [decision].**
+- A phase B that fails once the release is live **fails the run** (`apply_failed`, the unit's entry `failed` with
+  "Phase B failed: …"). Before, the entry stayed `released` and the run ended `applied` without phase B.
+- A worker without `command` on a unit that isn't Laravel on a PHP runtime is a stage 4 `value.unsupported`
+  (SaveWorker's rule); limits a static unit, or cgroup limits (`memory`, `memory_reservation`, `cpus`, `pids`) on a
+  FrankenPHP unit, are `value.unsupported` too. Both used to pass validation and fail the run.
+- A compose unit without `files` reads its root's default compose file when created (its project snapshot was empty,
+  so service limits failed phase A and public services weren't checked).
+- **An export pushed as is applies**: before a first apply, the export's environment gets the branch its sites deploy
+  the source's repository from (it had none, so a push applied nothing), and the export carries `previews` when the
+  exported environment owns the block (its `base`, else production).
+- A dashboard worker adopted unchanged under its export key (`worker-<n>`) is named with it, so a worker added later
+  can't shift which row the key means.
+
+**Upgrade tests** (`modules/Config/tests/Feature/UpgradeTest.php`): enabling on a project made in the dashboard and
+pushing the export (empty plan, one deployment — the push's own —, nothing deleted or detached); disabling (every
+field editable, nothing deleted, push to deploy deploys the next push, no run); re-enabling (the file wins again for
+what it sets, one deployment); existing preview settings through export and apply and a file without `previews`
+(untouched); the existing roles get their `config.*` permissions when the upgrade migrates.
+
+**Known gaps (after phase 5).**
+- Two environments of one push claiming the same host both validate; the second's phase B fails ("This domain is
+  already in use."). Stage 4 checks hosts against the database only, not across the file's environments.
+- A reference to a database on a server without a private network to the unit validates and fails at deploy time.
+- Compose units can't mount Falak volumes; plain git servers can't be a config source; the Playwright check of
+  read-only fields.
+
+## Release notes (draft): v0.11.0
+
+**Config as code.** A project can now be described in one file at the root of its repository, `falak.yaml` (or
+`falak.json`): apps, Docker Compose stacks, functions, databases, Redis/Valkey, volumes, backups, domains, workers,
+schedules, limits and previews, for several environments bound to branches. A push applies it: validate, plan, apply,
+deploy only what changed. Guide: `docs/CONFIG_AS_CODE.md`.
+
+Highlights
+- `falak init` writes a first file from the code (Laravel, Symfony, Next, Nuxt, Vite, Astro, Bun, Deno, static,
+  Dockerfile, compose, monorepos), each value with its reason; `falak init --update` proposes what the code adds.
+- `falak validate` (offline), `falak plan`, `falak apply --wait`, `falak runs`, `falak drift`, `falak config export`,
+  `falak config unmanaged`; pull requests get the plan as a comment and a `falak/config` status.
+- Risky changes (database major upgrades, removing a production domain, production servers or strategy, backups and
+  PITR turned down, data units removed, previews with production data…) wait for an approval: dashboard or `falak
+  approve`, optionally by someone other than the requester, expiring after 7 days.
+- Managed fields are read-only in the dashboard with a "Managed by falak.yaml @ commit" badge; removed resources are
+  detached, never deleted without `--allow-destroy`; data is never deleted by a push.
+- Drift checks every 30 minutes with a canvas banner and an alert; rollbacks restore the config saved on the release.
+- Previews are built from the pull request's own file (a fork's: the base branch's).
+- JSON Schema `https://falak.sh/schema/v1.json` for editor completion; v1 only gains optional fields from now on.
+
+Upgrade notes
+- **Migrations** (run by the update as usual): `config_sources`, `config_runs`, `config_ownership`,
+  `config_pull_requests`, `config_detached`, `config_drift` and the approval / phase A columns of `config_runs`
+  (Config); `deployments_releases.config` (the unit's config on each release); `processes_workers.name` (nullable);
+  Functions' repository code (`functions_functions` columns, `functions_version_commits`); `previews_previews.config_ref`.
+- **Permissions**: `config.view` (Admin, Developer, Viewer), `config.apply` (Admin, Developer), `config.approve` and
+  `config.destroy` (Admin); the Owner has all. Existing roles get them when the update migrates (the permission sync
+  runs after migrations); nothing to do. **API tokens** created with a list of abilities don't have them: create a token
+  with the `config.*` abilities the CLI needs (tokens with every ability are fine).
+- **Settings** (optional, `.env`): `FALAK_CONFIG_APPROVAL_DAYS` (7), `FALAK_CONFIG_DRIFT_MINUTES` (30),
+  `FALAK_CONFIG_KEEP_RUNS` (200). The image ships the schema and risky-change rules in `/opt/falak/contracts/config`
+  (`FALAK_CONFIG_CONTRACTS_PATH`).
+- Nothing changes for a project until an admin or developer enables its config source (Project settings → Config as
+  code). The CLI needs v0.11.0 for the new commands; older CLIs keep working for everything else.
+
+Breaking changes
+- **Workers have a name** (`processes_workers.name`, null for workers made in the dashboard; an export calls those
+  `worker-<n>`). A worker the file adopts is renamed to its key; daemon and schedule names the file uses are refused
+  (422) when created in the dashboard.
+- **Dashboard edits of managed fields answer 422**, and managed services can't be renamed or deleted; a function whose
+  code the file manages can't be deployed from the editor. Disable the source to edit freely.
+- **Push to deploy skips sites Config deploys** (units of the file last applied to the environment, deploying the
+  source's repository from a branch the file binds); their deployments come from config runs (trigger `push`).
+- For module code and custom gateways: `PushReceived` gained `changedPaths` (null when the payload can't list them),
+  `ReleaseActivated` gained `trigger`, `SourceControlGateway::tree()` gained `$complete` (throws `TreeTruncated`),
+  `SiteDirectory` gained `findMany()` and `remembering()`, `ProjectDirectory` gained `servicesInProject()`,
+  `ServiceVolumes` gained `resize()` and `backupStorageFor()`, `BackupStorage` gained `namesForProject()`; new
+  contracts `Deployments\Contracts\ConfigReleases`, `Projects\Contracts\ConfigEnvironments`, `Sites\Contracts\SiteLimits`
+  and `DeployScriptSections`.
+
+Known gaps
+- Plain git servers can't be a config source; compose units can't mount Falak volumes.
+- A run never changes a database engine, moves a database or volume, or shrinks a disk (dashboard actions).
+- Two environments claiming the same host in one push: the second fails at phase B instead of validation.
+- Cross-server references without a private network fail at deploy time, not validation.
+- The dashboard's "Open a PR adding falak.yaml" and the builder-side `detect` job come after the release (phase 6).
