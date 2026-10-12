@@ -11,13 +11,15 @@ use Illuminate\Validation\ValidationException;
 interface ConfigReleases
 {
     /**
-     * Queue a deployment of the site at $commit of $branch (trigger push; manual when $requestedBy is given).
+     * Queue a deployment of the site at $commit of $branch (trigger push; manual when $requestedBy is given). A
+     * deployment of the same commit already on its way is reused, unless its id sorts before $after (a ULID: it was
+     * queued before the caller changed the site's config): that one is cancelled and a new one queued.
      *
      * @return string the deployment id
      *
      * @throws ValidationException when the site cannot be deployed
      */
-    public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null): string;
+    public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null, ?string $after = null): string;
 
     /**
      * Save the unit's resolved config on a release (Release.config).

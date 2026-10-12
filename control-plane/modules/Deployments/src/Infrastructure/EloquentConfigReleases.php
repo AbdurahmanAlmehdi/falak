@@ -3,6 +3,7 @@
 namespace Falak\Deployments\Infrastructure;
 
 use Falak\Deployments\Application\Actions\TriggerDeployment;
+use Falak\Deployments\Application\Orchestration\Orchestrator;
 use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Deployments\Contracts\Exceptions\DeploymentTriggerBusy;
 use Falak\Deployments\Domain\Enums\Trigger;
@@ -16,15 +17,22 @@ final class EloquentConfigReleases implements ConfigReleases
     public function __construct(
         private readonly SiteDirectory $sites,
         private readonly TriggerDeployment $trigger,
+        private readonly Orchestrator $orchestrator,
     ) {}
 
-    public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null): string
+    public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null, ?string $after = null): string
     {
         $site = $this->sites->find(strtolower($siteId)) ?? throw ValidationException::withMessages(['site' => 'Unknown site.']);
 
         // The same commit already on its way (push to deploy got the push first): that deployment is the unit's.
         if ($commit !== null && ($active = Deployment::activeFor($site->id, $commit)) !== null) {
-            return $active->id;
+            if ($after === null || strcmp($active->id, strtolower($after)) > 0) {
+                return $active->id;
+            }
+
+            // Queued before the site's config changed (push to deploy got the push before Config's phase A): it would
+            // release the old config. A building one stops at its next step; the new one waits for it.
+            $this->orchestrator->cancel($active->id);
         }
 
         $trigger = fn () => ($this->trigger)($site, $requestedBy === null ? Trigger::Push : Trigger::Manual, branch: $branch, commit: $commit, message: $message, author: $author, requestedBy: $requestedBy);

@@ -841,7 +841,7 @@ Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decisi
   source is experimental. Units map to sites by the resource the file manages (`config_ownership`), not by the canvas
   name, and a managed service can't be renamed in the dashboard (422); rename the unit in the file.
 - **[decision] Who Config deploys on push:** a site is Config's only when it is a unit of the file last applied to its
-  environment, deploys from the source's repository and connection, and that file binds the site's branch. Every other
+  environment (rc.2: the latest file whose phase A committed, or a site the file created; see "Live test fixes"), deploys from the source's repository and connection, and that file binds the site's branch. Every other
   site keeps push to deploy. A push whose file is missing, unreadable or invalid records a failed run only for the
   environments the last applied file binds to that branch, and those sites deploy the old way for that push. A push
   never deploys a site whose push to deploy is off (its config is applied; entry `skipped`). A commit already being
@@ -1357,6 +1357,15 @@ Found testing v0.11.0-rc.1 on a live install.
   `APP_KEY: ${{ secrets.APP_KEY }}` (required, in "create these secrets", hint `php artisan key:generate --show`),
   and for a docker unit `health_path: /up` when `bootstrap/app.php` declares the health route (the check hit `/`,
   which redirects). Fixture `testdata/init/laravel-dockerfile`; the PHP cross-check creates the secrets init lists.
+- **Until a first run ended `applied`, a push never applied the file.** `managesSite` only counted units of the last
+  applied run, so after a first run whose deployment failed every push was push to deploy's: its deployment was queued
+  before Config's phase A, the run reused it, and the file's changes (env, health path) never reached the site.
+  **[decision]** Config owns a site's push deploys when the file created it, or when it is a unit of the latest run
+  whose phase A committed (`phase_a_at`; applied runs from before that column count by status). A push deployment of
+  the same commit queued before the run's phase A (push to deploy saw the push first, e.g. the first push after
+  enabling, which keeps H2's intent: sites the file doesn't manage yet still deploy) is cancelled and replaced by one
+  queued after phase A (`ConfigReleases::deploy(after: <ULID taken after phase A>)`) when phase A changed that unit;
+  otherwise (an export pushed as is) it is reused, so an unchanged push still deploys once.
 
 ## Release notes (draft): v0.11.0
 

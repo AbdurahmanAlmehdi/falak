@@ -9,6 +9,7 @@ use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Http\Presenters;
 use Falak\Deployments\Application\Actions\TriggerDeployment;
+use Falak\Deployments\Application\Listeners\DeployOnPush;
 use Falak\Deployments\Domain\Enums\Trigger;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Deployments\Domain\Models\Release;
@@ -19,6 +20,8 @@ use Falak\Projects\Domain\Models\Service;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
 use Falak\Sites\Domain\Models\Site;
+use Falak\SourceControl\Contracts\Data\CommitData;
+use Falak\SourceControl\Events\PushReceived;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -61,7 +64,8 @@ it('applies a push: phase A before the build, a deployment, phase B and the conf
         ->and(SiteSettings::query()->find($site->id)?->health_path)->toBe('/healthz')   // phase A
         ->and(config_env($site->id)['FEATURE'])->toBe('on')
         ->and(Worker::query()->where('site_id', $site->id)->exists())->toBeFalse()      // phase B waits for the release
-        ->and(Deployment::query()->where('site_id', $site->id)->sole()->commit)->toBe(config_sha('b'));
+        // The first push after enabling: push to deploy queued the site before phase A; Config replaced it.
+        ->and(Deployment::query()->where('site_id', $site->id)->where('status', '!=', 'cancelled')->sole()->commit)->toBe(config_sha('b'));
 
     $world->settle();
     $run->refresh();
@@ -85,7 +89,7 @@ it('deploys only the units whose files or config changed', function () {
 
     $world->push(config_sha('b'));  // the first run manages both units: both deploy
     $world->settle();
-    expect(Deployment::query()->count())->toBe(2);
+    expect(Deployment::query()->where('status', '!=', 'cancelled')->count())->toBe(2);
 
     $world->push(config_sha('c'), paths: ['apps/docs/index.md', 'README.md']);
     $world->settle();
@@ -245,4 +249,48 @@ it('a phase B that fails when the release is live fails the run (it never ends a
         ->and($run->deploy[0]['error'])->toStartWith('Phase B failed: Only Laravel sites run queue:work')
         ->and(Presenters::run($run)['error_code'])->toBe('apply_failed')
         ->and(Worker::query()->where('site_id', $site->id)->exists())->toBeFalse();
+});
+
+it('after a first run whose deployment failed, the next push applies the file before deploying', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file(config_e2e_file('one'));
+    $world->push(config_sha('b'));
+    $world->deploy->builds->fail();
+    deploy_run_all($world->deploy->agents);
+    expect(ConfigRun::query()->sole()->status)->toBe(RunStatus::Failed);
+
+    // Fixing the file: the push is Config's, even when push to deploy sees it first (queued listeners race).
+    $world->file(config_e2e_file('two', '/two'));
+    app(DeployOnPush::class)->handle(new PushReceived($world->deploy->organization->id, $world->source->source_connection_id, 'github', 'acme/shop', 'main',
+        new CommitData(config_sha('c'), 'Fix', 'Ada', 'ada@example.com'), 'ada', str_repeat('0', 39).'1', null));
+    expect(Deployment::query()->where('site_id', $site->id)->where('commit', config_sha('c'))->exists())->toBeFalse();
+
+    $world->push(config_sha('c'));
+    $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
+    $deployments = Deployment::query()->where('site_id', $site->id)->where('commit', config_sha('c'))->get();
+
+    expect($run->phase_a_at)->not->toBeNull()
+        ->and($deployments)->toHaveCount(1)
+        ->and($run->deploy[0]['deployment_id'])->toBe($deployments->first()->id)
+        ->and(config_env($site->id)['FEATURE'])->toBe('two')
+        ->and(SiteSettings::query()->find($site->id)?->health_path)->toBe('/two');
+});
+
+it('a push deployment queued before phase A is replaced by one queued after it', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file(config_e2e_file('one'));
+    $world->push(config_sha('b'));
+    $world->settle();
+
+    // Push to deploy got the push first (e.g. a site the file manages only from this run on).
+    $legacy = app(TriggerDeployment::class)(app(SiteDirectory::class)->find($site->id), Trigger::Push, branch: 'main', commit: config_sha('c'));
+    $world->file(config_e2e_file('two'));
+    $world->push(config_sha('c'));
+    $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
+
+    expect($legacy->refresh()->status->value)->toBe('cancelled')
+        ->and($run->deploy[0]['deployment_id'])->not->toBe($legacy->id)
+        ->and(strcmp($run->deploy[0]['deployment_id'], $legacy->id))->toBeGreaterThan(0);
 });

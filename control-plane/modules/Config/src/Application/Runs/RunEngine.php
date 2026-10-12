@@ -5,6 +5,7 @@ namespace Falak\Config\Application\Runs;
 use Falak\Config\Application\EnvMask;
 use Falak\Config\Application\Planning\Plan;
 use Falak\Config\Application\Planning\Planner;
+use Falak\Config\Application\Planning\Reconcilers;
 use Falak\Config\Application\ScopeFactory;
 use Falak\Config\Application\Validation\FileCheck;
 use Falak\Config\Contracts\ApplyContext;
@@ -26,6 +27,7 @@ use Falak\Sites\Contracts\SiteDirectory;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -180,6 +182,16 @@ final class RunEngine
         try {
             $scope = DB::transaction(fn () => $this->applier->phaseA($scope, $plan->changes, $ctx));
             $run->forceFill(['phase_a_at' => now()])->save();
+            // A deployment queued before this point releases the old config of the units phase A changed: those get
+            // a new one (see ConfigReleases::deploy); the others reuse it.
+            $afterPhaseA = strtolower((string) Str::ulid());
+            $changedInPhaseA = [];
+
+            foreach (app(Reconcilers::class)->forPhase(ApplyPhase::BeforeBuild) as $reconciler) {
+                foreach (app(Reconcilers::class)->changesOf($reconciler, $plan->changes)->actionable() as $change) {
+                    $changedInPhaseA[(string) $change->unit] = true;
+                }
+            }
         } catch (Throwable $e) {
             return $this->finish($run, RunStatus::Failed, 'Phase A failed: '.self::message($e).' Nothing was deployed.');
         }
@@ -208,7 +220,7 @@ final class RunEngine
 
             try {
                 $entry['deployment_id'] = $this->releases->deploy($siteId, $run->branch ?? $scope->branch, $run->commit,
-                    $commitInfo['message'] ?? null, $commitInfo['author'] ?? null, $run->trigger === RunTrigger::Push ? null : $run->requested_by);
+                    $commitInfo['message'] ?? null, $commitInfo['author'] ?? null, $run->trigger === RunTrigger::Push ? null : $run->requested_by, isset($changedInPhaseA[$unit]) ? $afterPhaseA : null);
                 $entry['status'] = 'deploying';
             } catch (ValidationException $e) {
                 $entry['status'] = 'skipped';

@@ -252,7 +252,8 @@ it('an approval is claimed once: a second approval of the same run does nothing'
 
     expect($approve($run, $world->deploy->user->id, $hash))->toBe('approved')
         ->and($approve($stale, $world->deploy->user->id, $hash))->toBe('not_waiting')
-        ->and(Deployment::query()->count())->toBe(1);
+        // One deployment of the approved config (push to deploy's, queued before phase A, was replaced).
+        ->and(Deployment::query()->where('status', '!=', 'cancelled')->count())->toBe(1);
 });
 
 it('a run sent back to waiting alerts again', function () {
