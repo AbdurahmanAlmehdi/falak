@@ -1,0 +1,2 @@
+note: web: optional secrets, commented out in env (empty in the example env file): SESSION_SECRET, GITHUB_CLIENT_SECRET
+Not written: run `falak init --update --write` to apply this to falak.yaml.

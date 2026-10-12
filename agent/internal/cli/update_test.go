@@ -91,3 +91,24 @@ func TestUnifiedDiff(t *testing.T) {
 		t.Fatal("equal texts")
 	}
 }
+
+// --json reports written only when the file was written.
+func TestInitUpdateJSONWritten(t *testing.T) {
+	h := newHarness(t, nil)
+	h.wd = copyRepo(t, filepath.Join("testdata", "init", "node-express"))
+	writeFile(t, h.wd, "falak.yaml", "version: 1\nunits:\n  web:\n    type: app\n    runtime: node\n")
+	for _, c := range []struct {
+		args    []string
+		written string
+	}{{[]string{"init", "--update", "--json"}, `"written": false`}, {[]string{"init", "--update", "--write", "--json"}, `"written": true`}} {
+		if code := h.run(c.args...); code != 0 || !strings.Contains(h.out.String(), c.written) {
+			t.Fatalf("%v: %d %s", c.args, code, h.out.String())
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(h.wd, "falak.yaml")); !strings.Contains(string(b), "redis:") {
+		t.Fatalf("--write --json didn't write:\n%s", b)
+	}
+	if code := h.run("init", "--update", "--write", "--json"); code != 0 || !strings.Contains(h.out.String(), `"written": false`) {
+		t.Fatalf("nothing to write: %s", h.out.String())
+	}
+}

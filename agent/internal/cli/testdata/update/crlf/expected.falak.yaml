@@ -1,0 +1,17 @@
+version: 1
+units:
+  # the API
+  web:
+    type: app
+    runtime: node
+    node: "20"
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      NODE_ENV: production
+      LOG_LEVEL: info
+      REDIS_URL: ${{ redis.REDIS_URL }}
+      GITHUB_CLIENT_ID: abc
+      # SESSION_SECRET: ${{ secrets.SESSION_SECRET }} # empty in the example env file; uncomment if used
+      # GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }} # empty in the example env file; uncomment if used
+
+  redis:
+    type: redis # detected: ioredis in package.json

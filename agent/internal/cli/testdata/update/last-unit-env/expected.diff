@@ -1,0 +1,11 @@
+--- falak.yaml
++++ falak.yaml
+@@ -7,3 +7,8 @@
+     env:
+       NODE_ENV: production
+       LOG_LEVEL: info
++      REDIS_URL: ${{ redis.REDIS_URL }}
++      GITHUB_CLIENT_ID: abc
++
++  redis:
++    type: redis # detected: ioredis in package.json

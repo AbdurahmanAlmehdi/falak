@@ -1,0 +1,48 @@
+--- falak.yaml
++++ falak.yaml
+@@ -7,3 +7,45 @@
+     health_path: /up
+     laravel:
+       scheduler: true
++      horizon: true # detected: laravel/horizon in composer.json
++    deploy:
++      hooks:
++        before_activate: | # detected: database/migrations (Falak's Laravel deploy steps, migrations on the leader)
++          if [ "$FALAK_IS_LEADER" = "1" ]; then
++            $FALAK_PHP artisan migrate --force
++          fi
++          $FALAK_PHP artisan optimize
++          $FALAK_PHP artisan storage:link --force
++    env: # from the example env file; secrets are ${{ secrets.NAME }} references
++      APP_NAME: Shop
++      APP_ENV: production
++      APP_DEBUG: "false"
++      DB_CONNECTION: ${{ db.DB_CONNECTION }}
++      DB_HOST: ${{ db.DB_HOST }}
++      DB_PORT: ${{ db.DB_PORT }}
++      DB_DATABASE: ${{ db.DB_DATABASE }}
++      DB_USERNAME: ${{ db.DB_USERNAME }}
++      DB_PASSWORD: ${{ db.DB_PASSWORD }}
++      SESSION_DRIVER: database
++      QUEUE_CONNECTION: redis
++      CACHE_STORE: redis
++      REDIS_CLIENT: phpredis
++      REDIS_HOST: ${{ redis.REDIS_HOST }}
++      REDIS_PASSWORD: ${{ redis.REDIS_PASSWORD }}
++      REDIS_PORT: ${{ redis.REDIS_PORT }}
++      MAIL_MAILER: log
++      MAIL_FROM_ADDRESS: hello@example.com
++      VITE_APP_NAME: Shop
++      # MAIL_PASSWORD: ${{ secrets.MAIL_PASSWORD }} # empty in the example env file; uncomment if used
++      # AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }} # empty in the example env file; uncomment if used
++      # AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # empty in the example env file; uncomment if used
++      # STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }} # empty in the example env file; uncomment if used
++      # PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }} # empty in the example env file; uncomment if used
++      # VITE_PUSHER_APP_KEY: ${{ secrets.PUSHER_APP_KEY }} # public variable: this value ends up in the browser bundle; uncomment with the secrets it uses
++
++  db:
++    type: database
++    engine: postgresql # detected: DB_CONNECTION=pgsql in .env.example
++
++  redis:
++    type: redis # detected: laravel/horizon in composer.json
