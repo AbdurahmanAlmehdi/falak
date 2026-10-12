@@ -13,6 +13,7 @@ use Falak\Processes\Domain\Models\Schedule;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Sites\Domain\Models\Site;
+use Spatie\Permission\Models\Role as SpatieRole;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -148,4 +149,15 @@ it('keeps a project\'s preview settings through export and apply, and leaves the
     expect(ConfigRun::query()->where('commit', config_sha('c'))->sole()->status)->toBe(RunStatus::Applied)
         ->and($stored())->toBe($before)
         ->and($settings->refresh()->enabled)->toBeTrue();
+});
+
+it('gives the existing roles their config permissions when the upgrade migrates', function () {
+    // SyncPermissionsAfterMigrations: `php artisan migrate` converges every global role with the registry.
+    $holders = fn (string $permission) => SpatieRole::query()->whereNull('organization_id')
+        ->whereHas('permissions', fn ($q) => $q->where('name', $permission))->pluck('name')->sort()->values()->all();
+
+    expect($holders('config.view'))->toBe(['admin', 'developer', 'owner', 'viewer'])
+        ->and($holders('config.apply'))->toBe(['admin', 'developer', 'owner'])
+        ->and($holders('config.approve'))->toBe(['admin', 'owner'])
+        ->and($holders('config.destroy'))->toBe(['admin', 'owner']);
 });
