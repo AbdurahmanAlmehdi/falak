@@ -169,8 +169,7 @@ final class FilePreviews implements PreviewConfig
         $environment = $this->projects->environment($previewEnvironmentId);
         $source = $environment !== null ? ConfigSource::enabledFor($environment->projectId) : null;
         $run = $environment !== null && $environment->isPreview
-            ? ConfigRun::query()->where('environment_id', $environment->id)->where('trigger', RunTrigger::PullRequest)->where('status', RunStatus::Applied)
-                ->whereNotNull('resolved')->latest('finished_at')->orderByDesc('id')->first()
+            ? ConfigRun::query()->where('environment_id', $environment->id)->where('trigger', RunTrigger::PullRequest)->baseline()->first()
             : null;
 
         if ($environment === null || $source === null || $run === null) {

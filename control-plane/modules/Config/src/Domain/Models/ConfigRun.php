@@ -5,6 +5,7 @@ namespace Falak\Config\Domain\Models;
 use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
@@ -73,6 +74,20 @@ class ConfigRun extends Model
             'approved_risky' => 'array',
             'rejected_at' => 'datetime',
         ];
+    }
+
+    /**
+     * **[decision]** An environment's baseline: its latest run whose phase A committed (the file the environment is
+     * configured with, even if a deployment failed afterwards), or an applied run from before `phase_a_at` existed.
+     * Who deploys on push, what a push without a readable file falls back to, what is released, "Apply now"'s branch
+     * and a preview's base all read it.
+     *
+     * @param  Builder<self>  $query
+     */
+    public function scopeBaseline(Builder $query): void
+    {
+        $query->whereNotNull('resolved')->where(fn (Builder $q) => $q->whereNotNull('phase_a_at')->orWhere('status', RunStatus::Applied))
+            ->latest('created_at')->orderByDesc('id');
     }
 
     public function changes(): ChangeSet

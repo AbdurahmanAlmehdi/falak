@@ -2,6 +2,7 @@
 
 use Falak\Config\Application\Exporter;
 use Falak\Config\Application\Runs\PlanFile;
+use Falak\Config\Contracts\ConfigSources;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
@@ -303,4 +304,36 @@ it('the deploy health check uses the unit health_path when deploy.health.path is
     $run = ConfigRun::query()->sole();
 
     expect(Deployment::query()->findOrFail($run->deploy[0]['deployment_id'])->setting('health')['path'])->toBe('/up');
+});
+
+it('after a first run whose deployment failed, a push with an unreadable file records a failed run and deploys the old way', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file(config_e2e_file('one'));
+    $world->push(config_sha('b'));
+    $world->deploy->builds->fail();
+    deploy_run_all($world->deploy->agents);
+
+    $world->file("version: 1\nunits: [oops\n");
+    $world->push(config_sha('c'));
+
+    expect(ConfigRun::query()->where('commit', config_sha('c'))->sole()->status)->toBe(RunStatus::Failed)
+        ->and(Deployment::query()->where('site_id', $site->id)->where('commit', config_sha('c'))->exists())->toBeTrue();
+});
+
+it('after a first run whose deployment failed, dropping the environment from the file releases it', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file(config_e2e_file('one'));
+    $world->push(config_sha('b'));
+    $world->deploy->builds->fail();
+    deploy_run_all($world->deploy->agents);
+    expect(app(ConfigSources::class)->managesSite($site->id))->toBeTrue();
+
+    $world->file("version: 1\nunits:\n  web: { type: app, runtime: frankenphp, php: \"8.4\" }\nenvironments:\n  staging: { branch: main }\n");
+    $world->push(config_sha('c'));
+
+    expect(ConfigOwnership::query()->where('environment_id', $world->environment->id)->exists())->toBeFalse()
+        ->and(app(ConfigSources::class)->managesSite($site->id))->toBeFalse()
+        ->and(Deployment::query()->where('site_id', $site->id)->where('commit', config_sha('c'))->exists())->toBeTrue();
 });

@@ -8,7 +8,6 @@ use Falak\Config\Application\Actions\RejectRun;
 use Falak\Config\Application\Actions\RequestRun;
 use Falak\Config\Application\Actions\SaveSource;
 use Falak\Config\Application\Runs\ImplicitEnvironment;
-use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
@@ -94,7 +93,7 @@ final class ConfigController extends Controller
         $input = $request->validate(['environment' => ['required', 'string', 'max:64']]);
         $source = ConfigSource::enabledFor($data->id) ?? throw ValidationException::withMessages(['environment' => 'Config as code is not enabled for this project.']);
         $environment = $this->environment($data, $input['environment']);
-        $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->whereNotNull('resolved')->latest('finished_at')->orderByDesc('id')->first();
+        $applied = ConfigRun::query()->where('environment_id', $environment->id)->baseline()->first();
         $branch = $applied?->resolved['environments'][$environment->slug]['branch'] ?? ($environment->isProduction ? $implicit->defaultBranch($source) : null);
 
         if ($branch === null) {

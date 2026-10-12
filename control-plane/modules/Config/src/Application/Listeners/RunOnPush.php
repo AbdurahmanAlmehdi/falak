@@ -178,8 +178,7 @@ final class RunOnPush implements ShouldQueue
                 continue;
             }
 
-            $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->whereNotNull('resolved')
-                ->latest('finished_at')->orderByDesc('id')->first();
+            $applied = ConfigRun::query()->where('environment_id', $environment->id)->baseline()->first();
 
             if (($applied?->resolved['environments'][$environment->slug]['branch'] ?? null) !== $event->branch) {
                 continue;
@@ -207,8 +206,7 @@ final class RunOnPush implements ShouldQueue
     private function unplanned(ConfigSource $source, PushReceived $event, string $error, string $raw): void
     {
         foreach ($this->projects->environments($source->project_id) as $environment) {
-            $applied = ConfigRun::query()->where('environment_id', $environment->id)->where('status', RunStatus::Applied)->whereNotNull('resolved')
-                ->latest('finished_at')->orderByDesc('id')->first();
+            $applied = ConfigRun::query()->where('environment_id', $environment->id)->baseline()->first();
 
             if (($applied?->resolved['environments'][$environment->slug]['branch'] ?? null) !== $event->branch) {
                 continue;

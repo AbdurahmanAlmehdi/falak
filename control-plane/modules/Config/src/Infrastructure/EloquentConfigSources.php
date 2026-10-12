@@ -3,7 +3,6 @@
 namespace Falak\Config\Infrastructure;
 
 use Falak\Config\Contracts\ConfigSources;
-use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
@@ -49,9 +48,7 @@ final class EloquentConfigSources implements ConfigSources
         }
 
         // Runs applied before phase_a_at existed count by their status.
-        $applied = ConfigRun::query()->where('environment_id', $service->environmentId)->whereNotNull('resolved')
-            ->where(fn ($q) => $q->whereNotNull('phase_a_at')->orWhere('status', RunStatus::Applied))
-            ->latest('created_at')->orderByDesc('id')->first();
+        $applied = ConfigRun::query()->where('environment_id', $service->environmentId)->baseline()->first();
 
         if ($unit === null || $applied === null || ! isset($applied->resolved['units'][$unit])) {
             return false;
