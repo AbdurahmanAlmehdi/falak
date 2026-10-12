@@ -1260,6 +1260,7 @@ and `page`.
 | `falak plan [file]` | `-e/--env` (default: the environment whose `branch` is the current git branch), `-p/--project`, `--json` | `POST …/config/plan` with the local file |
 | `falak apply [file]` | `-e/--env`, `-p/--project`, `--allow-destroy`, `--wait`, `--json` | `POST …/config/runs`; `--wait` polls the run and streams its deployments |
 | `falak config export [project]` | `-e/--env`, `-o/--output <file>`, `--format yaml\|json` | `GET …/config/export` |
+| `falak config source [show\|set]` (rc.2) | `-p`, `--repo`, `--connection`, `--path`, `--enable`/`--disable` | `GET`/`PUT …/config/source`; `set` reads the source first and changes only what its flags name |
 
 `[file]` defaults to `falak.yaml`, then `falak.yml`, then `falak.json` in the current directory. The project comes
 from `-p`, else `.falak/project.json` in the repository (written by `init` when logged in). Exit codes: 0 ok, 1 error,

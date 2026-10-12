@@ -39,6 +39,7 @@ type fakeConfig struct {
 	hashes    []any    // plan_hash of each POST approve
 	drift     map[string]any
 	unmanaged []map[string]any
+	source    map[string]any // GET/PUT …/config/source (nil: 404)
 }
 
 func newFakeConfig(t *testing.T) *fakeConfig {
@@ -160,6 +161,23 @@ func (f *fakeConfig) serve(w http.ResponseWriter, r *http.Request) {
 			lines = f.deployOut
 		}
 		f.json(w, 200, map[string]any{"data": lines, "meta": map[string]any{"next": 9}})
+	case p == api.Path(api.PathConfigSource, "project", projectID) && r.Method == http.MethodPut:
+		if f.source == nil {
+			f.source = map[string]any{"id": "01jsrc", "experimental": false, "separate_approver": false, "allowed_credentials": []string{}}
+		}
+		for k, v := range body {
+			f.source[k] = v
+		}
+		if f.source["path"] == nil {
+			f.source["path"] = "falak.yaml"
+		}
+		f.json(w, 200, map[string]any{"data": f.source})
+	case p == api.Path(api.PathConfigSource, "project", projectID):
+		if f.source == nil {
+			f.json(w, 404, map[string]string{"message": "Config as code is not connected for this project."})
+			return
+		}
+		f.json(w, 200, map[string]any{"data": f.source})
 	case p == api.Path(api.PathConfigExport, "project", projectID):
 		f.json(w, 200, map[string]any{"data": f.export})
 	default:
@@ -736,5 +754,55 @@ func TestPlanForANewEnvironment(t *testing.T) {
 	f.plan = plan
 	if code := h.run("plan", "-e", "staging"); code != 0 || !strings.Contains(h.out.String(), "staging doesn't exist yet: this plan is a preview") {
 		t.Fatalf("%d %s %s", code, h.out.String(), h.err.String())
+	}
+}
+
+func TestConfigSource(t *testing.T) {
+	h, f := configHarness(t)
+	h.env["FALAK_PROJECT"] = projectID
+	src := api.Path(api.PathConfigSource, "project", projectID)
+
+	if code := h.run("config", "source", "show"); code != 1 || !strings.Contains(h.err.String(), "not connected") {
+		t.Fatalf("show without a source: %d %s", code, h.err.String())
+	}
+	if code := h.run("config", "source", "set", "--enable"); code != 2 || !strings.Contains(h.err.String(), "give --repo and --connection") {
+		t.Fatalf("set without a source: %d %s", code, h.err.String())
+	}
+	if code := h.run("config", "source", "set", "--enable", "--disable"); code != 2 {
+		t.Fatalf("both: %d", code)
+	}
+
+	// Connecting: a new source is enabled.
+	if code := h.run("config", "source", "set", "--repo", "acme/shop", "--connection", "01jconn"); code != 0 || !strings.Contains(h.out.String(), "acme/shop:falak.yaml (enabled)") {
+		t.Fatalf("connect: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	if last := f.requests[len(f.requests)-1]; last != "PUT "+src {
+		t.Fatalf("request %v", f.requests)
+	}
+	body := f.bodies[len(f.bodies)-1]
+	if body["repository"] != "acme/shop" || body["connection_id"] != "01jconn" || body["enabled"] != true {
+		t.Fatalf("body %v", body)
+	}
+	if _, ok := body["path"]; ok {
+		t.Fatalf("path sent though not given: %v", body)
+	}
+
+	// Disabling keeps the rest (read first) and sends no admin-only field.
+	if code := h.run("config", "source", "set", "--disable"); code != 0 || !strings.Contains(h.out.String(), "(disabled)") {
+		t.Fatalf("disable: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	body = f.bodies[len(f.bodies)-1]
+	if body["repository"] != "acme/shop" || body["connection_id"] != "01jconn" || body["path"] != "falak.yaml" || body["enabled"] != false {
+		t.Fatalf("disable body %v", body)
+	}
+	if _, ok := body["separate_approver"]; ok {
+		t.Fatalf("admin field sent: %v", body)
+	}
+	if got := f.requests[len(f.requests)-2:]; got[0] != "GET "+src || got[1] != "PUT "+src {
+		t.Fatalf("requests %v", got)
+	}
+
+	if code := h.run("config", "source", "--json"); code != 0 || !strings.Contains(h.out.String(), `"repository": "acme/shop"`) {
+		t.Fatalf("show json: %d %s %s", code, h.out.String(), h.err.String())
 	}
 }

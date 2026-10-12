@@ -35,7 +35,9 @@ The schema is `https://falak.sh/schema/v1.json` (also in the repository: `contra
 2. **Commit it** to the branch your production environment deploys from (usually `main`). Nothing happens yet.
 3. **Turn it on**: Project settings → **Config as code**: pick the source control connection, the repository and the
    path (`falak.yaml` by default; a file in a folder works too), and enable it. Falak registers the repository's
-   webhook. GitHub, GitLab and Bitbucket work; plain git servers can't be a config source yet.
+   webhook. GitHub, GitLab and Bitbucket work; plain git servers can't be a config source yet. From the terminal:
+   `falak config source set --repo acme/shop --connection <id> --enable` (the connection ids:
+   `GET /api/v1/source-control/connections`).
 4. **Push.** The push creates a **config run** per environment bound to the pushed branch. Follow it in Project
    settings → Config as code, or from the terminal:
 
@@ -728,6 +730,7 @@ whose `branch` is the current git branch (production for a file without environm
 | `falak drift` | The environment against its last applied file. `--check` checks now |
 | `falak config export [project]` | Today's state as a file. `-e`, `-o FILE`, `--format yaml\|json` |
 | `falak config unmanaged` | What runs detached |
+| `falak config source show` / `falak config source set` | The file the project follows. `set` changes only what its flags name: `--repo owner/name`, `--connection <id>`, `--path falak.yaml`, `--enable` / `--disable` (a new source is enabled) |
 
 `--json` prints the API's data as is. Issues print as `falak.yaml:12:17: schema: /units/web/deploy/strategy: value must
 be one of …`.

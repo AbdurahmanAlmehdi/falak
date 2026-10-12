@@ -112,6 +112,10 @@ func (a *App) commands() []*command {
 		{name: "config", summary: "config as code", subs: []*command{
 			{name: "export", args: "[project] [-e ENV] [-o FILE] [--format yaml|json]", summary: "write a project's current state as a falak.yaml", run: cmdConfigExport},
 			{name: "unmanaged", args: "[-e ENV] [-p PROJECT]", summary: "list what runs detached (kept, no longer managed)", run: cmdConfigUnmanaged},
+			{name: "source", summary: "the repository file a project follows", subs: []*command{
+				{name: "show", args: "[-p PROJECT]", summary: "show a project's config source", run: cmdConfigSourceShow},
+				{name: "set", args: "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable]", summary: "connect, change, enable or disable a project's config source", run: cmdConfigSourceSet},
+			}},
 		}},
 		runsCommands(),
 		{name: "approve", args: "<run> [--comment TEXT] [--yes]", summary: "approve a config run waiting for an approval", run: cmdApprove},

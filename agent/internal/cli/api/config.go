@@ -25,6 +25,9 @@ const (
 	PathConfigRunReject  = "/api/v1/config/runs/{run}/reject"            // POST {comment?} → {data:ConfigRun} (cancelled, rejected); 409 not waiting
 	PathConfigDrift      = "/api/v1/projects/{project}/config/drift"     // GET ?environment= ; POST {environment} checks now → {data:ConfigDrift}
 	PathConfigUnmanaged  = "/api/v1/projects/{project}/config/unmanaged" // GET ?environment= → {data:[UnmanagedResource]}
+
+	// rc.2: the source (connection, repository, path, on/off).
+	PathConfigSource = "/api/v1/projects/{project}/config/source" // GET → {data:ConfigSource}, 404 none; PUT ConfigSourceRequest → {data:ConfigSource}
 )
 
 // Project is one project of GET /projects.
@@ -257,6 +260,29 @@ type ConfigExport struct {
 	Raw         json.RawMessage `json:"-"`
 }
 
+// ConfigSource is GET/PUT …/config/source.
+type ConfigSource struct {
+	ID                 string          `json:"id"`
+	ConnectionID       string          `json:"connection_id"`
+	Repository         string          `json:"repository"`
+	Path               string          `json:"path"`
+	Enabled            bool            `json:"enabled"`
+	Experimental       bool            `json:"experimental"`
+	SeparateApprover   bool            `json:"separate_approver"`
+	AllowedCredentials []string        `json:"allowed_credentials"`
+	CreatedAt          *string         `json:"created_at"`
+	UpdatedAt          *string         `json:"updated_at"`
+	Raw                json.RawMessage `json:"-"`
+}
+
+// ConfigSourceRequest is the body of PUT …/config/source (the admin-only fields are left as they are).
+type ConfigSourceRequest struct {
+	ConnectionID string `json:"connection_id"`
+	Repository   string `json:"repository"`
+	Path         string `json:"path,omitempty"`
+	Enabled      bool   `json:"enabled"`
+}
+
 // ConfigInvalidError is a 422 answer carrying the file's issues.
 type ConfigInvalidError struct {
 	Message  string
@@ -431,4 +457,20 @@ func (c *Client) ConfigUnmanaged(ctx context.Context, project, environment strin
 	var list []UnmanagedResource
 	_, err := c.rawData(ctx, http.MethodGet, Path(PathConfigUnmanaged, "project", project), q, nil, &list)
 	return list, err
+}
+
+// ConfigSource reads a project's source (an *Error with Status 404 when it has none).
+func (c *Client) ConfigSource(ctx context.Context, project string) (ConfigSource, error) {
+	var s ConfigSource
+	raw, err := c.rawData(ctx, http.MethodGet, Path(PathConfigSource, "project", project), nil, nil, &s)
+	s.Raw = raw
+	return s, err
+}
+
+// SetConfigSource connects, changes, enables or disables a project's source.
+func (c *Client) SetConfigSource(ctx context.Context, project string, r ConfigSourceRequest) (ConfigSource, error) {
+	var s ConfigSource
+	raw, err := c.rawData(ctx, http.MethodPut, Path(PathConfigSource, "project", project), nil, r, &s)
+	s.Raw = raw
+	return s, err
 }

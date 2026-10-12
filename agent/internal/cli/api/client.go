@@ -53,6 +53,8 @@ type API interface {
 	ConfigReject(ctx context.Context, id, comment string) (ConfigRun, error)
 	ConfigDrift(ctx context.Context, project, environment string, check bool) (ConfigDrift, error)
 	ConfigUnmanaged(ctx context.Context, project, environment string) ([]UnmanagedResource, error)
+	ConfigSource(ctx context.Context, project string) (ConfigSource, error)
+	SetConfigSource(ctx context.Context, project string, r ConfigSourceRequest) (ConfigSource, error)
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).

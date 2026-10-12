@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/OthmanHaba/falak/agent/internal/cli/api"
@@ -410,5 +411,106 @@ func cmdConfigUnmanaged(ctx context.Context, a *App, args []string) error {
 		rows = append(rows, []string{dash(r.Environment), dash(deref(r.Unit)), r.ResourceType, r.Label, r.Reason, r.DetachedAt})
 	}
 	a.table([]string{"ENVIRONMENT", "UNIT", "TYPE", "RESOURCE", "REASON", "DETACHED"}, rows)
+	return nil
+}
+
+func cmdConfigSourceShow(ctx context.Context, a *App, args []string) error {
+	fs := a.flagSet("config source show")
+	var project string
+	projectFlag(fs, &project)
+	if _, err := a.parse(fs, args, 0, 0, "[-p PROJECT]"); err != nil {
+		return err
+	}
+	c, err := a.api()
+	if err != nil {
+		return err
+	}
+	id, err := a.requireProject(ctx, c, project, "")
+	if err != nil {
+		return err
+	}
+	s, err := c.ConfigSource(ctx, id)
+	if err != nil {
+		return sourceErr(err)
+	}
+	return a.printSource(s)
+}
+
+// cmdConfigSourceSet changes only what its flags name: the rest is read from the current source first.
+func cmdConfigSourceSet(ctx context.Context, a *App, args []string) error {
+	fs := a.flagSet("config source set")
+	var project, repo, connection, path string
+	projectFlag(fs, &project)
+	fs.StringVar(&repo, "repo", "", "repository, owner/name")
+	fs.StringVar(&connection, "connection", "", "source control connection id")
+	fs.StringVar(&path, "path", "", "the file in the repository (default falak.yaml)")
+	enable := fs.Bool("enable", false, "follow the file (pushes apply it)")
+	disable := fs.Bool("disable", false, "stop following the file (keeps every resource; cancels waiting runs)")
+	if _, err := a.parse(fs, args, 0, 0, "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable]"); err != nil {
+		return err
+	}
+	if *enable && *disable {
+		return usagef("give --enable or --disable, not both")
+	}
+	c, err := a.api()
+	if err != nil {
+		return err
+	}
+	id, err := a.requireProject(ctx, c, project, "")
+	if err != nil {
+		return err
+	}
+	// A new source is enabled unless --disable says otherwise.
+	r := api.ConfigSourceRequest{Enabled: true}
+	cur, err := c.ConfigSource(ctx, id)
+	var e *api.Error
+	switch {
+	case err == nil:
+		r = api.ConfigSourceRequest{ConnectionID: cur.ConnectionID, Repository: cur.Repository, Path: cur.Path, Enabled: cur.Enabled}
+	case !errors.As(err, &e) || e.Status != http.StatusNotFound:
+		return err
+	}
+	if repo != "" {
+		r.Repository = repo
+	}
+	if connection != "" {
+		r.ConnectionID = connection
+	}
+	if path != "" {
+		r.Path = path
+	}
+	if *enable || *disable {
+		r.Enabled = *enable
+	}
+	if r.Repository == "" || r.ConnectionID == "" {
+		return usagef("the project has no config source yet: give --repo and --connection")
+	}
+	s, err := c.SetConfigSource(ctx, id, r)
+	if err != nil {
+		return err
+	}
+	return a.printSource(s)
+}
+
+func sourceErr(err error) error {
+	var e *api.Error
+	if errors.As(err, &e) && e.Status == http.StatusNotFound {
+		return fmt.Errorf("config as code is not connected for this project (falak config source set --repo OWNER/NAME --connection ID)")
+	}
+	return err
+}
+
+func (a *App) printSource(s api.ConfigSource) error {
+	if a.jsonOut {
+		return a.printRaw(s.Raw)
+	}
+	state := "disabled"
+	if s.Enabled {
+		state = "enabled"
+	}
+	fmt.Fprintf(a.Stdout, "%s:%s (%s)\n", s.Repository, s.Path, state)
+	fmt.Fprintf(a.Stdout, "  connection          %s\n", s.ConnectionID)
+	fmt.Fprintf(a.Stdout, "  separate approver   %t\n", s.SeparateApprover)
+	fmt.Fprintf(a.Stdout, "  allowed credentials %s\n", dash(strings.Join(s.AllowedCredentials, ", ")))
 	return nil
 }
