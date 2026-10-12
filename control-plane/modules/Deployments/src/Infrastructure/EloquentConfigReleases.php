@@ -23,6 +23,7 @@ final class EloquentConfigReleases implements ConfigReleases
     public function deploy(string $siteId, ?string $branch, ?string $commit, ?string $message = null, ?string $author = null, ?string $requestedBy = null, ?string $after = null): string
     {
         $site = $this->sites->find(strtolower($siteId)) ?? throw ValidationException::withMessages(['site' => 'Unknown site.']);
+        $replaces = null;
 
         // The same commit already on its way (push to deploy got the push first): that deployment is the unit's.
         if ($commit !== null && ($active = Deployment::activeFor($site->id, $commit)) !== null) {
@@ -31,11 +32,16 @@ final class EloquentConfigReleases implements ConfigReleases
             }
 
             // Queued before the site's config changed (push to deploy got the push before Config's phase A): it would
-            // release the old config. A building one stops at its next step; the new one waits for it.
+            // release the old config. A queued or waiting one is cancelled and a building one stops at its next step;
+            // one already deploying can't be stopped and finishes. Either way the new one queues behind it.
             $this->orchestrator->cancel($active->id);
+            // The replacement is the same deploy: who asked for it, how, and its variables.
+            $replaces = $active;
         }
 
-        $trigger = fn () => ($this->trigger)($site, $requestedBy === null ? Trigger::Push : Trigger::Manual, branch: $branch, commit: $commit, message: $message, author: $author, requestedBy: $requestedBy);
+        $trigger = fn () => ($this->trigger)($site, $replaces->trigger ?? ($requestedBy === null ? Trigger::Push : Trigger::Manual), branch: $branch, commit: $commit,
+            message: $message ?? $replaces?->commit_message, author: $author ?? $replaces?->commit_author, variables: (array) ($replaces?->variables ?? []),
+            requestedBy: $requestedBy ?? $replaces?->requested_by);
 
         try {
             return $trigger()->id;

@@ -286,7 +286,8 @@ it('a push deployment queued before phase A is replaced by one queued after it',
     $world->settle();
 
     // Push to deploy got the push first (e.g. a site the file manages only from this run on).
-    $legacy = app(TriggerDeployment::class)(app(SiteDirectory::class)->find($site->id), Trigger::Push, branch: 'main', commit: config_sha('c'));
+    $legacy = app(TriggerDeployment::class)(app(SiteDirectory::class)->find($site->id), Trigger::Manual, branch: 'main', commit: config_sha('c'),
+        variables: ['FALAK_VAR_REASON' => 'hotfix'], requestedBy: $world->deploy->user->id);
     $world->file(config_e2e_file('two'));
     $world->push(config_sha('c'));
     $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
@@ -294,6 +295,12 @@ it('a push deployment queued before phase A is replaced by one queued after it',
     expect($legacy->refresh()->status->value)->toBe('cancelled')
         ->and($run->deploy[0]['deployment_id'])->not->toBe($legacy->id)
         ->and(strcmp($run->deploy[0]['deployment_id'], $legacy->id))->toBeGreaterThan(0);
+
+    // The replacement is the same deploy: its trigger, requester and variables carry over.
+    $replacement = Deployment::query()->findOrFail($run->deploy[0]['deployment_id']);
+    expect($replacement->trigger)->toBe(Trigger::Manual)
+        ->and($replacement->requested_by)->toBe($world->deploy->user->id)
+        ->and($replacement->variables)->toBe(['FALAK_VAR_REASON' => 'hotfix']);
 });
 
 it('the deploy health check uses the unit health_path when deploy.health.path is unset', function () {

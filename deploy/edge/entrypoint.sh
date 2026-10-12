@@ -39,8 +39,8 @@ mkdir -p "$AGENT_TLS" /etc/caddy/sites /etc/caddy/global /etc/caddy/trust
 } > /etc/caddy/global/tls.caddyfile
 
 rm -f /etc/caddy/sites/grafana.caddyfile /etc/caddy/sites/aliases.caddyfile /etc/caddy/sites/registry.caddyfile
-# Former panel domains (falak-ctl domain set --keep-old) redirect to the current one. 308, not 301: webhooks
-# (GitHub App, git providers) still registered on an old domain are POSTs, and a 301 turns them into GETs.
+# Former panel domains (falak-ctl domain set --keep-old) redirect to the current one. 308, not 301: a POST to an old
+# domain keeps its method when the client follows the redirect (a 301 may turn it into a GET).
 if [ -n "${FALAK_DOMAIN_ALIASES:-}" ]; then
   cat > /etc/caddy/sites/aliases.caddyfile <<SITE
 $(printf '%s' "$FALAK_DOMAIN_ALIASES" | sed 's/,/, /g') {
