@@ -8,6 +8,8 @@ use Falak\Identity\Contracts\Role;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Application\Actions\CreateProject;
 use Falak\Projects\Domain\Models\Environment;
+use Falak\Secrets\Application\Actions\CreateSecret;
+use Falak\Secrets\Contracts\SecretScope;
 use Falak\Servers\Domain\Enums\PhpVersionStatus;
 use Falak\Servers\Domain\Models\PhpVersion;
 use Falak\Sites\Contracts\Framework;
@@ -89,6 +91,13 @@ it('validates falak init\'s Laravel files on a new project', function (string $g
 
     if ($php !== null && ! $world->deploy->servers[0]->phpVersions()->where('version', $php)->exists()) {
         $world->deploy->servers[0]->phpVersions()->forceCreate(['version' => $php, 'status' => PhpVersionStatus::Installed, 'is_default' => false, 'ini' => [], 'fpm' => PhpVersion::defaultFpm(null)]);
+    }
+
+    // The secrets init says to create.
+    preg_match_all('/^[^#\n]*\$\{\{ secrets\.([A-Z0-9_]+) \}\}/m', (string) file_get_contents($golden), $secrets);
+
+    foreach (array_unique($secrets[1]) as $name) {
+        app(CreateSecret::class)($world->deploy->organization->id, SecretScope::Organization, $world->deploy->organization->id, ['name' => $name, 'value' => 'x'], null);
     }
 
     // The one step the user adds: where production runs.

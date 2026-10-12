@@ -1350,6 +1350,13 @@ Found testing v0.11.0-rc.1 on a live install.
   FrankenPHP, Docker, the agent's functions support) on a new unit's servers, and on an existing unit's servers when its
   `php` changes: `value.unsupported` at `/units/<unit>/php` ("… (install it in Servers → <server> → PHP)"), so
   validate and plan report it. `POST /api/v1/servers/{server}/php` installs a version without the dashboard.
+- **A Laravel Dockerfile app had no `APP_KEY`.** Falak generates `APP_KEY` only for framework `laravel` sites; init
+  left it out for every Laravel repository, so a docker (or compose) unit ran without one. **[decision]** The init
+  fix, not server-side generation: Falak can't tell that an image is Laravel, and generating keys into arbitrary
+  images is guesswork. For a Laravel repository whose unit is docker or compose, `falak init` writes
+  `APP_KEY: ${{ secrets.APP_KEY }}` (required, in "create these secrets", hint `php artisan key:generate --show`),
+  and for a docker unit `health_path: /up` when `bootstrap/app.php` declares the health route (the check hit `/`,
+  which redirects). Fixture `testdata/init/laravel-dockerfile`; the PHP cross-check creates the secrets init lists.
 
 ## Release notes (draft): v0.11.0
 

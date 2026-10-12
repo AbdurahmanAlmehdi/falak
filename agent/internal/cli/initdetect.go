@@ -435,6 +435,9 @@ func detectApp(repo fsRepo, rel string, opt detectOptions, d *detection) (*detec
 		if plan, err := r.detect(); err == nil {
 			u.plan = &plan
 			if plan.Framework == "laravel" {
+				if m := healthRe.FindStringSubmatch(r.read("bootstrap/app.php")); m != nil {
+					f.set("health_path", m[1], "detected: health route in bootstrap/app.php")
+				}
 				d.Notes = append(d.Notes, fmt.Sprintf("%s: Laravel in a Dockerfile: migrations, queue workers and the scheduler run as your image runs them", key))
 			}
 		}

@@ -1,0 +1,4 @@
+Wrote falak.yaml: web (app, docker), db (database, postgresql)
+note: web: Laravel in a Dockerfile: migrations, queue workers and the scheduler run as your image runs them
+note: web: create these secrets before applying (falak validate checks them when logged in): APP_KEY
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

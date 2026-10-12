@@ -219,7 +219,8 @@ units:
 | `limits` | Resource limits ([below](#limits)); not for `static` units, and only `log`, `restart`, `oom` on FrankenPHP (the shared edge) | — |
 | `volumes` | `docker` runtime only ([below](#volumes)) | — |
 
-A unit the file adds is created as the dashboard would create it: a Laravel unit gets a generated `APP_KEY`, `APP_NAME`
+A unit the file adds is created as the dashboard would create it: a Laravel unit (framework `laravel`; not a docker or
+compose unit, whose image is opaque to Falak: give those `APP_KEY: ${{ secrets.APP_KEY }}`) gets a generated `APP_KEY`, `APP_NAME`
 and `APP_URL` unless the file sets them.
 
 ### `compose` units

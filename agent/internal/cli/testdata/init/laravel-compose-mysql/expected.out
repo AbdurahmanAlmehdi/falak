@@ -1,3 +1,3 @@
 Wrote falak.yaml: web (compose), mysql (database, mysql), redis (redis, redis)
-note: web: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value
+note: web: create these secrets before applying (falak validate checks them when logged in): APP_KEY
 Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

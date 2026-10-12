@@ -301,6 +301,9 @@ type envValue struct {
 // the local machine are left out. No secret value is ever written, in the file or in the notes.
 func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 	laravel := u.plan != nil && u.plan.Framework == "laravel"
+	// [decision] Falak generates APP_KEY only for native Laravel sites (framework laravel); a Laravel image (docker or
+	// compose unit) needs it as a secret the user creates.
+	ownKey := laravel && (u.Runtime == "docker" || u.Type == "compose")
 	usesDB := db != nil && u.needs.db != ""
 	usesRedis := redis != nil && u.needs.redis != ""
 	vals := map[string]*envValue{}
@@ -309,6 +312,10 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 	set := func(k, v, comment string, literal bool) {
 		vals[k] = &envValue{value: v, comment: comment, literal: literal}
 		order = append(order, k)
+	}
+	appKey := func() {
+		set("APP_KEY", ref("secrets", "APP_KEY"), "required: create it from `php artisan key:generate --show` (Falak generates it only for native Laravel units)", false)
+		secrets = append(secrets, "APP_KEY")
 	}
 	for _, e := range u.envFile {
 		k, v := e.key, e.value
@@ -342,6 +349,8 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 			name := strings.ToUpper(k)
 			switch {
 			case !secretNameRe.MatchString(name):
+			case ownKey && name == "APP_KEY":
+				appKey()
 			case laravel && name == "APP_KEY":
 				d.Notes = append(d.Notes, fmt.Sprintf("%s: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value", u.Key))
 			default:
@@ -377,6 +386,10 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 		default:
 			set(k, v, "", true)
 		}
+	}
+
+	if _, ok := vals["APP_KEY"]; ownKey && !ok {
+		appKey() // the example file has none
 	}
 
 	// ${VAR} interpolation (dotenv): expanded with the other keys' values here, references included.
