@@ -637,6 +637,8 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 continue;
             }
 
+            array_push($issues, ...$this->serverIssues($scope, (string) $unit, $body, $type, $site));
+
             if ($type === 'compose') {
                 array_push($issues, ...$this->validateCompose($scope, $resolved, (string) $unit, $body, $site));
 
@@ -682,6 +684,44 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
 
             if (isset($body['deploy']['hooks']) && $runtime !== null && $runtime->usesDocker()) {
                 $issues[] = ConfigIssue::error('value.unsupported', "{$base}/deploy/hooks", 'Deploy hooks run on host runtimes only (not docker).');
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * SiteRules' server checks (PHP version installed, Docker, …) on the unit's servers, as creating the site or changing
+     * its PHP version would run them in phase A: a new unit on the environment's (or its own) servers, an existing one
+     * whose `php` changes on its current servers.
+     *
+     * @param  array<string, mixed>  $body
+     * @return list<ConfigIssue>
+     */
+    private function serverIssues(ConfigScope $scope, string $unit, array $body, string $type, ?Site $site): array
+    {
+        $runtime = match ($type) {
+            'compose' => SiteRuntime::Compose,
+            'function' => SiteRuntime::Function,
+            'app' => SiteRuntime::tryFrom((string) ($body['runtime'] ?? '')) ?? $site?->runtime,
+            default => null,
+        };
+        $php = isset($body['php']) ? (string) $body['php'] : $site?->php_version;
+
+        if ($runtime === null || ($site !== null && $php === $site->php_version) || ($php !== null && ! in_array($php, (array) config('sites.php_versions'), true))) {
+            return [];
+        }
+
+        $base = '/units/'.Pointer::escape($unit);
+        $issues = [];
+
+        foreach ($site === null ? $this->serverIds($scope, $body) : $site->targets()->pluck('server_id')->all() as $serverId) {
+            $server = $this->servers->find((string) $serverId);
+            $problem = $server !== null ? app(SiteRules::class)->runtimeProblem($server, $runtime, $runtime->isPhp() ? $php : null) : null;
+
+            if ($problem !== null) {
+                $at = $problem['field'] === 'php' && isset($body['php']) ? "{$base}/php" : ($type === 'app' && isset($body['runtime']) ? "{$base}/runtime" : $base);
+                $issues[] = ConfigIssue::error('value.unsupported', $at, $problem['message']);
             }
         }
 

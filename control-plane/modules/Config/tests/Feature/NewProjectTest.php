@@ -8,6 +8,8 @@ use Falak\Identity\Contracts\Role;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Application\Actions\CreateProject;
 use Falak\Projects\Domain\Models\Environment;
+use Falak\Servers\Domain\Enums\PhpVersionStatus;
+use Falak\Servers\Domain\Models\PhpVersion;
 use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Domain\Models\Site;
 
@@ -82,6 +84,13 @@ it('validates falak init\'s Laravel files on a new project', function (string $g
     ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
     $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
 
+    // The server has what the file asks for (the next test covers a server that doesn't).
+    $php = preg_match('/php: "([0-9.]+)"/', (string) file_get_contents($golden), $m) ? $m[1] : null;
+
+    if ($php !== null && ! $world->deploy->servers[0]->phpVersions()->where('version', $php)->exists()) {
+        $world->deploy->servers[0]->phpVersions()->forceCreate(['version' => $php, 'status' => PhpVersionStatus::Installed, 'is_default' => false, 'ini' => [], 'fpm' => PhpVersion::defaultFpm(null)]);
+    }
+
     // The one step the user adds: where production runs.
     $file = file_get_contents($golden)."environments:\n  production:\n    branch: main\n    servers: [{$server}]\n";
     $response = $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file, 'environment' => 'production'])->assertOk();
@@ -105,4 +114,19 @@ it('creates a unit with a `laravel` block on a PHP runtime as Laravel, with its 
     expect($site->framework)->toBe(Framework::Laravel)
         ->and(Worker::query()->where('site_id', $site->id)->count())->toBe(1)
         ->and(ConfigRun::query()->where('project_id', $environment->project_id)->sole()->status)->toBe(RunStatus::Applied);
+});
+
+it('reports a PHP version the unit\'s servers lack when validating and planning, not in phase A', function () {
+    [$world, $environment, $server] = config_new_project();
+    ConfigSource::query()->where('project_id', $environment->project_id)->update(['allowed_servers' => json_encode([$server])]);
+    $this->withToken(app(CreateApiToken::class)($world->deploy->user, $world->deploy->organization->id, 'cli', ['*'])->plainTextToken);
+    $file = fn (string $php) => "version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"{$php}\"\nenvironments:\n  production: { branch: main, servers: [{$server}] }\n";
+
+    $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file('8.3'), 'environment' => 'production'])->assertOk()
+        ->assertJsonPath('data.errors.0.code', 'value.unsupported')
+        ->assertJsonPath('data.errors.0.pointer', '/units/web/php')
+        ->assertJsonPath('data.errors.0.message', "PHP 8.3 is not installed on {$server} (install it in Servers → {$server} → PHP).");
+    $this->postJson("/api/v1/projects/{$environment->project_id}/config/plan", ['file' => $file('8.3'), 'environment' => 'production'])->assertStatus(422);
+
+    $this->postJson("/api/v1/projects/{$environment->project_id}/config/validate", ['file' => $file('8.4'), 'environment' => 'production'])->assertOk()->assertJsonPath('data.errors', []);
 });

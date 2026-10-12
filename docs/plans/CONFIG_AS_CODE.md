@@ -1345,6 +1345,11 @@ Found testing v0.11.0-rc.1 on a live install.
   workers the same way; an existing site keeps its framework unless the file sets one), and `falak init` now writes
   `framework: laravel` for a Laravel repository. A test validates every `testdata/init/*laravel*/expected.falak.yaml`
   (with production's servers added) on a new project, so init's output and the server's checks can't diverge again.
+- **A PHP version the server lacks failed only in phase A** ("PHP 8.3 is not installed on …", nothing deployed).
+  Stage 4 now runs SiteRules' server checks (`SiteRules::runtimeProblem`: PHP running and the version installed,
+  FrankenPHP, Docker, the agent's functions support) on a new unit's servers, and on an existing unit's servers when its
+  `php` changes: `value.unsupported` at `/units/<unit>/php` ("… (install it in Servers → <server> → PHP)"), so
+  validate and plan report it. `POST /api/v1/servers/{server}/php` installs a version without the dashboard.
 
 ## Release notes (draft): v0.11.0
 
