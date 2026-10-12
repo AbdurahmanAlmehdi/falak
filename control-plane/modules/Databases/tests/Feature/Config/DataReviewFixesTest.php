@@ -186,7 +186,7 @@ it('a rollback never creates a data resource', function () {
     $this->world->file($file(''));
     $this->world->push(config_sha('c'));
     $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
-    app(ApproveRun::class)($run, $this->world->deploy->user->id);
+    config_approve($run, $this->world->deploy->user->id);
     $this->world->settle();
     $volumes = Volume::query()->count();
 

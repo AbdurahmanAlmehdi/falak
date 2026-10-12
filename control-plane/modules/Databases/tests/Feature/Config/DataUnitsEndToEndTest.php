@@ -269,7 +269,7 @@ it('an approved run that drops a database unit detaches it and lists it as unman
     $world->push(config_sha('c'));
     $run = ConfigRun::query()->where('commit', config_sha('c'))->sole();
 
-    expect(app(ApproveRun::class)($run, $world->deploy->user->id))->toBe('approved');
+    expect(config_approve($run, $world->deploy->user->id))->toBe('approved');
     $world->settle();
 
     $cache = DatabaseInstance::query()->where('name', 'cache')->sole();

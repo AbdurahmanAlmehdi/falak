@@ -13,8 +13,8 @@ Route::middleware(['auth', 'org'])->group(function () use ($ulid) {
     Route::post('projects/{project}/settings/config/apply', [ConfigController::class, 'apply'])->where('project', $ulid)->middleware('throttle:10,1')->name('config.apply');
     Route::get('config/runs/{run}', [ConfigController::class, 'run'])->where('run', $ulid)->name('config.runs.show');
     Route::post('config/runs/{run}/cancel', [ConfigController::class, 'cancel'])->where('run', $ulid)->name('config.runs.cancel');
-    Route::post('config/runs/{run}/approve', [ConfigController::class, 'approve'])->where('run', $ulid)->name('config.runs.approve');
-    Route::post('config/runs/{run}/reject', [ConfigController::class, 'reject'])->where('run', $ulid)->name('config.runs.reject');
+    Route::post('config/runs/{run}/approve', [ConfigController::class, 'approve'])->where('run', $ulid)->middleware('throttle:30,1')->name('config.runs.approve');
+    Route::post('config/runs/{run}/reject', [ConfigController::class, 'reject'])->where('run', $ulid)->middleware('throttle:30,1')->name('config.runs.reject');
     Route::get('projects/{project}/settings/config/drift', [DriftApiController::class, 'show'])->where('project', $ulid)->name('config.drift.show');
     Route::post('projects/{project}/settings/config/drift', [DriftApiController::class, 'check'])->where('project', $ulid)->middleware('throttle:10,1')->name('config.drift.check');
     Route::get('projects/{project}/settings/config/unmanaged', [UnmanagedController::class, 'index'])->where('project', $ulid)->name('config.unmanaged.index');

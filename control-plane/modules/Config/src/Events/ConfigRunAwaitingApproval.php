@@ -8,7 +8,7 @@ use Falak\Alerting\Contracts\Severity;
 use Illuminate\Foundation\Events\Dispatchable;
 
 /**
- * A config run waits for an approval (alert type `config.run.awaiting_approval`, once per run).
+ * A config run waits for an approval (alert type `config.run.awaiting_approval`, each time the run starts waiting).
  */
 final class ConfigRunAwaitingApproval implements Alertable
 {
@@ -24,11 +24,12 @@ final class ConfigRunAwaitingApproval implements Alertable
         public string $url,
         public string $rules = '',
         public string $error = '',
+        public string $planHash = '',
     ) {}
 
     public function toAlert(): AlertData
     {
         return new AlertData($this->organizationId, self::TYPE, Severity::Warning, "falak.yaml for {$this->environment} waits for an approval", "Its plan has risky changes: {$this->rules}.", $this->url,
-            dedupKey: "config-run:{$this->runId}:".self::TYPE, context: ['project_id' => $this->projectId, 'run_id' => $this->runId, 'environment' => $this->environment]);
+            dedupKey: "config-run:{$this->runId}:".self::TYPE.":{$this->planHash}", context: ['project_id' => $this->projectId, 'run_id' => $this->runId, 'environment' => $this->environment]);
     }
 }

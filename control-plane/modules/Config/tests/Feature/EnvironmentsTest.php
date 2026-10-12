@@ -72,7 +72,7 @@ it('flags production only through an approval; a reserved or taken name fails th
         ->and(collect($run->plan['changes'])->firstWhere('path', '/environments/eu/production'))->toMatchArray(['op' => 'update', 'before' => false, 'after' => true, 'rule' => 'environment.production'])
         ->and($eu->is_production)->toBeFalse();
 
-    app(ApproveRun::class)($run, $world->deploy->user->id);
+    config_approve($run, $world->deploy->user->id);
 
     expect($eu->refresh()->is_production)->toBeTrue()
         ->and(ConfigOwnership::query()->where('resource_type', 'environment')->where('resource_id', $eu->id)->pluck('path')->all())->toBe(['/production']);
@@ -208,7 +208,7 @@ it('cancels a waiting run of an environment the file releases', function () {
     $world->push(config_sha('e'), 'develop');
 
     expect($pending->refresh()->status)->toBe(RunStatus::Cancelled)
-        ->and(app(ApproveRun::class)($pending->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING);
+        ->and(config_approve($pending->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING);
 });
 
 it('creates an environment once under concurrent pushes, and names a bad key\'s problem', function () {

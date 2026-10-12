@@ -1,5 +1,8 @@
 <?php
 
+use Falak\Config\Application\Actions\ApproveRun;
+use Falak\Config\Application\Runs\RiskSet;
+use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Identity\Contracts\Role;
 use Falak\Projects\Application\Actions\LinkService;
@@ -83,4 +86,17 @@ function config_world(array $site = [], int $servers = 1, bool $experimental = t
 function config_sha(string $char): string
 {
     return str_repeat($char, 40);
+}
+
+/** Approve a run as shown now (its stored plan's hash). */
+function config_approve(ConfigRun $run, string $userId, ?string $comment = null): string
+{
+    return app(ApproveRun::class)($run, $userId, config_plan_hash($run), $comment);
+}
+
+function config_plan_hash(ConfigRun|string $run): string
+{
+    $run = is_string($run) ? ConfigRun::query()->findOrFail($run) : $run->refresh();
+
+    return RiskSet::hash((array) ($run->plan['changes'] ?? []));
 }

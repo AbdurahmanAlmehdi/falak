@@ -141,7 +141,9 @@ final class RunEngine
      */
     private function applyLocked(ConfigRun $run, array $commitInfo): ConfigRun
     {
-        if ($run->status->isTerminal()) {
+        // [decision] Only a run still planning applies (a new run, or an approval that claimed it): one already
+        // applying, waiting or finished is left alone, so a repeated or racing call never applies twice.
+        if ($run->status !== RunStatus::Planning) {
             return $run;
         }
 
@@ -164,7 +166,7 @@ final class RunEngine
 
         $deployList = (array) ($run->plan['deploy'] ?? []);
 
-        if ($plan->changes->isRisky() && ($run->approved_at === null || self::riskyBeyond($plan, (array) $run->approved_risky) !== [])) {
+        if ($plan->changes->isRisky() && ($run->approved_at === null || RiskSet::beyond($plan->changes->changes, (array) $run->approved_risky) !== [])) {
             // Not approved, or the plan gained risky changes the approver didn't see: it waits (again).
             $run->forceFill(['plan' => EnvMask::plan([...$plan->toArray(), 'deploy' => $deployList])])->save();
 
@@ -424,17 +426,24 @@ final class RunEngine
      */
     private function awaitApproval(ConfigRun $run, Plan $plan, ?string $message, bool $reset = false): ConfigRun
     {
-        $first = $run->status !== RunStatus::AwaitingApproval && $run->approval_expires_at === null;
+        $announce = $run->status !== RunStatus::AwaitingApproval;
         $run->forceFill([
             'status' => RunStatus::AwaitingApproval,
             'approval_expires_at' => $run->approval_expires_at ?? now()->addDays(max(1, (int) config('config_as_code.approval_days', 7))),
             ...($reset ? ['approved_by' => null, 'approved_at' => null, 'approved_risky' => null] : []),
         ])->save();
 
-        if ($first) {
+        // [decision] One run waits per environment: the older waiting ones are superseded.
+        ConfigRun::query()->where('environment_id', $run->environment_id)->where('id', '<', $run->id)->where('status', RunStatus::AwaitingApproval)
+            ->update(['status' => RunStatus::Cancelled->value, 'cancel_reason' => 'superseded', 'error' => "Superseded by a newer run ({$run->id}).",
+                'finished_at' => now(), 'updated_at' => now()]);
+
+        if ($announce) {
+            // Every time a run starts waiting (a run sent back to waiting too): its alert key carries the plan hash.
             $rules = implode(', ', array_unique(array_map(fn ($c) => (string) $c->rule, $plan->changes->risky())));
-            DB::afterCommit(function () use ($run, $rules, $message) {
-                ConfigRunAwaitingApproval::dispatch($run->organization_id, $run->project_id, $run->id, $run->environment, Presenters::run($run)['url'], $rules);
+            $hash = RiskSet::hash($plan->changes->changes);
+            DB::afterCommit(function () use ($run, $rules, $message, $hash) {
+                ConfigRunAwaitingApproval::dispatch($run->organization_id, $run->project_id, $run->id, $run->environment, Presenters::run($run)['url'], $rules, '', $hash);
 
                 if ($run->trigger === RunTrigger::Push) {
                     $this->notice->post($run, $message);
@@ -443,19 +452,6 @@ final class RunEngine
         }
 
         return $run;
-    }
-
-    /**
-     * Risky changes of a plan an approval didn't cover (by path and rule).
-     *
-     * @param  list<array{path: string, rule: ?string}>  $approved
-     * @return list<Change>
-     */
-    public static function riskyBeyond(Plan $plan, array $approved): array
-    {
-        $seen = array_flip(array_map(fn (array $a) => $a['path']."\0".($a['rule'] ?? ''), $approved));
-
-        return array_values(array_filter($plan->changes->risky(), fn (Change $c) => ! isset($seen[$c->path."\0".($c->rule ?? '')])));
     }
 
     private static function message(Throwable $e): string

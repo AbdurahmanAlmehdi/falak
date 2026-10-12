@@ -129,8 +129,8 @@ final class ConfigController extends Controller
     public function approve(Request $request, string $run, ApproveRun $approve): JsonResponse
     {
         $model = $this->run($request->user(), $run, ConfigPolicy::APPROVE);
-        $input = $request->validate(['comment' => ['nullable', 'string', 'max:2000']]);
-        $outcome = $approve($model, (string) $request->user()?->getAuthIdentifier(), $input['comment'] ?? null);
+        $input = $request->validate(['plan_hash' => ['required', 'string', 'size:64'], 'comment' => ['nullable', 'string', 'max:2000']]);
+        $outcome = $approve($model, (string) $request->user()?->getAuthIdentifier(), $input['plan_hash'], $input['comment'] ?? null);
 
         if ($outcome === ApproveRun::BLOCKED) {
             abort(403, (string) ApproveRun::blockedReason($model, (string) $request->user()?->getAuthIdentifier()));

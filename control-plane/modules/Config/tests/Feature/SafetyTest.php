@@ -105,7 +105,7 @@ it('approving re-plans: a superseded run is refused, a disabled source cancels t
     $world->push(config_sha('c'));
     $world->settle();
 
-    expect(app(ApproveRun::class)($waiting->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING)
+    expect(config_approve($waiting->refresh(), $world->deploy->user->id))->toBe(ApproveRun::NOT_WAITING)
         ->and($waiting->status)->toBe(RunStatus::Cancelled);
 
     $world->file($risky);
@@ -113,7 +113,7 @@ it('approving re-plans: a superseded run is refused, a disabled source cancels t
     $next = ConfigRun::query()->where('commit', config_sha('d'))->sole();
     $world->source->forceFill(['enabled' => false])->save();
 
-    expect(app(ApproveRun::class)($next, $world->deploy->user->id))->toBe(ApproveRun::APPROVED)
+    expect(config_approve($next, $world->deploy->user->id))->toBe(ApproveRun::APPROVED)
         ->and($next->refresh()->status)->toBe(RunStatus::Cancelled)
         ->and(Deployment::query()->where('commit', config_sha('d'))->count())->toBe(0);
 });

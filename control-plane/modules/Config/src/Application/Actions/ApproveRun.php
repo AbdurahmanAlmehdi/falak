@@ -2,11 +2,11 @@
 
 namespace Falak\Config\Application\Actions;
 
+use Falak\Config\Application\Runs\RiskSet;
 use Falak\Config\Application\Runs\RunEngine;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Approve a run waiting for an approval. The approval covers the risky changes of the plan the approver saw; the run
@@ -37,35 +37,56 @@ final class ApproveRun
     }
 
     /**
+     * Approve the plan the approver was shown ($planHash, the run's `approval.plan_hash`). The claim is one conditional
+     * update (awaiting_approval → planning), so two approvals, an expiry or a newer run can't both win.
+     *
      * @return self::APPROVED|self::NOT_WAITING|self::BLOCKED|self::PLAN_CHANGED
      */
-    public function __invoke(ConfigRun $run, string $userId, ?string $comment = null): string
+    public function __invoke(ConfigRun $run, string $userId, string $planHash, ?string $comment = null): string
     {
         if (self::blockedReason($run, $userId) !== null) {
             return self::BLOCKED;
         }
 
-        $claimed = DB::transaction(function () use ($run, $userId, $comment) {
-            $locked = ConfigRun::query()->lockForUpdate()->find($run->id);
+        $run->refresh();
 
-            if ($locked === null || $locked->status !== RunStatus::AwaitingApproval) {
-                return false;
-            }
+        if ($run->status !== RunStatus::AwaitingApproval) {
+            return self::NOT_WAITING;
+        }
 
-            if ($locked->approval_expires_at !== null && $locked->approval_expires_at->isPast()) {
-                $locked->forceFill(['status' => RunStatus::Cancelled, 'cancel_reason' => 'expired', 'error' => 'The approval expired.', 'finished_at' => now()])->save();
+        if ($run->approval_expires_at !== null && $run->approval_expires_at->isPast()) {
+            ConfigRun::query()->whereKey($run->id)->where('status', RunStatus::AwaitingApproval)->update([
+                'status' => RunStatus::Cancelled->value, 'cancel_reason' => 'expired', 'error' => 'The approval expired.', 'finished_at' => now(), 'updated_at' => now(),
+            ]);
 
-                return false;
-            }
+            return self::NOT_WAITING;
+        }
 
-            $risky = array_values(array_map(fn (array $c) => ['path' => (string) $c['path'], 'rule' => $c['rule'] ?? null],
-                array_filter((array) ($locked->plan['changes'] ?? []), fn (array $c) => (bool) ($c['risky'] ?? false))));
-            $locked->forceFill(['approved_by' => $userId, 'approved_at' => now(), 'approved_risky' => $risky, 'approval_comment' => $comment])->save();
+        // [decision] Nothing older than the newest run of the environment is approvable.
+        if (ConfigRun::query()->where('environment_id', $run->environment_id)->where('id', '>', $run->id)->exists()) {
+            ConfigRun::query()->whereKey($run->id)->where('status', RunStatus::AwaitingApproval)->update([
+                'status' => RunStatus::Cancelled->value, 'cancel_reason' => 'superseded', 'error' => 'Superseded by a newer run.', 'finished_at' => now(), 'updated_at' => now(),
+            ]);
 
-            return true;
-        });
+            return self::NOT_WAITING;
+        }
 
-        if (! $claimed) {
+        $changes = (array) ($run->plan['changes'] ?? []);
+
+        if (! hash_equals(RiskSet::hash($changes), $planHash)) {
+            return self::PLAN_CHANGED;
+        }
+
+        $claimed = ConfigRun::query()->whereKey($run->id)->where('status', RunStatus::AwaitingApproval)->where('updated_at', $run->getRawOriginal('updated_at'))->update([
+            'status' => RunStatus::Planning->value,
+            'approved_by' => $userId,
+            'approved_at' => now(),
+            'approved_risky' => json_encode(RiskSet::of($changes)),
+            'approval_comment' => $comment,
+            'updated_at' => now(),
+        ]);
+
+        if ($claimed !== 1) {
             return self::NOT_WAITING;
         }
 

@@ -5,7 +5,7 @@ import { useState } from 'react';
 /** The `approval` block of a config run (docs/API.md, Config as code). */
 export interface ConfigApproval {
     required: boolean;
-    risky: { path: string; rule: string | null; reason: string | null }[];
+    risky: { op: string; path: string; rule: string | null; reason: string | null }[];
     expires_at: string | null;
     approved_by: string | null;
     approved_at: string | null;
@@ -14,6 +14,8 @@ export interface ConfigApproval {
     comment: string | null;
     can_approve: boolean;
     blocked_reason: string | null;
+    /** The hash of the risky changes shown: an approval of another plan is refused. */
+    plan_hash: string;
 }
 
 /**
@@ -40,7 +42,7 @@ export function RunApproval({
         setBusy(action);
         setError(null);
         try {
-            await requestJson(`/config/runs/${runId}/${action}`, 'POST', { comment: comment || null });
+            await requestJson(`/config/runs/${runId}/${action}`, 'POST', { comment: comment || null, plan_hash: approval.plan_hash });
             setComment('');
         } catch (failure) {
             setError(failure instanceof HttpError ? (Object.values(failure.errors)[0] ?? failure.message) : 'The request failed.');
@@ -74,12 +76,12 @@ export function RunApproval({
             </div>
             <ul className="grid gap-1 text-sm">
                 {approval.risky.map((item) => (
-                    <li key={`${item.path}:${item.rule}`} className="grid gap-0.5">
+                    <li key={`${item.op}:${item.path}:${item.rule}`} className="grid gap-0.5">
                         <span className="font-mono text-xs">
                             <Tag tone="warning" className="mr-1">
                                 {item.rule ?? 'risky'}
                             </Tag>
-                            {item.path}
+                            {item.op} {item.path}
                         </span>
                         {item.reason && <span className="text-fg-muted">{item.reason}</span>}
                     </li>

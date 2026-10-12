@@ -49,7 +49,7 @@ final class Applier
      * Phase B for one unit: planned again against today's state (the release just went live), so a retried or late
      * activation applies what is still needed.
      *
-     * Risky changes are applied only when $approved covers them (path and rule); the others are skipped and returned
+     * Risky changes are applied only when $approved covers them (op, path and rule); the others are skipped and returned
      * (a rollback passes none: it never applies a risky change).
      *
      * @param  array<string, mixed>  $resolved
@@ -59,8 +59,7 @@ final class Applier
     public function phaseB(ConfigScope $scope, array $resolved, ApplyContext $ctx, string $unit, array $approved = []): array
     {
         $plan = $this->planner->plan($scope, $resolved, $unit)->changes;
-        $covered = array_flip(array_map(fn (array $a) => $a['path']."\0".($a['rule'] ?? ''), $approved));
-        $skipped = array_values(array_filter($plan->changes, fn (Change $c) => $c->risky && ! isset($covered[$c->path."\0".($c->rule ?? '')])));
+        $skipped = RiskSet::beyond($plan->changes, $approved);
         $plan = new ChangeSet(array_values(array_filter($plan->changes, fn (Change $c) => ! in_array($c, $skipped, true))));
 
         foreach ($this->reconcilers->forPhase(ApplyPhase::WithRelease) as $reconciler) {

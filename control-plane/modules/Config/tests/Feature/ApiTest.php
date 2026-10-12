@@ -110,7 +110,7 @@ it('lists, shows and cancels runs; approve answers 409 unless the run awaits app
     $this->getJson("/api/v1/config/runs/{$run->id}")->assertOk()->assertJsonPath('data.status', 'awaiting_approval')->assertJsonPath('data.error_code', null);
     $this->postJson("/api/v1/config/runs/{$run->id}/cancel")->assertOk()->assertJsonPath('data.status', 'cancelled');
     $this->postJson("/api/v1/config/runs/{$run->id}/cancel")->assertStatus(409);
-    $this->postJson("/api/v1/config/runs/{$run->id}/approve")->assertStatus(409)->assertJsonPath('message', 'This run is not awaiting approval.');
+    $this->postJson("/api/v1/config/runs/{$run->id}/approve", ['plan_hash' => config_plan_hash($run->id)])->assertStatus(409)->assertJsonPath('message', 'This run is not awaiting approval.');
 });
 
 it('creating a run with an invalid file answers 422 and keeps the failed run', function () {

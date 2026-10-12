@@ -3,6 +3,7 @@
 namespace Falak\Config\Http;
 
 use Falak\Config\Application\Actions\ApproveRun;
+use Falak\Config\Application\Runs\RiskSet;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
@@ -104,7 +105,7 @@ final class Presenters
      */
     public static function approval(ConfigRun $run, ?Authenticatable $user): ?array
     {
-        $risky = array_values(array_map(fn (array $c) => ['path' => $c['path'], 'rule' => $c['rule'] ?? null, 'reason' => $c['reason'] ?? null],
+        $risky = array_values(array_map(fn (array $c) => ['op' => $c['op'], 'path' => $c['path'], 'rule' => $c['rule'] ?? null, 'reason' => $c['reason'] ?? null],
             array_filter((array) ($run->plan['changes'] ?? []), fn (array $c) => (bool) ($c['risky'] ?? false))));
 
         if ($run->approval_expires_at === null && $run->approved_at === null && $run->rejected_at === null) {
@@ -133,6 +134,7 @@ final class Presenters
             'comment' => $run->approval_comment,
             'can_approve' => $blocked === null,
             'blocked_reason' => $blocked,
+            'plan_hash' => RiskSet::hash((array) ($run->plan['changes'] ?? [])),
         ];
     }
 

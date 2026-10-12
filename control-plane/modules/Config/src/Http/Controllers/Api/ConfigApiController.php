@@ -176,9 +176,9 @@ final class ConfigApiController extends Controller
     public function approve(Request $request, string $run, ApproveRun $approve): JsonResponse
     {
         $model = $this->run($request->user(), $run, ConfigPolicy::APPROVE);
-        $input = $request->validate(['comment' => ['nullable', 'string', 'max:2000']]);
+        $input = $request->validate(['plan_hash' => ['required', 'string', 'size:64'], 'comment' => ['nullable', 'string', 'max:2000']]);
 
-        return match ($approve($model, (string) $request->user()?->getAuthIdentifier(), $input['comment'] ?? null)) {
+        return match ($approve($model, (string) $request->user()?->getAuthIdentifier(), $input['plan_hash'], $input['comment'] ?? null)) {
             ApproveRun::BLOCKED => response()->json(['message' => ApproveRun::blockedReason($model, (string) $request->user()?->getAuthIdentifier())], 403),
             ApproveRun::NOT_WAITING => response()->json(['message' => 'This run is not awaiting approval.'], 409),
             ApproveRun::PLAN_CHANGED => response()->json(['message' => 'The plan changed since it was shown; review it again.', 'data' => Presenters::run($model->refresh(), user: $request->user())], 409),

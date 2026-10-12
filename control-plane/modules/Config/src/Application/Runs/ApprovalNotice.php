@@ -12,7 +12,7 @@ use Throwable;
 
 /**
  * A push run waiting for an approval tells the pull request it came from: Falak's plan comment of that pull request
- * (found by `#<number>` in the commit message — GitHub's merge and squash titles — or by its head sha) gets "Waiting
+ * (found by the merge commit's subject — "Merge pull request #N" or a squash's trailing "(#N)" — or by its head sha) gets "Waiting
  * for an approval" with the run's link.
  */
 final class ApprovalNotice
@@ -29,8 +29,12 @@ final class ApprovalNotice
 
         $numbers = [];
 
-        if ($message !== null && preg_match_all('/#(\d+)\b/', $message, $m)) {
-            $numbers = array_map('intval', $m[1]);
+        // Only the merge commit's own reference: "Merge pull request #N …" (a merge) or "… (#N)" ending the subject (a
+        // squash), never any #N mentioned in the message.
+        $subject = strtok((string) $message, "\n") ?: '';
+
+        if (preg_match('/^Merge pull request #(\d+)\b/', $subject, $m) || preg_match('/\(#(\d+)\)\s*$/', $subject, $m)) {
+            $numbers = [(int) $m[1]];
         }
 
         $records = ConfigPullRequest::query()->where('project_id', $run->project_id)->whereNotNull('comment_id')
