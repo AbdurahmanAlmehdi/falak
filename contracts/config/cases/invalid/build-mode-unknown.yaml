@@ -1,0 +1,7 @@
+# Build modes: native, docker, on-server.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    build: { mode: nixpacks }

@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
+	"github.com/OthmanHaba/falak/agent/internal/redact"
 )
 
 // SwapPayload is deploy.container.swap.
@@ -217,7 +219,9 @@ func (s *Service) swap(ctx context.Context, p SwapPayload, st commands.Stream) (
 		s.removeSecrets(spec.Name)
 		return nil, err
 	}
-	if err := s.waitHealthy(ctx, p.port(target), h, st); err != nil {
+	if err := s.waitHealthy(ctx, id, p.port(target), h, st); err != nil {
+		// The container (and its env) is removed next: what it printed is the only clue to why it never got healthy.
+		s.reportContainer(ctx, id, st)
 		return fail(err)
 	}
 	up := "127.0.0.1:" + strconv.Itoa(p.port(target))
@@ -268,13 +272,17 @@ func (s *Service) healthy(ctx context.Context, port int, h HealthSpec) bool {
 	return resp.StatusCode == h.ExpectStatus
 }
 
-func (s *Service) waitHealthy(ctx context.Context, port int, h HealthSpec, st commands.Stream) error {
+func (s *Service) waitHealthy(ctx context.Context, id string, port int, h HealthSpec, st commands.Stream) error {
 	deadline := time.Now().Add(time.Duration(h.TimeoutS) * time.Second)
 	interval := time.Duration(h.IntervalMS) * time.Millisecond
 	for {
 		if s.healthy(ctx, port, h) {
 			fmt.Fprintf(st.Stdout(), "health check passed on :%d%s\n", port, h.Path)
 			return nil
+		}
+		// A container that stopped won't get healthy: say so now rather than at the deadline.
+		if c, ok, err := s.c.ContainerInspect(ctx, id); err == nil && ok && !c.State.Running {
+			return fmt.Errorf("the container stopped before the health check %s passed (%s)", h.Path, containerState(c))
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("health check %s on :%d did not return %d within %ds", h.Path, port, h.ExpectStatus, h.TimeoutS)
@@ -295,3 +303,90 @@ func (s *Service) setEdge(ctx context.Context, routeID, upstream string) error {
 	}
 	return s.opts.Upstreams.SetUpstreams(ctx, routeID, []string{upstream})
 }
+
+// What reportContainer streams: at most reportLines lines of at most reportLineMax bytes each.
+const (
+	reportLines   = 50
+	reportLineMax = 500
+)
+
+// reportContainer streams a failed container's state and the last lines it printed (stdout and stderr, with their
+// timestamps) into the command output, before the container is removed. Secret values are masked like any output.
+func (s *Service) reportContainer(ctx context.Context, id string, st commands.Stream) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	out := st.Stdout()
+	if c, ok, err := s.c.ContainerInspect(ctx, id); err == nil && ok {
+		fmt.Fprintf(out, "container state: %s\n", containerState(c))
+	}
+	var b limitedBuffer
+	b.max = reportLines * (reportLineMax + 64)
+	if err := s.c.ContainerLogTail(ctx, id, reportLines, &b); err != nil {
+		fmt.Fprintf(out, "container output: unavailable (%v)\n", err)
+		return
+	}
+	text := b.String()
+	if b.cut {
+		// The front was cut mid-line: start at the next whole line (a secret straddling the cut can't be masked).
+		_, text, _ = strings.Cut(text, "\n")
+	}
+	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if text == "" {
+		fmt.Fprintln(out, "container output: (none)")
+		return
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > reportLines {
+		lines = lines[len(lines)-reportLines:]
+	}
+	fmt.Fprintf(out, "container output (last %d lines):\n", len(lines))
+	secrets := redact.FromContext(ctx)
+	for _, l := range lines {
+		// Masked whole, then cut: a cut must not split a secret the masker would no longer recognize.
+		l = secrets.String(l)
+		if len(l) > reportLineMax {
+			l = strings.ToValidUTF8(l[:reportLineMax], "") + " …"
+		}
+		fmt.Fprintf(out, "  | %s\n", l)
+	}
+}
+
+// containerState is "running", or "exited with code N" plus "killed: out of memory" and the restart count.
+func containerState(c *Container) string {
+	state := "running"
+	if !c.State.Running {
+		state = fmt.Sprintf("%s with code %d", firstNonEmpty(c.State.Status, "exited"), c.State.ExitCode)
+	}
+	if c.State.OOMKilled {
+		state += ", killed: out of memory"
+	}
+	if c.RestartCount > 0 {
+		state += fmt.Sprintf(", restarted %d times", c.RestartCount)
+	}
+	return state
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// limitedBuffer keeps the last max bytes written to it; cut says the front was dropped.
+type limitedBuffer struct {
+	buf []byte
+	max int
+	cut bool
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	if len(l.buf) > l.max {
+		l.buf = l.buf[len(l.buf)-l.max:]
+		l.cut = true
+	}
+	return len(p), nil
+}
+
+func (l *limitedBuffer) String() string { return string(l.buf) }

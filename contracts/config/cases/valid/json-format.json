@@ -1,0 +1,13 @@
+{
+  "$schema": "https://falak.sh/schema/v1.json",
+  "version": 1,
+  "units": {
+    "web": {
+      "type": "app",
+      "runtime": "deno",
+      "env": { "PORT": 8000, "DEBUG": false, "TOKEN": "${{ secrets.TOKEN }}" },
+      "domains": ["deno.example.com"]
+    }
+  },
+  "environments": { "production": { "branch": "main", "servers": ["web-1"] } }
+}

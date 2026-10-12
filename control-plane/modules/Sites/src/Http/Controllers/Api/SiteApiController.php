@@ -18,6 +18,7 @@ use Falak\Sites\Contracts\SiteResourceExtension;
 use Falak\Sites\Domain\Dotenv;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
 use Falak\Sites\Domain\Models\Site;
+use Falak\Sites\Http\Controllers\GuardsManagedFields;
 use Falak\Sites\Http\Controllers\PresentsSites;
 use Falak\Sites\Http\Requests\StoreSiteRequest;
 use Falak\Volumes\Contracts\VolumeMounts;
@@ -35,6 +36,7 @@ use InvalidArgumentException;
  */
 final class SiteApiController extends Controller
 {
+    use GuardsManagedFields;
     use PresentsSites;
 
     public function __construct(
@@ -125,6 +127,7 @@ final class SiteApiController extends Controller
 
         /** @var ?EnvironmentVersion $current */
         $current = $model->latestEnvironment;
+        $this->guardVariables($model, $current !== null ? array_map('strval', $current->variables) : [], $variables, null, null, 'content');
         $version = $save($model, $variables, $current->exposed ?? [], (string) $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => [
@@ -148,6 +151,13 @@ final class SiteApiController extends Controller
             'maintenance' => ['sometimes', 'boolean'],
             'octane_server' => ['nullable', Rule::enum(OctaneServer::class)],
         ]);
+
+        $current = $model->laravel;
+        $octane = fn (bool $on, ?string $server) => $on ? ($server ?? 'default') : false;
+        $this->managedFields($model)->guard(['scheduler' => '/laravel/scheduler', 'horizon' => '/laravel/horizon', 'octane' => '/laravel/octane'], [
+            ...array_intersect_key($data, ['scheduler' => true, 'horizon' => true]),
+            ...(array_key_exists('octane', $data) ? ['octane' => $octane((bool) $data['octane'], $data['octane'] ? ($data['octane_server'] ?? $current->octaneServer?->value) : null)] : []),
+        ], ['scheduler' => $current->scheduler, 'horizon' => $current->horizon, 'octane' => $octane($current->octane, $current->octaneServer?->value)]);
 
         $update($model, LaravelSettings::fromArray([...$model->laravel->toArray(), ...$data]), (string) $request->user()?->getAuthIdentifier());
 

@@ -1,0 +1,163 @@
+{
+  "$comment": "Risky changes of a config plan (docs/plans/CONFIG_AS_CODE.md, \"Phase 0 contract\": Risky changes). A plan with any change matching a rule waits for an approval (config.approve). A change matches a rule when its op is in `ops`, its path matches one of `paths` (JSON Pointers into the resolved file; * matches one reference token), the unit's type is in `unit_types` (when given), the environment is a production one (when `production_only`), and `condition` holds (when given). Conditions: became_true (before is not true, after is true), became_false (before is true, after is not), decrease (after < before; sizes compared in bytes, durations in seconds), tightens (a limit set where there was none, or a lower one), removes_items (after, a list, lacks items before had), has_volumes (the removed unit had volumes). The first matching rule sets Change.rule and Change.reason.",
+  "version": 1,
+  "rules": [
+    {
+      "id": "database.version",
+      "paths": ["/units/*/version"],
+      "ops": ["update"],
+      "unit_types": ["database", "redis"],
+      "reason": "A database version is a major version: changing it runs a major upgrade."
+    },
+    {
+      "id": "database.public",
+      "paths": ["/units/*/public"],
+      "ops": ["create", "update"],
+      "unit_types": ["database", "redis"],
+      "condition": "became_true",
+      "reason": "Making a database public publishes its port to the internet."
+    },
+    {
+      "id": "database.backups_removed",
+      "paths": ["/units/*/backups"],
+      "ops": ["delete", "detach"],
+      "unit_types": ["database", "redis"],
+      "reason": "Removing a database's backup schedule stops its backups."
+    },
+    {
+      "id": "database.pitr_off",
+      "paths": ["/units/*/pitr/enabled"],
+      "ops": ["create", "update"],
+      "unit_types": ["database"],
+      "condition": "became_false",
+      "reason": "Turning point-in-time recovery off drops the recovery window."
+    },
+    {
+      "id": "database.pitr_removed",
+      "paths": ["/units/*/pitr"],
+      "ops": ["delete", "detach"],
+      "unit_types": ["database"],
+      "reason": "Removing point-in-time recovery drops the recovery window."
+    },
+    {
+      "id": "database.pitr_window",
+      "paths": ["/units/*/pitr/window_days"],
+      "ops": ["update"],
+      "unit_types": ["database"],
+      "condition": "decrease",
+      "reason": "A shorter recovery window deletes older recovery points."
+    },
+    {
+      "id": "database.backups_disabled",
+      "paths": ["/units/*/backups/enabled"],
+      "ops": ["create", "update"],
+      "unit_types": ["database", "redis"],
+      "condition": "became_false",
+      "reason": "Disabling a database's backup schedule stops its backups."
+    },
+    {
+      "id": "database.database_removed",
+      "paths": ["/units/*/databases/*"],
+      "ops": ["delete"],
+      "unit_types": ["database"],
+      "reason": "Deleting a database drops its data."
+    },
+    {
+      "id": "volume.backups_removed",
+      "paths": ["/units/*/volumes/*/backups"],
+      "ops": ["delete", "detach"],
+      "reason": "Removing a volume's backup schedule stops its backups."
+    },
+    {
+      "id": "volume.backups_disabled",
+      "paths": ["/units/*/volumes/*/backups/enabled"],
+      "ops": ["create", "update"],
+      "condition": "became_false",
+      "reason": "Disabling a volume's backup schedule stops its backups."
+    },
+    {
+      "id": "database.backups_retention",
+      "paths": ["/units/*/backups/keep", "/units/*/backups/keep_days"],
+      "ops": ["create", "update"],
+      "unit_types": ["database", "redis"],
+      "condition": "tightens",
+      "reason": "Keeping fewer backups (or for fewer days) deletes older ones."
+    },
+    {
+      "id": "database.backups_databases_removed",
+      "paths": ["/units/*/backups/databases"],
+      "ops": ["create", "update"],
+      "unit_types": ["database"],
+      "condition": "removes_items",
+      "reason": "A database dropped from the backup schedule is no longer backed up."
+    },
+    {
+      "id": "volume.backups_retention",
+      "paths": ["/units/*/volumes/*/backups/keep", "/units/*/volumes/*/backups/keep_days"],
+      "ops": ["create", "update"],
+      "condition": "tightens",
+      "reason": "Keeping fewer backups (or for fewer days) deletes older ones."
+    },
+    {
+      "id": "production.drill_server",
+      "paths": ["/units/*/backups/drill_server", "/units/*/volumes/*/backups/drill_server"],
+      "ops": ["create", "update"],
+      "production_only": true,
+      "reason": "Restore drills put a copy of production data on the drill server."
+    },
+    {
+      "id": "volume.delete",
+      "paths": ["/units/*/volumes/*"],
+      "ops": ["delete", "detach"],
+      "reason": "A volume removed from the file holds data."
+    },
+    {
+      "id": "unit.remove_with_data",
+      "paths": ["/units/*"],
+      "ops": ["delete", "detach"],
+      "unit_types": ["database", "redis"],
+      "reason": "The removed unit holds data."
+    },
+    {
+      "id": "unit.delete",
+      "paths": ["/units/*"],
+      "ops": ["delete"],
+      "unit_types": ["app", "compose", "function"],
+      "reason": "Deleting a unit deletes its service (a run deletes only with allow_destroy, else it detaches)."
+    },
+    {
+      "id": "unit.remove_with_volumes",
+      "paths": ["/units/*"],
+      "ops": ["delete", "detach"],
+      "condition": "has_volumes",
+      "reason": "The removed unit has volumes holding data."
+    },
+    {
+      "id": "production.strategy",
+      "paths": ["/units/*/deploy/strategy"],
+      "ops": ["create", "update", "delete"],
+      "production_only": true,
+      "reason": "Changing a production deploy strategy changes how releases go live."
+    },
+    {
+      "id": "production.servers",
+      "paths": ["/environments/*/servers", "/units/*/servers"],
+      "ops": ["create", "update", "delete"],
+      "production_only": true,
+      "reason": "Changing the servers of a production environment moves where it runs."
+    },
+    {
+      "id": "production.domain_removed",
+      "paths": ["/units/*/domains/*", "/units/*/services/*/domains/*"],
+      "ops": ["delete", "detach"],
+      "production_only": true,
+      "reason": "Removing a production domain takes it offline."
+    },
+    {
+      "id": "environment.production",
+      "paths": ["/environments/*/production"],
+      "ops": ["create", "update", "delete"],
+      "reason": "Changing whether an environment is production changes which changes need approval."
+    }
+  ]
+}

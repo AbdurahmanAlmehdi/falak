@@ -15,6 +15,7 @@ import {
 import { Head, Link, router, useForm } from '@inertiajs/react';
 import { ArrowLeft, Copy, ExternalLink, HardDrive, KeyRound, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
+import { ConfigSection } from '../components/config-section';
 import { NewEnvironmentDialog } from '../components/new-environment-dialog';
 import { canvasUrl, type ProjectAbilities, type ProjectDetail, type ProjectEnvironment } from '../types';
 
@@ -230,6 +231,8 @@ export default function Settings({ project, can }: Props) {
                         ]}
                     />
                 </Section>
+
+                <ConfigSection projectId={project.id} />
 
                 <Section
                     id="secrets"

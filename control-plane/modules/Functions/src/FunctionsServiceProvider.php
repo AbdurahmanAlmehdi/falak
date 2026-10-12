@@ -2,8 +2,11 @@
 
 namespace Falak\Functions;
 
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Deployments\Contracts\FunctionSources;
 use Falak\Functions\Application\Listeners\ForgetDeletedFunction;
+use Falak\Functions\Infrastructure\Config\FunctionSchedulesReconciler;
+use Falak\Functions\Infrastructure\Config\FunctionsReconciler;
 use Falak\Functions\Infrastructure\FunctionsCapacity;
 use Falak\Functions\Infrastructure\FunctionScheduleSources;
 use Falak\Functions\Infrastructure\StoredFunctionSources;
@@ -54,6 +57,8 @@ class FunctionsServiceProvider extends ModuleServiceProvider
         $registry->register(self::DEPLOY, [Role::Admin, Role::Developer], 'Deploy function versions, roll back and change scaling', 'functions');
 
         Event::listen(SiteDeleted::class, ForgetDeletedFunction::class);
+        // falak.yaml's function units (Config, docs/plans/CONFIG_AS_CODE.md): settings and code (phase A), schedules (B).
+        $this->app->tag([FunctionsReconciler::class, FunctionSchedulesReconciler::class], Reconcilable::TAG);
         $this->app->make(CapacitySources::class)->register(FunctionsCapacity::class);
 
         // Code is stored exactly as written: no trimmed lines or emptied files.

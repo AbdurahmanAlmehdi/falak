@@ -1,0 +1,4 @@
+# Quote versions: 17 is a number.
+version: 1
+units:
+  db: { type: database, engine: postgresql, version: 17 }

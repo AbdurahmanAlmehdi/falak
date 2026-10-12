@@ -1,0 +1,33 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  api:
+    type: app
+    root: apps/api
+    runtime: node # detected: express ^5.1.0 in package.json
+    node: "22" # detected: engines.node 22 in package.json
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      DATABASE_URL: ${{ db.DATABASE_URL }}
+      CORS_ORIGIN: https://acme.test
+      # JWT_SECRET: ${{ secrets.JWT_SECRET }} # empty in the example env file; uncomment if used
+
+  web:
+    type: app
+    root: apps/web
+    runtime: node # detected: next ^15.5.0 in package.json
+    node: "22" # detected: engines.node >=22 in package.json
+
+  db:
+    type: database
+    engine: postgresql # detected: DATABASE_URL in .env.example
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

@@ -7,12 +7,15 @@ import {
     Field,
     Input,
     KeyValue,
+    ManagedBadge,
     Section,
     Select,
     SkeletonRows,
     StatusBadge,
     Switch,
     Tag,
+    managedCovers,
+    pointer,
     toast,
 } from '@/components/falak';
 import { errorMessage, requestJson } from '@/lib/http';
@@ -239,6 +242,9 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
 
     if (!data || !draft) return <Loading error={error} />;
     const { options, settings } = data;
+    const managed = (path: string) => managedCovers(data.config, path);
+    const lock = (path: string) => !data.can.update || managed(path);
+    const badge = (path: string) => (managed(path) ? <ManagedBadge config={data.config} /> : undefined);
     const framework = options.frameworks.find((item) => item.value === settings.framework);
     const current = options.runtimes.find((item) => item.value === settings.runtime);
     const runtime = options.runtimes.find((item) => item.value === draft.runtime) ?? current ?? options.runtimes[0];
@@ -293,18 +299,18 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
             }
         >
             <form id="site-build" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-                <Field label="Runtime" error={errors.runtime}>
+                <Field label="Runtime" aside={badge('/runtime')} error={errors.runtime}>
                     <Select
                         value={draft.runtime}
-                        disabled={!data.can.update || runtimes.length < 2}
+                        disabled={lock('/runtime') || runtimes.length < 2}
                         onValueChange={(value) => set({ runtime: value })}
                         options={runtimes.map((item) => ({ value: item.value, label: item.label }))}
                     />
                 </Field>
-                <Field label="Build mode" error={errors.build_mode}>
+                <Field label="Build mode" aside={badge('/build/mode')} error={errors.build_mode}>
                     <Select
                         value={draft.build_mode}
-                        disabled={!data.can.update}
+                        disabled={lock('/build/mode')}
                         onValueChange={(value) => set({ build_mode: value })}
                         options={options.build_modes
                             .filter((mode) => runtime.build_modes.includes(mode.value))
@@ -312,10 +318,10 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                     />
                 </Field>
                 {runtime.is_php ? (
-                    <Field label="PHP version" error={errors.php_version}>
+                    <Field label="PHP version" aside={badge('/php')} error={errors.php_version}>
                         <Select
                             value={draft.php_version ?? undefined}
-                            disabled={!data.can.update}
+                            disabled={lock('/php')}
                             placeholder="Pick a version"
                             onValueChange={(value) => set({ php_version: value })}
                             options={options.php_versions.map((version) => ({ value: version, label: `PHP ${version}` }))}
@@ -323,10 +329,10 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                     </Field>
                 ) : (
                     !runtime.container && (
-                        <Field label="Node version" error={errors.node_version}>
+                        <Field label="Node version" aside={badge('/node')} error={errors.node_version}>
                             <Select
                                 value={draft.node_version ?? undefined}
-                                disabled={!data.can.update}
+                                disabled={lock('/node')}
                                 placeholder="Default"
                                 onValueChange={(value) => set({ node_version: value })}
                                 options={options.node_versions.map((version) => ({ value: version, label: `Node ${version}` }))}
@@ -335,11 +341,16 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                     )
                 )}
                 {(runtime.is_php || draft.runtime === 'static') && (
-                    <Field label="Web directory" error={errors.web_directory} hint={`Document root: ${settings.document_root}`}>
+                    <Field
+                        label="Web directory"
+                        aside={badge('/web_directory')}
+                        error={errors.web_directory}
+                        hint={`Document root: ${settings.document_root}`}
+                    >
                         <Input
                             mono
                             value={text('web_directory')}
-                            disabled={!data.can.update}
+                            disabled={lock('/web_directory')}
                             onChange={(event) => set({ web_directory: event.target.value })}
                         />
                     </Field>
@@ -347,6 +358,7 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                 {draft.runtime === 'docker' ? (
                     <Field
                         label="Container port"
+                        aside={badge('/port')}
                         error={errors.container_port}
                         hint={`The port the app listens on inside its container (also passed as PORT). Falak publishes it on 127.0.0.1:${settings.app_port ?? 'auto'}. Changing it redeploys the service.`}
                     >
@@ -354,7 +366,7 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                             mono
                             inputMode="numeric"
                             value={text('container_port')}
-                            disabled={!data.can.update}
+                            disabled={lock('/port')}
                             onChange={(event) =>
                                 set({ container_port: event.target.value === '' ? null : Number(event.target.value.replace(/\D/g, '')) })
                             }
@@ -377,19 +389,19 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                 )}
                 {draft.runtime === 'docker' && (
                     <>
-                        <Field label="Image" error={errors.docker_image}>
+                        <Field label="Image" aside={badge('/image')} error={errors.docker_image}>
                             <Input
                                 mono
                                 value={text('docker_image')}
-                                disabled={!data.can.update}
+                                disabled={lock('/image')}
                                 onChange={(event) => set({ docker_image: event.target.value })}
                             />
                         </Field>
-                        <Field label="Dockerfile" error={errors.dockerfile}>
+                        <Field label="Dockerfile" aside={badge('/build/dockerfile')} error={errors.dockerfile}>
                             <Input
                                 mono
                                 value={text('dockerfile')}
-                                disabled={!data.can.update}
+                                disabled={lock('/build/dockerfile')}
                                 onChange={(event) => set({ dockerfile: event.target.value })}
                             />
                         </Field>
@@ -401,6 +413,7 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                 {settings.repository && (
                     <Field
                         label="Root directory"
+                        aside={badge('/root')}
                         error={errors.root_directory}
                         hint="Repository subfolder the app lives in (monorepos). Empty = the repository root."
                     >
@@ -408,17 +421,22 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                             mono
                             placeholder="apps/api"
                             value={text('root_directory')}
-                            disabled={!data.can.update}
+                            disabled={lock('/root')}
                             onChange={(event) => set({ root_directory: event.target.value })}
                         />
                     </Field>
                 )}
-                <Field label="App health path" error={errors.health_check_path} hint="Default path of the deploy health check.">
+                <Field
+                    label="App health path"
+                    aside={badge('/health_path')}
+                    error={errors.health_check_path}
+                    hint="Default path of the deploy health check."
+                >
                     <Input
                         mono
                         placeholder="/up"
                         value={text('health_check_path')}
-                        disabled={!data.can.update}
+                        disabled={lock('/health_path')}
                         onChange={(event) => set({ health_check_path: event.target.value })}
                     />
                 </Field>
@@ -513,6 +531,7 @@ export function TestDomainSettings({ ctx }: ServiceTabProps) {
         <Section title="Test domain" description="A generated hostname to reach the site before its own domain points here.">
             <Field
                 inline
+                aside={managedCovers(data.config, '/test_domain') ? <ManagedBadge config={data.config} /> : undefined}
                 label={
                     <span>
                         Serve{' '}
@@ -522,7 +541,7 @@ export function TestDomainSettings({ ctx }: ServiceTabProps) {
             >
                 <Switch
                     checked={data.settings.test_domain_enabled}
-                    disabled={!data.can.update || saving}
+                    disabled={!data.can.update || saving || managedCovers(data.config, '/test_domain')}
                     onCheckedChange={(on) =>
                         void save('PATCH', `/sites/${data.site.id}`, { test_domain_enabled: on }, on ? 'Test domain enabled' : 'Test domain disabled')
                     }
@@ -545,6 +564,8 @@ export function ServersSettings({ ctx }: ServiceTabProps) {
     const [retrying, setRetrying] = useState<string | null>(null);
 
     if (!data || !value) return <Loading error={error} />;
+    const locked = managedCovers(data.config, '/servers');
+    const canEdit = data.can.update && !locked;
 
     const toggle = (id: string, on: boolean) => {
         const ids = on ? [...value.ids, id] : value.ids.filter((item) => item !== id);
@@ -567,9 +588,10 @@ export function ServersSettings({ ctx }: ServiceTabProps) {
     return (
         <Section
             title="Deploy targets"
+            aside={locked ? <ManagedBadge config={data.config} /> : undefined}
             description="Where the site deploys. New servers are prepared right away; removed servers keep their files. The leader runs migrations and the scheduler."
             footer={
-                data.can.update && (
+                canEdit && (
                     <>
                         <Button variant="ghost" disabled={!dirty || saving} onClick={reset}>
                             Reset
@@ -603,7 +625,7 @@ export function ServersSettings({ ctx }: ServiceTabProps) {
                             <Checkbox
                                 id={`target-${server.id}`}
                                 checked={selected}
-                                disabled={!data.can.update}
+                                disabled={!canEdit}
                                 onCheckedChange={(checked) => toggle(server.id, checked === true)}
                             />
                             <label htmlFor={`target-${server.id}`} className="grid min-w-0 flex-1 gap-0.5">
@@ -646,7 +668,7 @@ export function ServersSettings({ ctx }: ServiceTabProps) {
                                         type="radio"
                                         name={`leader-${data.site.id}`}
                                         className="accent-primary"
-                                        disabled={!data.can.update}
+                                        disabled={!canEdit}
                                         checked={value.leader === server.id}
                                         onChange={() => update({ ...value, leader: server.id })}
                                     />
@@ -692,6 +714,7 @@ export function LaravelSettings({ ctx }: ServiceTabProps) {
 
     if (!data) return <Loading error={error} />;
     const toggles = data.settings.laravel;
+    const managed = (key: LaravelToggleKey) => key !== 'maintenance' && managedCovers(data.config, pointer('laravel', key));
     const serverOptions = data.settings.octane_servers.map((option) => ({ ...option, description: OCTANE_HINTS[option.value] }));
 
     return (
@@ -707,13 +730,14 @@ export function LaravelSettings({ ctx }: ServiceTabProps) {
                                 <span className="text-fg flex items-center gap-2 text-sm font-medium">
                                     {item.label}
                                     {item.key === 'maintenance' && toggles.maintenance && <Tag tone="warning">down</Tag>}
+                                    {managed(item.key) && <ManagedBadge config={data.config} />}
                                 </span>
                                 <span className="text-fg-muted text-xs">{item.hint}</span>
                             </div>
                             <Switch
                                 aria-label={item.label}
                                 checked={toggles[item.key]}
-                                disabled={!data.can.update || saving}
+                                disabled={!data.can.update || saving || managed(item.key)}
                                 onCheckedChange={(on) =>
                                     void save(
                                         'PUT',
@@ -732,7 +756,7 @@ export function LaravelSettings({ ctx }: ServiceTabProps) {
                                         aria-label="Octane server"
                                         value={toggles.octane_server ?? undefined}
                                         options={serverOptions}
-                                        disabled={!data.can.update || saving}
+                                        disabled={!data.can.update || saving || managed('octane')}
                                         onValueChange={(server) =>
                                             void save(
                                                 'PUT',

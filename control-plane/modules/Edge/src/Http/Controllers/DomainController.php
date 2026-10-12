@@ -2,6 +2,7 @@
 
 namespace Falak\Edge\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Edge\Application\Actions\AddDomain;
 use Falak\Edge\Application\Actions\MakePrimaryDomain;
 use Falak\Edge\Application\Actions\RemoveDomain;
@@ -72,6 +73,8 @@ final class DomainController extends Controller
             'domains' => Domain::query()->where('site_id', $siteData->id)->orderByDesc('is_primary')->orderBy('name')->get()->map(fn (Domain $domain) => [
                 'id' => $domain->id,
                 'name' => $domain->name,
+                // What the project's falak.yaml manages of it (read-only in the panel), null when nothing.
+                'managed' => app(ManagedResources::class)->managed('domain', $domain->id)->toArray(),
                 'service' => $domain->compose_service === ComposeServiceDomains::primaryService($siteData) ? null : $domain->compose_service,
                 'is_primary' => $domain->is_primary,
                 'www_redirect' => $domain->www_redirect->value,
@@ -273,7 +276,12 @@ final class DomainController extends Controller
 
     private function domain(string $siteId, string $domainId): Domain
     {
-        return Domain::query()->where('site_id', $siteId)->findOrFail($domainId);
+        $domain = Domain::query()->where('site_id', $siteId)->findOrFail($domainId);
+
+        // Managed by the project's falak.yaml: changed through the file only.
+        app(ManagedResources::class)->managed('domain', $domain->id)->guardWhole('domain', '/domains');
+
+        return $domain;
     }
 
     /**

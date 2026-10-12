@@ -1,0 +1,60 @@
+# Our shop. Edited by hand: keep these comments.
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  # The storefront.
+  shop:
+    type: app
+    runtime: frankenphp
+    php: "8.2"   # pinned until the payment SDK supports 8.3
+
+    env:
+      APP_NAME: Shop
+      APP_ENV: production
+      # our own key, not in .env.example
+      FEATURE_FLAGS: checkout-v2
+      DB_CONNECTION: ${{ main-db.DB_CONNECTION }}
+      APP_DEBUG: "false"
+      DB_HOST: ${{ main-db.DB_HOST }}
+      DB_PORT: ${{ main-db.DB_PORT }}
+      DB_DATABASE: ${{ main-db.DB_DATABASE }}
+      DB_USERNAME: ${{ main-db.DB_USERNAME }}
+      DB_PASSWORD: ${{ main-db.DB_PASSWORD }}
+      SESSION_DRIVER: database
+      QUEUE_CONNECTION: redis
+      CACHE_STORE: redis
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: ${{ redis.REDIS_HOST }}
+      REDIS_PASSWORD: ${{ redis.REDIS_PASSWORD }}
+      REDIS_PORT: ${{ redis.REDIS_PORT }}
+      MAIL_MAILER: log
+      MAIL_FROM_ADDRESS: hello@example.com
+      VITE_APP_NAME: Shop
+    domains: [shop.example.com]
+    framework: laravel # detected: laravel/framework ^12.0 in composer.json
+    health_path: /up # detected: health route in bootstrap/app.php
+    laravel:
+      horizon: true # detected: laravel/horizon in composer.json
+      scheduler: true # detected: schedules in routes/console.php
+    deploy:
+      hooks:
+        before_activate: | # detected: database/migrations (Falak's Laravel deploy steps, migrations on the leader)
+          if [ "$FALAK_IS_LEADER" = "1" ]; then
+            $FALAK_PHP artisan migrate --force
+          fi
+          $FALAK_PHP artisan optimize
+          $FALAK_PHP artisan storage:link --force
+
+  main-db:
+    type: database
+    engine: postgresql
+    version: "16"
+
+  redis:
+    type: redis # detected: laravel/horizon in composer.json
+
+environments:
+  production:
+    branch: main
+    servers: [web-1]

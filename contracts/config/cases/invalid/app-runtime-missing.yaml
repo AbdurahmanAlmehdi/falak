@@ -1,0 +1,4 @@
+# An app unit needs a runtime.
+version: 1
+units:
+  web: { type: app }

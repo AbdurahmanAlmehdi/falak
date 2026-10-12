@@ -20,6 +20,16 @@ interface BackupStorage
     public function find(string $organizationId, string $providerId): ?StorageProviderData;
 
     /**
+     * Names of the providers a project's falak.yaml may name (`backups.storage`, `pitr.storage`, volume backups): those
+     * the project's databases and volumes (any environment) already back up to, plus $allowed (the names an admin listed
+     * on the project's config source). Never the rest of the organization's.
+     *
+     * @param  list<string>  $allowed
+     * @return list<string>
+     */
+    public function namesForProject(string $organizationId, string $projectId, array $allowed = []): array;
+
+    /**
      * An object key under the provider's prefix.
      *
      * @throws StorageUnavailable when the provider is unknown

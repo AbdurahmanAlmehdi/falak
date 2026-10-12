@@ -74,18 +74,34 @@ final class SiteRules
 
     public function runtimeSupported(ServerData $server, SiteRuntime $runtime, ?string $phpVersion, string $field = 'server_ids'): void
     {
+        $problem = $this->runtimeProblem($server, $runtime, $phpVersion);
+
+        if ($problem !== null) {
+            throw ValidationException::withMessages([$field => $problem['message']]);
+        }
+    }
+
+    /**
+     * Why the server can't run the runtime (config as code reports it at validation), or null.
+     *
+     * @return ?array{field: 'php'|'runtime', message: string}
+     */
+    public function runtimeProblem(ServerData $server, SiteRuntime $runtime, ?string $phpVersion): ?array
+    {
+        if ($runtime->isPhp() && $server->phpRuntime !== null && $phpVersion !== null && ! in_array($phpVersion, $server->phpVersions, true)
+            && ($runtime !== SiteRuntime::FrankenPhp || $server->phpRuntime === 'frankenphp')) {
+            return ['field' => 'php', 'message' => "PHP {$phpVersion} is not installed on {$server->name} (install it in Servers → {$server->name} → PHP)."];
+        }
+
         $error = match (true) {
             $runtime->isPhp() && $server->phpRuntime === null => "{$server->name} does not run PHP.",
             $runtime === SiteRuntime::FrankenPhp && $server->phpRuntime !== 'frankenphp' => "{$server->name} does not run FrankenPHP; use the PHP-FPM runtime.",
-            $runtime->isPhp() && $phpVersion !== null && ! in_array($phpVersion, $server->phpVersions, true) => "PHP {$phpVersion} is not installed on {$server->name}.",
             $runtime->usesDocker() && ! $server->docker => "Docker is not installed on {$server->name}.",
             $runtime->isFunction() && ! ($this->agents->forServer($server->id)?->supports('fn.v1') ?? false) => "The Falak agent on {$server->name} is too old for functions; update it first.",
             default => null,
         };
 
-        if ($error !== null) {
-            throw ValidationException::withMessages([$field => $error]);
-        }
+        return $error !== null ? ['field' => 'runtime', 'message' => $error] : null;
     }
 
     /**

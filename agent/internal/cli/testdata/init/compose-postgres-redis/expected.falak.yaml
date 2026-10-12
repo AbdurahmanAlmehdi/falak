@@ -1,0 +1,32 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: compose # detected: compose.yaml
+    services:
+      app:
+        port: 8080 # detected: ports of app in compose.yaml
+      cache:
+        replace_with: cache # run cache as a Falak-managed instance
+      postgres:
+        replace_with: postgres # run postgres as a Falak-managed instance
+
+  cache:
+    type: redis # detected: image redis:7.4-alpine of cache in compose.yaml
+    version: "7.4" # detected: tag 7.4-alpine
+
+  postgres:
+    type: database
+    engine: postgresql # detected: image postgres:16-alpine of postgres in compose.yaml
+    version: "16" # detected: tag 16-alpine
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

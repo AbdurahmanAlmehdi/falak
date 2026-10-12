@@ -9,6 +9,7 @@ use Falak\Databases\Application\Actions\StartDrill;
 use Falak\Databases\Domain\Models\BackupSchedule;
 use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Databases\Domain\Policies\DatabasesPolicy;
+use Falak\Databases\Infrastructure\Config\DatabasesReconciler;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Illuminate\Http\RedirectResponse;
@@ -17,6 +18,8 @@ use Illuminate\Validation\ValidationException;
 
 final class BackupScheduleController extends Controller
 {
+    use GuardsConfigManaged;
+
     /**
      * @return array<string, mixed>
      */
@@ -44,6 +47,11 @@ final class BackupScheduleController extends Controller
         $this->authorize('manage', $instance);
 
         $data = $request->validate($this->rules());
+
+        if ($data['name'] === DatabasesReconciler::SCHEDULE && $this->managed('database_instance', $instance->id)->any()) {
+            throw ValidationException::withMessages(['name' => 'This name is reserved for the schedule falak.yaml manages.']);
+        }
+
         $this->authorizeDrillServer($request, $instance->organization_id, $data, null);
         $save($instance, $data, null, $request->user()?->getAuthIdentifier());
 
@@ -55,6 +63,7 @@ final class BackupScheduleController extends Controller
         $this->authorize('manage', $backupSchedule);
 
         $data = $request->validate($this->rules());
+        $this->guardSchedule($backupSchedule, $data);
         $this->authorizeDrillServer($request, $backupSchedule->organization_id, $data, $backupSchedule->drill_server_id);
         $save($backupSchedule->instance, $data, $backupSchedule);
 
@@ -83,6 +92,7 @@ final class BackupScheduleController extends Controller
     public function destroy(BackupSchedule $backupSchedule, DeleteBackupSchedule $delete): RedirectResponse
     {
         $this->authorize('manage', $backupSchedule);
+        $this->guardManaged('backup_schedule', $backupSchedule->id, 'schedule', 'this backup schedule');
 
         $delete($backupSchedule);
 

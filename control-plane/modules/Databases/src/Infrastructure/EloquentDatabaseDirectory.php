@@ -62,6 +62,7 @@ final class EloquentDatabaseDirectory implements DatabaseDirectory
             health: $instance->health,
             volumeId: $instance->volume_id,
             cpus: $instance->cpus,
+            environmentId: $instance->environment_id,
         );
     }
 }

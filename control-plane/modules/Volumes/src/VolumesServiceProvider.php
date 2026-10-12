@@ -4,6 +4,7 @@ namespace Falak\Volumes;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Databases\Events\StorageProviderDeleted;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
@@ -33,6 +34,7 @@ use Falak\Volumes\Events\VolumeAlmostFull;
 use Falak\Volumes\Events\VolumeBackupFinished;
 use Falak\Volumes\Events\VolumeDrillFinished;
 use Falak\Volumes\Infrastructure\ActionServiceVolumes;
+use Falak\Volumes\Infrastructure\Config\VolumesReconciler;
 use Falak\Volumes\Infrastructure\EloquentVolumeMounts;
 use Falak\Volumes\Infrastructure\EloquentVolumeRecovery;
 use Illuminate\Console\Scheduling\Schedule;
@@ -55,6 +57,9 @@ class VolumesServiceProvider extends ModuleServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom($this->modulePath().'/config/volumes.php', 'volumes');
+
+        // falak.yaml: units.<app>.volumes.
+        $this->app->tag([VolumesReconciler::class], Reconcilable::TAG);
     }
 
     protected function bootModule(): void

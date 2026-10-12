@@ -1,0 +1,7 @@
+# Host paths (bind) are admin-only and never in the file.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    volumes: { data: { kind: bind, mount: /data } }

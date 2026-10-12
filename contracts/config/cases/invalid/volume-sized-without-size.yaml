@@ -1,0 +1,7 @@
+# A sized volume needs its size.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    volumes: { data: { kind: sized, mount: /data } }

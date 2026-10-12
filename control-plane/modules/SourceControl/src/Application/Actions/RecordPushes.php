@@ -53,6 +53,7 @@ final class RecordPushes
                 $push->commit,
                 $push->pusher,
                 $push->beforeSha,
+                $push->changedPaths,
             );
         }
 

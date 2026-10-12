@@ -1,0 +1,4 @@
+# A function schedule runs scheduled(), it has no command.
+version: 1
+units:
+  api: { type: function, runtime: bun, schedules: { s: { cron: "* * * * *", command: run } } }

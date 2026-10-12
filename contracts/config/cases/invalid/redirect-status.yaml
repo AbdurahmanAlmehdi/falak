@@ -1,0 +1,7 @@
+# Redirect status is 301, 302, 307 or 308.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    redirects: [{ from: /a, to: /b, status: 200 }]

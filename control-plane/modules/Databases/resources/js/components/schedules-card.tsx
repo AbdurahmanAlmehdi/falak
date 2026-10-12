@@ -1,4 +1,5 @@
 import { DrillHistory, ProtectionFields, protectionFrom, protectionPayload, type ProtectionValue } from '@/components/backup-protection';
+import { ManagedBadge } from '@/components/falak';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -131,8 +132,9 @@ export function SchedulesCard({ instance, schedules, databases, storageProviders
                         {schedules.map((schedule) => (
                             <li key={schedule.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 text-sm">
                                 <div>
-                                    <div className="font-medium">
+                                    <div className="flex items-center gap-2 font-medium">
                                         {schedule.name} {!schedule.enabled && <span className="text-muted-foreground text-xs">(paused)</span>}
+                                        <ManagedBadge config={schedule.managed} />
                                     </div>
                                     <div className="text-muted-foreground text-xs">
                                         <span className="font-mono">{schedule.cron}</span> UTC → {schedule.storage_provider} ·{' '}
@@ -173,12 +175,19 @@ export function SchedulesCard({ instance, schedules, databases, storageProviders
                                         >
                                             <FlaskConical />
                                         </Button>
-                                        <Button variant="ghost" size="icon" aria-label={`Edit ${schedule.name}`} onClick={() => open(schedule)}>
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            disabled={!!schedule.managed}
+                                            aria-label={`Edit ${schedule.name}`}
+                                            onClick={() => open(schedule)}
+                                        >
                                             <Pencil />
                                         </Button>
                                         <Button
                                             variant="ghost"
                                             size="icon"
+                                            disabled={!!schedule.managed}
                                             aria-label={`Delete ${schedule.name}`}
                                             onClick={() => setDeleting(schedule)}
                                         >

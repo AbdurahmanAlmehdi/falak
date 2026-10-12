@@ -1,0 +1,33 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: docker # detected: Dockerfile
+    port: 8080 # detected: EXPOSE 8080 in Dockerfile
+    build:
+      mode: docker # detected: Dockerfile
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      INVENTORY_DATABASE_URL: ${{ db.DATABASE_URL }}
+      HTTP_ADDR: 0.0.0.0:8080 # was 127.0.0.1:8080 in the example: an app in a container listens on all interfaces
+      REDIS_ADDR: ${{ redis.REDIS_HOST }}:${{ redis.REDIS_PORT }}
+      GIN_MODE: release
+      REPORTS_BUCKET: inventory-reports
+
+  db:
+    type: database
+    engine: postgresql # detected: INVENTORY_DATABASE_URL in .env.example
+
+  redis:
+    type: redis # detected: github.com/redis/go-redis in go.mod
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

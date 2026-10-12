@@ -1,0 +1,7 @@
+# Variable values are strings, integers or booleans.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { FOO: { nested: true } }

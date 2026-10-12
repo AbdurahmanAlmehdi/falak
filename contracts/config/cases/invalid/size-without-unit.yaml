@@ -1,0 +1,7 @@
+# Sizes carry a unit: 512m, not 512.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    limits: { memory: 512 }

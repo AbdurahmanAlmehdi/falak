@@ -58,6 +58,12 @@ final class EloquentProjectDirectory implements ProjectDirectory
             ->map(fn (Service $service) => $service->toData())->values()->all();
     }
 
+    public function servicesInProject(string $projectId): array
+    {
+        return Service::query()->where('project_id', strtolower($projectId))->orderBy('created_at')->orderBy('id')->get()
+            ->map(fn (Service $service) => $service->toData())->values()->all();
+    }
+
     public function serviceUrl(ServiceKind|string $kind, string $refId, ?string $tab = null): ?string
     {
         $service = $this->service($kind, $refId);

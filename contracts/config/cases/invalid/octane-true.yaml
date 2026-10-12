@@ -1,0 +1,7 @@
+# octane names its server (frankenphp, swoole, roadrunner) or is false.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    laravel: { octane: true }

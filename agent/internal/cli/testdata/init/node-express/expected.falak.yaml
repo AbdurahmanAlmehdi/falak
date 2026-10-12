@@ -1,0 +1,28 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: node # detected: express ^4.21.2 in package.json
+    node: "20" # detected: engines.node 20.x in package.json
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      NODE_ENV: production
+      LOG_LEVEL: info
+      REDIS_URL: ${{ redis.REDIS_URL }}
+      GITHUB_CLIENT_ID: abc
+      # SESSION_SECRET: ${{ secrets.SESSION_SECRET }} # empty in the example env file; uncomment if used
+      # GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }} # empty in the example env file; uncomment if used
+
+  redis:
+    type: redis # detected: ioredis in package.json
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

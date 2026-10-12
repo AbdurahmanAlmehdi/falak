@@ -1,0 +1,7 @@
+# Servers are named in environments, never defined at the top level.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+servers: [web-1]

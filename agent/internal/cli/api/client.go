@@ -41,6 +41,24 @@ type API interface {
 	FunctionRollback(ctx context.Context, fn string, number int) (string, error)
 	FunctionRun(ctx context.Context, fn, schedule string) (string, error)
 	FunctionRunStatus(ctx context.Context, fn, run string) (FunctionRun, error)
+
+	DatabaseInstances(ctx context.Context) ([]DatabaseInstance, error)
+	DatabaseInstance(ctx context.Context, id string) (DatabaseInstance, error)
+	DeleteDatabaseInstance(ctx context.Context, id, confirm string, deleteVolume bool) (DatabaseInstance, error)
+
+	Projects(ctx context.Context) ([]Project, error)
+	ConfigValidate(ctx context.Context, project string, r ConfigRequest) (ConfigValidation, error)
+	ConfigPlan(ctx context.Context, project string, r ConfigRequest) (ConfigPlanResult, error)
+	ConfigApply(ctx context.Context, project string, r ConfigRequest) (ConfigRun, error)
+	ConfigRun(ctx context.Context, id string) (ConfigRun, error)
+	ConfigExport(ctx context.Context, project, environment, format string) (ConfigExport, error)
+	ConfigRuns(ctx context.Context, project, environment string, limit int) ([]ConfigRun, error)
+	ConfigApprove(ctx context.Context, id, planHash, comment string) (ConfigRun, error)
+	ConfigReject(ctx context.Context, id, comment string) (ConfigRun, error)
+	ConfigDrift(ctx context.Context, project, environment string, check bool) (ConfigDrift, error)
+	ConfigUnmanaged(ctx context.Context, project, environment string) ([]UnmanagedResource, error)
+	ConfigSource(ctx context.Context, project string) (ConfigSource, error)
+	SetConfigSource(ctx context.Context, project string, r ConfigSourceRequest) (ConfigSource, error)
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).
@@ -72,7 +90,10 @@ func (e *Error) Error() string {
 	case http.StatusUnauthorized:
 		s += " — run `falak login` or set FALAK_TOKEN"
 	case http.StatusForbidden:
-		s += " — the token lacks the required ability"
+		// The token's abilities, unless the server said why (e.g. an approval's blocked reason).
+		if e.Message == "" || e.Message == "This action is unauthorized." || e.Message == "Invalid ability provided." {
+			s += " — the token lacks the required ability"
+		}
 	}
 	return s
 }

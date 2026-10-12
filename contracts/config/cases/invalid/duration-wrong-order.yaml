@@ -1,0 +1,7 @@
+# Duration parts go from the largest unit to the smallest: 5m30s, not 30s5m.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { health: { retry_delay: 30s5m } }

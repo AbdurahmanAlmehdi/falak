@@ -1,0 +1,9 @@
+--- falak.yaml
++++ falak.yaml
+@@ -8,3 +8,6 @@
+   api:
+     <<: *web
+     root: api
++
++  redis:
++    type: redis # detected: ioredis in package.json

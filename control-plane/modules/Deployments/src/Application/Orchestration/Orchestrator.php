@@ -1030,7 +1030,7 @@ final class Orchestrator
         $this->afterCommit(function () use ($deployment, $serverIds, $duration, $previous, $release, $site) {
             $this->annotate($deployment, 'succeeded');
             DeploymentSucceeded::dispatch($deployment->id, $deployment->organization_id, $deployment->site_id, $deployment->trigger->value, $deployment->commit, (string) $deployment->release_id, $serverIds, $duration);
-            ReleaseActivated::dispatch((string) $deployment->release_id, $deployment->organization_id, $deployment->site_id, $deployment->id, $release?->commit ?? $deployment->commit, $previous?->id, $serverIds);
+            ReleaseActivated::dispatch((string) $deployment->release_id, $deployment->organization_id, $deployment->site_id, $deployment->id, $release?->commit ?? $deployment->commit, $previous?->id, $serverIds, $deployment->trigger->value);
 
             if ($deployment->trigger === Trigger::Rollback) {
                 // An automatic rollback after a release went live tells why (the watch of the deployment it replaced).

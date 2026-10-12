@@ -1,0 +1,7 @@
+# A key appears once per map.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    runtime: bun

@@ -1,0 +1,7 @@
+# Backups name their storage provider.
+version: 1
+units:
+  db:
+    type: database
+    engine: postgresql
+    backups: { cron: "0 3 * * *" }

@@ -1,0 +1,31 @@
+# A compose stack: public services, a database replacing its postgres service, volumes.
+version: 1
+units:
+  stack:
+    type: compose
+    root: deploy
+    files: [compose.yaml, compose.prod.yaml]
+    profiles: [web]
+    deploy: { strategy: compose, health: { timeout: 20s } }
+    env:
+      APP_URL: https://app.example.com
+      PG_URL: ${{ pg.DATABASE_URL }}
+    domains: [app.example.com]
+    headers: { X-Robots-Tag: noindex }
+    services:
+      web:
+        port: 3000
+        health_path: /healthz
+        limits: { memory: 512m, cpus: 1 }
+      admin:
+        port: 8080
+        domains: [{ name: admin.example.com, tls: auto }]
+        redirects: [{ from: /, to: /login, status: 307 }]
+        headers: { Cache-Control: no-store }
+      postgres:
+        replace_with: pg
+    volumes:
+      media: { mount: /data/media, service: web }
+  pg:
+    type: database
+    engine: postgresql

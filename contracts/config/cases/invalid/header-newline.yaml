@@ -1,0 +1,7 @@
+# Header values are one line.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    headers: { X-Test: "a\nb" }

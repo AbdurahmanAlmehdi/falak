@@ -193,7 +193,13 @@ export function BackupsSection({ volume, backups, schedules, providers, servers,
                     rowActions={
                         canManage
                             ? (row) => [
-                                  { label: 'Edit', icon: <Pencil />, onSelect: () => setEditing(row) },
+                                  // falak.yaml's schedule is edited in the file.
+                                  {
+                                      label: row.managed ? 'Set by falak.yaml' : 'Edit',
+                                      icon: <Pencil />,
+                                      disabled: !!row.managed,
+                                      onSelect: () => setEditing(row),
+                                  },
                                   {
                                       label: 'Drill now',
                                       icon: <FlaskConical />,
@@ -204,6 +210,7 @@ export function BackupsSection({ volume, backups, schedules, providers, servers,
                                       label: 'Delete schedule',
                                       icon: <Trash2 />,
                                       danger: true,
+                                      disabled: !!row.managed,
                                       onSelect: () => void action.run('DELETE', `/volumes/schedules/${row.id}`, undefined, 'Schedule deleted'),
                                   },
                               ]

@@ -11,6 +11,7 @@ use Falak\SourceControl\Contracts\Data\RepositoryData;
 use Falak\SourceControl\Contracts\Data\WebhookData;
 use Falak\SourceControl\Contracts\Exceptions\ConnectionNotFound;
 use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
+use Falak\SourceControl\Contracts\Exceptions\TreeTruncated;
 use Falak\SourceControl\Contracts\SourceControlGateway;
 use Falak\SourceControl\Domain\Models\Connection;
 use Falak\SourceControl\Domain\Models\DeployKey;
@@ -93,16 +94,21 @@ final class EloquentSourceControlGateway implements SourceControlGateway
         return $this->client($connection)->exists($connection, $repository, $ref, $path);
     }
 
-    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*'): array
+    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*', bool $complete = false): array
     {
         $connection = $this->find($connectionId);
         $pattern = self::globPattern($glob);
         $byName = ! str_contains($glob, '/');
+        $truncated = false;
         $paths = array_values(array_filter(
-            $this->client($connection)->tree($connection, $repository, $ref, self::MAX_TREE_PATHS * 5),
+            $this->client($connection)->tree($connection, $repository, $ref, self::MAX_TREE_PATHS * 5, $truncated),
             fn (string $path) => preg_match($pattern, $byName ? basename($path) : $path) === 1,
         ));
         sort($paths);
+
+        if ($complete && ($truncated || count($paths) > self::MAX_TREE_PATHS)) {
+            throw TreeTruncated::at($repository, $ref);
+        }
 
         return array_slice($paths, 0, self::MAX_TREE_PATHS);
     }

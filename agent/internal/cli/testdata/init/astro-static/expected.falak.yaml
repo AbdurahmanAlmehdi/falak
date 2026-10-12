@@ -1,0 +1,18 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: static # detected: astro ^5.13.0 in package.json (static output in dist/)
+    node: "20" # detected: engines.node >=20 in package.json
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

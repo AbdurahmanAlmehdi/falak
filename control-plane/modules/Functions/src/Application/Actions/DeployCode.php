@@ -2,6 +2,7 @@
 
 namespace Falak\Functions\Application\Actions;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Deployments\Contracts\DeploymentTrigger;
 use Falak\Functions\Application\AgentSupport;
 use Falak\Functions\Application\Code;
@@ -26,6 +27,7 @@ final class DeployCode
         private readonly DeploymentTrigger $deployments,
         private readonly AuditLog $audit,
         private readonly AgentSupport $agents,
+        private readonly ManagedResources $managed,
     ) {}
 
     /**
@@ -35,6 +37,9 @@ final class DeployCode
      */
     public function __invoke(SiteData $site, CloudFunction $function, mixed $files, ?string $message, ?string $baseVersionId, ?string $userId, ?string $userName, bool $deploy = true, bool $force = false): array
     {
+        // [decision] A function of a falak.yaml runs the repository's code: the editor doesn't replace it.
+        $this->managed->managed('site', $site->id)->guardWhole('files', '/code');
+
         $files = Code::files($files, $function->entrypoint);
         $hash = Code::hash($files, $function->entrypoint);
 

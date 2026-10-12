@@ -1,3 +1,4 @@
+import { ManagedBadge } from '@/components/falak';
 import InputError from '@/components/input-error';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -94,7 +95,12 @@ export function DatabasesCard({ instance, databases, storageProviders, canManage
                         <TableBody>
                             {databases.map((database) => (
                                 <TableRow key={database.id}>
-                                    <TableCell className="pl-6 font-mono">{database.name}</TableCell>
+                                    <TableCell className="pl-6 font-mono">
+                                        <span className="flex items-center gap-2">
+                                            {database.name}
+                                            <ManagedBadge config={database.managed} />
+                                        </span>
+                                    </TableCell>
                                     {mysql && <TableCell className="text-muted-foreground text-xs">{database.collation ?? '—'}</TableCell>}
                                     <TableCell>
                                         <StatusBadge status={database.status} title={database.status_message} />
@@ -117,7 +123,7 @@ export function DatabasesCard({ instance, databases, storageProviders, canManage
                                                 <Button
                                                     variant="ghost"
                                                     size="icon"
-                                                    disabled={database.status === 'deleting'}
+                                                    disabled={database.status === 'deleting' || !!database.managed}
                                                     aria-label={`Delete ${database.name}`}
                                                     onClick={() => setDeleting(database)}
                                                 >

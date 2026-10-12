@@ -2,6 +2,7 @@
 
 namespace Falak\Functions\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Functions\Application\Actions\SaveSchedule;
@@ -38,7 +39,7 @@ final class ScheduleController extends Controller
         $schedules = FunctionSchedule::query()->where('function_id', $function->id)->orderBy('created_at')->get();
 
         return response()->json(['data' => [
-            'schedules' => $schedules->map(fn (FunctionSchedule $s) => $s->present($data->slug))->values(),
+            'schedules' => $schedules->map(fn (FunctionSchedule $s) => [...$s->present($data->slug), 'managed' => app(ManagedResources::class)->managed('function_schedule', $s->id)->toArray()])->values(),
             'timezones' => \DateTimeZone::listIdentifiers(),
             'can' => ['manage' => $this->canDeploy($request, $data)],
         ]]);
@@ -47,7 +48,14 @@ final class ScheduleController extends Controller
     public function store(Request $request, string $site, SaveSchedule $save): JsonResponse
     {
         [$data, $function] = $this->resolve($request, $site, Permissions::DEPLOY);
-        $schedule = $save($data, $function, null, $request->validate(SaveSchedule::rules()));
+        $input = $request->validate(SaveSchedule::rules());
+
+        // A name the file uses is the file's: a schedule created here would be adopted by the next push.
+        if (FunctionSchedule::query()->where('function_id', $function->id)->where('name', trim((string) $input['name']))->get()->contains(fn (FunctionSchedule $s) => app(ManagedResources::class)->managed('function_schedule', $s->id)->any())) {
+            throw ValidationException::withMessages(['name' => 'falak.yaml manages a schedule with this name: edit the file to change it.']);
+        }
+
+        $schedule = $save($data, $function, null, $input);
 
         return response()->json(['data' => $schedule->present($data->slug)], 201);
     }
@@ -55,7 +63,9 @@ final class ScheduleController extends Controller
     public function update(Request $request, string $site, string $schedule, SaveSchedule $save): JsonResponse
     {
         [$data, $function] = $this->resolve($request, $site, Permissions::DEPLOY);
-        $model = $save($data, $function, $this->schedule($function, $schedule), $request->validate(SaveSchedule::rules()));
+        $model = $this->schedule($function, $schedule);
+        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules/'.$model->name);
+        $model = $save($data, $function, $model, $request->validate(SaveSchedule::rules()));
 
         return response()->json(['data' => $model->present($data->slug)]);
     }
@@ -63,7 +73,9 @@ final class ScheduleController extends Controller
     public function destroy(Request $request, string $site, string $schedule, SaveSchedule $save): JsonResponse
     {
         [$data, $function] = $this->resolve($request, $site, Permissions::DEPLOY);
-        $save->delete($data, $this->schedule($function, $schedule));
+        $model = $this->schedule($function, $schedule);
+        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules/'.$model->name);
+        $save->delete($data, $model);
 
         return response()->json(['data' => null]);
     }

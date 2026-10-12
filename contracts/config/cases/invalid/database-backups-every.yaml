@@ -1,0 +1,7 @@
+# Backup schedules are 5-field cron expressions (no @every).
+version: 1
+units:
+  db:
+    type: database
+    engine: postgresql
+    backups: { cron: "@every 1h", storage: offsite }

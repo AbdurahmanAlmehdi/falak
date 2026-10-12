@@ -1,0 +1,29 @@
+# Preview environments with every option.
+version: 1
+units:
+  web: { type: app, runtime: node }
+  search: { type: app, runtime: docker, image: getmeili/meilisearch:v1.10 }
+  db: { type: database, engine: postgresql }
+  cache: { type: redis }
+environments:
+  staging: { branch: develop, servers: [staging-1] }
+  production: { branch: main, servers: [web-1] }
+previews:
+  enabled: true
+  base: staging
+  units:
+    web: include
+    search: share
+    cache: omit
+    db:
+      strategy: clone_sanitize
+      source: production
+      sanitize: { sql: "UPDATE users SET email = concat('user', id, '@example.test');" }
+  server: previews-1
+  fork_server: forks-1
+  variables: [APP_KEY, STRIPE_KEY]
+  domain_pattern: "{project}-pr-{number}-{service}"
+  max_concurrent: 10
+  idle_ttl: 2d
+  access: public
+  acknowledge_shared_database: true

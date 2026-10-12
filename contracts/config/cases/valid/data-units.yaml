@@ -1,0 +1,42 @@
+# Database and Redis/Valkey units with backups, encryption, point-in-time recovery and public access.
+version: 1
+units:
+  db:
+    type: database
+    engine: mysql
+    version: "8.4"
+    server: db-1
+    memory: 2g
+    cpus: 2
+    disk: 50g
+    settings: { max_connections: 300, slow_query_log: true, long_query_time: 0.5 }
+    public: true
+    allowed_sources: [203.0.113.10/32]
+    require_tls: true
+    databases: [shop, shop_reports]
+    backups:
+      cron: "15 1 * * *"
+      storage: offsite
+      keep: 30
+      keep_days: 90
+      databases: [shop]
+      encryption: { mode: customer, recipient: age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p }
+      drill: weekly
+      drill_query: SELECT 1 FROM users LIMIT 1
+      drill_server: drill-1
+      enabled: true
+    pitr:
+      storage: offsite
+      window_days: 14
+      base_interval_days: 2
+      encryption: { mode: cp }
+  pg:
+    type: database
+    engine: postgresql
+    pitr: { enabled: false, storage: offsite }
+  cache:
+    type: redis
+    engine: valkey
+    version: "8.1"
+    memory: 256m
+    backups: { cron: "0 * * * *", storage: offsite, keep: 24 }

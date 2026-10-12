@@ -1,0 +1,4 @@
+# Compose units have no runtime.
+version: 1
+units:
+  stack: { type: compose, runtime: docker }

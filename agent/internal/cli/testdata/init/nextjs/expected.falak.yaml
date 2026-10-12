@@ -1,0 +1,23 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: app
+    runtime: node # detected: next 15.5.2 in package.json
+    node: "22" # detected: .nvmrc
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      NEXT_PUBLIC_API_URL: https://api.example.com
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_x
+      # STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }} # empty in the example env file; uncomment if used
+      # REVALIDATE_TOKEN: ${{ secrets.REVALIDATE_TOKEN }} # empty in the example env file; uncomment if used
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

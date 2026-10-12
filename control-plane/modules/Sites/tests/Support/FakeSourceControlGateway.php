@@ -12,6 +12,7 @@ use Falak\SourceControl\Contracts\Data\WebhookData;
 use Falak\SourceControl\Contracts\Exceptions\ConnectionNotFound;
 use Falak\SourceControl\Contracts\Exceptions\NoApi;
 use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
+use Falak\SourceControl\Contracts\Exceptions\TreeTruncated;
 use Falak\SourceControl\Contracts\ProviderType;
 use Falak\SourceControl\Contracts\SourceControlGateway;
 use Illuminate\Support\Str;
@@ -126,8 +127,20 @@ final class FakeSourceControlGateway implements SourceControlGateway
             throw NoApi::forConnection($connection->name);
         }
 
+        $this->fileReads[] = ['ref' => $ref, 'path' => trim($path, '/')];
+
+        if (isset($this->filesByRef[$ref]) && array_key_exists(trim($path, '/'), $this->filesByRef[$ref])) {
+            return $this->filesByRef[$ref][trim($path, '/')];
+        }
+
         return $this->files[trim($path, '/')] ?? null;
     }
+
+    /** @var array<string, array<string, ?string>> files of one ref (branch or commit) by path, over */
+    public array $filesByRef = [];
+
+    /** @var list<array{ref: string, path: string}> every file() read */
+    public array $fileReads = [];
 
     /** @var list<string> paths exists() answers false for (e.g. to simulate an unlisted folder) */
     public array $existsCalls = [];
@@ -152,8 +165,15 @@ final class FakeSourceControlGateway implements SourceControlGateway
         return false;
     }
 
-    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*'): array
+    /** The provider cut its listing short (tree() with $complete throws). */
+    public bool $treeTruncated = false;
+
+    public function tree(string $connectionId, string $repository, string $ref, string $glob = '*', bool $complete = false): array
     {
+        if ($complete && $this->treeTruncated) {
+            throw TreeTruncated::at($repository, $ref);
+        }
+
         $connection = $this->connections[$connectionId] ?? throw ConnectionNotFound::id($connectionId);
 
         if (! $connection->provider->hasApi()) {

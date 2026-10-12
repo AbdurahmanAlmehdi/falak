@@ -4,6 +4,7 @@ namespace Falak\Databases;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Databases\Application\Jobs\CheckBackupHealth;
 use Falak\Databases\Application\Jobs\MaintainInstances;
 use Falak\Databases\Application\Jobs\MaintainPitr;
@@ -39,6 +40,7 @@ use Falak\Databases\Infrastructure\ActionDatabaseProvisioner;
 use Falak\Databases\Infrastructure\AgentRequests\PitrGapReported;
 use Falak\Databases\Infrastructure\AgentRequests\PitrShipped;
 use Falak\Databases\Infrastructure\AgentRequests\PitrUploadUrls;
+use Falak\Databases\Infrastructure\Config\DatabasesReconciler;
 use Falak\Databases\Infrastructure\EloquentBackupPosture;
 use Falak\Databases\Infrastructure\EloquentDatabaseConnections;
 use Falak\Databases\Infrastructure\EloquentDatabaseDirectory;
@@ -80,6 +82,9 @@ class DatabasesServiceProvider extends ModuleServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom($this->modulePath().'/config/databases.php', 'databases');
+
+        // falak.yaml: database and redis units.
+        $this->app->tag([DatabasesReconciler::class], Reconcilable::TAG);
     }
 
     protected function bootModule(): void

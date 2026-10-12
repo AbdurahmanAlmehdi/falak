@@ -1,0 +1,4 @@
+# Every unit says its type.
+version: 1
+units:
+  web: { runtime: node }

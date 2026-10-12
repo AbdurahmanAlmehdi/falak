@@ -1,4 +1,4 @@
-import { toast } from '@/components/falak';
+import { toast, type ManagedConfig } from '@/components/falak';
 import { errorMessage, requestJson, type HttpMethod } from '@/lib/http';
 import { serviceActionsFor, type ServicePanelContext } from '@/lib/registry';
 
@@ -19,6 +19,8 @@ export interface EnvironmentState {
     } | null;
     versions: { version: number; changed_keys: string[]; created_by: string | null; created_at: string }[];
     can: { reveal: boolean; update: boolean };
+    /** Variables the project's falak.yaml sets (/env/<KEY>, /expose): read-only here. Null when none. */
+    config?: ManagedConfig | null;
 }
 
 /** POST /sites/{site}/environment/reveal (audited). */

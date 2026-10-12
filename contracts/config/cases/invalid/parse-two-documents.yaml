@@ -1,0 +1,8 @@
+# One YAML document per file.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+---
+version: 1

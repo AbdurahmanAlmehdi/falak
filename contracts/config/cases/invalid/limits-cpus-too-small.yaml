@@ -1,0 +1,7 @@
+# cpus is at least 0.05.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    limits: { cpus: 0.01 }

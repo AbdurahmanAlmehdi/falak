@@ -1,0 +1,4 @@
+# compose is a unit type, not an app runtime.
+version: 1
+units:
+  web: { type: app, runtime: compose }

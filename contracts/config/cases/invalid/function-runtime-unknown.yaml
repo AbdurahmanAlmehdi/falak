@@ -1,0 +1,4 @@
+# Function runtimes: bun, node, deno, python, go.
+version: 1
+units:
+  api: { type: function, runtime: ruby }

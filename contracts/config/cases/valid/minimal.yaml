@@ -1,0 +1,6 @@
+# The smallest useful file: one app unit.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node

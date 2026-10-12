@@ -1,0 +1,260 @@
+{
+  "environments": {
+    "production": {
+      "resolved": {
+        "version": 1,
+        "units": {
+          "web": {
+            "type": "app",
+            "runtime": "frankenphp",
+            "env": {
+              "APP_KEY": "${{ secrets.APP_KEY }}",
+              "SPACED": "${{secrets.APP_KEY}} and ${{   db.DB_HOST   }}",
+              "DATABASE_URL": "${{ db.DATABASE_URL }}",
+              "DB_URL_LOWER": "${{ db.url }}",
+              "CACHE": "${{ cache.REDIS_URL }}",
+              "CACHE_SQL_KEY": "${{ cache.DATABASE_URL }}",
+              "API_URL": "${{ api.PUBLIC_URL }}",
+              "API_MISSING": "${{ api.NOPE }}",
+              "LOWER_SECRET": "${{ secrets.stripe_key }}",
+              "MALFORMED": "${{ secrets }}",
+              "UNCLOSED": "${{ secrets.APP_KEY",
+              "LEGACY": "${{ legacy-api.TOKEN }}",
+              "LITERAL": "price: $5 {{ not a reference }}"
+            },
+            "deploy": {
+              "hooks": {
+                "before_activate": "echo ${{ secrets.APP_KEY }}"
+              }
+            },
+            "workers": {
+              "queue": {
+                "env": {
+                  "QUEUE_DB": "${{ db.DB_DATABASE }}",
+                  "BAD": "${{ db.PASSWORD }}"
+                }
+              }
+            },
+            "daemons": {
+              "ws": {
+                "command": "run",
+                "env": {
+                  "WS_KEY": "${{ secrets.WS_KEY }}"
+                }
+              }
+            }
+          },
+          "api": {
+            "type": "app",
+            "runtime": "node",
+            "env": {
+              "PUBLIC_URL": "https://api.example.com"
+            }
+          },
+          "db": {
+            "type": "database",
+            "engine": "postgresql"
+          },
+          "cache": {
+            "type": "redis",
+            "engine": "valkey"
+          }
+        },
+        "environments": {
+          "production": {
+            "branch": "main"
+          }
+        }
+      },
+      "errors": [
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/DB_URL_LOWER",
+          "source": "/units/web/env/DB_URL_LOWER"
+        },
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/CACHE_SQL_KEY",
+          "source": "/units/web/env/CACHE_SQL_KEY"
+        },
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/API_MISSING",
+          "source": "/units/web/env/API_MISSING"
+        },
+        {
+          "code": "reference.secret_name",
+          "pointer": "/units/web/env/LOWER_SECRET",
+          "source": "/units/web/env/LOWER_SECRET"
+        },
+        {
+          "code": "reference.malformed",
+          "pointer": "/units/web/env/MALFORMED",
+          "source": "/units/web/env/MALFORMED"
+        },
+        {
+          "code": "reference.malformed",
+          "pointer": "/units/web/env/UNCLOSED",
+          "source": "/units/web/env/UNCLOSED"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/deploy/hooks/before_activate",
+          "source": "/units/web/deploy/hooks/before_activate"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/workers/queue/env/QUEUE_DB",
+          "source": "/units/web/workers/queue/env/QUEUE_DB"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/workers/queue/env/BAD",
+          "source": "/units/web/workers/queue/env/BAD"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/daemons/ws/env/WS_KEY",
+          "source": "/units/web/daemons/ws/env/WS_KEY"
+        }
+      ],
+      "warnings": [
+        {
+          "code": "reference.external",
+          "pointer": "/units/web/env/LEGACY",
+          "source": "/units/web/env/LEGACY"
+        }
+      ]
+    },
+    "staging": {
+      "resolved": {
+        "version": 1,
+        "units": {
+          "web": {
+            "type": "app",
+            "runtime": "frankenphp",
+            "env": {
+              "APP_KEY": "${{ secrets.APP_KEY }}",
+              "SPACED": "${{secrets.APP_KEY}} and ${{   db.DB_HOST   }}",
+              "DATABASE_URL": "${{ db.DATABASE_URL }}",
+              "DB_URL_LOWER": "${{ db.url }}",
+              "CACHE": "${{ cache.REDIS_URL }}",
+              "CACHE_SQL_KEY": "${{ cache.DATABASE_URL }}",
+              "API_URL": "${{ api.PUBLIC_URL }}",
+              "API_MISSING": "${{ api.NOPE }}",
+              "LOWER_SECRET": "${{ secrets.stripe_key }}",
+              "MALFORMED": "${{ secrets }}",
+              "UNCLOSED": "${{ secrets.APP_KEY",
+              "LEGACY": "${{ legacy-api.TOKEN }}",
+              "LITERAL": "price: $5 {{ not a reference }}",
+              "EXTRA": "${{ cache.NOPE }}"
+            },
+            "deploy": {
+              "hooks": {
+                "before_activate": "echo ${{ secrets.APP_KEY }}"
+              }
+            },
+            "workers": {
+              "queue": {
+                "env": {
+                  "QUEUE_DB": "${{ db.DB_DATABASE }}",
+                  "BAD": "${{ db.PASSWORD }}"
+                }
+              }
+            },
+            "daemons": {
+              "ws": {
+                "command": "run",
+                "env": {
+                  "WS_KEY": "${{ secrets.WS_KEY }}"
+                }
+              }
+            }
+          },
+          "db": {
+            "type": "database",
+            "engine": "postgresql"
+          },
+          "cache": {
+            "type": "redis",
+            "engine": "valkey"
+          }
+        },
+        "environments": {
+          "staging": {
+            "branch": "develop"
+          }
+        }
+      },
+      "errors": [
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/DB_URL_LOWER",
+          "source": "/units/web/env/DB_URL_LOWER"
+        },
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/CACHE_SQL_KEY",
+          "source": "/units/web/env/CACHE_SQL_KEY"
+        },
+        {
+          "code": "reference.unknown_key",
+          "pointer": "/units/web/env/EXTRA",
+          "source": "/environments/staging/units/web/env/EXTRA"
+        },
+        {
+          "code": "reference.secret_name",
+          "pointer": "/units/web/env/LOWER_SECRET",
+          "source": "/units/web/env/LOWER_SECRET"
+        },
+        {
+          "code": "reference.malformed",
+          "pointer": "/units/web/env/MALFORMED",
+          "source": "/units/web/env/MALFORMED"
+        },
+        {
+          "code": "reference.malformed",
+          "pointer": "/units/web/env/UNCLOSED",
+          "source": "/units/web/env/UNCLOSED"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/deploy/hooks/before_activate",
+          "source": "/units/web/deploy/hooks/before_activate"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/workers/queue/env/QUEUE_DB",
+          "source": "/units/web/workers/queue/env/QUEUE_DB"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/workers/queue/env/BAD",
+          "source": "/units/web/workers/queue/env/BAD"
+        },
+        {
+          "code": "reference.not_allowed",
+          "pointer": "/units/web/daemons/ws/env/WS_KEY",
+          "source": "/units/web/daemons/ws/env/WS_KEY"
+        }
+      ],
+      "warnings": [
+        {
+          "code": "reference.external",
+          "pointer": "/units/web/env/LEGACY",
+          "source": "/units/web/env/LEGACY"
+        },
+        {
+          "code": "reference.external",
+          "pointer": "/units/web/env/API_URL",
+          "source": "/units/web/env/API_URL"
+        },
+        {
+          "code": "reference.external",
+          "pointer": "/units/web/env/API_MISSING",
+          "source": "/units/web/env/API_MISSING"
+        }
+      ]
+    }
+  }
+}

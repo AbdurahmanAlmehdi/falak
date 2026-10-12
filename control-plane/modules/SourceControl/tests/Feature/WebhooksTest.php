@@ -40,6 +40,20 @@ describe('GitHub', function () {
             ->and($this->webhook->refresh()->last_delivery_at)->not->toBeNull();
     });
 
+    it('announces the files a push changed, or null when the payload can\'t say', function (array $overrides, ?array $expected) {
+        $payload = sc_github_push(overrides: $overrides);
+
+        sc_post_webhook($this->webhook, $payload, ['X-GitHub-Event' => 'push', 'X-Hub-Signature-256' => 'sha256='.sc_sign($payload)])->assertStatus(202);
+
+        Event::assertDispatched(PushReceived::class, fn (PushReceived $e) => $e->changedPaths === $expected);
+    })->with([
+        'listed' => [['commits' => [['id' => 'c1', 'added' => ['b.txt'], 'modified' => ['apps/web/a.php'], 'removed' => []], ['id' => str_repeat('b', 40), 'added' => [], 'modified' => ['b.txt'], 'removed' => ['old']]]], ['apps/web/a.php', 'b.txt', 'old']],
+        'force push' => [['forced' => true, 'commits' => [['id' => 'c1', 'modified' => ['a']]]], null],
+        'no commits' => [['commits' => []], null],
+        'twenty commits' => [['commits' => array_map(fn ($i) => ['id' => "c{$i}", 'modified' => ['a']], range(1, 20))], null],
+        'truncated' => [['size' => 30, 'commits' => [['id' => 'c1', 'modified' => ['a']]]], null],
+    ]);
+
     it('rejects invalid and missing signatures', function (array $headers) {
         sc_post_webhook($this->webhook, sc_github_push(), ['X-GitHub-Event' => 'push', ...$headers])->assertUnauthorized();
 

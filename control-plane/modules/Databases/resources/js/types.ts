@@ -1,4 +1,5 @@
 import { type DrillFrequency, type DrillRow, type DrillStatus, type EncryptionMode } from '@/components/backup-protection';
+import { type ManagedConfig } from '@/components/falak';
 
 export {
     AGE_IDENTITY,
@@ -92,6 +93,8 @@ export interface DatabaseInstance {
     databases_count: number | null;
     users_count: number | null;
     created_at: string;
+    /** What the project's falak.yaml manages (read-only here), null when nothing. */
+    managed?: ManagedConfig | null;
 }
 
 /** Create options of the Databases page and the canvas picker. */
@@ -122,6 +125,7 @@ export interface DatabaseRow {
     status_message: string | null;
     command_id: string | null;
     created_at: string;
+    managed?: ManagedConfig | null;
 }
 
 export interface GrantRow {
@@ -145,6 +149,8 @@ export interface DatabaseUserRow {
 export interface ScheduleRow {
     id: string;
     name: string;
+    /** The unit's `backups` in falak.yaml: read-only here. */
+    managed?: ManagedConfig | null;
     cron: string;
     storage_provider_id: string;
     storage_provider: string | null;

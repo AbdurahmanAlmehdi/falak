@@ -2,6 +2,7 @@
 
 namespace Falak\Edge\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Edge\Application\Actions\AddRedirect;
 use Falak\Edge\Application\Actions\AddSecurityRule;
 use Falak\Edge\Application\Actions\DeleteSiteRule;
@@ -64,11 +65,13 @@ final class RoutingController extends Controller
         return response()->json(['data' => [
             'services' => ComposeServiceDomains::options($siteData),
             'redirects' => Redirect::query()->where('site_id', $siteData->id)->orderBy('position')->get(['id', 'compose_service', 'from', 'to', 'status'])
-                ->map(fn (Redirect $r) => ['id' => $r->id, 'service' => $r->compose_service, 'from' => $r->from, 'to' => $r->to, 'status' => $r->status])->values(),
+                ->map(fn (Redirect $r) => ['id' => $r->id, 'service' => $r->compose_service, 'from' => $r->from, 'to' => $r->to, 'status' => $r->status,
+                    'managed' => app(ManagedResources::class)->managed('redirect', $r->id)->toArray()])->values(),
             'rules' => SecurityRule::query()->where('site_id', $siteData->id)->orderBy('path')->orderBy('username')->get()
                 ->map(fn (SecurityRule $rule) => ['id' => $rule->id, 'service' => $rule->compose_service, 'name' => $rule->name, 'path' => $rule->path, 'username' => $rule->username])->values(),
             'headers' => Header::query()->where('site_id', $siteData->id)->orderBy('name')->get()
-                ->map(fn (Header $h) => ['id' => $h->id, 'service' => $h->compose_service, 'name' => $h->name, 'value' => $h->value])->values(),
+                ->map(fn (Header $h) => ['id' => $h->id, 'service' => $h->compose_service, 'name' => $h->name, 'value' => $h->value,
+                    'managed' => app(ManagedResources::class)->managed('header', $h->id)->toArray()])->values(),
             'settings' => [
                 'allow_ips' => $settings->allow_ips,
                 'deny_ips' => $settings->deny_ips,
@@ -102,7 +105,9 @@ final class RoutingController extends Controller
     public function destroyRedirect(Request $request, string $site, string $redirect, DeleteSiteRule $delete): RedirectResponse
     {
         $siteData = $this->site($request, $site, 'edge.manage');
-        $delete(Redirect::query()->where('site_id', $siteData->id)->findOrFail($redirect), $siteData->organizationId);
+        $model = Redirect::query()->where('site_id', $siteData->id)->findOrFail($redirect);
+        app(ManagedResources::class)->managed('redirect', $model->id)->guardWhole('redirect', '/redirects');
+        $delete($model, $siteData->organizationId);
 
         return back();
     }
@@ -157,6 +162,14 @@ final class RoutingController extends Controller
             throw ValidationException::withMessages(['name' => 'This header is managed by the edge.']);
         }
 
+        // Saving a header by the name of one falak.yaml manages would overwrite it.
+        $existing = Header::query()->where('site_id', $siteData->id)->where('name', $data['name'])
+            ->when($service === null, fn ($q) => $q->whereNull('compose_service'), fn ($q) => $q->where('compose_service', $service))->value('id');
+
+        if ($existing !== null) {
+            app(ManagedResources::class)->managed('header', $existing)->guardWhole('name', '/headers');
+        }
+
         $save($siteData, $data['name'], $data['value'], $service);
 
         return back();
@@ -165,7 +178,9 @@ final class RoutingController extends Controller
     public function destroyHeader(Request $request, string $site, string $header, DeleteSiteRule $delete): RedirectResponse
     {
         $siteData = $this->site($request, $site, 'edge.manage');
-        $delete(Header::query()->where('site_id', $siteData->id)->findOrFail($header), $siteData->organizationId);
+        $model = Header::query()->where('site_id', $siteData->id)->findOrFail($header);
+        app(ManagedResources::class)->managed('header', $model->id)->guardWhole('header', '/headers');
+        $delete($model, $siteData->organizationId);
 
         return back();
     }

@@ -48,6 +48,10 @@ The agent protocol (`/agent/v1`, mTLS) is documented in `contracts/agent-protoco
 | `secrets.reveal` | admin, developer | read a non-sensitive value; a token needs this ability **by name** (`*` is not enough) |
 | `security.view` | admin, developer, viewer | servers' security baseline reports |
 | `security.fix` | admin | run audits, apply and undo baseline fixes |
+| `config.view` | admin, developer, viewer | validate and plan falak.yaml, export it, read config runs |
+| `config.apply` | admin, developer | create config runs (`falak apply`), cancel them, connect the config source (UI) |
+| `config.approve` | admin | approve config runs with risky changes |
+| `config.destroy` | admin | `allow_destroy`: let a run delete databases and volumes the file removed |
 
 ## Identity
 
@@ -133,6 +137,12 @@ agents get the plan directly. `202` `{"data": {"status", "status_message", "stag
 "command_id"}}`. A server that was provisioned before keeps its status while the check runs and when something blocks
 (`status_message` starts with "Re-provisioning stopped."); it never goes to `needs_attention`. `422` while the server is
 being deleted. Rate limited to 10/min.
+
+### `POST /api/v1/servers/{server}/php` `{"version": "8.3"}` — update permission on the server (`servers.manage`)
+Installs a PHP version (Servers → server → PHP → Install), e.g. one a falak.yaml unit's `php` needs. The agent installs
+it (`runtime.php.install`); `202 {"data": {"version": "8.3", "status": "installing", "command_id": "01k…"}}`. `422` on
+`version` for a version Falak doesn't offer or the server's OS can't install, one already installed or installing, a
+server that doesn't run PHP or isn't active. `404` for a server of another organization. Rate limited to 10/min.
 
 ### `GET /api/v1/servers/{server}/capacity` — `servers.view`
 What every service on the server may use against what it has (the agent's facts): each site, compose service,
@@ -408,7 +418,8 @@ to the environment's network. SQL engines get a database and a user named after 
 major this release ships no pinned image of is a `422` on `version`. Sites: the `POST /sites` body with
 `kind: "site"`. `201 {data: <canvas service>, warnings[]}`; the service is `provisioning` until the container runs.
 
-Database containers and backups have no `/api/v1` endpoints yet; the session routes (CSRF, `Accept: application/json`
+Database containers can be listed, read and deleted over `/api/v1` (see Databases); the rest of their lifecycle and
+backups have no `/api/v1` endpoints yet. The session routes (CSRF, `Accept: application/json`
 for errors as JSON): `POST /databases/instances {engine, server_id, name, version?, memory_mb?, cpus?, disk_gb?,
 settings?}`, `PUT /databases/instances/{instance} {memory_mb?, cpus?, settings?, public_access?, require_tls?,
 allowed_sources?}` (a setting given as `null` returns to its default; `allowed_sources`: IPv4 CIDRs allowed to reach a
@@ -459,6 +470,33 @@ current version of the nearest secret `NAME` of the service owning the variable 
 then organization secrets. A missing secret fails the deployment (`STRIPE_KEY: secret STRIPE_KEY is not defined for
 this service …`), as does a linked secret whose provider is not configured. Each read is in the secret's access log
 (once per deployment and version).
+
+## Databases
+
+Database containers (instances). Responses never carry a password: `rotating_password` and `password_overlap_until`
+only say a rotation is pending.
+
+### `GET /api/v1/databases/instances` · `GET /api/v1/databases/instances/{instance}` — `databases.view`
+```json
+{"data": {
+  "id": "01k…", "name": "shop", "server_id": "01k…", "server_name": "db-1", "environment_id": "01k…",
+  "engine": "postgresql", "engine_label": "PostgreSQL", "kind": "sql", "version": "17",
+  "image": "ghcr.io/othmanhaba/falak-postgres:17", "image_digest": "sha256:…",
+  "hostname": "falak-db-01k…", "port": 5432, "host_port": 20000, "published_addresses": [], "public_access": false,
+  "require_tls": true, "memory_mb": 512, "cpus": null, "settings": {}, "pitr_enabled": false, "volume_id": "01k…",
+  "status": "active", "status_message": null, "health": "healthy", "rotating_password": false,
+  "databases_count": 1, "users_count": 1, "managed": null, "created_at": "2026-10-01T10:00:00+00:00", "…": "…"
+}}
+```
+The list is the organization's instances by name; `404` for an instance of another organization. `managed` is what
+`falak.yaml` manages on it (`null` when nothing).
+
+### `DELETE /api/v1/databases/instances/{instance}` `{"confirm": "<name>", "delete_volume": false}` — `databases.manage`
+The dashboard's delete: `confirm` must be the instance's name (`422` otherwise). `202 {data: <instance>}` with
+`status: deleting`; the agent removes the container, then the instance is gone. Its data volume stays unless
+`delete_volume: true`. `422` on `confirm` when a `falak.yaml` declares the instance (remove it from the file first),
+`422` on `instance` during a major upgrade or when the server's agent is not connected. The token needs
+`databases.view` as well.
 
 ## Secrets
 
@@ -533,6 +571,157 @@ Custom git uses `auth_type: none` (public URLs) or per-site deploy keys.
 GitHub App connections (`auth_type: app`) are created only through the browser flow (Settings → Source control →
 Connect GitHub), since GitHub asks the user to confirm the app and pick repositories; they are listed like any
 other connection and can be used as `source_connection_id` for sites.
+
+## Config as code (`falak.yaml`)
+
+A project can follow one file in its repository (`falak.yaml`, `falak.yml` or `falak.json`; schema
+`https://falak.sh/schema/v1.json`; guide: [CONFIG_AS_CODE.md](CONFIG_AS_CODE.md), design: [plans/CONFIG_AS_CODE.md](plans/CONFIG_AS_CODE.md)). The source (connection,
+repository, path, on/off) is set in the dashboard (Project settings → Config as code) or with `PUT …/config/source`
+(`falak config source set`). A push to a branch an
+environment of the file names (`environments.<slug>.branch`) creates one **config run** per environment: the file is read
+at the pushed commit, validated, planned, applied, and the units that changed (their files, or their config) are
+deployed; phase B (workers, schedules, domains…) is applied when each unit's release goes live. A plan with risky
+changes **waits for an approval** (`awaiting_approval`, `config.approve`, expires after 7 days by default); `refused` is
+only found on runs made before approvals. "Experimental" is a label only.
+A file without `environments` binds the project's production environment to the repository's default branch.
+
+`{project}` is the project id. Issues (`ConfigIssue`):
+
+```json
+{"code": "schema", "pointer": "/units/web/deploy/strategy", "source": null, "line": 12, "column": 17,
+ "message": "The data should match one item from enum.", "severity": "error"}
+```
+
+`code`: `parse`, `parse.*`, `schema`, `environment.unknown`, `override.type`, `reference.*`, `name.server`,
+`name.secret`, `name.unit`, `name.storage`, `name.dns_credential`, `name.certificate`, `name.environment`, `value.range`, `value.unsupported`, `value.forbidden`,
+`value.conflict`, `limit.server`. `pointer` is a JSON Pointer into the file (or into the resolved file, `source` then
+says where the value is in the file); `line`/`column` are 1-based, `null` when unknown.
+
+An invalid file answers **422** in Laravel's shape plus the issues:
+
+```json
+{"message": "falak.yaml is invalid (2 errors).",
+ "errors": {"file": ["/units/web/deploy/strategy: The data should match one item from enum."]},
+ "config_errors": [ConfigIssue], "config_warnings": [ConfigIssue]}
+```
+
+### `GET /api/v1/projects/{project}/config/source` — `config.view`
+`{"data": ConfigSource}`; `404 {"message": "Config as code is not connected for this project."}` when the project has
+none.
+
+```json
+{"id": "01j…", "connection_id": "01j…", "repository": "acme/shop", "path": "falak.yaml", "enabled": true,
+ "experimental": false, "separate_approver": false, "allowed_credentials": [], "allowed_servers": [],
+ "created_at": "…", "updated_at": "…"}
+```
+
+### `PUT /api/v1/projects/{project}/config/source` — `config.apply` (30/min)
+Connects, changes, enables or disables the source, exactly as the dashboard does. Body `{"connection_id", "repository":
+"owner/name", "path"?: "falak.yaml", "enabled": true, "separate_approver"?: bool, "allowed_credentials"?: [name], "allowed_servers"?: [name]}`
+(`path` defaults to `falak.yaml`; `falak.yml`/`falak.json`, in a folder or not). → `200 {"data": ConfigSource}`.
+`separate_approver`, `allowed_credentials` and `allowed_servers` (server names the file may place units on besides those
+hosting the project's services: a new project hosts none) can only be changed with `config.approve` (`403` otherwise;
+sending the current value is fine). While either list is non-empty, changing `repository` or `connection_id` needs
+`config.approve` too (`403`): the grants were given to that repository's file. `422` for a server name the organization lacks, an unknown connection (or one of a plain git server), a repository not `owner/name`
+or a path not named `falak.*`. `enabled: false` keeps every resource, makes every field editable again and cancels the
+runs `planning` or `awaiting_approval` (`cancel_reason: source_disabled`). Enabling registers the repository's webhook.
+
+### `POST /api/v1/projects/{project}/config/validate` — `config.view` (60/min)
+Body `{"file": "<raw text>", "format": "yaml"|"json", "environment": "staging"?}`. Without `environment`: reading, schema
+and the merge of every environment of the file; with it: also the organization checks (servers attached to the
+project or allowed on its source, secrets, services, each module's checks) for that environment. Always `200`:
+`{"data": {"valid": false, "environments": ["production", "staging"], "errors": [ConfigIssue], "warnings": [ConfigIssue]}}`.
+
+### `POST /api/v1/projects/{project}/config/plan` — `config.view` (30/min)
+`data.environment_exists` / `data.preview_only`: for an environment the file declares but the project lacks, the plan
+is a preview of its creation (a `create` of `/environments/<slug>` first, then its units) with the warning
+`environment.created_on_push`. A file without `environments` plans the project's production environment.
+
+Body: exactly one of `file` (+ `format`) / `commit` (the file at that commit), plus `environment`. Nothing is applied.
+→ `200 {"data": {"environment", "commit", "resolved": {…}, "plan": {"changes": [Change], "summary": {"create": 1,
+"update": 2, "delete": 0, "detach": 0, "noop": 9}, "risky": false, "deploy": ["web"]}, "warnings": [ConfigIssue]}}`.
+`Change` is `{op, path, before, after, section, unit, risky, reason, rule}` (`op`: create, update, delete, detach,
+noop; `path` a JSON Pointer, list items by identity: `/units/web/domains/shop.example.com`). `422` invalid file, `409
+{"message": "Config as code is not enabled for this project."}`.
+
+### `POST /api/v1/projects/{project}/config/runs` — `config.apply` (10/min)
+Body as for plan, plus `"allow_destroy": false` (`true` needs `config.destroy`). A run from `file` applies that text
+(`commit` null: units deploy their branch's head). → `201 {"data": ConfigRun}`, answered once the plan is saved
+(status `applying`, `applied`, `awaiting_approval`, `refused` or `failed`); `422` (with `run`) for an invalid file.
+
+```json
+{"id": "01j…", "project_id": "01j…", "environment": "production", "environment_id": "01j…", "commit": null,
+ "branch": null, "trigger": "cli", "status": "applying",
+ "plan": {"changes": [Change], "summary": {…}, "risky": false, "deploy": ["web"]},
+ "errors": [], "warnings": [], "error": null, "allow_destroy": false, "requested_by": "01j…", "approved_by": null,
+ "approved_at": null, "error_code": null,
+ "deployments": [{"unit": "web", "site_id": "01j…", "deployment_id": "01j…", "status": "deploying", "deployment_status": "deploying", "error": null}],
+ "created_at": "…", "started_at": "…", "finished_at": null, "url": "https://…/projects/01j…/settings?config_run=01j…#config"}
+```
+
+`trigger`: `push`, `pr`, `cli`, `manual`, `rollback` (a rollback restores the config saved on the release it returns
+to). `status`: `planning`, `awaiting_approval`, `applying`, `applied`, `failed`, `cancelled`, `refused`; the run's
+`status` alone says whether it is finished (`applied`, `failed`, `cancelled`, `refused`). `deployments[].status` is
+Config's view of each unit: `pending`, `deploying`, `released` (live, phase B applied), `skipped` (not deployed: no
+deploy source, push to deploy off on a push, or a unit removed from the file), `failed`, `cancelled`, `superseded` (a
+newer run of the environment took over; the run ends `cancelled`); `deployment_status` is the deployment's own status.
+Env values are `••••` in plans and runs unless the token has `sites.env.view` (plans are stored masked).
+`error_code` (only when `failed`): `invalid` (see `errors`), `unreadable` (the file couldn't be read at the commit),
+`apply_failed` (applying a phase failed; a phase A failure deploys nothing), `deployment_failed` (a unit's deployment
+failed or was cancelled: the entries with `status: failed` / `cancelled`).
+
+### `GET /api/v1/projects/{project}/config/runs[?environment=&per_page=&page=]` · `GET /api/v1/config/runs/{run}` — `config.view`
+Newest first, `{"data": [ConfigRun], "links": {"next", "prev"}, "meta": {"current_page", "last_page", "total", "per_page"}}`
+(`per_page` 1–100, default 25; `page` from 1) / `{"data": ConfigRun}` (`falak apply --wait` polls it).
+
+A run that needed an approval carries `approval` (null otherwise), and a cancelled run its `cancel_reason`:
+
+```json
+{"approval": {"required": true, "risky": [{"path": "/units/web/deploy/strategy", "rule": "production.strategy", "reason": "…"}],
+              "expires_at": "…", "approved_by": null, "approved_at": null, "rejected_by": null, "rejected_at": null,
+              "comment": null, "can_approve": true, "blocked_reason": null, "plan_hash": "3f1a…"},
+ "cancel_reason": null}
+```
+
+`can_approve`/`blocked_reason` are the caller's ("You need the config.approve permission.", "You requested this run:
+another approver must approve it." when the project's admins require a different approver). `cancel_reason`:
+`superseded`, `rejected`, `expired`, `source_disabled`, `environment_released`, `user`.
+
+### `POST /api/v1/config/runs/{run}/approve` `{"plan_hash", "comment"?}` — `config.approve` (30/min)
+`plan_hash` (required) is the run's `approval.plan_hash` as shown: a different hash approves nothing (`409`, "The plan
+changed since it was shown; review it again."). The run plans again and applies: `200 {"data": ConfigRun}` (`applying`, or already `applied`/`failed`). `403
+{"message": blocked_reason}`; `409 {"message": "This run is not awaiting approval."}` (superseded, expired, rejected,
+done); `409 {"message": "The plan changed since it was shown; review it again.", "data": ConfigRun}` when the fresh plan
+has a risky change the approval didn't cover (the run waits again with the new plan).
+
+### `POST /api/v1/config/runs/{run}/reject` `{"comment"?}` — `config.approve` (30/min)
+`200 {"data": ConfigRun}` (`cancelled`, `cancel_reason: rejected`); `409` when it isn't awaiting approval.
+
+### `GET /api/v1/projects/{project}/config/drift?environment=` · `POST …/config/drift` `{"environment"}` — `config.view` (POST 10/min)
+The environment's state against the file last applied to it (POST checks now; a scheduled check runs every 30 minutes):
+
+```json
+{"data": {"environment": "production", "status": "drifted", "checked_at": "…", "since": "…",
+          "baseline_run_id": "01j…", "baseline_commit": "abc…", "signature": "9f2c…", "changes": [Change]}}
+```
+
+`status`: `in_sync`, `drifted`, `unknown` (never checked, nothing applied yet, or a run is applying: **not drift**).
+`changes` are what a run would change to put the file back (env values masked). A drift alerts `config.drift` once per
+signature.
+
+### `GET /api/v1/projects/{project}/config/unmanaged?environment=` — `config.view`
+What runs detached (removed from the file but kept, or released with their environment):
+`{"data": [{"id", "environment", "unit", "resource_type", "resource_id", "label", "reason", "run_id", "detached_at"}]}`
+(`reason`: `removed_from_file`, `environment_released`). Delete them from their module's page (its permissions), or add
+them back to the file to manage them again.
+
+### `POST /api/v1/config/runs/{run}/cancel` — `config.apply`
+A run `planning` or `awaiting_approval` → `cancelled`; `409` otherwise.
+
+### `GET /api/v1/projects/{project}/config/export?environment=production&format=yaml` — `config.view`
+`{"data": {"environment": "production", "format": "yaml", "file": "<text>"}}`: today's state of the environment as a
+file (`units` from each module's current state, the environment with its `branch`). Without `sites.env.view` literal env
+values are left out (references are kept).
 
 ## Deployments
 

@@ -2,6 +2,7 @@
 
 namespace Falak\Projects;
 
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Databases\Events\DatabaseCreated;
 use Falak\Databases\Events\DatabaseDeleted;
 use Falak\Identity\Contracts\PermissionRegistry;
@@ -15,12 +16,15 @@ use Falak\Projects\Application\Console\BackfillProjectsCommand;
 use Falak\Projects\Application\Listeners\CreateDefaultProject;
 use Falak\Projects\Application\Listeners\DeleteOrganizationProjects;
 use Falak\Projects\Application\Listeners\PlaceCreatedServices;
+use Falak\Projects\Contracts\ConfigEnvironments;
 use Falak\Projects\Contracts\PreviewEnvironments;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\VariableReferences;
 use Falak\Projects\Domain\Models\Project;
 use Falak\Projects\Domain\Policies\ProjectPolicy;
+use Falak\Projects\Infrastructure\ActionConfigEnvironments;
 use Falak\Projects\Infrastructure\ActionPreviewEnvironments;
+use Falak\Projects\Infrastructure\Config\ProjectsReconciler;
 use Falak\Projects\Infrastructure\EloquentProjectDirectory;
 use Falak\Projects\Infrastructure\ReferenceResolver;
 use Falak\Sites\Events\ComposeServiceExtracted;
@@ -49,11 +53,14 @@ class ProjectsServiceProvider extends ModuleServiceProvider
         VariableReferences::class => ReferenceResolver::class,
         // Uses the request-scoped audit log.
         PreviewEnvironments::class => ActionPreviewEnvironments::class,
+        ConfigEnvironments::class => ActionConfigEnvironments::class,
     ];
 
     protected function bootModule(): void
     {
         Gate::policy(Project::class, ProjectPolicy::class);
+        // falak.yaml's `environments` (Config, docs/plans/CONFIG_AS_CODE.md).
+        $this->app->tag([ProjectsReconciler::class], Reconcilable::TAG);
 
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register(ProjectPolicy::VIEW, [Role::Admin, Role::Developer, Role::Viewer], 'View projects, environments and their canvas', 'projects');

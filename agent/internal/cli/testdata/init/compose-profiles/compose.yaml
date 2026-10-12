@@ -1,0 +1,13 @@
+services:
+  web:
+    build: .
+    ports: ["3000:3000"]
+  worker:
+    build: .
+    command: ["node", "worker.js"]
+    profiles: [jobs]
+  postgres:
+    image: postgres:17-alpine
+  adminer:
+    image: adminer
+    profiles: [tools]

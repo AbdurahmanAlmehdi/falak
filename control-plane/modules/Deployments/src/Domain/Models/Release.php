@@ -22,6 +22,7 @@ use Illuminate\Support\Carbon;
  * @property ?string $image
  * @property ?array{yaml: string, env: array<string, string>, leader: array<string, list<string>>, source: string, version?: ?int, pinned?: bool, registry?: bool} $compose rendered compose release
  * @property ?array<string, string> $environment the site variables its `.env` was written with (references resolved)
+ * @property ?array<string, mixed> $config the unit's slice of the resolved falak.yaml it was released with
  * @property ReleaseStatus $status
  * @property ?Carbon $activated_at
  * @property ?Carbon $auto_rolled_back_at its watch rolled it back: never an automatic rollback target
@@ -46,7 +47,7 @@ class Release extends Model
      */
     protected function casts(): array
     {
-        return ['status' => ReleaseStatus::class, 'activated_at' => 'datetime', 'auto_rolled_back_at' => 'datetime', 'compose' => SealedArray::class, 'environment' => SealedArray::class];
+        return ['status' => ReleaseStatus::class, 'activated_at' => 'datetime', 'auto_rolled_back_at' => 'datetime', 'compose' => SealedArray::class, 'environment' => SealedArray::class, 'config' => 'array'];
     }
 
     public static function current(string $siteId): ?self

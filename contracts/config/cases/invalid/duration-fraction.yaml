@@ -1,0 +1,7 @@
+# Durations are whole numbers per unit: 90s, not 1.5m.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    workers: { default: { timeout: 1.5m } }

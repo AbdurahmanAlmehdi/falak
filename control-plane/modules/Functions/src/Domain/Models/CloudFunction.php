@@ -21,6 +21,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $memory_mb
  * @property float $cpus
  * @property int $request_timeout_s
+ * @property ?list<string> $allow_cidrs
+ * @property ?string $root a falak.yaml unit's `root`: the repository folder its code comes from (null: the repository root, or code written in the editor)
  */
 class CloudFunction extends Model
 {

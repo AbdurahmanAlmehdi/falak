@@ -1,0 +1,7 @@
+# null removes a key only in environment overrides.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    env: { FOO: null }

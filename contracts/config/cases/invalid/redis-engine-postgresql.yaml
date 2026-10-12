@@ -1,0 +1,4 @@
+# Redis units are redis or valkey.
+version: 1
+units:
+  cache: { type: redis, engine: postgresql }

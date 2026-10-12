@@ -1,0 +1,47 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  web:
+    type: compose # detected: compose.yaml
+    services:
+      app:
+        port: 8080 # detected: ports of app in compose.yaml
+      mysql:
+        replace_with: mysql # run mysql as a Falak-managed instance
+      redis:
+        replace_with: redis # run redis as a Falak-managed instance
+    env: # from the example env file; secrets are ${{ secrets.NAME }} references
+      APP_NAME: Blog
+      APP_ENV: production
+      APP_KEY: ${{ secrets.APP_KEY }} # required: create it from `php artisan key:generate --show` (Falak generates it only for native Laravel units)
+      DB_CONNECTION: ${{ mysql.DB_CONNECTION }}
+      DB_HOST: ${{ mysql.DB_HOST }}
+      DB_PORT: ${{ mysql.DB_PORT }}
+      DB_DATABASE: ${{ mysql.DB_DATABASE }}
+      DB_USERNAME: ${{ mysql.DB_USERNAME }}
+      DB_PASSWORD: ${{ mysql.DB_PASSWORD }}
+      REDIS_CLIENT: predis
+      REDIS_HOST: ${{ redis.REDIS_HOST }}
+      REDIS_PORT: ${{ redis.REDIS_PORT }}
+      CACHE_STORE: redis
+      LOG_CHANNEL: stderr
+
+  mysql:
+    type: database
+    engine: mysql # detected: image mysql:8.0 of mysql in compose.yaml
+    version: "8.0" # detected: tag 8.0
+
+  redis:
+    type: redis # detected: image redis:8 of redis in compose.yaml
+    version: "8" # detected: tag 8
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

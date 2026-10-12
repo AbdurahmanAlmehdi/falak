@@ -1,0 +1,4 @@
+# Only version 1 exists.
+version: 2
+units:
+  web: { type: app, runtime: node }

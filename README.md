@@ -150,7 +150,47 @@ falak fn versions hooks && falak fn rollback hooks v3 --wait
 falak fn run hooks "Nightly cleanup"                # run a schedule now, streams its output
 falak fn invoke hooks /hello/ada -H 'X-Falak-Key: …'
 falak fn logs hooks --follow
+
+# Database containers
+falak db list
+falak db delete shop --confirm shop                 # the data volume stays; add --delete-volume to remove it too
+
+# Config as code (falak.yaml)
+falak init                                          # writes falak.yaml from the code; --stdout, --json, --full, --yes
+falak init --dockerfile                             # Go, Python, Ruby, Rust, Java: also a starter Dockerfile
+falak validate                                      # offline: schema, overrides, references; exit 5 if invalid
+falak plan                                          # + create, ~ update, - delete, ! risky (with the reason)
+falak apply --wait                                  # applies, then streams the deployments; exit 6 if it waits for an approval
+falak apply --wait --approve                        # shows the risky changes and approves them (if you may), then waits
+falak runs && falak runs show 01j…                  # runs, newest first; a run's plan, approval and deployments
+falak approve 01j… --comment "checked"              # or: falak reject 01j… --comment "not today"
+falak drift -e production --check                   # exit 7 if the environment drifted from its last applied file
+falak config unmanaged                              # what runs detached (kept, no longer managed)
+falak config source set --repo acme/shop --connection 01j… --enable   # turn it on (or --disable); `show` prints it
+falak config source set --allow-server app-1        # admins: a new project's file may place units there
+falak init --update                                 # a diff of what the code adds to falak.yaml; --write applies it
+falak config export shop -e production -o falak.yaml
 ```
+`falak init` reads the repository the way the builder does (`builder.Detect`, a Dockerfile's `EXPOSE`, a compose file
+that builds the code, `.env.example`, package and dependency files, workspaces) and writes each value with the reason
+it was chosen; versions come only from the repository. Secrets (by name, or by a value that looks like a credential)
+become `${{ secrets.NAME }}` references and are never printed (secret keys left empty in the example are written
+commented out, as optional; Laravel's `APP_KEY` is left to Falak, which generates it for a native Laravel unit; a Laravel Dockerfile or compose
+app gets `APP_KEY: ${{ secrets.APP_KEY }}`, a secret to create from `php artisan key:generate --show`); databases and Redis become units wired with
+`${{ db.DATABASE_URL }}`-style references; local development values are left out. It reads and writes nothing through
+symlinks that leave the repository, and never overwrites a file without `--force`. Logged in, it asks for the project,
+environments, servers, a domain and previews; it links the repository (`.falak/project.json`) only to a project you
+pick or pass with `-p`. Not linked, it writes no `environments` (production deploys from the default branch) and a
+comment showing how to bind branches; environments the file declares are created by a push to production's branch.
+`init --update` only adds: everything you wrote (keys, comments, order) stays, a renamed unit keeps its name, and a
+value the code now says otherwise is flagged with a comment and a note. `apply --wait` gives up after `--timeout` (30m;
+the run goes on). `approve` and `apply --approve` ask before approving (`--yes` in scripts), and ask again when the
+plan changed since it was shown.
+`plan`, `apply`, `runs`, `drift` and `config export` find the project with `-p` (id or name), then `FALAK_PROJECT`, then
+that file; the environment with `-e`, else the one whose `branch` is the current git branch (production for a file
+without environments, and for `drift`). A plan for an environment the project doesn't have yet is shown as a preview. `--json` prints the API's data as is.
+The guide to the file, every field, approvals, drift and the security model: [`docs/CONFIG_AS_CODE.md`](docs/CONFIG_AS_CODE.md)
+(schema: `contracts/config/v1.schema.json`; design notes: [`docs/plans/CONFIG_AS_CODE.md`](docs/plans/CONFIG_AS_CODE.md)).
 
 ### API
 Sanctum bearer tokens scoped to one organization. Endpoints and payloads: [`docs/API.md`](docs/API.md).

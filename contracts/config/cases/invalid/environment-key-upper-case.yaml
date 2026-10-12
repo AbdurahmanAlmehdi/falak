@@ -1,0 +1,8 @@
+# Environment keys are slugs.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+environments:
+  Production: { branch: main }

@@ -1,0 +1,26 @@
+# Written by `falak init` from the code (comments say why). Check it, then commit it.
+# Schema and docs: https://falak.sh/schema/v1.json
+$schema: https://falak.sh/schema/v1.json
+version: 1
+
+units:
+  api:
+    type: app
+    root: apps/api
+    runtime: docker # detected: go (go.mod); starter Dockerfile written by falak init
+    port: 8080 # EXPOSE 8080 in the starter Dockerfile
+    build:
+      mode: docker
+
+  web:
+    type: app
+    root: apps/web
+    runtime: node # detected: next 15.5.2 in package.json
+
+# No environments: the project's production environment deploys from the repository's default branch.
+# To bind branches, name the project's environment slugs (a push to production's branch creates the others):
+# environments:
+#   production:
+#     branch: main
+#   staging:
+#     branch: develop

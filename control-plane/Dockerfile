@@ -96,6 +96,7 @@ ENV APP_ENV=production \
     FALAK_AGENT_BINARIES_PATH=/opt/falak/bin \
     FALAK_BUILDER_BINARIES_PATH=/opt/falak/bin \
     FALAK_AGENT_SCHEMAS_PATH=/opt/falak/contracts/agent-protocol \
+    FALAK_CONFIG_CONTRACTS_PATH=/opt/falak/contracts/config \
     FALAK_TEMPLATES_PATH=/opt/falak/templates \
     FALAK_GRAFANA_DASHBOARDS_PATH=/opt/falak/observability/grafana/dashboards
 USER www-data

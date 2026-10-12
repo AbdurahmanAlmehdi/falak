@@ -1,0 +1,4 @@
+# Point-in-time recovery is for SQL engines only.
+version: 1
+units:
+  cache: { type: redis, pitr: { storage: offsite } }

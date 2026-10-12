@@ -1,3 +1,5 @@
+import { type ManagedConfig } from '@/components/falak';
+
 export type TlsMode = 'auto' | 'dns' | 'custom' | 'internal' | 'off';
 export type WwwRedirect = 'none' | 'to_www' | 'to_apex';
 export type ApplyStatus = 'pending' | 'applied' | 'failed' | 'error';
@@ -31,6 +33,8 @@ export interface EdgeDomain {
     served_host: string;
     supports_www: boolean;
     wildcard: boolean;
+    /** Set by the project's falak.yaml: read-only here (edit the file). Null when the file doesn't manage it. */
+    managed?: ManagedConfig | null;
     /** Set when the domain is in a Cloudflare zone Falak manages (records created for it). */
     cloudflare: {
         zone: string;
@@ -110,9 +114,9 @@ export interface DomainsData {
 export interface RoutingData {
     /** Compose sites: their public services (empty for other sites). Rows with `service` apply to that service only. */
     services: ComposeServiceOption[];
-    redirects: { id: string; service: string | null; from: string; to: string; status: number }[];
+    redirects: { id: string; service: string | null; from: string; to: string; status: number; managed?: ManagedConfig | null }[];
     rules: { id: string; service: string | null; name: string | null; path: string | null; username: string }[];
-    headers: { id: string; service: string | null; name: string; value: string }[];
+    headers: { id: string; service: string | null; name: string; value: string; managed?: ManagedConfig | null }[];
     settings: { allow_ips: string[]; deny_ips: string[]; max_body_bytes: number | null; encode: boolean };
     /** IP lists per compose service: its allow list replaces the site's, its deny list adds to it. */
     serviceSettings: Record<string, { allow_ips: string[]; deny_ips: string[] }>;

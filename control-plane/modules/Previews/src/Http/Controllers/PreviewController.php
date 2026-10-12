@@ -2,6 +2,7 @@
 
 namespace Falak\Previews\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Edge\Contracts\PreviewDomains;
 use Falak\Identity\Contracts\CurrentOrganization;
 use Falak\Identity\Contracts\OrganizationAccess;
@@ -56,6 +57,8 @@ final class PreviewController extends Controller
                 'max_concurrent' => $settings?->max_concurrent ?? 5,
                 'idle_ttl_hours' => $settings?->idle_ttl_hours ?? 72,
                 'access' => $settings?->access ?? 'basic',
+                // What the project's falak.yaml `previews:` block manages: shown read-only.
+                'managed' => $settings !== null ? app(ManagedResources::class)->managed('preview_settings', $settings->id)->toArray() : null,
             ],
             'environments' => array_map(fn ($e) => ['id' => $e->id, 'name' => $e->name, 'is_production' => $e->isProduction], $environments),
             'services' => $base !== null ? array_map(fn ($s) => ['name' => $s->name, 'kind' => $s->kind->value], $this->projects->servicesIn($base)) : [],
@@ -68,9 +71,53 @@ final class PreviewController extends Controller
     public function settings(Request $request, string $project, SavePreviewSettings $save): RedirectResponse
     {
         $data = $this->project($request, $project, PreviewPolicy::MANAGE);
+        $this->guardManaged($data->id, $request->all());
         $warnings = $save($data->id, $request->all(), $request->user()?->getAuthIdentifier());
 
         return back()->with('warnings', $warnings)->with('success', 'Preview settings saved.');
+    }
+
+    /**
+     * Settings a falak.yaml's `previews:` block sets are refused (422) when the form changes them.
+     *
+     * @param  array<string, mixed>  $input
+     */
+    private function guardManaged(string $projectId, array $input): void
+    {
+        $settings = PreviewSettings::query()->where('project_id', $projectId)->first();
+        $managed = $settings !== null ? app(ManagedResources::class)->managed('preview_settings', $settings->id) : null;
+
+        if ($settings === null || ! $managed->any()) {
+            return;
+        }
+
+        $managed->guard([
+            'enabled' => '/previews/enabled', 'base_environment_id' => '/previews/base', 'server_id' => '/previews/server', 'fork_server_id' => '/previews/fork_server',
+            'variables' => '/previews/variables', 'domain_pattern' => '/previews/domain_pattern', 'max_concurrent' => '/previews/max_concurrent',
+            'idle_ttl_hours' => '/previews/idle_ttl', 'access' => '/previews/access', 'acknowledge_shared_database' => '/previews/acknowledge_shared_database',
+        ], $input, $settings->only(['enabled', 'base_environment_id', 'server_id', 'fork_server_id', 'variables', 'domain_pattern', 'max_concurrent', 'idle_ttl_hours', 'access', 'acknowledge_shared_database']));
+
+        $unitPath = collect($managed->paths)->first(fn (string $p) => str_starts_with($p, '/previews/units/'));
+
+        if ($unitPath !== null) {
+            $sorted = function (array $map, bool $databases = false): array {
+                $map = $databases ? array_map(fn ($e) => array_filter(array_intersect_key((array) $e, array_flip(['strategy', 'source_environment_id', 'sanitize_kind', 'sanitize_script'])), fn ($v) => $v !== null), $map) : $map;
+                ksort($map);
+
+                foreach ($map as $key => $entry) {
+                    if (is_array($entry)) {
+                        ksort($entry);
+                        $map[$key] = $entry;
+                    }
+                }
+
+                return $map;
+            };
+            $managed->guard(['services' => $unitPath, 'databases' => $unitPath], [
+                ...(array_key_exists('services', $input) ? ['services' => $sorted((array) $input['services'])] : []),
+                ...(array_key_exists('databases', $input) ? ['databases' => $sorted((array) $input['databases'], true)] : []),
+            ], ['services' => $sorted((array) $settings->services), 'databases' => $sorted((array) $settings->databases, true)]);
+        }
     }
 
     public function approve(Request $request, Preview $preview, PreviewLifecycle $lifecycle): RedirectResponse

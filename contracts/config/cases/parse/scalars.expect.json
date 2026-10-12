@@ -1,0 +1,17 @@
+{
+  "strings": ["yes", "no", "on", "off", "Yes", "true", "12:30", "0755", "08", "-0", "0b11", "~foo", "2026-10-11"],
+  "integers": [0, 42, -7, 12, 1000, 31, 15],
+  "floats": [0.5, -1.25, 1500.0],
+  "booleans": [true, false, true, false],
+  "nulls": [null, null, null, ""],
+  "empty_map": {},
+  "empty_list": [],
+  "200": "numeric key",
+  "anchors": {
+    "base": {"a": 1, "b": 2},
+    "merged": {"a": 1, "b": 3},
+    "alias": {"a": 1, "b": 2}
+  },
+  "block": "line one\nline two\n",
+  "folded": "one two\n"
+}

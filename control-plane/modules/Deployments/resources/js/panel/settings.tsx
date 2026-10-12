@@ -1,4 +1,18 @@
-import { Button, Callout, CopyButton, Field, Input, Section, Select, SkeletonRows, Switch, toast } from '@/components/falak';
+import {
+    Button,
+    Callout,
+    CopyButton,
+    Field,
+    Input,
+    ManagedBadge,
+    Section,
+    Select,
+    SkeletonRows,
+    Switch,
+    managedCovers,
+    toast,
+    type ManagedConfig,
+} from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson, type HttpMethod } from '@/lib/http';
 import { type ServiceTabProps } from '@/lib/registry';
@@ -32,7 +46,23 @@ interface DeploySettingsData {
     hasHook: boolean;
     watch: WatchSettings & { migrations: boolean; production: boolean };
     can: { manage: boolean };
+    /** Settings the project's falak.yaml manages (/deploy/...): read-only here. Null when none. */
+    config: ManagedConfig | null;
 }
+
+/** Input fields => what they are in falak.yaml (pointers relative to the unit). */
+const DEPLOY_PATHS: Partial<Record<keyof DeploySettings, string>> = {
+    strategy: '/deploy/strategy',
+    batch_size: '/deploy/batch_size',
+    keep_releases: '/deploy/keep_releases',
+    secrets_mode: '/deploy/secrets',
+    health_enabled: '/deploy/health/enabled',
+    health_path: '/deploy/health/path',
+    health_status: '/deploy/health/status',
+    health_timeout_s: '/deploy/health/timeout',
+    health_retries: '/deploy/health/retries',
+    health_retry_delay_s: '/deploy/health/retry_delay',
+};
 
 /** Rollback after a release goes live (opt-in). */
 interface WatchSettings {
@@ -85,14 +115,17 @@ export function DeployStrategySettings({ ctx }: ServiceTabProps) {
     if (!data || !form) return error ? <Callout tone="danger">{error}</Callout> : <SkeletonRows rows={5} />;
 
     const manage = data.can.manage;
+    const managed = (key: keyof DeploySettings) => managedCovers(data.config, DEPLOY_PATHS[key] ?? '');
+    const lock = (key: keyof DeploySettings) => !manage || managed(key);
+    const badge = (key: keyof DeploySettings) => (managed(key) ? <ManagedBadge config={data.config} /> : undefined);
     const dirty = JSON.stringify(form) !== JSON.stringify(data.settings);
     const set = (patch: Partial<DeploySettings>) => setForm({ ...form, ...patch });
     const number = (key: keyof DeploySettings, label: string, hint?: string) => (
-        <Field label={label} hint={hint} error={errors[key]}>
+        <Field label={label} hint={hint} error={errors[key]} aside={badge(key)}>
             <Input
                 mono
                 inputMode="numeric"
-                disabled={!manage}
+                disabled={lock(key)}
                 value={String(form[key] ?? '')}
                 onChange={(event) => set({ [key]: Number(event.target.value.replace(/\D/g, '') || 0) })}
             />
@@ -125,10 +158,10 @@ export function DeployStrategySettings({ ctx }: ServiceTabProps) {
             }
         >
             <form id="deploy-strategy" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-                <Field label="Strategy" error={errors.strategy} hint={strategy?.description} className="sm:col-span-2">
+                <Field label="Strategy" error={errors.strategy} hint={strategy?.description} className="sm:col-span-2" aside={badge('strategy')}>
                     <Select
                         value={form.strategy}
-                        disabled={!manage}
+                        disabled={lock('strategy')}
                         onValueChange={(value) => set({ strategy: value })}
                         options={data.strategies.map((item) => ({ value: item.value, label: item.label }))}
                     />
@@ -145,10 +178,11 @@ export function DeployStrategySettings({ ctx }: ServiceTabProps) {
                                 : 'Secret variables are passed as environment variables. Applies from the next deploy.'
                         }
                         className="sm:col-span-2"
+                        aside={badge('secrets_mode')}
                     >
                         <Select
                             value={form.secrets_mode}
-                            disabled={!manage}
+                            disabled={lock('secrets_mode')}
                             onValueChange={(value) => set({ secrets_mode: value === 'files' ? 'files' : 'env' })}
                             options={[
                                 { value: 'env', label: 'Environment variables' },
@@ -158,16 +192,20 @@ export function DeployStrategySettings({ ctx }: ServiceTabProps) {
                     </Field>
                 )}
                 <div className="grid gap-3 sm:col-span-2">
-                    <Field inline label="Health check gates activation (failed checks roll the server back)">
-                        <Switch checked={form.health_enabled} disabled={!manage} onCheckedChange={(on) => set({ health_enabled: on })} />
+                    <Field inline label="Health check gates activation (failed checks roll the server back)" aside={badge('health_enabled')}>
+                        <Switch
+                            checked={form.health_enabled}
+                            disabled={lock('health_enabled')}
+                            onCheckedChange={(on) => set({ health_enabled: on })}
+                        />
                     </Field>
                 </div>
                 {form.health_enabled && (
                     <>
-                        <Field label="Path" error={errors.health_path} hint={`Default ${data.defaultHealthPath}`}>
+                        <Field label="Path" error={errors.health_path} hint={`Default ${data.defaultHealthPath}`} aside={badge('health_path')}>
                             <Input
                                 mono
-                                disabled={!manage}
+                                disabled={lock('health_path')}
                                 placeholder={data.defaultHealthPath}
                                 value={form.health_path ?? ''}
                                 onChange={(event) => set({ health_path: event.target.value || null })}
@@ -208,11 +246,14 @@ export function WatchAfterDeploySettings({ ctx }: ServiceTabProps) {
     if (!data || !form || !initial) return error ? <Callout tone="danger">{error}</Callout> : <SkeletonRows rows={3} />;
 
     const manage = data.can.manage;
+    const managed = (key: keyof WatchSettings) => managedCovers(data.config, `/deploy/watch/${key}`);
+    const lock = (key: keyof WatchSettings) => !manage || managed(key);
+    const badge = (key: keyof WatchSettings) => (managed(key) ? <ManagedBadge config={data.config} /> : undefined);
     const dirty = JSON.stringify(form) !== JSON.stringify(initial);
     const set = (patch: Partial<WatchSettings>) => setForm({ ...form, ...patch });
     const toggle = (key: 'health' | 'crashes' | 'errors' | 'issues', label: string) => (
-        <Field inline label={label}>
-            <Switch checked={form[key]} disabled={!manage || !form.enabled} onCheckedChange={(on) => set({ [key]: on })} />
+        <Field inline label={label} aside={badge(key)}>
+            <Switch checked={form[key]} disabled={lock(key) || !form.enabled} onCheckedChange={(on) => set({ [key]: on })} />
         </Field>
     );
 
@@ -241,8 +282,8 @@ export function WatchAfterDeploySettings({ ctx }: ServiceTabProps) {
             }
         >
             <form id="deploy-watch" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-                <Field inline label="Watch each release after it goes live" className="sm:col-span-2">
-                    <Switch checked={form.enabled} disabled={!manage} onCheckedChange={(on) => set({ enabled: on })} />
+                <Field inline label="Watch each release after it goes live" className="sm:col-span-2" aside={badge('enabled')}>
+                    <Switch checked={form.enabled} disabled={lock('enabled')} onCheckedChange={(on) => set({ enabled: on })} />
                 </Field>
                 {!form.enabled && data.watch.production && (
                     <Callout tone="info" className="sm:col-span-2">
@@ -251,19 +292,19 @@ export function WatchAfterDeploySettings({ ctx }: ServiceTabProps) {
                 )}
                 {form.enabled && (
                     <>
-                        <Field label="Watch for (minutes)" error={errors.minutes} hint="1–60 minutes.">
+                        <Field label="Watch for (minutes)" error={errors.minutes} hint="1–60 minutes." aside={badge('minutes')}>
                             <Input
                                 mono
                                 inputMode="numeric"
-                                disabled={!manage}
+                                disabled={lock('minutes')}
                                 value={String(form.minutes)}
                                 onChange={(event) => set({ minutes: Number(event.target.value.replace(/\D/g, '') || 0) })}
                             />
                         </Field>
-                        <Field label="When a trigger fires" error={errors.on_trigger}>
+                        <Field label="When a trigger fires" error={errors.on_trigger} aside={badge('on_trigger')}>
                             <Select
                                 value={form.on_trigger}
-                                disabled={!manage}
+                                disabled={lock('on_trigger')}
                                 onValueChange={(value) => set({ on_trigger: value === 'alert_only' ? 'alert_only' : 'rollback' })}
                                 options={[
                                     { value: 'rollback', label: 'Roll back and alert' },
@@ -286,11 +327,16 @@ export function WatchAfterDeploySettings({ ctx }: ServiceTabProps) {
                                 </p>
                             )}
                             {form.health && data.settings.health_enabled && (
-                                <Field label="Failures in a row" error={errors.health_failures} hint="Uses the health check path and status above.">
+                                <Field
+                                    label="Failures in a row"
+                                    error={errors.health_failures}
+                                    hint="Uses the health check path and status above."
+                                    aside={badge('health_failures')}
+                                >
                                     <Input
                                         mono
                                         inputMode="numeric"
-                                        disabled={!manage}
+                                        disabled={lock('health_failures')}
                                         value={String(form.health_failures)}
                                         onChange={(event) => set({ health_failures: Number(event.target.value.replace(/\D/g, '') || 0) })}
                                     />

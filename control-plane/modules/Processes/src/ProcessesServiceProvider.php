@@ -4,6 +4,7 @@ namespace Falak\Processes;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Edge\Events\EdgeApplied;
 use Falak\Fleet\Events\AgentSecretsMissing;
 use Falak\Fleet\Events\CommandFailed;
@@ -28,6 +29,7 @@ use Falak\Processes\Contracts\ScheduleSources;
 use Falak\Processes\Events\ProgramCrashLooping;
 use Falak\Processes\Events\ProgramRecovered;
 use Falak\Processes\Infrastructure\AgentProcessControl;
+use Falak\Processes\Infrastructure\Config\ProcessesReconciler;
 use Falak\Processes\Infrastructure\EloquentOctaneRouting;
 use Falak\Processes\Infrastructure\EloquentProcessOwners;
 use Falak\Processes\Infrastructure\NoScheduleSources;
@@ -54,6 +56,8 @@ class ProcessesServiceProvider extends ModuleServiceProvider
         ScheduleSources::class => NoScheduleSources::class,
         OctaneRouting::class => EloquentOctaneRouting::class,
         ProcessOwners::class => EloquentProcessOwners::class,
+        // One instance per process: diff() keeps the env values apply() needs (plans only carry env keys).
+        ProcessesReconciler::class => ProcessesReconciler::class,
     ];
 
     public function register(): void
@@ -62,6 +66,8 @@ class ProcessesServiceProvider extends ModuleServiceProvider
 
         // Not a singleton: tests swap the AgentGateway after boot.
         $this->app->bind(ProcessControl::class, AgentProcessControl::class);
+
+        $this->app->tag([ProcessesReconciler::class], Reconcilable::TAG);
     }
 
     protected function bootModule(): void

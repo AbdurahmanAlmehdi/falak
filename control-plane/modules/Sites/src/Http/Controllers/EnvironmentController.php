@@ -21,6 +21,7 @@ use InvalidArgumentException;
  */
 final class EnvironmentController extends Controller
 {
+    use GuardsManagedFields;
     use PresentsSites;
 
     /**
@@ -74,6 +75,8 @@ final class EnvironmentController extends Controller
                     'created_at' => $version->created_at->toIso8601String(),
                 ];
             })->values(),
+            // Variables the project's falak.yaml sets (/env/<KEY>, /expose), read-only here.
+            'config' => $this->managedFields($site)->toArray(),
             'can' => [
                 'reveal' => $request->user()?->can('revealEnvironment', $site) ?? false,
                 'update' => $request->user()?->can('updateEnvironment', $site) ?? false,
@@ -132,6 +135,7 @@ final class EnvironmentController extends Controller
             $exposed = $on ? [...$exposed, (string) $key] : array_values(array_diff($exposed, [(string) $key]));
         }
 
+        $this->guardVariables($site, $current !== null ? array_map('strval', $current->variables) : [], $variables, $current->exposed ?? [], $exposed, 'set');
         $version = $save($site, $variables, $exposed, $request->user()?->getAuthIdentifier());
 
         return response()->json(['data' => ['version' => $version->version ?? $current?->version]]);
@@ -182,6 +186,8 @@ final class EnvironmentController extends Controller
             throw ValidationException::withMessages(['content' => "Someone saved version {$latest} while you were editing. Reveal again to merge your changes."]);
         }
 
+        $current = EnvironmentVersion::query()->where('site_id', $site->id)->orderByDesc('version')->first();
+        $this->guardVariables($site, $current !== null ? array_map('strval', $current->variables) : [], $variables, $current->exposed ?? [], array_values($data['exposed']), 'content');
         $saved = $save($site, $variables, array_values($data['exposed']), $request->user()?->getAuthIdentifier());
 
         return $this->wantsPanelJson($request) ? response()->json(['data' => ['version' => $saved->version ?? $latest]]) : back();
@@ -193,6 +199,8 @@ final class EnvironmentController extends Controller
 
         $old = EnvironmentVersion::query()->where('site_id', $site->id)->where('version', $version)->firstOrFail();
 
+        $current = EnvironmentVersion::query()->where('site_id', $site->id)->orderByDesc('version')->first();
+        $this->guardVariables($site, $current !== null ? array_map('strval', $current->variables) : [], array_map('strval', $old->variables), $current->exposed ?? [], $old->exposed, 'version');
         $saved = $save($site, array_map('strval', $old->variables), $old->exposed, $request->user()?->getAuthIdentifier(), 'site.environment_restored');
 
         return $this->wantsPanelJson($request) ? response()->json(['data' => ['version' => $saved?->version]]) : back();

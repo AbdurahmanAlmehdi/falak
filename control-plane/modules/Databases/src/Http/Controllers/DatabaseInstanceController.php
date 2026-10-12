@@ -23,6 +23,7 @@ use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Servers\Contracts\ServerDirectory;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -37,6 +38,7 @@ use Inertia\Response;
  */
 final class DatabaseInstanceController extends Controller
 {
+    use GuardsConfigManaged;
     use PresentsDatabases;
 
     public function __construct(
@@ -52,11 +54,7 @@ final class DatabaseInstanceController extends Controller
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, DatabasesPolicy::VIEW);
 
-        $instances = DatabaseInstance::query()
-            ->where('organization_id', $organizationId)
-            ->withCount(['databases', 'users'])
-            ->orderBy('name')
-            ->get();
+        $instances = $this->instances($organizationId);
 
         $options = $this->createOptions($organizationId, $servers);
 
@@ -149,6 +147,7 @@ final class DatabaseInstanceController extends Controller
             'allowed_sources.*' => ['string', 'max:18'],
         ]);
 
+        $this->guardInstance($instance, $data);
         $instance = $update($instance, $data, $request->user()?->getAuthIdentifier());
 
         return $this->respond($request, $instance);
@@ -186,6 +185,12 @@ final class DatabaseInstanceController extends Controller
     {
         $this->authorize('manage', $instance);
         $data = $request->validate(['version' => ['nullable', 'string', 'max:16']]);
+
+        // A rebuild of the same major is not a change of the file's `version`.
+        if (($data['version'] ?? null) !== null && $data['version'] !== $instance->version) {
+            $this->managed('database_instance', $instance->id)->guard(['version' => '/version'], $data, ['version' => $instance->version]);
+        }
+
         $upgrade($instance, $data['version'] ?? null, $request->user()?->getAuthIdentifier());
 
         return $this->respond($request, $instance->refresh());
@@ -209,17 +214,68 @@ final class DatabaseInstanceController extends Controller
      */
     public function destroy(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): RedirectResponse|JsonResponse
     {
+        $this->delete($request, $instance, $lifecycle);
+
+        return $request->wantsJson() && $request->header('X-Inertia') === null
+            ? response()->json(['data' => $this->presentInstance($instance)])
+            : redirect('/databases');
+    }
+
+    /**
+     * GET /api/v1/databases/instances: the organization's containers (never a password).
+     */
+    public function indexApi(Request $request): JsonResponse
+    {
+        $organizationId = $this->organization->requireId();
+        $this->access->authorize($request->user(), $organizationId, DatabasesPolicy::VIEW);
+
+        return response()->json(['data' => $this->instances($organizationId)->map(fn (DatabaseInstance $instance) => $this->presentInstance($instance))->values()]);
+    }
+
+    /**
+     * GET /api/v1/databases/instances/{instance}
+     */
+    public function showApi(DatabaseInstance $instance): JsonResponse
+    {
+        $this->authorize('view', $instance);
+
+        return response()->json(['data' => $this->presentInstance($instance->loadCount(['databases', 'users']))]);
+    }
+
+    /**
+     * DELETE /api/v1/databases/instances/{instance} {confirm, delete_volume?}: 202, the agent removes the container
+     * (status `deleting` until it reports back).
+     */
+    public function destroyApi(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): JsonResponse
+    {
+        $this->delete($request, $instance, $lifecycle);
+
+        return response()->json(['data' => $this->presentInstance($instance)], 202);
+    }
+
+    /** The dashboard's and the API's delete: same permission, typed confirmation and falak.yaml guard. */
+    private function delete(Request $request, DatabaseInstance $instance, InstanceLifecycle $lifecycle): void
+    {
         $this->authorize('manage', $instance);
         $data = $request->validate([
             'confirm' => ['required', 'string', 'in:'.$instance->name],
             'delete_volume' => ['nullable', 'boolean'],
         ], ['confirm.in' => 'Type the database server name to confirm.']);
+        $this->guardManaged('database_instance', $instance->id, 'confirm', 'this database server');
 
         $lifecycle->delete($instance, (bool) ($data['delete_volume'] ?? false), $request->user()?->getAuthIdentifier());
+    }
 
-        return $request->wantsJson() && $request->header('X-Inertia') === null
-            ? response()->json(['data' => $this->presentInstance($instance)])
-            : redirect('/databases');
+    /**
+     * @return Collection<int, DatabaseInstance>
+     */
+    private function instances(string $organizationId): Collection
+    {
+        return DatabaseInstance::query()
+            ->where('organization_id', $organizationId)
+            ->withCount(['databases', 'users'])
+            ->orderBy('name')
+            ->get();
     }
 
     /**

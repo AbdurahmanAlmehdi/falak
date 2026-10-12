@@ -1,0 +1,5 @@
+# Previews turned off need no base.
+version: 1
+units:
+  web: { type: app, runtime: static }
+previews: { enabled: false }

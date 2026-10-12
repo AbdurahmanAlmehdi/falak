@@ -1,4 +1,4 @@
-import { Button, Section, SkeletonRows, Tag, toast } from '@/components/falak';
+import { Button, ManagedBadge, Section, SkeletonRows, Tag, managedCovers, toast, type ManagedConfig } from '@/components/falak';
 import { LimitsFields, cleanLimits, limitsSummary, type ResourceLimits } from '@/components/limits-fields';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
@@ -16,6 +16,8 @@ interface SiteLimitsData {
     services: { name: string; limits: ResourceLimits; effective: ResourceLimits }[];
     bounds: { memory_mb: number | null; cpus: number | null; min_memory_mb: number };
     can: { update: boolean };
+    /** Limits the project's falak.yaml sets (/limits/...): the site's limits are then read-only here. */
+    config: ManagedConfig | null;
 }
 
 const APPLIED: Record<string, string> = {
@@ -92,8 +94,11 @@ export function SiteLimitsSection({ ctx }: ServiceTabProps) {
             ? 'FrankenPHP sites run inside the shared edge: only the restart, log and OOM settings of their processes apply.'
             : 'Limits keep one service from starving the others on its servers. Empty fields mean no limit.';
 
+    // The editor saves every field at once, so limits the file sets lock the whole site-level editor.
+    const managed = data.scope !== 'services' && managedCovers(data.config, '/limits', true);
+
     return (
-        <Section title="Resource limits" description={description}>
+        <Section title="Resource limits" description={description} aside={managed ? <ManagedBadge config={data.config} /> : undefined}>
             {data.scope === 'services' ? (
                 <ul className="border-border divide-border divide-y rounded-md border" aria-label="Compose services">
                     {data.services.map((service) => (
@@ -132,7 +137,7 @@ export function SiteLimitsSection({ ctx }: ServiceTabProps) {
                     initial={data.limits}
                     bounds={data.bounds}
                     policyOnly={data.scope === 'policy'}
-                    canUpdate={data.can.update}
+                    canUpdate={data.can.update && !managed}
                     onSaved={() => void reload()}
                 />
             )}

@@ -1,0 +1,8 @@
+# Branch names follow git's rules.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+environments:
+  production: { branch: feature..x }

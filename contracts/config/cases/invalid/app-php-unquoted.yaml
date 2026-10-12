@@ -1,0 +1,7 @@
+# Versions are strings: 8.4 unquoted is a number.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    php: 8.4

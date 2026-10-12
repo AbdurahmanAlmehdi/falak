@@ -2,6 +2,7 @@
 
 namespace Falak\Sites\Http\Controllers;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Identity\Contracts\AuditLog;
@@ -75,6 +76,8 @@ final class ComposeController extends Controller
             'public_services' => array_map(fn ($public) => $public->toArray(), $site->publicServices()),
             'template' => $site->template,
             'policy' => ['allow_privileged' => OrganizationSettings::for($site->organization_id)->allow_privileged_compose],
+            // What falak.yaml manages (files, profiles, services): shown read-only.
+            'managed' => app(ManagedResources::class)->managed('site', $site->id)->toArray(),
             'can' => ['update' => $request->user()?->can('update', $site) ?? false],
         ]])->header('Cache-Control', 'no-store');
     }
@@ -118,6 +121,7 @@ final class ComposeController extends Controller
             'base_version' => ['nullable', 'integer'],
         ]);
 
+        $this->guardManaged($site, $data);
         $latest = ComposeVersion::query()->where('site_id', $site->id)->max('version');
 
         if (isset($data['base_version']) && $latest !== null && (int) $data['base_version'] !== (int) $latest) {
@@ -129,11 +133,60 @@ final class ComposeController extends Controller
         return response()->json(['data' => $result]);
     }
 
+    /**
+     * Fields a falak.yaml manages (files, profiles, a public service's port and health path, a service replaced by a
+     * database unit) are refused (422) when the form changes them.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function guardManaged(Site $site, array $data): void
+    {
+        $managed = app(ManagedResources::class)->managed('site', $site->id);
+
+        if (! $managed->any()) {
+            return;
+        }
+
+        $managed->guard(['compose_files' => '/files', 'compose_profiles' => '/profiles'], $data, [
+            'compose_files' => $site->composeFiles(),
+            'compose_profiles' => array_values((array) $site->compose_profiles),
+        ]);
+
+        if (($data['compose_source'] ?? null) === ComposeSource::Inline->value && $managed->covers('/files')) {
+            $managed->guard(['compose_source' => '/files'], $data, ['compose_source' => ComposeSource::Repo->value]);
+        }
+
+        $current = collect(array_filter((array) $site->public_services, 'is_array'))->keyBy('service');
+        $wanted = collect(array_key_exists('public_services', $data) ? array_filter((array) $data['public_services'], 'is_array') : $current->all())->keyBy('service');
+
+        foreach ($current->keys()->merge($wanted->keys())->unique() as $service) {
+            foreach (['port' => 'port', 'health_check_path' => 'health_path'] as $key => $field) {
+                $managed->guard(["public_services.{$service}.{$key}" => "/services/{$service}/{$field}"],
+                    ["public_services.{$service}.{$key}" => $wanted->get($service)[$key] ?? null],
+                    ["public_services.{$service}.{$key}" => $current->get($service)[$key] ?? null]);
+            }
+        }
+
+        foreach ((array) ($data['compose_services'] ?? []) as $service => $decision) {
+            // The form sends every service's decision: only a changed one is an edit.
+            $current = (array) ($site->compose_services[$service] ?? []);
+            $mode = (string) ($decision['mode'] ?? 'keep');
+            $same = $mode === (string) ($current['mode'] ?? 'keep')
+                && ($mode !== 'database' || ! isset($decision['database_id']) || strtolower((string) $decision['database_id']) === strtolower((string) ($current['database_id'] ?? '')));
+
+            if (! $same) {
+                $managed->guardWhole("compose_services.{$service}", '/services/'.$service.'/replace_with');
+            }
+        }
+    }
+
     /** POST /sites/{site}/compose/versions/{version}/restore — the version's content becomes a new version. */
     public function restore(Request $request, Site $site, int $version, UpdateComposeSettings $update): JsonResponse
     {
         $this->authorize('update', $site);
         $row = ComposeVersion::query()->where('site_id', $site->id)->where('version', $version)->firstOrFail();
+        // Restoring an inline version switches the stack away from the repository files the file manages.
+        $this->guardManaged($site, ['compose_source' => ComposeSource::Inline->value]);
 
         $result = $update($site, ['compose_source' => ComposeSource::Inline->value, 'compose_content' => $row->content], $request->user()?->getAuthIdentifier());
 

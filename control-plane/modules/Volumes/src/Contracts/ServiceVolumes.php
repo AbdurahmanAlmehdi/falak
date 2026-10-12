@@ -79,4 +79,20 @@ interface ServiceVolumes
      * first; remaining attachments go with it). Unknown ids are ignored.
      */
     public function deleteDatabaseVolume(string $volumeId, ?string $actorId = null): void;
+
+    /**
+     * Grow a sized volume online (a database container's data volume: falak.yaml's `disk`). Volumes never shrink.
+     *
+     * @throws ValidationException
+     */
+    public function resize(string $volumeId, int $sizeBytes, ?string $actorId = null): void;
+
+    /**
+     * Storage providers the backup schedules of these sites' volumes already use (a project's falak.yaml may name
+     * those, and the ones an admin allowed).
+     *
+     * @param  list<string>  $siteIds
+     * @return list<string> provider ids
+     */
+    public function backupStorageFor(array $siteIds): array;
 }

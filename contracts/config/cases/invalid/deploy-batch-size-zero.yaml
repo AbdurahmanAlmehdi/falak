@@ -1,0 +1,7 @@
+# batch_size is 1 to 100.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    deploy: { batch_size: 0 }

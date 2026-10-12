@@ -1,0 +1,2072 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/schema/v1.json",
+  "title": "falak.yaml",
+  "description": "Falak config as code, version 1: the deployable units of one repository and their per-environment overrides (docs/plans/CONFIG_AS_CODE.md, \"Phase 0 contract\"). Secrets are never written here: use ${{ secrets.NAME }} in env values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "units"
+  ],
+  "properties": {
+    "$schema": {
+      "description": "The schema of this file, for editors: https://falak.sh/schema/v1.json.",
+      "type": "string"
+    },
+    "version": {
+      "description": "Schema version of this file. Always 1.",
+      "const": 1
+    },
+    "units": {
+      "description": "The deployable units of the repository, by key. A key is the unit's service name on the project canvas and the name ${{ <unit>.KEY }} references use.",
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 100,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$": {
+          "$ref": "#/$defs/unit"
+        }
+      },
+      "not": {
+        "required": [
+          "secrets"
+        ]
+      }
+    },
+    "environments": {
+      "description": "Project environments this file deploys to, by environment slug, each with the branch that feeds it, its servers and overrides of units.",
+      "type": "object",
+      "maxProperties": 20,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z]([a-z0-9-]{0,46}[a-z0-9])?$": {
+          "$ref": "#/$defs/environment"
+        }
+      }
+    },
+    "previews": {
+      "$ref": "#/$defs/previews"
+    }
+  },
+  "$defs": {
+    "unitKey": {
+      "description": "Unit key: lower-case letters, digits and dashes, starting with a letter, at most 63 characters. \"secrets\" is reserved.",
+      "type": "string",
+      "pattern": "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "not": {
+        "const": "secrets"
+      }
+    },
+    "environmentKey": {
+      "description": "Environment slug (as in the project's URL): lower-case letters, digits and dashes, starting with a letter.",
+      "type": "string",
+      "pattern": "^[a-z]([a-z0-9-]{0,46}[a-z0-9])?$"
+    },
+    "resourceName": {
+      "description": "The name of an organization resource that must already exist (storage provider, DNS credential, certificate...). Named only, never defined here.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[^\\x00-\\x1f\\x7f]+$"
+    },
+    "serverName": {
+      "description": "The name of a server already attached to the project.",
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$"
+    },
+    "servers": {
+      "description": "Names of servers already attached to the project. The first one leads (migrations, the scheduler).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/serverName"
+      }
+    },
+    "duration": {
+      "description": "A duration: whole numbers with a unit, largest unit first, e.g. 30s, 5m, 1h30m, 2d. Units: d (days), h (hours), m (minutes), s (seconds).",
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 32,
+      "pattern": "^([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?$"
+    },
+    "size": {
+      "description": "A size in binary units: a number and k, m, g or t (KiB, MiB, GiB, TiB), optionally followed by b or ib, any case, e.g. 512m, 1g, 1.5G, 20GiB.",
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^[0-9]+(\\.[0-9]+)?[kKmMgGtT]([iI]?[bB])?$"
+    },
+    "cron": {
+      "description": "A 5-field cron expression (minute hour day-of-month month day-of-week), evaluated in UTC unless a timezone is given.",
+      "type": "string",
+      "maxLength": 120,
+      "pattern": "^\\S+(\\s+\\S+){4}$"
+    },
+    "scheduleExpression": {
+      "description": "When the job runs: a 5-field cron expression, @hourly, @daily, @weekly, @monthly, @yearly, or \"@every <duration>\" (Go duration, at least 1s, e.g. @every 90s).",
+      "type": "string",
+      "maxLength": 64,
+      "anyOf": [
+        {
+          "$ref": "#/$defs/cron"
+        },
+        {
+          "enum": [
+            "@hourly",
+            "@daily",
+            "@weekly",
+            "@monthly",
+            "@yearly"
+          ]
+        },
+        {
+          "pattern": "^@every ([0-9]+(ns|us|ms|s|m|h))+$"
+        }
+      ]
+    },
+    "relativePath": {
+      "description": "A path relative to the repository root (or to the unit's root): no leading slash, no . or .. segments.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9_.\\-]+(/[A-Za-z0-9_.\\-]+)*$",
+      "not": {
+        "pattern": "(^|/)\\.\\.?(/|$)"
+      }
+    },
+    "absolutePath": {
+      "description": "An absolute path, without .. segments.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^/[^\\x00]*$",
+      "not": {
+        "pattern": "(^|/)\\.\\.(/|$)"
+      }
+    },
+    "urlPath": {
+      "description": "A URL path starting with /.",
+      "type": "string",
+      "maxLength": 255,
+      "pattern": "^/[^\\s]*$"
+    },
+    "cidr": {
+      "description": "An IPv4 or IPv6 address or CIDR range, e.g. 203.0.113.0/24.",
+      "type": "string",
+      "maxLength": 43,
+      "pattern": "^[0-9a-fA-F:.]+(/[0-9]{1,3})?$"
+    },
+    "cidrs": {
+      "type": "array",
+      "maxItems": 200,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/cidr"
+      }
+    },
+    "unixUser": {
+      "description": "The unix user the process runs as: always the unit's site user. Leave it out, or set it to exactly that user; any other user is refused (value.forbidden).",
+      "type": "string",
+      "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+      "not": {
+        "const": "root"
+      }
+    },
+    "envKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+    },
+    "envValue": {
+      "description": "A value, or references: ${{ secrets.NAME }} (the secret store) and ${{ <unit>.KEY }} (another unit's variable; database units expose DATABASE_URL, DB_CONNECTION, DB_HOST, DB_PORT, DB_DATABASE, DB_USERNAME, DB_PASSWORD; redis units REDIS_URL, REDIS_CLIENT, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD). Integers and booleans become their text (true, false, 42).",
+      "type": [
+        "string",
+        "integer",
+        "boolean"
+      ],
+      "maxLength": 65536
+    },
+    "env": {
+      "description": "Environment variables. Never put secret values here: use ${{ secrets.NAME }}.",
+      "type": "object",
+      "maxProperties": 500,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]{0,127}$": {
+          "$ref": "#/$defs/envValue"
+        }
+      }
+    },
+    "processEnv": {
+      "description": "Extra environment variables of this process, on top of the unit's (which it already sees). Literal values only: references are resolved in the unit's env, not here.",
+      "type": "object",
+      "maxProperties": 50,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]{0,127}$": {
+          "type": [
+            "string",
+            "integer",
+            "boolean"
+          ],
+          "maxLength": 4096
+        }
+      }
+    },
+    "hostname": {
+      "description": "A lower-case host name; *.example.com for a wildcard.",
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^(\\*\\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$"
+    },
+    "domain": {
+      "description": "A domain: just the host name, or an object with its options.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/hostname"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/hostname"
+            },
+            "primary": {
+              "description": "The primary domain (APP_URL, links). Default: the first domain in the list.",
+              "type": "boolean"
+            },
+            "www": {
+              "description": "www redirect: none, to_www (apex → www) or to_apex (www → apex). Default none.",
+              "enum": [
+                "none",
+                "to_www",
+                "to_apex"
+              ]
+            },
+            "tls": {
+              "description": "Certificates: auto (ACME HTTP), dns (ACME DNS challenge, needs dns_credential; required for wildcards), custom (an uploaded certificate), internal (Caddy's internal CA), off (plain HTTP). Default auto.",
+              "enum": [
+                "auto",
+                "dns",
+                "custom",
+                "internal",
+                "off"
+              ]
+            },
+            "dns_credential": {
+              "description": "tls: dns: the name of an existing DNS credential.",
+              "$ref": "#/$defs/resourceName"
+            },
+            "certificate": {
+              "description": "tls: custom: the name of an existing uploaded certificate.",
+              "$ref": "#/$defs/resourceName"
+            },
+            "cloudflare": {
+              "description": "Cloudflare options, for a domain in a Cloudflare zone Falak manages.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "proxied": {
+                  "description": "Proxy through Cloudflare (orange cloud). Default: the zone's default.",
+                  "type": "boolean"
+                },
+                "cache": {
+                  "description": "Cache rule: standard, everything or bypass.",
+                  "enum": [
+                    "standard",
+                    "everything",
+                    "bypass"
+                  ]
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "const": "dns"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "dns_credential"
+                ]
+              }
+            },
+            {
+              "if": {
+                "required": [
+                  "tls"
+                ],
+                "properties": {
+                  "tls": {
+                    "const": "custom"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "certificate"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "domains": {
+      "description": "Domains served by this unit. The first is the primary unless one says primary: true.",
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/domain"
+      }
+    },
+    "redirects": {
+      "description": "Path redirects, applied in order.",
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "description": "A path matcher, e.g. /old or /blog/*.",
+            "type": "string",
+            "maxLength": 500,
+            "pattern": "^/\\S*$"
+          },
+          "to": {
+            "description": "An absolute URL or a path starting with /.",
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^(https?://\\S+|/\\S*)$"
+          },
+          "status": {
+            "description": "HTTP status. Default 301.",
+            "enum": [
+              301,
+              302,
+              307,
+              308
+            ]
+          }
+        }
+      }
+    },
+    "headers": {
+      "description": "Response headers added to every response, by name.",
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9-]{1,100}$": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^[^\\r\\n]*$"
+        }
+      }
+    },
+    "mounts": {
+      "description": "Paths of this unit's domains served by a function unit (e.g. /api → the api function).",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "function"
+        ],
+        "properties": {
+          "path": {
+            "description": "Path prefix, starting with / and without a trailing slash.",
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*[A-Za-z0-9._~!$&'()*+,;=:@%-]$"
+          },
+          "function": {
+            "description": "The key of a function unit.",
+            "$ref": "#/$defs/unitKey"
+          },
+          "strip_prefix": {
+            "description": "Remove the prefix before calling the function. Default true.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "limits": {
+      "description": "Resource limits. Unset values take the environment's defaults (or no limit).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "memory": {
+          "description": "Hard memory limit (whole MiB, at least 32m).",
+          "$ref": "#/$defs/size"
+        },
+        "memory_reservation": {
+          "description": "Memory kept for this service (whole MiB, at most the limit).",
+          "$ref": "#/$defs/size"
+        },
+        "cpus": {
+          "description": "CPU cores, fractional (0.05 to 1024).",
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 1024
+        },
+        "pids": {
+          "description": "Most processes and threads (16 to 4194304).",
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 4194304
+        },
+        "restart": {
+          "description": "Restart policy.",
+          "enum": [
+            "always",
+            "unless-stopped",
+            "on-failure"
+          ]
+        },
+        "max_restarts": {
+          "description": "on-failure: give up after so many restarts (1 to 1000).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "log": {
+          "description": "Log rotation of the service's output.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_size": {
+              "description": "Size of one log file (whole MiB, 1m to 10g).",
+              "$ref": "#/$defs/size"
+            },
+            "max_files": {
+              "description": "Log files kept (1 to 100).",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        },
+        "oom": {
+          "description": "protect: the kernel kills other processes first when memory runs out.",
+          "enum": [
+            "protect",
+            "normal"
+          ]
+        }
+      }
+    },
+    "health": {
+      "description": "The health check a release must pass to go live.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Default true.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "Path requested on the new release. Default: the unit's health path, else /.",
+          "$ref": "#/$defs/urlPath"
+        },
+        "status": {
+          "description": "Expected HTTP status (100 to 599). Default 200.",
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 599
+        },
+        "timeout": {
+          "description": "Time for one attempt (1s to 2m). Default 10s.",
+          "$ref": "#/$defs/duration"
+        },
+        "retries": {
+          "description": "Attempts before the deploy fails (1 to 30). Default 3.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "retry_delay": {
+          "description": "Wait between attempts (0s to 5m). Default 5s.",
+          "$ref": "#/$defs/duration"
+        }
+      }
+    },
+    "watch": {
+      "description": "Watch a release after it goes live and roll back (or alert) on a trigger. Setting this block turns watching on unless enabled: false.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Default true when the block is present.",
+          "type": "boolean"
+        },
+        "minutes": {
+          "description": "How long to watch (1 to 60). Default 5.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "on_trigger": {
+          "description": "rollback (default) or alert_only.",
+          "enum": [
+            "rollback",
+            "alert_only"
+          ]
+        },
+        "health": {
+          "description": "Trigger: the health check fails health_failures times in a row. Default true.",
+          "type": "boolean"
+        },
+        "health_failures": {
+          "description": "1 to 20. Default 3.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "crashes": {
+          "description": "Trigger: an OOM kill or a restart loop. Default true.",
+          "type": "boolean"
+        },
+        "errors": {
+          "description": "Trigger: the 5xx rate goes above max(baseline × 3, 5%). Default true.",
+          "type": "boolean"
+        },
+        "issues": {
+          "description": "Trigger: a new error issue in Insights. Default false.",
+          "type": "boolean"
+        }
+      }
+    },
+    "hooks": {
+      "description": "Shell commands run during a deploy, in the release directory: the sections of the deploy script around $FALAK_FETCH, $FALAK_ACTIVATE and $FALAK_RESTART_PROCS.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "before_fetch": {
+          "description": "Before the new release is fetched.",
+          "type": "string",
+          "maxLength": 65536
+        },
+        "before_activate": {
+          "description": "After fetch and build, before the release goes live (e.g. php artisan migrate --force).",
+          "type": "string",
+          "maxLength": 65536
+        },
+        "after_activate": {
+          "description": "After the release is live, before processes restart.",
+          "type": "string",
+          "maxLength": 65536
+        },
+        "after_restart": {
+          "description": "After workers and daemons restarted.",
+          "type": "string",
+          "maxLength": 65536
+        }
+      }
+    },
+    "deploy": {
+      "description": "How releases are deployed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "description": "zero-downtime, in-place, rolling or canary for host runtimes; blue-green, rolling or canary for docker; compose, rolling or canary for compose units. Default: the first of those.",
+          "enum": [
+            "in-place",
+            "zero-downtime",
+            "blue-green",
+            "rolling",
+            "canary",
+            "compose"
+          ]
+        },
+        "batch_size": {
+          "description": "rolling: servers switched at a time (1 to 100). Default 1.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "keep_releases": {
+          "description": "Releases kept on each server for rollbacks (1 to 50). Default 5.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "secrets": {
+          "description": "docker runtime: env (default) or files (secret variables as /run/secrets files).",
+          "enum": [
+            "env",
+            "files"
+          ]
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        },
+        "watch": {
+          "$ref": "#/$defs/watch"
+        },
+        "hooks": {
+          "$ref": "#/$defs/hooks"
+        }
+      }
+    },
+    "encryption": {
+      "description": "Encryption of backups: cp (keys held by the control plane, default) or customer (encrypted to your age recipient; only you can restore).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "cp",
+            "customer"
+          ]
+        },
+        "recipient": {
+          "description": "customer: the age X25519 recipient (age1...).",
+          "type": "string",
+          "pattern": "^age1[0-9a-z]{58}$"
+        }
+      },
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "customer"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "recipient"
+        ]
+      }
+    },
+    "databaseBackups": {
+      "description": "A backup schedule of this database instance.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cron",
+        "storage"
+      ],
+      "properties": {
+        "cron": {
+          "$ref": "#/$defs/cron"
+        },
+        "storage": {
+          "description": "The name of an existing storage provider.",
+          "$ref": "#/$defs/resourceName"
+        },
+        "keep": {
+          "description": "Keep at most this many successful backups per database (1 to 1000).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "keep_days": {
+          "description": "Delete successful backups older than this many days (1 to 3650).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        },
+        "databases": {
+          "description": "Databases backed up. Default: all of this unit's databases.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/databaseName"
+          }
+        },
+        "encryption": {
+          "$ref": "#/$defs/encryption"
+        },
+        "drill": {
+          "description": "Restore drills: off (default), weekly or monthly.",
+          "enum": [
+            "off",
+            "weekly",
+            "monthly"
+          ]
+        },
+        "drill_query": {
+          "description": "SQL engines: a read-only SELECT that must return rows after a drill restore.",
+          "type": "string",
+          "maxLength": 4000
+        },
+        "drill_server": {
+          "description": "Another server of the organization to run drills on.",
+          "$ref": "#/$defs/serverName"
+        },
+        "enabled": {
+          "description": "Default true.",
+          "type": "boolean"
+        }
+      }
+    },
+    "volumeBackups": {
+      "description": "A backup schedule of this volume.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cron",
+        "storage"
+      ],
+      "properties": {
+        "cron": {
+          "$ref": "#/$defs/cron"
+        },
+        "storage": {
+          "description": "The name of an existing storage provider.",
+          "$ref": "#/$defs/resourceName"
+        },
+        "keep": {
+          "description": "Keep at most this many successful backups (1 to 1000).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "keep_days": {
+          "description": "Delete successful backups older than this many days (1 to 3650).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        },
+        "consistency": {
+          "description": "none (default), pause or stop the services using the volume while it is archived.",
+          "enum": [
+            "none",
+            "pause",
+            "stop"
+          ]
+        },
+        "encryption": {
+          "$ref": "#/$defs/encryption"
+        },
+        "drill": {
+          "description": "Restore drills: off (default), weekly or monthly.",
+          "enum": [
+            "off",
+            "weekly",
+            "monthly"
+          ]
+        },
+        "drill_server": {
+          "description": "Another server of the organization to run drills on.",
+          "$ref": "#/$defs/serverName"
+        },
+        "enabled": {
+          "description": "Default true.",
+          "type": "boolean"
+        }
+      }
+    },
+    "volumeName": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$"
+    },
+    "volume": {
+      "description": "A volume and where it is mounted. Volumes are never deleted automatically.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mount"
+      ],
+      "properties": {
+        "kind": {
+          "description": "docker (a Docker named volume, default) or sized (a fixed-size volume, needs size).",
+          "enum": [
+            "docker",
+            "sized"
+          ]
+        },
+        "size": {
+          "description": "sized: the size (whole MiB).",
+          "$ref": "#/$defs/size"
+        },
+        "mount": {
+          "description": "Absolute path in the container (docker runtimes and compose services).",
+          "$ref": "#/$defs/absolutePath"
+        },
+        "service": {
+          "description": "compose units: the compose service it is mounted in.",
+          "$ref": "#/$defs/composeServiceName"
+        },
+        "read_only": {
+          "description": "Mount read-only. Default false.",
+          "type": "boolean"
+        },
+        "protected": {
+          "description": "Refuse deleting the volume until this is turned off. Default false.",
+          "type": "boolean"
+        },
+        "server": {
+          "description": "The server it lives on. Default: the unit's first server.",
+          "$ref": "#/$defs/serverName"
+        },
+        "backups": {
+          "$ref": "#/$defs/volumeBackups"
+        }
+      },
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "sized"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "required": [
+          "size"
+        ]
+      }
+    },
+    "volumes": {
+      "description": "Volumes of this unit, by name.",
+      "type": "object",
+      "maxProperties": 50,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9_.-]{0,62}$": {
+          "$ref": "#/$defs/volume"
+        }
+      }
+    },
+    "worker": {
+      "description": "A queue worker: php artisan queue:work on PHP runtimes, or command.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "connection": {
+          "description": "Queue connection.",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "queue": {
+          "description": "Queue names, in priority order.",
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9_.:{}\\-]+(\\s*,\\s*[A-Za-z0-9_.:{}\\-]+)*$"
+            },
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.:{}\\-]+$"
+              }
+            }
+          ]
+        },
+        "command": {
+          "description": "Custom start command (non-PHP runtimes).",
+          "type": "string",
+          "maxLength": 1000
+        },
+        "processes": {
+          "description": "Processes per server (1 to 64). Default 1.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "timeout": {
+          "description": "Job timeout (0s = none, at most 1d). Default 60s.",
+          "$ref": "#/$defs/duration"
+        },
+        "sleep": {
+          "description": "Sleep when the queue is empty (at most 1h). Default 3s.",
+          "$ref": "#/$defs/duration"
+        },
+        "tries": {
+          "description": "Attempts per job (0 = unlimited, at most 1000). Default 1.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "backoff": {
+          "description": "Wait before retrying a failed job (at most 1d).",
+          "$ref": "#/$defs/duration"
+        },
+        "max_jobs": {
+          "description": "Restart after this many jobs (0 to 1000000).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "max_time": {
+          "description": "Restart after running this long (at most 7d).",
+          "$ref": "#/$defs/duration"
+        },
+        "memory": {
+          "description": "Memory a worker may use before it restarts (whole MiB, 32m to 64g). Default 128m.",
+          "$ref": "#/$defs/size"
+        },
+        "env": {
+          "$ref": "#/$defs/processEnv"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "servers": {
+          "description": "Run only on these servers of the unit. Default: all of them.",
+          "$ref": "#/$defs/servers"
+        }
+      }
+    },
+    "daemon": {
+      "description": "A long-running command supervised on the unit's servers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "directory": {
+          "description": "Working directory. Default: the current release.",
+          "$ref": "#/$defs/absolutePath"
+        },
+        "user": {
+          "$ref": "#/$defs/unixUser"
+        },
+        "instances": {
+          "description": "Processes per server (1 to 64). Default 1.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "restart": {
+          "description": "always (default), on-failure or never.",
+          "enum": [
+            "always",
+            "on-failure",
+            "never"
+          ]
+        },
+        "stop_signal": {
+          "description": "Signal sent to stop it. Default TERM.",
+          "enum": [
+            "TERM",
+            "INT",
+            "QUIT",
+            "HUP",
+            "KILL",
+            "USR1",
+            "USR2"
+          ]
+        },
+        "stop_timeout": {
+          "description": "Wait after the stop signal before killing (1s to 1h). Default 30s.",
+          "$ref": "#/$defs/duration"
+        },
+        "env": {
+          "$ref": "#/$defs/processEnv"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "servers": {
+          "description": "Run only on these servers of the unit. Default: all of them.",
+          "$ref": "#/$defs/servers"
+        }
+      }
+    },
+    "schedule": {
+      "description": "A scheduled job of the unit (on the leader server unless all_servers).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "cron"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "cron": {
+          "$ref": "#/$defs/scheduleExpression"
+        },
+        "timezone": {
+          "description": "IANA time zone. Default UTC.",
+          "type": "string",
+          "maxLength": 64
+        },
+        "user": {
+          "$ref": "#/$defs/unixUser"
+        },
+        "overlap": {
+          "description": "skip (default): don't start while the previous run is still going; allow.",
+          "enum": [
+            "allow",
+            "skip"
+          ]
+        },
+        "timeout": {
+          "description": "Kill a run after this long (1s to 1d). Default 1h.",
+          "$ref": "#/$defs/duration"
+        },
+        "heartbeat": {
+          "description": "Alert on missed or failed runs. Default true.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Default true.",
+          "type": "boolean"
+        },
+        "all_servers": {
+          "description": "Run on every server of the unit instead of the leader. Default false.",
+          "type": "boolean"
+        }
+      }
+    },
+    "functionSchedule": {
+      "description": "A schedule of a function: runs its scheduled() handler on the leader server.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cron"
+      ],
+      "properties": {
+        "cron": {
+          "$ref": "#/$defs/scheduleExpression"
+        },
+        "timezone": {
+          "description": "IANA time zone. Default UTC.",
+          "type": "string",
+          "maxLength": 64
+        },
+        "overlap": {
+          "description": "skip (default) or allow.",
+          "enum": [
+            "allow",
+            "skip"
+          ]
+        },
+        "timeout": {
+          "description": "Kill a run after this long. Default 5m.",
+          "$ref": "#/$defs/duration"
+        },
+        "enabled": {
+          "description": "Default true.",
+          "type": "boolean"
+        }
+      }
+    },
+    "processKey": {
+      "description": "Process name: letters, digits, dots, dashes and underscores, at most 64 characters.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+    },
+    "workers": {
+      "description": "Queue workers, by name.",
+      "type": "object",
+      "maxProperties": 50,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$": {
+          "$ref": "#/$defs/worker"
+        }
+      }
+    },
+    "daemons": {
+      "description": "Daemons, by name.",
+      "type": "object",
+      "maxProperties": 50,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$": {
+          "$ref": "#/$defs/daemon"
+        }
+      }
+    },
+    "schedules": {
+      "description": "Scheduled jobs, by name.",
+      "type": "object",
+      "maxProperties": 100,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$": {
+          "$ref": "#/$defs/schedule"
+        }
+      }
+    },
+    "build": {
+      "description": "How the unit is built.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "description": "native (Railpack on a builder, default), docker (an image from a Dockerfile) or on-server (built on each server).",
+          "enum": [
+            "native",
+            "docker",
+            "on-server"
+          ]
+        },
+        "dockerfile": {
+          "description": "docker: the Dockerfile, relative to the unit's root. Default Dockerfile.",
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "laravel": {
+      "description": "Laravel processes Falak runs for you.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scheduler": {
+          "description": "Run php artisan schedule:run every minute on the leader. Default false.",
+          "type": "boolean"
+        },
+        "horizon": {
+          "description": "Run Horizon. Default false.",
+          "type": "boolean"
+        },
+        "octane": {
+          "description": "Serve with Octane: false (default), frankenphp, swoole or roadrunner.",
+          "enum": [
+            false,
+            "frankenphp",
+            "swoole",
+            "roadrunner"
+          ]
+        }
+      }
+    },
+    "root": {
+      "description": "The unit's directory in the repository. Default \".\" (the root). A push changing files under it redeploys the unit.",
+      "anyOf": [
+        {
+          "const": "."
+        },
+        {
+          "$ref": "#/$defs/relativePath"
+        }
+      ]
+    },
+    "expose": {
+      "description": "Variables exported to the deploy hooks and the build (public front-end prefixes such as VITE_ and NEXT_PUBLIC_ always are).",
+      "type": "array",
+      "maxItems": 200,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/envKey"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$"
+    },
+    "composeServiceName": {
+      "type": "string",
+      "maxLength": 63,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+    },
+    "composeService": {
+      "description": "Falak settings of one compose service.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": {
+          "description": "Makes the service public: the port it listens on inside its container.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "health_path": {
+          "description": "Path checked before it goes live.",
+          "$ref": "#/$defs/urlPath"
+        },
+        "domains": {
+          "description": "Domains of this service (needs port). The unit's own domains go to its first public service.",
+          "$ref": "#/$defs/domains"
+        },
+        "redirects": {
+          "$ref": "#/$defs/redirects"
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "replace_with": {
+          "description": "Run this service as a Falak-managed database instead: the key of a database or redis unit. Its references are rewritten to that unit.",
+          "$ref": "#/$defs/unitKey"
+        }
+      }
+    },
+    "databaseCommon": {
+      "$comment": "Fields shared by database and redis units (referenced by both, never on its own).",
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "Major version, e.g. \"17\" (PostgreSQL), \"8.4\" (MySQL), \"11.4\" (MariaDB), \"8\" (Redis), \"8.1\" (Valkey). Default: the newest Falak supports. Quote it.",
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?$"
+        },
+        "server": {
+          "description": "The server it runs on. Default: the environment's first server.",
+          "$ref": "#/$defs/serverName"
+        },
+        "memory": {
+          "description": "Memory limit; the engine is tuned to it (whole MiB, at least 16m).",
+          "$ref": "#/$defs/size"
+        },
+        "cpus": {
+          "description": "CPU cores (0.1 to 256).",
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 256
+        },
+        "disk": {
+          "description": "Size of its data volume (whole GiB, 1g to 16t). Default: a Docker volume without a size.",
+          "$ref": "#/$defs/size"
+        },
+        "settings": {
+          "description": "Engine settings (docs/DB_IMAGES.md \"Settings\").",
+          "type": "object",
+          "maxProperties": 100,
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9_.-]{0,63}$": {
+              "type": [
+                "string",
+                "integer",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "public": {
+          "description": "Publish the port publicly (only to allowed_sources). Default false. Turning it on needs an approval.",
+          "type": "boolean"
+        },
+        "allowed_sources": {
+          "description": "public: addresses allowed to connect.",
+          "$ref": "#/$defs/cidrs"
+        },
+        "require_tls": {
+          "description": "Refuse unencrypted connections. Default false.",
+          "type": "boolean"
+        },
+        "backups": {
+          "$ref": "#/$defs/databaseBackups"
+        }
+      }
+    },
+    "unit": {
+      "description": "A deployable unit. type picks its fields: app, compose, function, database or redis.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "description": "app (a site), compose (a Docker Compose stack), function (a cloud function), database (PostgreSQL, MySQL, MariaDB) or redis (Redis, Valkey).",
+          "enum": [
+            "app",
+            "compose",
+            "function",
+            "database",
+            "redis"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "app"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/appUnit"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "compose"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/composeUnit"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "function"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/functionUnit"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "database"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/databaseUnit"
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "const": "redis"
+              }
+            }
+          },
+          "then": {
+            "$ref": "#/$defs/redisUnit"
+          }
+        }
+      ]
+    },
+    "appUnit": {
+      "description": "A site: PHP, Node, Bun, Deno, static or a Docker image.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "runtime"
+      ],
+      "properties": {
+        "type": {
+          "const": "app"
+        },
+        "root": {
+          "$ref": "#/$defs/root"
+        },
+        "runtime": {
+          "description": "frankenphp, php-fpm, node, bun, deno, static or docker.",
+          "enum": [
+            "frankenphp",
+            "php-fpm",
+            "node",
+            "bun",
+            "deno",
+            "static",
+            "docker"
+          ]
+        },
+        "framework": {
+          "description": "Framework (sets defaults such as the web directory). Default: detected.",
+          "enum": [
+            "laravel",
+            "symfony",
+            "statamic",
+            "wordpress",
+            "php",
+            "next",
+            "nuxt",
+            "node",
+            "static",
+            "docker"
+          ]
+        },
+        "php": {
+          "description": "PHP version, e.g. \"8.4\". Quote it.",
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+$"
+        },
+        "node": {
+          "description": "Node.js major version, e.g. \"22\". Quote it.",
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "web_directory": {
+          "description": "Public directory served, relative to the unit's root (e.g. public, dist).",
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "$ref": "#/$defs/relativePath"
+            }
+          ]
+        },
+        "port": {
+          "description": "docker runtime: the port the app listens on inside its container.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "image": {
+          "description": "docker runtime: deploy this prebuilt image instead of building (e.g. ghcr.io/acme/web:1.2).",
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[a-z0-9][a-z0-9._\\-/:@]*$"
+        },
+        "health_path": {
+          "description": "The unit's health path (deploy checks, previews). Default /.",
+          "$ref": "#/$defs/urlPath"
+        },
+        "test_domain": {
+          "description": "Serve on the installation's test domain too. Default true.",
+          "type": "boolean"
+        },
+        "servers": {
+          "description": "Servers of this unit. Default: the environment's servers.",
+          "$ref": "#/$defs/servers"
+        },
+        "build": {
+          "$ref": "#/$defs/build"
+        },
+        "laravel": {
+          "$ref": "#/$defs/laravel"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "expose": {
+          "$ref": "#/$defs/expose"
+        },
+        "domains": {
+          "$ref": "#/$defs/domains"
+        },
+        "redirects": {
+          "$ref": "#/$defs/redirects"
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "mounts": {
+          "$ref": "#/$defs/mounts"
+        },
+        "workers": {
+          "$ref": "#/$defs/workers"
+        },
+        "daemons": {
+          "$ref": "#/$defs/daemons"
+        },
+        "schedules": {
+          "$ref": "#/$defs/schedules"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "volumes": {
+          "$ref": "#/$defs/volumes"
+        }
+      }
+    },
+    "composeUnit": {
+      "description": "A Docker Compose stack from the repository.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "compose"
+        },
+        "root": {
+          "$ref": "#/$defs/root"
+        },
+        "files": {
+          "description": "Compose files relative to the unit's root, in -f order. Default: compose.yaml (or docker-compose.yml).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "profiles": {
+          "description": "Compose profiles to enable.",
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+          }
+        },
+        "test_domain": {
+          "description": "Serve public services on the installation's test domain too. Default true.",
+          "type": "boolean"
+        },
+        "servers": {
+          "description": "Servers of this unit. Default: the environment's servers.",
+          "$ref": "#/$defs/servers"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "expose": {
+          "$ref": "#/$defs/expose"
+        },
+        "domains": {
+          "$ref": "#/$defs/domains"
+        },
+        "redirects": {
+          "$ref": "#/$defs/redirects"
+        },
+        "headers": {
+          "$ref": "#/$defs/headers"
+        },
+        "mounts": {
+          "$ref": "#/$defs/mounts"
+        },
+        "services": {
+          "description": "Falak settings of compose services, by service name.",
+          "type": "object",
+          "maxProperties": 100,
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$": {
+              "$ref": "#/$defs/composeService"
+            }
+          }
+        },
+        "volumes": {
+          "$ref": "#/$defs/volumes"
+        }
+      }
+    },
+    "functionUnit": {
+      "description": "A cloud function: its code is the files under root.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "runtime"
+      ],
+      "properties": {
+        "type": {
+          "const": "function"
+        },
+        "root": {
+          "$ref": "#/$defs/root"
+        },
+        "runtime": {
+          "description": "bun, node, deno, python or go.",
+          "enum": [
+            "bun",
+            "node",
+            "deno",
+            "python",
+            "go"
+          ]
+        },
+        "entrypoint": {
+          "description": "The entry file, relative to root. Default: the runtime's (index.ts, main.py, main.go...).",
+          "$ref": "#/$defs/relativePath"
+        },
+        "servers": {
+          "description": "Servers of this unit. Default: the environment's servers.",
+          "$ref": "#/$defs/servers"
+        },
+        "scaling": {
+          "description": "Instances and concurrency.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min_instances": {
+              "description": "Instances kept warm (0 to 20). Default 0.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20
+            },
+            "max_instances": {
+              "description": "1 to 50, at least min_instances. Default 5.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "concurrency": {
+              "description": "Requests one instance handles at once (1 to 10000). Default 50.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "idle_timeout": {
+              "description": "Stop an idle instance after (10s to 1d). Default 5m.",
+              "$ref": "#/$defs/duration"
+            }
+          }
+        },
+        "memory": {
+          "description": "Memory per instance (whole MiB, 64m to 16g). Default 256m.",
+          "$ref": "#/$defs/size"
+        },
+        "cpus": {
+          "description": "CPU cores per instance (0.1 to 16). Default 0.5.",
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 16
+        },
+        "timeout": {
+          "description": "Request timeout (1s to 15m). Default 30s.",
+          "$ref": "#/$defs/duration"
+        },
+        "access": {
+          "description": "Who may call it. API keys are created in the dashboard, never here.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allow": {
+              "description": "Only these addresses may call it.",
+              "$ref": "#/$defs/cidrs"
+            }
+          }
+        },
+        "env": {
+          "$ref": "#/$defs/env"
+        },
+        "domains": {
+          "$ref": "#/$defs/domains"
+        },
+        "schedules": {
+          "description": "Schedules of the function, by name.",
+          "type": "object",
+          "maxProperties": 50,
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$": {
+              "$ref": "#/$defs/functionSchedule"
+            }
+          }
+        }
+      }
+    },
+    "databaseUnit": {
+      "description": "A managed PostgreSQL, MySQL or MariaDB instance. Never deleted automatically.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "engine"
+      ],
+      "$ref": "#/$defs/databaseCommon",
+      "properties": {
+        "type": {
+          "const": "database"
+        },
+        "engine": {
+          "description": "postgresql, mysql or mariadb. A run never changes it (a new engine is a new unit).",
+          "enum": [
+            "postgresql",
+            "mysql",
+            "mariadb"
+          ]
+        },
+        "version": true,
+        "server": true,
+        "memory": true,
+        "cpus": true,
+        "disk": true,
+        "settings": true,
+        "public": true,
+        "allowed_sources": true,
+        "require_tls": true,
+        "backups": true,
+        "databases": {
+          "description": "Databases in the instance. Default: one named after the unit key (dashes as underscores).",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/databaseName"
+          }
+        },
+        "pitr": {
+          "description": "Point-in-time recovery: continuous archiving to storage.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "storage"
+          ],
+          "properties": {
+            "enabled": {
+              "description": "Default true when the block is present.",
+              "type": "boolean"
+            },
+            "storage": {
+              "description": "The name of an existing storage provider.",
+              "$ref": "#/$defs/resourceName"
+            },
+            "window_days": {
+              "description": "Recovery window in days (1 to 35). Default 7. Shrinking it needs an approval.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 35
+            },
+            "base_interval_days": {
+              "description": "A new base backup every so many days (1 to 35). Default 1.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 35
+            },
+            "encryption": {
+              "$ref": "#/$defs/encryption"
+            }
+          }
+        }
+      }
+    },
+    "redisUnit": {
+      "description": "A managed Redis or Valkey instance. Never deleted automatically.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "$ref": "#/$defs/databaseCommon",
+      "properties": {
+        "type": {
+          "const": "redis"
+        },
+        "engine": {
+          "description": "redis (default) or valkey. A run never changes it (a new engine is a new unit).",
+          "enum": [
+            "redis",
+            "valkey"
+          ]
+        },
+        "version": true,
+        "server": true,
+        "memory": true,
+        "cpus": true,
+        "disk": true,
+        "settings": true,
+        "public": true,
+        "allowed_sources": true,
+        "require_tls": true,
+        "backups": true
+      }
+    },
+    "unitOverride": {
+      "description": "Overrides of a unit in this environment, merged over the unit (maps merge, lists replace, null removes). null removes the unit from this environment. A key not in units adds an environment-only unit (it needs type). The merged unit is validated as a whole.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "Only for a unit this environment adds; must not change an existing unit's type.",
+          "enum": [
+            "app",
+            "compose",
+            "function",
+            "database",
+            "redis"
+          ]
+        },
+        "root": {},
+        "runtime": {},
+        "framework": {},
+        "php": {},
+        "node": {},
+        "web_directory": {},
+        "port": {},
+        "image": {},
+        "health_path": {},
+        "test_domain": {},
+        "servers": {},
+        "build": {},
+        "laravel": {},
+        "deploy": {},
+        "env": {},
+        "expose": {},
+        "domains": {},
+        "redirects": {},
+        "headers": {},
+        "mounts": {},
+        "workers": {},
+        "daemons": {},
+        "schedules": {},
+        "limits": {},
+        "volumes": {},
+        "files": {},
+        "profiles": {},
+        "services": {},
+        "entrypoint": {},
+        "scaling": {},
+        "memory": {},
+        "cpus": {},
+        "timeout": {},
+        "access": {},
+        "engine": {},
+        "version": {},
+        "server": {},
+        "disk": {},
+        "settings": {},
+        "public": {},
+        "allowed_sources": {},
+        "require_tls": {},
+        "backups": {},
+        "databases": {},
+        "pitr": {}
+      }
+    },
+    "environment": {
+      "description": "A project environment this file deploys to.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "description": "A push to this branch applies the file to this environment. Without it, the environment is applied only from the CLI or the dashboard.",
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_./-]*$",
+          "not": {
+            "pattern": "(\\.\\.|//|/$|\\.lock$)"
+          }
+        },
+        "production": {
+          "description": "A production environment: risky changes to it need an approval. Default: the environment's current flag (false for a new one).",
+          "type": "boolean"
+        },
+        "servers": {
+          "$ref": "#/$defs/servers"
+        },
+        "units": {
+          "description": "Overrides of units in this environment, by unit key.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$": {
+              "$ref": "#/$defs/unitOverride"
+            }
+          },
+          "not": {
+            "required": [
+              "secrets"
+            ]
+          }
+        }
+      }
+    },
+    "previewUnit": {
+      "description": "include (default): a copy runs in the preview; share: the preview uses the base environment's; omit: left out. Database units take an object with the data strategy.",
+      "oneOf": [
+        {
+          "enum": [
+            "include",
+            "share",
+            "omit"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "strategy"
+          ],
+          "properties": {
+            "strategy": {
+              "description": "empty (default), clone_backup (the latest backup of source) or clone_sanitize (that backup, then sanitize).",
+              "enum": [
+                "empty",
+                "clone_backup",
+                "clone_sanitize"
+              ]
+            },
+            "source": {
+              "description": "The environment whose backup is cloned. Default: base.",
+              "$ref": "#/$defs/environmentKey"
+            },
+            "sanitize": {
+              "description": "clone_sanitize: SQL or a command run on the copy.",
+              "type": "object",
+              "additionalProperties": false,
+              "minProperties": 1,
+              "maxProperties": 1,
+              "properties": {
+                "sql": {
+                  "type": "string",
+                  "maxLength": 65536
+                },
+                "command": {
+                  "type": "string",
+                  "maxLength": 65536
+                }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "clone_sanitize"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sanitize"
+            ]
+          }
+        }
+      ]
+    },
+    "previews": {
+      "description": "Preview environments for pull requests. A PR's preview uses the PR branch's file (fork PRs: the base branch's).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Default true when the block is present.",
+          "type": "boolean"
+        },
+        "base": {
+          "description": "The environment previews copy (required when enabled).",
+          "$ref": "#/$defs/environmentKey"
+        },
+        "units": {
+          "description": "What each unit does in a preview, by unit key. Unlisted units: include.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$": {
+              "$ref": "#/$defs/previewUnit"
+            }
+          },
+          "not": {
+            "required": [
+              "secrets"
+            ]
+          }
+        },
+        "server": {
+          "description": "The server previews run on. Default: the base environment's first server.",
+          "$ref": "#/$defs/serverName"
+        },
+        "fork_server": {
+          "description": "A server for previews of pull requests from forks only.",
+          "$ref": "#/$defs/serverName"
+        },
+        "variables": {
+          "description": "Variables previews copy from the base environment's units.",
+          "type": "array",
+          "maxItems": 200,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/envKey"
+          }
+        },
+        "domain_pattern": {
+          "description": "Host label of a preview under the organization's preview domain; must hold {number} and {service} ({project} also works). Default pr-{number}-{service}.",
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^[a-z0-9{}-]+$",
+          "allOf": [
+            {
+              "pattern": "\\{number\\}"
+            },
+            {
+              "pattern": "\\{service\\}"
+            }
+          ]
+        },
+        "max_concurrent": {
+          "description": "Previews running at once (1 to 50). Default 5.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "idle_ttl": {
+          "description": "Delete a preview idle this long (whole hours, 1h to 30d). Default 3d.",
+          "$ref": "#/$defs/duration"
+        },
+        "access": {
+          "description": "basic (default: HTTP basic auth) or public.",
+          "enum": [
+            "basic",
+            "public"
+          ]
+        },
+        "acknowledge_shared_database": {
+          "description": "Allow sharing a database unit with the base environment (previews then write to it). Default false.",
+          "type": "boolean"
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "base"
+        ]
+      }
+    }
+  }
+}

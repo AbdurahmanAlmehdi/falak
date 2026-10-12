@@ -7,9 +7,11 @@ use Falak\Deployments\Contracts\FunctionSources;
 use Falak\Functions\Application\FunctionStore;
 use Falak\Functions\Domain\Models\CloudFunction;
 use Falak\Functions\Domain\Models\FunctionVersion;
+use Falak\Functions\Domain\Models\FunctionVersionCommit;
 
 /**
- * Deployments' view of function code: a version plus the function's current runtime image, scaling and limits.
+ * Deployments' view of function code: a version plus the function's current runtime image, scaling and limits. A
+ * function of a falak.yaml is also found by the repository commit its code was read at.
  */
 final class StoredFunctionSources implements FunctionSources
 {
@@ -29,6 +31,10 @@ final class StoredFunctionSources implements FunctionSources
         $version = $function !== null
             ? FunctionVersion::query()->where('function_id', $function->id)->where('hash', strtolower($hash))->orderByDesc('number')->first()
             : null;
+
+        if ($function !== null && $version === null && ($id = FunctionVersionCommit::query()->where('function_id', $function->id)->where('commit', strtolower($hash))->value('version_id')) !== null) {
+            $version = FunctionVersion::query()->find($id);
+        }
 
         return $function !== null && $version !== null ? $this->source($function, $version) : null;
     }

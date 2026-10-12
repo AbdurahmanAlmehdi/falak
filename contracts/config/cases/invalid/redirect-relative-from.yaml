@@ -1,0 +1,7 @@
+# from starts with /.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    redirects: [{ from: old, to: /new }]

@@ -9,6 +9,7 @@ import {
     Field,
     Input,
     KeyValue,
+    ManagedBadge,
     PageHeader,
     RelativeTime,
     Section,
@@ -83,11 +84,15 @@ export default function Show({
     usePoll(running ? 3_000 : 60_000, { only: SHOW_RELOAD });
 
     const backTo = volume.server ? `/servers/${volume.server.id}/volumes` : null;
-    const deleteBlocked = volume.protected
-        ? 'Protected volumes cannot be deleted: turn protection off first.'
-        : volume.attachments.length > 0
-          ? 'Detach it from its services first (or delete it with its service).'
-          : null;
+    // A field falak.yaml sets (/volumes/<key>/<field>) is read-only here; the server answers 422 to a change.
+    const managedField = (field: string) => !!volume.managed?.paths.some((path) => path.split('/').length === 4 && path.endsWith(`/${field}`));
+    const deleteBlocked = volume.managed
+        ? 'Declared in falak.yaml: remove it from the file (the file never deletes it on its own).'
+        : volume.protected
+          ? 'Protected volumes cannot be deleted: turn protection off first.'
+          : volume.attachments.length > 0
+            ? 'Detach it from its services first (or delete it with its service).'
+            : null;
 
     return (
         <AppShell
@@ -109,6 +114,7 @@ export default function Show({
                             <HardDrive className="text-fg-faint size-4" aria-hidden />
                             <span className="font-mono">{volume.name}</span>
                             {volume.protected && <Lock className="text-fg-faint size-3.5" aria-label="Protected" />}
+                            <ManagedBadge config={volume.managed} />
                             <StatusBadge
                                 status={volumeStatus(volume)}
                                 label={volume.status_message && volume.status === 'active' ? 'Attention' : undefined}
@@ -120,7 +126,11 @@ export default function Show({
                         can.manage && (
                             <>
                                 {volume.kind === 'sized' && (
-                                    <Button icon={<Expand />} onClick={() => setDialog('resize')} disabled={volume.status !== 'active'}>
+                                    <Button
+                                        icon={<Expand />}
+                                        onClick={() => setDialog('resize')}
+                                        disabled={volume.status !== 'active' || managedField('size')}
+                                    >
                                         Resize
                                     </Button>
                                 )}
@@ -130,7 +140,11 @@ export default function Show({
                                     </Button>
                                 )}
                                 {portable && !volume.compose && (
-                                    <Button icon={<ArrowRightLeft />} onClick={() => setDialog('move')} disabled={volume.status !== 'active'}>
+                                    <Button
+                                        icon={<ArrowRightLeft />}
+                                        onClick={() => setDialog('move')}
+                                        disabled={volume.status !== 'active' || managedField('server')}
+                                    >
                                         Move
                                     </Button>
                                 )}
@@ -155,7 +169,7 @@ export default function Show({
                             <label className="text-fg-muted flex items-center gap-2 text-sm">
                                 <Switch
                                     checked={volume.protected}
-                                    disabled={action.busy}
+                                    disabled={action.busy || managedField('protected')}
                                     onCheckedChange={(checked) =>
                                         void action.run(
                                             'PATCH',
@@ -243,12 +257,14 @@ export default function Show({
                         rowActions={
                             can.manage
                                 ? (row) => [
-                                      row.detachable
-                                          ? { label: 'Detach', icon: <Unlink />, danger: true, onSelect: () => setDetaching(row) }
-                                          : {
-                                                label: row.type === 'compose_service' ? 'Set by the compose file' : 'Kept by the database',
-                                                disabled: true,
-                                            },
+                                      row.detachable && volume.managed
+                                          ? { label: 'Mounted by falak.yaml', disabled: true }
+                                          : row.detachable
+                                            ? { label: 'Detach', icon: <Unlink />, danger: true, onSelect: () => setDetaching(row) }
+                                            : {
+                                                  label: row.type === 'compose_service' ? 'Set by the compose file' : 'Kept by the database',
+                                                  disabled: true,
+                                              },
                                   ]
                                 : undefined
                         }

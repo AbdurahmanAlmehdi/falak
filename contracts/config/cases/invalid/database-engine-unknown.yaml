@@ -1,0 +1,4 @@
+# Engines: postgresql, mysql, mariadb (redis and valkey are redis units).
+version: 1
+units:
+  db: { type: database, engine: mongodb }

@@ -1,4 +1,4 @@
-import { toast } from '@/components/falak';
+import { toast, type ManagedConfig } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson, type HttpMethod } from '@/lib/http';
 import { type ServicePanelContext } from '@/lib/registry';
@@ -52,6 +52,8 @@ export interface SiteSettingsData {
     options: SiteOptions;
     warnings: string[];
     can: { update: boolean; delete: boolean; run_commands: boolean };
+    /** What the project's falak.yaml manages on this site (read-only here), or null. */
+    config: ManagedConfig | null;
 }
 
 export const settingsUrl = (siteId: string) => `/sites/${siteId}/settings`;

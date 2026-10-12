@@ -1,0 +1,24 @@
+# A function with schedules and access rules, mounted under an app's /api.
+version: 1
+units:
+  api:
+    type: function
+    root: functions/api
+    runtime: go
+    entrypoint: main.go
+    servers: [fn-1]
+    scaling: { min_instances: 1, max_instances: 10, concurrency: 100, idle_timeout: 10m }
+    memory: 512m
+    cpus: 0.25
+    timeout: 1m
+    access: { allow: [203.0.113.0/24, "2001:db8::/32", 198.51.100.7] }
+    env:
+      TOKEN: ${{ secrets.API_TOKEN }}
+    domains: [api.example.com]
+    schedules:
+      nightly: { cron: "30 2 * * *", timezone: UTC, overlap: skip, timeout: 5m, enabled: true }
+  site:
+    type: app
+    runtime: static
+    web_directory: dist
+    mounts: [{ path: /api, function: api }]

@@ -1,4 +1,5 @@
 import { type DrillFrequency, type DrillRow, type DrillStatus, type EncryptionMode } from '@/components/backup-protection';
+import { type ManagedConfig } from '@/components/falak';
 
 /** Volumes read models (Falak\Volumes\Http\Controllers\PresentsVolumes). */
 
@@ -43,6 +44,8 @@ export interface Volume {
     created_at: string | null;
     schedules: number;
     last_backup_at: string | null;
+    /** What the project's falak.yaml manages (read-only here), null when nothing. */
+    managed?: ManagedConfig | null;
 }
 
 export interface VolumeBackup {
@@ -76,6 +79,8 @@ export interface VolumeBackup {
 
 export interface BackupSchedule {
     id: string;
+    /** The volume's `backups` in falak.yaml: read-only here. */
+    managed?: ManagedConfig | null;
     storage_provider_id: string | null;
     cron: string;
     retention_count: number | null;

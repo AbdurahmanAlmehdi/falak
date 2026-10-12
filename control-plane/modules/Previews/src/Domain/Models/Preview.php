@@ -34,6 +34,7 @@ use Illuminate\Support\Carbon;
  * @property ?array<string, string> $urls service name => URL
  * @property ?array<string, string> $deployments site id => deploying | deployed | failed
  * @property ?string $deployed_sha
+ * @property ?string $config_ref the commit (or branch) of the falak.yaml it was last built from
  * @property ?string $comment_id
  * @property ?string $basic_username
  * @property ?string $basic_password

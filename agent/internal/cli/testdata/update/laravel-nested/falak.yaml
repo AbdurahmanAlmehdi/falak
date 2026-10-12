@@ -1,0 +1,9 @@
+version: 1
+units:
+  web:
+    type: app
+    runtime: frankenphp
+    php: "8.3"
+    health_path: /up
+    laravel:
+      scheduler: true

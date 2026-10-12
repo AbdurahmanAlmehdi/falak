@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Fleet\Infrastructure\ProtocolSchemas;
+use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Identity\Contracts\Role;
 use Falak\Servers\Contracts\ServerStatus;
 use Falak\Servers\Contracts\ServerType;
@@ -149,4 +150,29 @@ it('refuses PHP management on servers that do not run PHP or are not active', fu
 
     $pending = Server::factory()->status(ServerStatus::Provisioning)->create(['organization_id' => $this->organization->id]);
     $this->post("/servers/{$pending->id}/php", ['version' => '8.3'])->assertSessionHasErrors('version');
+});
+
+it('installs a PHP version over the API', function () {
+    $token = fn ($user, array $abilities = ['*']) => app(CreateApiToken::class)($user, $this->organization->id, 'cli', $abilities)->plainTextToken;
+
+    $this->withToken($token($this->user))->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '8.3'])
+        ->assertStatus(202)->assertJsonPath('data.version', '8.3')->assertJsonPath('data.status', 'installing');
+    [$envelope] = servers_poll($this->agent['headers']);
+    expect($envelope['type'])->toBe('runtime.php.install');
+
+    app('auth')->forgetGuards();
+    $this->withToken($token($this->user))->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '8.3'])->assertStatus(422)->assertJsonValidationErrors(['version']);
+    $this->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '5.6'])->assertStatus(422)->assertJsonValidationErrors(['version']);
+
+    app('auth')->forgetGuards();
+    $this->withToken($token($this->user, ['servers.view']))->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '8.2'])->assertForbidden();
+
+    app('auth')->forgetGuards();
+    [$viewer] = memberOf($this->organization, Role::Viewer);
+    $this->withToken($token($viewer))->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '8.2'])->assertForbidden();
+
+    app('auth')->forgetGuards();
+    [$outsider, $other] = memberOf();
+    $this->withToken(app(CreateApiToken::class)($outsider, $other->id, 'cli', ['*'])->plainTextToken)
+        ->postJson("/api/v1/servers/{$this->server->id}/php", ['version' => '8.2'])->assertNotFound();
 });

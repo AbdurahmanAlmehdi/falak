@@ -1,0 +1,7 @@
+# Host names are lower case.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    domains: [Shop.Example.com]

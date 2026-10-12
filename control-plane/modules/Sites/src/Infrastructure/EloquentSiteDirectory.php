@@ -13,9 +13,41 @@ use Illuminate\Database\Eloquent\Builder;
 
 final class EloquentSiteDirectory implements SiteDirectory
 {
+    /** @var ?array<string, ?SiteData> find() answers while remembering() runs */
+    private ?array $memo = null;
+
     public function find(string $siteId): ?SiteData
     {
+        if ($this->memo !== null) {
+            return array_key_exists($siteId, $this->memo) ? $this->memo[$siteId] : ($this->memo[$siteId] = $this->query()->find($siteId)?->toData());
+        }
+
         return $this->query()->find($siteId)?->toData();
+    }
+
+    public function findMany(array $siteIds): array
+    {
+        if ($siteIds === []) {
+            return [];
+        }
+
+        return $this->query()->whereIn('id', array_values(array_unique($siteIds)))->get()
+            ->mapWithKeys(fn (Site $site) => [$site->id => $site->toData()])->all();
+    }
+
+    public function remembering(callable $callback): mixed
+    {
+        if ($this->memo !== null) {
+            return $callback(); // nested: the outer call owns the memo
+        }
+
+        $this->memo = [];
+
+        try {
+            return $callback();
+        } finally {
+            $this->memo = null;
+        }
     }
 
     public function forOrganization(string $organizationId): array

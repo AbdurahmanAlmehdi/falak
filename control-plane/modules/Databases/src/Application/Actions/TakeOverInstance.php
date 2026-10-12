@@ -2,6 +2,7 @@
 
 namespace Falak\Databases\Application\Actions;
 
+use Falak\Config\Contracts\ManagedResources;
 use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Enums\ResourceStatus;
 use Falak\Databases\Domain\Models\BackupSchedule;
@@ -15,15 +16,16 @@ use Illuminate\Support\Facades\DB;
 
 /**
  * A new instance takes over an old one (a major upgrade's copy, a point-in-time restore swapped in): its databases,
- * users, backup schedules, DNS name and host port (and the published addresses with it). The old one is retired:
- * stopped, its data volume kept until someone deletes it; its container goes at $retireAt (a major upgrade, once the
- * new one is healthy) or stays (null: a swapped-out instance keeps everything).
+ * users, backup schedules, DNS name and host port (and the published addresses with it), and what a falak.yaml
+ * managed of it. The old one is retired: stopped, its data volume kept until someone deletes it; its container goes at
+ * $retireAt (a major upgrade, once the new one is healthy) or stays (null: a swapped-out instance keeps everything).
  */
 final class TakeOverInstance
 {
     public function __construct(
         private readonly ApplyInstance $apply,
         private readonly ServiceVolumes $volumes,
+        private readonly ManagedResources $managed,
     ) {}
 
     /**
@@ -66,6 +68,9 @@ final class TakeOverInstance
             if (($primary = $target->databases()->reorder()->orderBy('created_at')->first()) !== null && $target->volume_id !== null) {
                 $this->volumes->attach($target->volume_id, AttachableType::Database, $primary->id, '/var/lib/falak/db');
             }
+
+            // A falak.yaml that managed the old container manages the new one (its unit keeps mapping to it).
+            $this->managed->move('database_instance', $source->id, $target->id);
 
             // Publish on the old host port, keep the DNS name across recreations, and a certificate valid for that name.
             ($this->apply)($target, background: true, renewCertificate: true);

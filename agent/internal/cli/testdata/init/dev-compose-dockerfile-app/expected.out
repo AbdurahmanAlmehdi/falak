@@ -1,0 +1,2 @@
+Wrote falak.yaml: web (app, docker), db (database, postgresql), redis (redis, redis)
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

@@ -26,6 +26,7 @@ export { Kbd } from './kbd';
 export { KeyValue, type KeyValueItem } from './key-value';
 export { LogViewer, stripAnsi, type LogLine, type LogViewerProps } from './log-viewer';
 export { FalakLogo, FalakMark } from './logo';
+export { ManagedBadge, managedCovers, pointer, type ManagedConfig } from './managed-badge';
 export {
     Menu,
     MenuActions,

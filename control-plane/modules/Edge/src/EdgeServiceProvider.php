@@ -4,6 +4,7 @@ namespace Falak\Edge;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Config\Contracts\Reconcilable;
 use Falak\Deployments\Events\DeploymentRolledBack;
 use Falak\Deployments\Events\DeploymentSucceeded;
 use Falak\Edge\Application\CertificateInstaller;
@@ -29,6 +30,7 @@ use Falak\Edge\Events\CertificateIssued;
 use Falak\Edge\Events\DomainAdded;
 use Falak\Edge\Events\DomainRemoved;
 use Falak\Edge\Infrastructure\CloudflareOriginPolicy;
+use Falak\Edge\Infrastructure\Config\EdgeReconciler;
 use Falak\Edge\Infrastructure\Dns\DnsResolver;
 use Falak\Edge\Infrastructure\Dns\DohResolver;
 use Falak\Edge\Infrastructure\Dns\StreamTlsProbe;
@@ -93,6 +95,8 @@ class EdgeServiceProvider extends ModuleServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom($this->modulePath().'/config/edge.php', 'edge');
+
+        $this->app->tag([EdgeReconciler::class], Reconcilable::TAG);
 
         $this->app->bind(RouteCompiler::class, fn ($app) => new RouteCompiler(
             $app->make(SiteDirectory::class),

@@ -1,0 +1,10 @@
+# Overrides take unit fields only.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+environments:
+  staging:
+    units:
+      web: { replicas: 3 }

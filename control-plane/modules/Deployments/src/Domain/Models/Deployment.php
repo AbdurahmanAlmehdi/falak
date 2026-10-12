@@ -157,4 +157,12 @@ class Deployment extends Model
     {
         return $this->commit !== null ? substr($this->commit, 0, 7) : null;
     }
+
+    /** The site's deployment of $commit that hasn't finished yet (queued, waiting, building or deploying). */
+    public static function activeFor(string $siteId, string $commit): ?self
+    {
+        return self::query()->where('site_id', $siteId)->where('commit', $commit)->where('trigger', '!=', Trigger::Rollback)
+            ->whereIn('status', [DeploymentStatus::Queued, DeploymentStatus::Waiting, DeploymentStatus::Building, DeploymentStatus::Deploying])
+            ->latest()->first();
+    }
 }

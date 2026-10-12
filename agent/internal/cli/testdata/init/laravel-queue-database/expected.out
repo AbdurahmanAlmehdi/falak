@@ -1,0 +1,3 @@
+Wrote falak.yaml: web (app, frankenphp), db (database, postgresql)
+note: web: APP_KEY left out: Falak generates it for a new Laravel site, and env keys the file doesn't set keep their value
+Next: review it, `falak validate`, then `falak plan` (when logged in) and commit it.

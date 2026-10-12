@@ -1,0 +1,7 @@
+# Workers are a map by name, not a list.
+version: 1
+units:
+  web:
+    type: app
+    runtime: node
+    workers: [{ processes: 2 }]
