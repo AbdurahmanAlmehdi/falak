@@ -7,6 +7,7 @@ use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Projects\Contracts\Data\ProjectData;
+use Falak\Servers\Contracts\ServerDirectory;
 use Falak\SourceControl\Contracts\ProviderType;
 use Falak\SourceControl\Contracts\SourceControlGateway;
 use Illuminate\Support\Facades\Cache;
@@ -25,10 +26,11 @@ final class SaveSource
     public function __construct(
         private readonly SourceControlGateway $gateway,
         private readonly AuditLog $audit,
+        private readonly ServerDirectory $servers,
     ) {}
 
     /**
-     * @param  array{connection_id: string, repository: string, path?: ?string, enabled?: bool, allowed_credentials?: ?list<string>}  $data
+     * @param  array{connection_id: string, repository: string, path?: ?string, enabled?: bool, allowed_credentials?: ?list<string>, allowed_servers?: ?list<string>}  $data
      */
     public function __invoke(ProjectData $project, array $data, ?string $userId): ConfigSource
     {
@@ -50,6 +52,16 @@ final class SaveSource
             throw ValidationException::withMessages(['path' => 'The file must be named falak.yaml, falak.yml or falak.json (in the repository or a folder of it).']);
         }
 
+        $servers = array_key_exists('allowed_servers', $data) ? array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_servers'])))) : null;
+
+        if ($servers !== null) {
+            $known = array_map(fn ($s) => $s->name, $this->servers->forOrganization($project->organizationId));
+
+            if (($unknown = array_values(array_diff($servers, $known))) !== []) {
+                throw ValidationException::withMessages(['allowed_servers' => 'The organization has no server named "'.implode('", "', $unknown).'".']);
+            }
+        }
+
         $source = ConfigSource::query()->firstOrNew(['project_id' => $project->id], ['organization_id' => $project->organizationId, 'created_by' => $userId]);
         $wasEnabled = $source->exists && $source->enabled;
         $source->fill([
@@ -60,6 +72,7 @@ final class SaveSource
             ...(array_key_exists('separate_approver', $data) ? ['separate_approver' => (bool) $data['separate_approver']] : []),
             ...(array_key_exists('allowed_credentials', $data)
                 ? ['allowed_credentials' => array_values(array_unique(array_filter(array_map('trim', (array) $data['allowed_credentials']))))] : []),
+            ...($servers !== null ? ['allowed_servers' => $servers] : []),
         ])->save();
 
         if ($wasEnabled && ! $source->enabled) {
@@ -83,7 +96,7 @@ final class SaveSource
         }
 
         $this->audit->record($wasEnabled && ! $source->enabled ? 'config.source_disabled' : 'config.source_saved', 'project', $project->id,
-            ['repository' => $source->repository, 'path' => $source->path, 'enabled' => $source->enabled], $project->organizationId, $userId);
+            ['repository' => $source->repository, 'path' => $source->path, 'enabled' => $source->enabled, 'allowed_servers' => $source->allowed_servers], $project->organizationId, $userId);
 
         return $source;
     }

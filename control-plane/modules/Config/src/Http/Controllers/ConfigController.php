@@ -57,6 +57,8 @@ final class ConfigController extends Controller
             'separate_approver' => ['sometimes', 'boolean'],
             'allowed_credentials' => ['sometimes', 'nullable', 'array', 'max:50'],
             'allowed_credentials.*' => ['string', 'max:255'],
+            'allowed_servers' => ['sometimes', 'nullable', 'array', 'max:50'],
+            'allowed_servers.*' => ['string', 'max:255'],
         ]);
 
         if (array_key_exists('separate_approver', $input) && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)
@@ -64,13 +66,16 @@ final class ConfigController extends Controller
             abort(403, 'Only admins can change who may approve runs.');
         }
 
-        // Letting a project's file use an organization certificate, DNS credential or storage provider is an admin's call.
-        if (array_key_exists('allowed_credentials', $input) && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)) {
-            $current = ConfigSource::query()->where('project_id', $data->id)->value('allowed_credentials');
-            $current = is_string($current) ? (array) json_decode($current, true) : (array) $current;
+        // Letting a project's file use an organization certificate, DNS credential, storage provider or server is an
+        // admin's call.
+        foreach (['allowed_credentials' => 'certificates, DNS credentials and storage providers', 'allowed_servers' => 'servers'] as $field => $what) {
+            if (array_key_exists($field, $input) && ! $this->can($request->user(), $data->organizationId, ConfigPolicy::APPROVE)) {
+                $current = ConfigSource::query()->where('project_id', $data->id)->value($field);
+                $current = is_string($current) ? (array) json_decode($current, true) : (array) $current;
 
-            if (array_values((array) $input['allowed_credentials']) !== array_values($current)) {
-                abort(403, 'Only admins can change the certificates, DNS credentials and storage providers the file may use.');
+                if (array_values((array) $input[$field]) !== array_values($current)) {
+                    abort(403, "Only admins can change the {$what} the file may use.");
+                }
             }
         }
 

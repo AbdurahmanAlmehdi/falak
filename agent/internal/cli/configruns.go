@@ -446,7 +446,9 @@ func cmdConfigSourceSet(ctx context.Context, a *App, args []string) error {
 	fs.StringVar(&path, "path", "", "the file in the repository (default falak.yaml)")
 	enable := fs.Bool("enable", false, "follow the file (pushes apply it)")
 	disable := fs.Bool("disable", false, "stop following the file (keeps every resource; cancels waiting runs)")
-	if _, err := a.parse(fs, args, 0, 0, "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable]"); err != nil {
+	var servers headerFlags // ponytail: the -H flag type, a repeatable string list
+	fs.Var(&servers, "allow-server", "a server the file may place units on (repeatable; replaces the list; \"\" clears it; admins only)")
+	if _, err := a.parse(fs, args, 0, 0, "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable] [--allow-server NAME]…"); err != nil {
 		return err
 	}
 	if *enable && *disable {
@@ -482,6 +484,15 @@ func cmdConfigSourceSet(ctx context.Context, a *App, args []string) error {
 	if *enable || *disable {
 		r.Enabled = *enable
 	}
+	if len(servers) > 0 {
+		list := []string{}
+		for _, s := range servers {
+			if s = strings.TrimSpace(s); s != "" {
+				list = append(list, s)
+			}
+		}
+		r.AllowedServers = &list
+	}
 	if r.Repository == "" || r.ConnectionID == "" {
 		return usagef("the project has no config source yet: give --repo and --connection")
 	}
@@ -512,5 +523,6 @@ func (a *App) printSource(s api.ConfigSource) error {
 	fmt.Fprintf(a.Stdout, "  connection          %s\n", s.ConnectionID)
 	fmt.Fprintf(a.Stdout, "  separate approver   %t\n", s.SeparateApprover)
 	fmt.Fprintf(a.Stdout, "  allowed credentials %s\n", dash(strings.Join(s.AllowedCredentials, ", ")))
+	fmt.Fprintf(a.Stdout, "  allowed servers     %s\n", dash(strings.Join(s.AllowedServers, ", ")))
 	return nil
 }

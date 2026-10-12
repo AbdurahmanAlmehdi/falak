@@ -38,6 +38,11 @@ The schema is `https://falak.sh/schema/v1.json` (also in the repository: `contra
    webhook. GitHub, GitLab and Bitbucket work; plain git servers can't be a config source yet. From the terminal:
    `falak config source set --repo acme/shop --connection <id> --enable` (the connection ids:
    `GET /api/v1/source-control/connections`).
+
+   **A new project** hosts nothing yet, so no server is attached to it and the file can't place a unit anywhere
+   (`name.server`). An admin lists the servers the file may use under **Servers the file may place units on** (or
+   `falak config source set --allow-server app-1`). A project that already runs services can use their servers
+   without this.
 4. **Push.** The push creates a **config run** per environment bound to the pushed branch. Follow it in Project
    settings → Config as code, or from the terminal:
 
@@ -167,7 +172,7 @@ below.
 |---|---|---|
 | `type` | `app`, `compose`, `function`, `database` or `redis` | required |
 | `root` | The unit's directory in the repository. A push changing files under it redeploys the unit | `.` |
-| `servers` | Names of servers already attached to the project. The first one leads (migrations, the scheduler) | the environment's `servers` |
+| `servers` | Names of servers attached to the project (hosting one of its services, or allowed by an admin in Project settings → Config as code). The first one leads (migrations, the scheduler) | the environment's `servers` |
 | `env` | Environment variables: literals and references (see [References](#references)); at most 500 | — |
 | `expose` | Variables also given to the deploy hooks and the build (`VITE_*`, `NEXT_PUBLIC_*` always are) | — |
 | `domains` | Domains served by the unit (below) | — |
@@ -730,7 +735,7 @@ whose `branch` is the current git branch (production for a file without environm
 | `falak drift` | The environment against its last applied file. `--check` checks now |
 | `falak config export [project]` | Today's state as a file. `-e`, `-o FILE`, `--format yaml\|json` |
 | `falak config unmanaged` | What runs detached |
-| `falak config source show` / `falak config source set` | The file the project follows. `set` changes only what its flags name: `--repo owner/name`, `--connection <id>`, `--path falak.yaml`, `--enable` / `--disable` (a new source is enabled) |
+| `falak config source show` / `falak config source set` | The file the project follows. `set` changes only what its flags name: `--repo owner/name`, `--connection <id>`, `--path falak.yaml`, `--enable` / `--disable` (a new source is enabled), `--allow-server NAME` (repeatable; replaces the list, `""` clears it; admins only) |
 
 `--json` prints the API's data as is. Issues print as `falak.yaml:12:17: schema: /units/web/deploy/strategy: value must
 be one of …`.
@@ -757,7 +762,7 @@ doesn't already have:
 | A pusher can | A pusher can't |
 |---|---|
 | Change units, builds, deploy settings, hooks, processes, domains, limits, previews of this project | Read or write secret values (only reference secrets that already exist) |
-| Create databases, Redis, volumes and backups on servers already attached to the project | Use a server not attached to the project, or create servers |
+| Create units, databases, Redis, volumes and backups on servers attached to the project (hosting one of its services, or allowed by an admin) | Use a server not attached to the project, or create servers |
 | Reference storage providers, DNS credentials and certificates the project already uses (or an admin allowed) | Define credentials, firewall rules, private networks, teams, roles or tokens |
 | Remove resources from the file (they are detached) | Delete data (databases, volumes) without `config.destroy` and `--allow-destroy` |
 | Propose risky changes | Apply a risky change without someone with `config.approve` |

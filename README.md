@@ -163,6 +163,7 @@ falak approve 01j… --comment "checked"              # or: falak reject 01j… 
 falak drift -e production --check                   # exit 7 if the environment drifted from its last applied file
 falak config unmanaged                              # what runs detached (kept, no longer managed)
 falak config source set --repo acme/shop --connection 01j… --enable   # turn it on (or --disable); `show` prints it
+falak config source set --allow-server app-1        # admins: a new project's file may place units there
 falak init --update                                 # a diff of what the code adds to falak.yaml; --write applies it
 falak config export shop -e production -o falak.yaml
 ```

@@ -270,6 +270,7 @@ type ConfigSource struct {
 	Experimental       bool            `json:"experimental"`
 	SeparateApprover   bool            `json:"separate_approver"`
 	AllowedCredentials []string        `json:"allowed_credentials"`
+	AllowedServers     []string        `json:"allowed_servers"`
 	CreatedAt          *string         `json:"created_at"`
 	UpdatedAt          *string         `json:"updated_at"`
 	Raw                json.RawMessage `json:"-"`
@@ -281,6 +282,8 @@ type ConfigSourceRequest struct {
 	Repository   string `json:"repository"`
 	Path         string `json:"path,omitempty"`
 	Enabled      bool   `json:"enabled"`
+	// AllowedServers replaces the servers the file may place units on (admins only); nil leaves them.
+	AllowedServers *[]string `json:"allowed_servers,omitempty"`
 }
 
 // ConfigInvalidError is a 422 answer carrying the file's issues.

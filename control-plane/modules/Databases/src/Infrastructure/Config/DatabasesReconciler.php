@@ -1177,7 +1177,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
 
     private static function server(string $pointer, string $name): ConfigIssue
     {
-        return ConfigIssue::error('name.server', $pointer, "No server named \"{$name}\" is attached to this project (a server hosting one of its services).");
+        return ConfigIssue::error('name.server', $pointer, "No server named \"{$name}\" is attached to this project (a server hosting one of its services, or one an admin allows in Project settings → Config as code).");
     }
 
     private static function storage(string $pointer, string $name): ConfigIssue

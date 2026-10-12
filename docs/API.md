@@ -577,22 +577,24 @@ none.
 
 ```json
 {"id": "01j…", "connection_id": "01j…", "repository": "acme/shop", "path": "falak.yaml", "enabled": true,
- "experimental": false, "separate_approver": false, "allowed_credentials": [], "created_at": "…", "updated_at": "…"}
+ "experimental": false, "separate_approver": false, "allowed_credentials": [], "allowed_servers": [],
+ "created_at": "…", "updated_at": "…"}
 ```
 
 ### `PUT /api/v1/projects/{project}/config/source` — `config.apply` (30/min)
 Connects, changes, enables or disables the source, exactly as the dashboard does. Body `{"connection_id", "repository":
-"owner/name", "path"?: "falak.yaml", "enabled": true, "separate_approver"?: bool, "allowed_credentials"?: [name]}`
+"owner/name", "path"?: "falak.yaml", "enabled": true, "separate_approver"?: bool, "allowed_credentials"?: [name], "allowed_servers"?: [name]}`
 (`path` defaults to `falak.yaml`; `falak.yml`/`falak.json`, in a folder or not). → `200 {"data": ConfigSource}`.
-`separate_approver` and `allowed_credentials` can only be changed with `config.approve` (`403` otherwise; sending the
-current value is fine). `422` for an unknown connection (or one of a plain git server), a repository not `owner/name`
+`separate_approver`, `allowed_credentials` and `allowed_servers` (server names the file may place units on besides those
+hosting the project's services: a new project hosts none) can only be changed with `config.approve` (`403` otherwise;
+sending the current value is fine). `422` for a server name the organization lacks, an unknown connection (or one of a plain git server), a repository not `owner/name`
 or a path not named `falak.*`. `enabled: false` keeps every resource, makes every field editable again and cancels the
 runs `planning` or `awaiting_approval` (`cancel_reason: source_disabled`). Enabling registers the repository's webhook.
 
 ### `POST /api/v1/projects/{project}/config/validate` — `config.view` (60/min)
 Body `{"file": "<raw text>", "format": "yaml"|"json", "environment": "staging"?}`. Without `environment`: reading, schema
 and the merge of every environment of the file; with it: also the organization checks (servers attached to the
-project, secrets, services, each module's checks) for that environment. Always `200`:
+project or allowed on its source, secrets, services, each module's checks) for that environment. Always `200`:
 `{"data": {"valid": false, "environments": ["production", "staging"], "errors": [ConfigIssue], "warnings": [ConfigIssue]}}`.
 
 ### `POST /api/v1/projects/{project}/config/plan` — `config.view` (30/min)

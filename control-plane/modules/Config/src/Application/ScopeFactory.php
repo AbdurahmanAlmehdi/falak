@@ -15,7 +15,8 @@ use Falak\Sites\Contracts\SiteDirectory;
 /**
  * Builds the {@see ConfigScope} of an environment: its canvas services by unit key, the servers attached to the
  * project (**[decision]** a server is attached to a project when it hosts one of the project's sites, in any
- * environment, or one of its databases: what the project "already has"), and the environment's defaults from the
+ * environment, or one of its databases: what the project "already has"; or when an admin lists it in the source's
+ * `allowed_servers`, so a new project, which hosts nothing yet, can place its first units), and the environment's defaults from the
  * resolved file.
  */
 final class ScopeFactory
@@ -146,10 +147,11 @@ final class ScopeFactory
         }
 
         $out = [];
+        $allowed = array_flip(array_map('strval', (array) (ConfigSource::query()->where('project_id', $projectId)->first()?->allowed_servers ?? [])));
 
-        if ($ids !== [] && $environments !== []) {
+        if (($ids !== [] || $allowed !== []) && $environments !== []) {
             foreach ($this->servers->forOrganization($environments[0]->organizationId) as $server) {
-                if (isset($ids[$server->id])) {
+                if (isset($ids[$server->id]) || isset($allowed[$server->name])) {
                     $out[$server->name] = $server->id;
                 }
             }

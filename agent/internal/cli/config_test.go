@@ -802,6 +802,19 @@ func TestConfigSource(t *testing.T) {
 		t.Fatalf("requests %v", got)
 	}
 
+	if code := h.run("config", "source", "set", "--allow-server", "app-1", "--allow-server", "app-2"); code != 0 || !strings.Contains(h.out.String(), "allowed servers     app-1, app-2") {
+		t.Fatalf("allow servers: %d %s %s", code, h.out.String(), h.err.String())
+	}
+	if got := f.bodies[len(f.bodies)-1]["allowed_servers"]; len(got.([]any)) != 2 {
+		t.Fatalf("allowed_servers %v", got)
+	}
+	if code := h.run("config", "source", "set", "--allow-server", ""); code != 0 {
+		t.Fatalf("clear: %d %s", code, h.err.String())
+	}
+	if got, ok := f.bodies[len(f.bodies)-1]["allowed_servers"].([]any); !ok || len(got) != 0 {
+		t.Fatalf("cleared allowed_servers %v", f.bodies[len(f.bodies)-1])
+	}
+
 	if code := h.run("config", "source", "--json"); code != 0 || !strings.Contains(h.out.String(), `"repository": "acme/shop"`) {
 		t.Fatalf("show json: %d %s %s", code, h.out.String(), h.err.String())
 	}

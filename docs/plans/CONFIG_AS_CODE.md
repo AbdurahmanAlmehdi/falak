@@ -102,7 +102,7 @@ previews:
 
 This split is the security model: whoever can push to the repo can change **how the project runs**, but cannot reach
 servers, credentials or projects the project doesn't already have. A server named in the file must already be
-attached to the project.
+attached to the project (or allowed by an admin on the source: `allowed_servers`, rc.2).
 
 ## Architecture
 
@@ -777,6 +777,7 @@ Settled while building phase 1 (PHP lane, `feat/config-p1`); each is a **[decisi
   `environments: {<production slug>: {branch: <default branch>}}`. Other environments then have no file.
 - **[decision] Servers attached to a project** (`name.server`): the servers hosting any of the project's sites, in any
   environment. A new project's first service is created in the dashboard; the file can then use its servers.
+  (rc.2: or an admin lists servers in the source's `allowed_servers`; see "Live test fixes (rc.2)".)
 - **[decision] Phase 1 supports `app` units** (sections `units.*(app)…`). Everything no reconciler owns yet (database,
   redis, compose and function units, volumes, mounts, previews…) is a `value.unsupported` **warning** and is ignored,
   so a file written for later phases still applies its app units.
@@ -1330,6 +1331,13 @@ Found testing v0.11.0-rc.1 on a live install.
   CLI and automation couldn't turn the feature on. `GET /api/v1/projects/{project}/config/source` (`404` when none)
   and `PUT …/config/source` (the dashboard's `ConfigController::update` itself: same validation, the same admin checks
   for `separate_approver` / `allowed_credentials`, disabling cancels the waiting runs); `falak config source`.
+- **A new project could never place a unit.** Attached servers were only those hosting the project's services, so a
+  project made for the file had none and every `servers:` was `name.server`. **[decision]** The dashboard has no
+  "attach a server to a project" concept to reuse (a project owns services; servers are the organization's), so the
+  source gets an admin-set `allowed_servers` (server names, like `allowed_credentials`; `config.approve` to change,
+  `422` for a name the organization lacks) that `ScopeFactory::attachedServers` adds to what the project hosts. A
+  pusher still can't reach a server an admin didn't allow. Dashboard field, `PUT …/config/source`, `falak config
+  source set --allow-server`.
 
 ## Release notes (draft): v0.11.0
 

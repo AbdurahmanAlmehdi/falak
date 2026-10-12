@@ -114,7 +114,7 @@ func (a *App) commands() []*command {
 			{name: "unmanaged", args: "[-e ENV] [-p PROJECT]", summary: "list what runs detached (kept, no longer managed)", run: cmdConfigUnmanaged},
 			{name: "source", summary: "the repository file a project follows", subs: []*command{
 				{name: "show", args: "[-p PROJECT]", summary: "show a project's config source", run: cmdConfigSourceShow},
-				{name: "set", args: "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable]", summary: "connect, change, enable or disable a project's config source", run: cmdConfigSourceSet},
+				{name: "set", args: "[-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable|--disable] [--allow-server NAME]…", summary: "connect, change, enable or disable a project's config source", run: cmdConfigSourceSet},
 			}},
 		}},
 		runsCommands(),

@@ -15,6 +15,7 @@ interface ConfigSource {
     experimental: boolean;
     separate_approver: boolean;
     allowed_credentials: string[];
+    allowed_servers: string[];
 }
 
 interface ConfigIssue {
@@ -161,6 +162,7 @@ export function ConfigSection({ projectId }: { projectId: string }) {
         enabled: true,
         separate_approver: false,
         credentials: '',
+        servers: '',
     });
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [saving, setSaving] = useState(false);
@@ -177,6 +179,7 @@ export function ConfigSection({ projectId }: { projectId: string }) {
             enabled: source?.enabled ?? true,
             separate_approver: source?.separate_approver ?? false,
             credentials: (source?.allowed_credentials ?? []).join(', '),
+            servers: (source?.allowed_servers ?? []).join(', '),
         });
     }, [projectId]);
 
@@ -189,13 +192,16 @@ export function ConfigSection({ projectId }: { projectId: string }) {
         setSaving(true);
         setErrors({});
         try {
-            const { credentials, ...rest } = form;
-            await requestJson(`/projects/${projectId}/settings/config`, 'PUT', {
-                ...rest,
-                allowed_credentials: credentials
+            const { credentials, servers, ...rest } = form;
+            const names = (list: string) =>
+                list
                     .split(',')
                     .map((name) => name.trim())
-                    .filter((name) => name !== ''),
+                    .filter((name) => name !== '');
+            await requestJson(`/projects/${projectId}/settings/config`, 'PUT', {
+                ...rest,
+                allowed_credentials: names(credentials),
+                allowed_servers: names(servers),
             });
             await load();
         } catch (error) {
@@ -267,6 +273,19 @@ export function ConfigSection({ projectId }: { projectId: string }) {
                             <Input
                                 value={form.credentials}
                                 onChange={(event) => setForm({ ...form, credentials: event.target.value })}
+                                disabled={!canApply || !data.can.approve}
+                                mono
+                            />
+                        </Field>
+                        <Field
+                            label="Servers the file may place units on"
+                            error={errors.allowed_servers}
+                            hint="Server names, comma-separated, besides those already hosting the project's services (a new project has none). Admins only."
+                            className="sm:col-span-2"
+                        >
+                            <Input
+                                value={form.servers}
+                                onChange={(event) => setForm({ ...form, servers: event.target.value })}
                                 disabled={!canApply || !data.can.approve}
                                 mono
                             />
