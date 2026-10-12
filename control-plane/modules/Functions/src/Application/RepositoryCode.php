@@ -24,7 +24,7 @@ final class RepositoryCode
     /** Commits kept in memory (a plan, then its apply, read the same commit). */
     private const CACHED = 20;
 
-    /** @var array<string, array{files: array<string, string>, hash: string}|ValidationException> */
+    /** @var array<string, array{files: array<string, string>, hash: string}> successes only: a failure is read again */
     private array $cache = [];
 
     public function __construct(private readonly SourceControlGateway $git) {}
@@ -45,25 +45,16 @@ final class RepositoryCode
             return $this->load($connectionId, $repository, $ref, $root, $entrypoint);
         }
 
-        $cached = $this->cache[$key] ?? null;
-
-        if ($cached instanceof ValidationException) {
-            throw $cached;
-        }
-
-        if ($cached !== null) {
-            return $cached;
+        if (isset($this->cache[$key])) {
+            return $this->cache[$key];
         }
 
         if (count($this->cache) >= self::CACHED) {
             array_shift($this->cache);
         }
 
-        try {
-            return $this->cache[$key] = $this->load($connectionId, $repository, $ref, $root, $entrypoint);
-        } catch (ValidationException $e) {
-            throw $this->cache[$key] = $e;
-        }
+        // Only successes are kept: a provider hiccup (or a token refresh that failed) is retried next time.
+        return $this->cache[$key] = $this->load($connectionId, $repository, $ref, $root, $entrypoint);
     }
 
     /**

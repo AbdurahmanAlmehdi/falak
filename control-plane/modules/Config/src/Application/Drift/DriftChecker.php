@@ -44,7 +44,7 @@ final class DriftChecker
             return $drift;
         }
 
-        $scope = $this->scopes->make($environment, $source, $baseline->resolved, $baseline->commit);
+        $scope = $this->scopes->make($environment, $source, $baseline->resolved, $baseline->commit, drift: true);
         $changes = $this->planner->plan($scope, (array) $baseline->resolved)->changes->actionable();
         $masked = EnvMask::changes(array_map(fn (Change $c) => $c->toArray(), $changes));
         usort($masked, fn (array $a, array $b) => strcmp((string) $a['path'], (string) $b['path']));

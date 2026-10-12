@@ -1,16 +1,19 @@
 <?php
 
 use Falak\Config\Contracts\ChangeSet;
+use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Domain\Models\ConfigDetached;
 use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Fleet\Domain\Models\Agent;
 use Falak\Functions\Application\FunctionStore;
+use Falak\Functions\Application\RepositoryCode;
 use Falak\Functions\Domain\Models\FunctionSchedule;
 use Falak\Functions\Infrastructure\Config\FunctionSchedulesReconciler;
 use Falak\Functions\Infrastructure\Config\FunctionsReconciler;
 use Falak\Identity\Contracts\Role;
 use Falak\Sites\Contracts\SiteDirectory;
+use Illuminate\Validation\ValidationException;
 
 require_once __DIR__.'/../../../Sites/tests/Support/config.php';
 
@@ -158,4 +161,27 @@ it('refuses a function whose code listing the provider cut short', function () {
 
     expect($issues[0]->code.' '.$issues[0]->pointer)->toBe('value.range /units/api/root')
         ->and($issues[0]->message)->toContain('too long to read whole');
+});
+
+it('drift compares a function\'s settings, never its code: no repository reads', function () {
+    $drift = new ConfigScope(...[...get_object_vars($this->scope), 'drift' => true]);
+    $desired = ['units' => ['api' => ['type' => 'function', 'runtime' => 'python', 'root' => 'fn', 'memory' => '1g']]];
+    $this->git->fileReads = [];
+
+    $changes = fn_changes($this->functions->diff($drift, $desired, $this->functions->current($drift)));
+
+    expect($changes)->not->toHaveKey('/units/api/code')
+        ->and($changes['/units/api/memory'][0])->toBe('update')
+        ->and($this->git->fileReads)->toBe([]);
+});
+
+it('the repository code reader keeps successes only: a failed read is read again', function () {
+    $code = app(RepositoryCode::class);
+    $sha = str_repeat('a', 40);
+    $this->git->treeTruncated = true;
+
+    expect(fn () => $code->read($this->source->source_connection_id, 'acme/shop', $sha, 'fn', 'main.py'))->toThrow(ValidationException::class);
+
+    $this->git->treeTruncated = false;
+    expect($code->read($this->source->source_connection_id, 'acme/shop', $sha, 'fn', 'main.py')['files'])->toHaveKeys(['main.py', 'util.py']);
 });

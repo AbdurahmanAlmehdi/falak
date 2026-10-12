@@ -24,6 +24,8 @@ final readonly class ConfigScope
      *                                     already use)
      * @param  bool  $preview  a pull request's preview environment (Previews): units it creates are isolated, never
      *                         deployed on push, and only the preview's own resources are touched
+     * @param  bool  $drift  a drift check: current()/diff() must be read-only and cheap (no provider reads that refresh
+     *                       tokens, no remote code comparison; reconcilers leave out what they can't compare that way)
      */
     public function __construct(
         public string $organizationId,
@@ -42,6 +44,7 @@ final readonly class ConfigScope
         public bool $allowDestroy = false,
         public array $credentials = [],
         public bool $preview = false,
+        public bool $drift = false,
     ) {}
 
     /** A server id by name (null: not attached to the project). */
@@ -80,6 +83,6 @@ final readonly class ConfigScope
     {
         return new self($this->organizationId, $this->projectId, $this->environmentId, $this->environment, $this->production, $this->commit,
             [...$this->services, $unit => ['kind' => $kind, 'ref_id' => $refId]], $this->servers, $this->defaultServers, $this->connectionId,
-            $this->repository, $this->branch, $this->actorId, $this->allowDestroy, $this->credentials, $this->preview);
+            $this->repository, $this->branch, $this->actorId, $this->allowDestroy, $this->credentials, $this->preview, $this->drift);
     }
 }

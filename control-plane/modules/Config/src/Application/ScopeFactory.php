@@ -30,7 +30,7 @@ final class ScopeFactory
     /**
      * @param  ?array<string, mixed>  $resolved
      */
-    public function make(EnvironmentData $environment, ?ConfigSource $source, ?array $resolved = null, ?string $commit = null, ?string $actorId = null, bool $allowDestroy = false): ConfigScope
+    public function make(EnvironmentData $environment, ?ConfigSource $source, ?array $resolved = null, ?string $commit = null, ?string $actorId = null, bool $allowDestroy = false, bool $drift = false): ConfigScope
     {
         $services = $this->services($environment->id);
 
@@ -60,6 +60,7 @@ final class ScopeFactory
             actorId: $actorId,
             allowDestroy: $allowDestroy,
             credentials: array_values(array_map('strval', (array) ($source?->allowed_credentials ?? []))),
+            drift: $drift,
         );
     }
 
@@ -68,7 +69,7 @@ final class ScopeFactory
     {
         return new ConfigScope($scope->organizationId, $scope->projectId, $scope->environmentId, $scope->environment, $scope->production,
             $scope->commit, $this->services($scope->environmentId), $scope->servers, $scope->defaultServers, $scope->connectionId, $scope->repository,
-            $scope->branch, $scope->actorId, $scope->allowDestroy, $scope->credentials, $scope->preview);
+            $scope->branch, $scope->actorId, $scope->allowDestroy, $scope->credentials, $scope->preview, $scope->drift);
     }
 
     /**

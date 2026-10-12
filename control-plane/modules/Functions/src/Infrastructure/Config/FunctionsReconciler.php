@@ -123,7 +123,9 @@ final class FunctionsReconciler implements Reconcilable, ValidatesConfig
                 array_push($changes, ...Diff::fields($section, $unit, $base, [$path => $value], $have, $creating));
             }
 
-            $code = $this->read($scope, $body);
+            // [decision] Drift compares a function's settings, not its code: no provider reads (they may refresh tokens,
+            // and a run without a commit would follow the branch head).
+            $code = $scope->drift ? null : $this->read($scope, $body);
 
             if ($code !== null) {
                 $head = $function?->head()?->hash;
