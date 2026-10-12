@@ -1432,3 +1432,18 @@ Known gaps
 - Two environments claiming the same host in one push: the second fails at phase B instead of validation.
 - Cross-server references without a private network fail at deploy time, not validation.
 - The dashboard's "Open a PR adding falak.yaml" and the builder-side `detect` job come after the release (phase 6).
+- A push deployment queued before phase A is reused when phase A changed nothing carrying that unit's key; a change it
+  reaches only indirectly (an environment-level change, or a database credential rotated behind an unchanged
+  `${{ db.* }}` reference) doesn't count, so that early deployment ships the previous values once.
+- Not tested on live servers: previews built from a pull request's file, and rollback restoring a release's config
+  (both covered by the test suites). Failed compose services don't get the container output report yet.
+
+Also in this release (found by the live test on rc.1–rc.5)
+- Config sources over the API and CLI (`GET`/`PUT /api/v1/projects/{p}/config/source`, `falak config source`), with an
+  admin-set list of servers a project's file may use (stored by id).
+- `falak validate`/`plan` report a PHP version or runtime the servers lack; `POST /api/v1/servers/{server}/php`.
+- Databases over the API and CLI: `GET /api/v1/databases/instances[/{id}]`, `DELETE …/{id}`, `falak db list|delete`.
+- A push applies the file even after a failed first deploy; a deployment queued before phase A is replaced.
+- A failed health check shows the container's state and last 50 output lines (secrets masked).
+- Former panel domains redirect with 308, so webhook POSTs keep their method.
+- `falak init`: `framework: laravel` for Laravel units, a required `APP_KEY` secret and `/up` for Laravel images.
