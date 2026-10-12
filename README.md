@@ -182,7 +182,8 @@ plan changed since it was shown.
 `plan`, `apply`, `runs`, `drift` and `config export` find the project with `-p` (id or name), then `FALAK_PROJECT`, then
 that file; the environment with `-e`, else the one whose `branch` is the current git branch (production for a file
 without environments, and for `drift`). A plan for an environment the project doesn't have yet is shown as a preview. `--json` prints the API's data as is.
-The file format: [`docs/plans/CONFIG_AS_CODE.md`](docs/plans/CONFIG_AS_CODE.md) and `contracts/config/`.
+The guide to the file, every field, approvals, drift and the security model: [`docs/CONFIG_AS_CODE.md`](docs/CONFIG_AS_CODE.md)
+(schema: `contracts/config/v1.schema.json`; design notes: [`docs/plans/CONFIG_AS_CODE.md`](docs/plans/CONFIG_AS_CODE.md)).
 
 ### API
 Sanctum bearer tokens scoped to one organization. Endpoints and payloads: [`docs/API.md`](docs/API.md).

@@ -541,7 +541,7 @@ other connection and can be used as `source_connection_id` for sites.
 ## Config as code (`falak.yaml`)
 
 A project can follow one file in its repository (`falak.yaml`, `falak.yml` or `falak.json`; schema
-`https://falak.sh/schema/v1.json`, rules in [plans/CONFIG_AS_CODE.md](plans/CONFIG_AS_CODE.md)). The source (connection,
+`https://falak.sh/schema/v1.json`; guide: [CONFIG_AS_CODE.md](CONFIG_AS_CODE.md), design: [plans/CONFIG_AS_CODE.md](plans/CONFIG_AS_CODE.md)). The source (connection,
 repository, path, on/off) is set in the dashboard (Project settings → Config as code). A push to a branch an
 environment of the file names (`environments.<slug>.branch`) creates one **config run** per environment: the file is read
 at the pushed commit, validated, planned, applied, and the units that changed (their files, or their config) are
@@ -558,11 +558,9 @@ A file without `environments` binds the project's production environment to the 
 ```
 
 `code`: `parse`, `parse.*`, `schema`, `environment.unknown`, `override.type`, `reference.*`, `name.server`,
-`name.secret`, `name.unit`, `name.dns_credential`, `name.certificate`, `value.range`, `value.unsupported`, `value.forbidden`,
+`name.secret`, `name.unit`, `name.storage`, `name.dns_credential`, `name.certificate`, `name.environment`, `value.range`, `value.unsupported`, `value.forbidden`,
 `value.conflict`, `limit.server`. `pointer` is a JSON Pointer into the file (or into the resolved file, `source` then
-says where the value is in the file); `line`/`column` are 1-based, `null` when unknown. Fields this version doesn't
-support yet (database, redis, compose and function units, volumes, previews…) come back as `value.unsupported`
-**warnings** and are ignored.
+says where the value is in the file); `line`/`column` are 1-based, `null` when unknown.
 
 An invalid file answers **422** in Laravel's shape plus the issues:
 
@@ -625,7 +623,7 @@ A run that needed an approval carries `approval` (null otherwise), and a cancell
 ```json
 {"approval": {"required": true, "risky": [{"path": "/units/web/deploy/strategy", "rule": "production.strategy", "reason": "…"}],
               "expires_at": "…", "approved_by": null, "approved_at": null, "rejected_by": null, "rejected_at": null,
-              "comment": null, "can_approve": true, "blocked_reason": null},
+              "comment": null, "can_approve": true, "blocked_reason": null, "plan_hash": "3f1a…"},
  "cancel_reason": null}
 ```
 
@@ -633,8 +631,9 @@ A run that needed an approval carries `approval` (null otherwise), and a cancell
 another approver must approve it." when the project's admins require a different approver). `cancel_reason`:
 `superseded`, `rejected`, `expired`, `source_disabled`, `environment_released`, `user`.
 
-### `POST /api/v1/config/runs/{run}/approve` `{"comment"?}` — `config.approve` (30/min)
-The run plans again and applies: `200 {"data": ConfigRun}` (`applying`, or already `applied`/`failed`). `403
+### `POST /api/v1/config/runs/{run}/approve` `{"plan_hash", "comment"?}` — `config.approve` (30/min)
+`plan_hash` (required) is the run's `approval.plan_hash` as shown: a different hash approves nothing (`409`, "The plan
+changed since it was shown; review it again."). The run plans again and applies: `200 {"data": ConfigRun}` (`applying`, or already `applied`/`failed`). `403
 {"message": blocked_reason}`; `409 {"message": "This run is not awaiting approval."}` (superseded, expired, rejected,
 done); `409 {"message": "The plan changed since it was shown; review it again.", "data": ConfigRun}` when the fresh plan
 has a risky change the approval didn't cover (the run waits again with the new plan).
