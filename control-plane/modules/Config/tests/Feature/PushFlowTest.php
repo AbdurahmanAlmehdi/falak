@@ -4,6 +4,7 @@ use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
 use Falak\Config\Domain\Models\ConfigRun;
 use Falak\Deployments\Domain\Models\Deployment;
+use Falak\Edge\Domain\Models\Domain;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -55,6 +56,27 @@ it('fails the run when the deployment of a unit fails while it is being queued (
         ->and($run->status)->toBe(RunStatus::Failed)
         ->and($run->deploy[0])->toMatchArray(['unit' => 'web', 'status' => 'failed'])
         ->and($run->deploy[0]['error'])->toContain('would put a sensitive secret');
+});
+
+it('gives a never-released unit its domains before its first deployment; a released one gets new ones with the release', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $file = fn (array $domains) => "version: 1\nunits:\n  web:\n    type: app\n    runtime: frankenphp\n    php: \"8.4\"\n    domains: [".implode(', ', $domains)."]\nenvironments:\n  production: { branch: main }\n";
+    $names = fn () => Domain::query()->where('site_id', $site->id)->pluck('name')->sort()->values()->all();
+
+    // First deployment: the build hasn't even finished, yet the edge already routes the domain its health check uses.
+    $world->file($file(['shop.example.com']));
+    $world->push(config_sha('b'));
+    expect(Deployment::query()->sole()->status->value)->not->toBe('succeeded')
+        ->and($names())->toBe(['shop.example.com']);
+    $world->settle();
+
+    // Released since: a new domain waits for the release that brings it.
+    $world->file($file(['shop.example.com', 'new.example.com']));
+    $world->push(config_sha('c'));
+    expect($names())->toBe(['shop.example.com']);
+    $world->settle();
+    expect($names())->toBe(['new.example.com', 'shop.example.com']);
 });
 
 it('a push never deploys a unit whose site has push to deploy off', function () {

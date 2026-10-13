@@ -11,6 +11,7 @@ use Falak\Config\Application\Validation\FileCheck;
 use Falak\Config\Contracts\ApplyContext;
 use Falak\Config\Contracts\ApplyPhase;
 use Falak\Config\Contracts\Change;
+use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Domain\Enums\RunStatus;
 use Falak\Config\Domain\Enums\RunTrigger;
@@ -219,6 +220,15 @@ final class RunEngine
             }
 
             try {
+                // A unit never released has no route through the edge, so its first health check could reach nothing:
+                // its domains and edge rules go on now (nothing is live to protect); the rest waits for the release.
+                $domains = array_values(array_filter($plan->changes->actionable(), fn (Change $c) => $c->unit === (string) $unit && str_ends_with($c->section, '.domains')));
+
+                if ($domains !== [] && ! $this->releases->released($siteId)) {
+                    $unitChanges = new ChangeSet(array_values(array_filter($plan->changes->actionable(), fn (Change $c) => $c->unit === (string) $unit)));
+                    DB::transaction(fn () => $this->applier->early($scope, $unitChanges, new ApplyContext($run->id, ApplyPhase::WithRelease, $run->commit, $run->requested_by, $run->allow_destroy, (string) $unit), '.domains'));
+                }
+
                 $entry['deployment_id'] = $this->releases->deploy($siteId, $run->branch ?? $scope->branch, $run->commit,
                     $commitInfo['message'] ?? null, $commitInfo['author'] ?? null, $run->trigger === RunTrigger::Push ? null : $run->requested_by, isset($changedInPhaseA[$unit]) ? $afterPhaseA : null);
                 $entry['status'] = 'deploying';

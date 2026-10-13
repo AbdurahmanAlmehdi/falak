@@ -72,4 +72,23 @@ final class Applier
 
         return array_values(array_filter($skipped, fn (Change $c) => in_array($c->section, array_merge(...array_map(fn ($r) => $r->sections(), $this->reconcilers->forPhase(ApplyPhase::WithRelease))), true)));
     }
+
+    /**
+     * Applies changes this run already planned for one unit, now, through the reconcilers of phase B whose sections end
+     * in $suffix (".domains": the edge's): a never-released unit's domains, before its first deployment (RunEngine).
+     */
+    public function early(ConfigScope $scope, ChangeSet $changes, ApplyContext $ctx, string $suffix): void
+    {
+        foreach ($this->reconcilers->forPhase(ApplyPhase::WithRelease) as $reconciler) {
+            if (array_filter($reconciler->sections(), fn (string $s) => str_ends_with($s, $suffix)) === []) {
+                continue;
+            }
+
+            $owned = $this->reconcilers->changesOf($reconciler, $changes);
+
+            if ($owned->changes !== []) {
+                $reconciler->apply($scope, $owned, $ctx);
+            }
+        }
+    }
 }

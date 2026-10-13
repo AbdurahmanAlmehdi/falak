@@ -43,6 +43,9 @@ interface ConfigReleases
      */
     public function ended(string $deploymentId): ?array;
 
+    /** Whether the site ever had a release go live (false before its first deployment succeeds). */
+    public function released(string $siteId): bool;
+
     /** The release a deployment created (null before it is planned). */
     public function releaseOf(string $deploymentId): ?string;
 }

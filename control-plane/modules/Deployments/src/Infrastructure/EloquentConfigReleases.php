@@ -78,4 +78,9 @@ final class EloquentConfigReleases implements ConfigReleases
 
         return ['status' => $deployment->status->value, 'number' => $deployment->number, 'error' => $deployment->error];
     }
+
+    public function released(string $siteId): bool
+    {
+        return Release::query()->where('site_id', strtolower($siteId))->whereNotNull('activated_at')->exists();
+    }
 }
