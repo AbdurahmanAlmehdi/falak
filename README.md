@@ -142,6 +142,7 @@ tool that `install.sh` puts on the control-plane host.
 ```bash
 falak login --url https://falak.example.com          # or FALAK_URL / FALAK_TOKEN in CI
 falak servers list
+falak servers stack app-1 --php 8.4 --node 22    # add runtimes to a server created without them (re-provisions it)
 falak sites list
 falak deploy shop --wait                            # streams output; exit code 3 if the deploy fails
 falak releases shop

@@ -60,6 +60,32 @@ type Server struct {
 	CreatedAt     string   `json:"created_at,omitempty"`
 }
 
+// StackRequest adds runtimes to a server created without them (POST /servers/{server}/stack).
+type StackRequest struct {
+	PHP  *StackPHP `json:"php,omitempty"`
+	Node string    `json:"node,omitempty"`
+}
+
+// StackPHP: runtime fpm | frankenphp (site servers) or cli (builders); version empty = the installation's default.
+type StackPHP struct {
+	Runtime string `json:"runtime"`
+	Version string `json:"version,omitempty"`
+}
+
+// StackChange is the server's new stack and the re-provisioning that installs it.
+type StackChange struct {
+	Stack struct {
+		PHP *struct {
+			Runtime  string   `json:"runtime"`
+			Versions []string `json:"versions"`
+		} `json:"php"`
+		Node string `json:"node"`
+	} `json:"stack"`
+	Status        string `json:"status"`
+	StatusMessage string `json:"status_message,omitempty"`
+	CommandID     string `json:"command_id,omitempty"`
+}
+
 // Site summary.
 type Site struct {
 	ID             string   `json:"id"`

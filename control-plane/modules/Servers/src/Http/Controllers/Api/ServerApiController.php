@@ -9,14 +9,17 @@ use Falak\Identity\Contracts\AuditLog;
 use Falak\Identity\Contracts\CurrentOrganization;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
+use Falak\Servers\Application\Actions\AddStackRuntimes;
 use Falak\Servers\Application\Actions\CreateServer;
 use Falak\Servers\Application\Actions\DeleteServer;
 use Falak\Servers\Domain\Models\Server;
+use Falak\Servers\Domain\Stack\Stack;
 use Falak\Servers\Http\Controllers\PresentsServers;
 use Falak\Servers\Http\Requests\StoreServerRequest;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Validation\Rule;
 
 /**
  * Public API (Sanctum tokens; abilities are permission names).
@@ -84,6 +87,30 @@ final class ServerApiController extends Controller
         $audit->record('server.agent_upgrade', 'server', $server->id, ['to_version' => $upgrade->toVersion], $server->organization_id);
 
         return response()->json(['data' => $upgrade->toArray()], 202);
+    }
+
+    /**
+     * POST /api/v1/servers/{server}/stack — add PHP and/or Node.js to a server created without them, then re-provision.
+     */
+    public function addRuntimes(Request $request, Server $server, AddStackRuntimes $add): JsonResponse
+    {
+        $this->authorize('update', $server);
+        $data = $request->validate([
+            'php' => ['nullable', 'array'],
+            'php.runtime' => ['required_with:php', 'string', Rule::in([...Stack::PHP_RUNTIMES, Stack::PHP_CLI])],
+            'php.version' => ['nullable', 'string', Rule::in((array) config('servers.php_versions'))],
+            'node' => ['nullable', 'string', Rule::in(array_map('strval', array_keys((array) config('servers.node_versions'))))],
+        ]);
+
+        $commandId = $add($server, $data, $request->user()?->getAuthIdentifier());
+        $server->refresh()->load('phpVersions');
+
+        return response()->json(['data' => [
+            'stack' => $server->stack->toArray(),
+            'status' => $server->status->value,
+            'status_message' => $server->status_message,
+            'command_id' => $commandId ?: null,
+        ]], 202);
     }
 
     public function destroy(Request $request, Server $server, DeleteServer $delete): Response

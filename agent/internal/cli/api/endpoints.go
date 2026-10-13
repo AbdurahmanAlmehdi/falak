@@ -12,8 +12,9 @@ const (
 	PathMe            = "/api/v1/me"            // GET  → {data:{user, organization, token}}
 	PathOrganizations = "/api/v1/organizations" // GET  → {data:[Organization]} (falls back to /me)
 
-	PathServers = "/api/v1/servers"          // GET  → {data:[Server]}
-	PathServer  = "/api/v1/servers/{server}" // GET  → {data:Server}
+	PathServers     = "/api/v1/servers"                // GET  → {data:[Server]}
+	PathServer      = "/api/v1/servers/{server}"       // GET  → {data:Server}
+	PathServerStack = "/api/v1/servers/{server}/stack" // POST {php?, node?} → 202 {data:StackChange}
 
 	PathSites = "/api/v1/sites"        // GET  → {data:[Site]}
 	PathSite  = "/api/v1/sites/{site}" // GET  → {data:Site} (id or slug)

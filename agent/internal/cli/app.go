@@ -88,9 +88,10 @@ func (a *App) commands() []*command {
 		{name: "logout", summary: "forget the stored token", run: cmdLogout},
 		{name: "whoami", summary: "show the current user and organization", run: cmdWhoami},
 		{name: "orgs", summary: "list organizations", run: cmdOrgs},
-		{name: "servers", summary: "list or inspect servers", subs: []*command{
+		{name: "servers", summary: "list, inspect or add runtimes to servers", subs: []*command{
 			{name: "list", summary: "list servers", run: cmdServersList},
 			{name: "show", args: "<server>", summary: "show one server", run: cmdServersShow},
+			{name: "stack", args: "<server> [--php VERSION] [--php-runtime fpm|frankenphp|cli] [--node VERSION]", summary: "add PHP and/or Node.js to a server created without them (re-provisions it)", run: cmdServersStack},
 		}},
 		{name: "sites", summary: "list or inspect sites", subs: []*command{
 			{name: "list", summary: "list sites", run: cmdSitesList},

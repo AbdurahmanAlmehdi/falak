@@ -13,6 +13,9 @@ final readonly class Stack
 {
     public const PHP_RUNTIMES = ['frankenphp', 'fpm'];
 
+    /** Builders run PHP only for builds (Composer): the CLI, no web runtime. */
+    public const PHP_CLI = 'cli';
+
     /**
      * @param  list<string>  $phpVersions
      */
@@ -89,8 +92,8 @@ final readonly class Stack
         if ($this->phpRuntime !== null) {
             $offered = (array) config('servers.php_versions', []);
 
-            if (! in_array($this->phpRuntime, self::PHP_RUNTIMES, true)) {
-                $errors['stack.php.runtime'] = 'Choose FrankenPHP or PHP-FPM.';
+            if ($type === ServerType::Builder ? $this->phpRuntime !== self::PHP_CLI : ! in_array($this->phpRuntime, self::PHP_RUNTIMES, true)) {
+                $errors['stack.php.runtime'] = $type === ServerType::Builder ? 'A builder runs the PHP CLI only (runtime "cli").' : 'Choose FrankenPHP or PHP-FPM.';
             }
 
             if ($this->phpVersions === [] || array_diff($this->phpVersions, $offered) !== []) {

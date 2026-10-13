@@ -61,7 +61,7 @@ enum ServerType: string
         return match ($this) {
             self::App, self::Web, self::Worker => ['php', 'node'],
             self::Database, self::Cache, self::LoadBalancer => [],
-            self::Builder => ['node'],
+            self::Builder => ['php', 'node'], // PHP: the CLI for Composer builds
         };
     }
 }

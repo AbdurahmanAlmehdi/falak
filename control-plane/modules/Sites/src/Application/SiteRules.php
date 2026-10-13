@@ -94,7 +94,7 @@ final class SiteRules
         }
 
         $error = match (true) {
-            $runtime->isPhp() && $server->phpRuntime === null => "{$server->name} does not run PHP.",
+            $runtime->isPhp() && $server->phpRuntime === null => "{$server->name} does not run PHP (add it: falak servers stack {$server->name} --php 8.4).",
             $runtime === SiteRuntime::FrankenPhp && $server->phpRuntime !== 'frankenphp' => "{$server->name} does not run FrankenPHP; use the PHP-FPM runtime.",
             $runtime->usesDocker() && ! $server->docker => "Docker is not installed on {$server->name}.",
             $runtime->isFunction() && ! ($this->agents->forServer($server->id)?->supports('fn.v1') ?? false) => "The Falak agent on {$server->name} is too old for functions; update it first.",

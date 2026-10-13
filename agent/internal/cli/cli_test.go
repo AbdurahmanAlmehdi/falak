@@ -54,6 +54,7 @@ func (f *fakeCP) json(w http.ResponseWriter, code int, v any) {
 var servers = []api.Server{
 	{ID: "01JSRV0000000000000000000A", Name: "web-1", Type: "app", Status: "active", Provider: "hetzner", IPv4: "203.0.113.10", PHP: "8.4", SSHUser: "falak"},
 	{ID: "01JSRV0000000000000000000B", Name: "db-1", Type: "db", Status: "active", Provider: "custom", IPv4: "203.0.113.11", SSHPort: 2222},
+	{ID: "01JSRV0000000000000000000C", Name: "builder", Type: "builder", Status: "active", Provider: "custom", IPv4: "203.0.113.12"},
 }
 
 var site = api.Site{ID: "01JSITE000000000000000000A", Slug: "acme", Domain: "acme.test", Runtime: "frankenphp", Status: "active", Branch: "main", ServerIDs: []string{servers[0].ID}}
@@ -96,6 +97,13 @@ func (f *fakeCP) serve(w http.ResponseWriter, r *http.Request) {
 		f.json(w, 200, map[string]any{"data": []api.Organization{{ID: "o1", Name: "Acme", Role: "owner"}, {ID: "o2", Name: "Beta"}}})
 	case p == api.PathServers:
 		f.json(w, 200, map[string]any{"data": servers})
+	case r.Method == http.MethodPost && strings.HasSuffix(p, "/stack"):
+		php, _ := f.lastBody["php"].(map[string]any)
+		stack := map[string]any{"php": nil, "node": f.lastBody["node"]}
+		if php != nil {
+			stack["php"] = map[string]any{"runtime": php["runtime"], "versions": []string{"8.4"}, "default": "8.4"}
+		}
+		f.json(w, 202, map[string]any{"data": map[string]any{"stack": stack, "status": "provisioning", "command_id": "c1"}})
 	case strings.HasPrefix(p, "/api/v1/servers/"):
 		id := strings.TrimPrefix(p, "/api/v1/servers/")
 		for _, s := range servers {
@@ -236,7 +244,7 @@ func TestParsingAndUsage(t *testing.T) {
 		}
 	}
 	var got []api.Server
-	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil || len(got) != 2 {
+	if err := json.Unmarshal(h.out.Bytes(), &got); err != nil || len(got) != len(servers) {
 		t.Fatalf("json output: %v %s", err, h.out.String())
 	}
 }
@@ -308,7 +316,7 @@ func TestServersAndSites(t *testing.T) {
 		t.Fatal(h.err.String())
 	}
 	lines := strings.Split(strings.TrimSpace(h.out.String()), "\n")
-	if len(lines) != 3 || !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[1], "web-1") || !strings.Contains(lines[1], "203.0.113.10") {
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "ID") || !strings.Contains(lines[1], "web-1") || !strings.Contains(lines[1], "203.0.113.10") {
 		t.Fatalf("table:\n%s", h.out.String())
 	}
 	// show by name falls back to the list.
@@ -330,6 +338,38 @@ func TestServersAndSites(t *testing.T) {
 	}
 	if code := h.run("sites"); code != 0 || !strings.Contains(h.out.String(), "frankenphp") {
 		t.Fatalf("sites: %s", h.out.String())
+	}
+}
+
+func TestServersStack(t *testing.T) {
+	cp := newFakeCP(t)
+	h := newHarness(t, cp)
+	if code := h.run("servers", "stack", "web-1"); code != ExitUsage {
+		t.Fatalf("nothing to add: %d", code)
+	}
+	// A site server gets PHP-FPM by default, by name.
+	if code := h.run("servers", "stack", "web-1", "--php", "8.4", "--node", "22"); code != 0 {
+		t.Fatal(h.err.String())
+	}
+	php, _ := cp.lastBody["php"].(map[string]any)
+	if cp.requests[len(cp.requests)-1] != "POST /api/v1/servers/01JSRV0000000000000000000A/stack" || php["runtime"] != "fpm" || php["version"] != "8.4" || cp.lastBody["node"] != "22" {
+		t.Fatalf("request %v body %v", cp.requests, cp.lastBody)
+	}
+	if !strings.Contains(h.out.String(), "web-1: added PHP 8.4 (fpm) and Node.js 22; re-provisioning") {
+		t.Fatalf("out: %s", h.out.String())
+	}
+	// A builder gets the PHP CLI; Node alone sends no php.
+	if code := h.run("servers", "stack", "builder", "--php", "8.4"); code != 0 {
+		t.Fatal(h.err.String())
+	}
+	if php, _ := cp.lastBody["php"].(map[string]any); php["runtime"] != "cli" {
+		t.Fatalf("builder body %v", cp.lastBody)
+	}
+	if code := h.run("servers", "stack", "builder", "--node", "22"); code != 0 {
+		t.Fatal(h.err.String())
+	}
+	if _, ok := cp.lastBody["php"]; ok {
+		t.Fatalf("node only sent php: %v", cp.lastBody)
 	}
 }
 

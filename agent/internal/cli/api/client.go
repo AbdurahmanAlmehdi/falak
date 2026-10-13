@@ -22,6 +22,7 @@ type API interface {
 	Organizations(ctx context.Context) ([]Organization, error)
 	Servers(ctx context.Context) ([]Server, error)
 	Server(ctx context.Context, id string) (Server, error)
+	AddServerRuntimes(ctx context.Context, server string, r StackRequest) (StackChange, error)
 	Sites(ctx context.Context) ([]Site, error)
 	Site(ctx context.Context, idOrSlug string) (Site, error)
 	Deploy(ctx context.Context, site, branch string) (Deployment, error)
@@ -223,6 +224,12 @@ func (c *Client) Servers(ctx context.Context) ([]Server, error) {
 
 func (c *Client) Server(ctx context.Context, id string) (Server, error) {
 	env, err := get[Server](ctx, c, Path(PathServer, "server", id), nil)
+	return env.Data, err
+}
+
+func (c *Client) AddServerRuntimes(ctx context.Context, server string, r StackRequest) (StackChange, error) {
+	var env Envelope[StackChange]
+	err := c.Do(ctx, http.MethodPost, Path(PathServerStack, "server", server), nil, r, &env)
 	return env.Data, err
 }
 

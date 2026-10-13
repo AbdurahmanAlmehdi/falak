@@ -10,6 +10,7 @@ Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group
     Route::post('servers', [ServerApiController::class, 'store'])->name('servers.store');
     Route::get('servers/{server}', [ServerApiController::class, 'show'])->name('servers.show');
     Route::delete('servers/{server}', [ServerApiController::class, 'destroy'])->name('servers.destroy');
+    Route::post('servers/{server}/stack', [ServerApiController::class, 'addRuntimes'])->middleware('throttle:10,1')->name('servers.stack.store');
     Route::post('servers/{server}/php', [PhpController::class, 'storeApi'])->middleware('throttle:10,1')->name('servers.php.store');
     Route::post('servers/{server}/agent/upgrade', [ServerApiController::class, 'upgradeAgent'])->middleware('throttle:30,1')->name('servers.agent.upgrade');
     Route::get('servers/{server}/inspection', [MachineCheckController::class, 'show'])->name('servers.inspection.show');

@@ -202,6 +202,55 @@ func cmdServersShow(ctx context.Context, a *App, args []string) error {
 	return nil
 }
 
+func cmdServersStack(ctx context.Context, a *App, args []string) error {
+	fs := a.flagSet("servers stack")
+	php := fs.String("php", "", "add PHP: the version (e.g. 8.4)")
+	runtime := fs.String("php-runtime", "", "fpm or frankenphp on site servers, cli on builders (default: cli on builders, else fpm)")
+	node := fs.String("node", "", "add Node.js: the major version (e.g. 22)")
+	pos, err := a.parse(fs, args, 1, 1, "<server> [--php VERSION] [--php-runtime fpm|frankenphp|cli] [--node VERSION]")
+	if err != nil {
+		return err
+	}
+	if *php == "" && *runtime == "" && *node == "" {
+		return usageError{"name a runtime to add: --php and/or --node"}
+	}
+	c, err := a.api()
+	if err != nil {
+		return err
+	}
+	s, err := resolveServer(ctx, c, pos[0])
+	if err != nil {
+		return err
+	}
+	req := api.StackRequest{Node: *node}
+	if *php != "" || *runtime != "" {
+		rt := *runtime
+		if rt == "" {
+			rt = "fpm"
+			if s.Type == "builder" {
+				rt = "cli"
+			}
+		}
+		req.PHP = &api.StackPHP{Runtime: rt, Version: *php}
+	}
+	ch, err := c.AddServerRuntimes(ctx, s.ID, req)
+	if err != nil {
+		return err
+	}
+	if a.jsonOut {
+		return a.printJSON(ch)
+	}
+	var added []string
+	if p := ch.Stack.PHP; p != nil && req.PHP != nil {
+		added = append(added, "PHP "+strings.Join(p.Versions, ", ")+" ("+p.Runtime+")")
+	}
+	if req.Node != "" {
+		added = append(added, "Node.js "+ch.Stack.Node)
+	}
+	fmt.Fprintf(a.Stdout, "%s: added %s; re-provisioning to install it (%s)\n", s.Name, strings.Join(added, " and "), ch.Status)
+	return nil
+}
+
 // resolveServer accepts an id or a (unique) name.
 func resolveServer(ctx context.Context, c api.API, ref string) (api.Server, error) {
 	s, err := c.Server(ctx, ref)

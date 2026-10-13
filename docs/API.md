@@ -156,6 +156,15 @@ agents get the plan directly. `202` `{"data": {"status", "status_message", "stag
 (`status_message` starts with "Re-provisioning stopped."); it never goes to `needs_attention`. `422` while the server is
 being deleted. Rate limited to 10/min.
 
+### `POST /api/v1/servers/{server}/stack` `{"php"?: {"runtime", "version"?}, "node"?: "22"}` — update permission on the server (`servers.manage`)
+Adds PHP and/or Node.js to a server created without them, then re-provisions it (the machine check first) to install
+them. `php.runtime` is `fpm` or `frankenphp` on app, web and worker servers, and `cli` on builders (the PHP CLI that
+Composer builds need; a builder never serves HTTP). `php.version` defaults to the installation's default. Add-only:
+`422` for a runtime the server already has (more PHP versions: `POST …/php`), a runtime its type can't have, or a server
+not provisioned yet. → `202 {"data": {"stack": {"php": {"runtime", "versions", "default"}, "node"}, "status",
+"status_message", "command_id"}}`; audited as `server.stack_runtimes_added`. CLI: `falak servers stack <server> --php 8.4
+[--php-runtime fpm|frankenphp|cli] [--node 22]`.
+
 ### `POST /api/v1/servers/{server}/php` `{"version": "8.3"}` — update permission on the server (`servers.manage`)
 Installs a PHP version (Servers → server → PHP → Install), e.g. one a falak.yaml unit's `php` needs. The agent installs
 it (`runtime.php.install`); `202 {"data": {"version": "8.3", "status": "installing", "command_id": "01k…"}}`. `422` on
