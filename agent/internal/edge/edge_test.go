@@ -378,7 +378,15 @@ func TestAdminListensOnAUnixSocketAndTheClientDialsIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	var host string
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { host = r.Host; _, _ = w.Write([]byte("null")) })}
+	// As Caddy: on a unix socket listener no origin is allowed, and one is checked whenever the request carries it.
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host = r.Host
+		if o := r.Header.Get("Origin"); o != "" {
+			http.Error(w, `{"error":"client is not allowed to access from origin '`+o+`'"}`, http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte("null"))
+	})}
 	go func() { _ = srv.Serve(l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
@@ -386,10 +394,16 @@ func TestAdminListensOnAUnixSocketAndTheClientDialsIt(t *testing.T) {
 	if _, err := c.Config(context.Background()); err != nil || host != "localhost" {
 		t.Fatalf("config over the socket: %v host=%q", err, host)
 	}
-	// No socket yet (a Caddy still on its old config): the fallback is used.
-	missing := &Client{Base: "unix://" + filepath.Join(dir, "missing.sock"), Fallback: "http://127.0.0.1:1"}
-	if missing.base() != "http://127.0.0.1:1" {
-		t.Fatalf("fallback base %q", missing.base())
+	if err := c.Load(context.Background(), []byte(`{}`)); err != nil {
+		t.Fatalf("load over the socket: %v", err)
+	}
+	// No socket yet (a Caddy still on its old config): the TCP fallback, which wants a matching Origin.
+	var origin string
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { origin = r.Header.Get("Origin"); _, _ = w.Write([]byte("null")) }))
+	t.Cleanup(tcp.Close)
+	missing := &Client{Base: "unix://" + filepath.Join(dir, "missing.sock"), Fallback: tcp.URL}
+	if _, err := missing.Config(context.Background()); err != nil || origin != tcp.URL {
+		t.Fatalf("fallback: %v origin=%q", err, origin)
 	}
 }
 

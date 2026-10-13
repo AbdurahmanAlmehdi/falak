@@ -86,8 +86,12 @@ func (c *Client) req(ctx context.Context, method, p string, body []byte, headers
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
-	// Caddy's admin API enforces origin checks; a matching Origin keeps requests accepted.
-	r.Header.Set("Origin", base)
+	// Over TCP, Caddy checks Host/Origin against the listen address: a matching Origin keeps requests accepted. On the
+	// unix socket it allows no origins at all and checks one only when the request carries it, so none is sent there
+	// (with one, every admin call got 403 "client is not allowed to access from origin").
+	if c.socket() == "" {
+		r.Header.Set("Origin", base)
+	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		r.Header.Set(headers[i], headers[i+1])
 	}
