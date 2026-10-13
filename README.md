@@ -126,10 +126,18 @@ curl -fsSL https://falak.sh/install-cli.sh | sh
 # install and log in in one go
 curl -fsSL https://falak.sh/install-cli.sh | FALAK_URL=https://falak.example.com sh
 ```
-`FALAK_VERSION=v0.2.6` pins a version and `FALAK_INSTALL_DIR` changes the target. Later, `falak update` updates the CLI in place. Log in with an API token from
-**Settings → API tokens**. The token is checked, then stored in `~/Library/Application Support/falak/credentials.json`
-(macOS) or `~/.config/falak/credentials.json` (Linux), mode 0600. `falak whoami` shows who you are, `falak logout`
-forgets the token, and revoking it in the panel cuts the CLI off. `falak-ctl` is different: it is the server admin
+`FALAK_VERSION=v0.2.6` pins a version and `FALAK_INSTALL_DIR` changes the target. Later, `falak update` updates the CLI in place.
+
+`falak login --url https://falak.example.com` signs in through the browser: it shows a code, opens the panel's
+approval page (sign in there as usual, confirm your password and 2FA code, check the code matches, approve) and
+receives a token named "CLI — <your host>" that works in the organization you picked, with your role's permissions,
+and expires after 90 days without use (and a year after the login at most). `--no-browser` prints the link instead (over SSH, open it on any device).
+Scripts and CI can still use an API token from **Settings → API tokens** (`--token`, `--token-stdin`, or piped in
+without a terminal; `FALAK_TOKEN` in CI). The token is checked, then stored in
+`~/Library/Application Support/falak/credentials.json` (macOS) or `~/.config/falak/credentials.json` (Linux), mode
+0600. `falak whoami` shows who you are; `falak logout` forgets the token and revokes it on the server when a browser
+login created it (a token you pasted in is kept, since it may be used elsewhere), and revoking it in the panel cuts
+the CLI off. `falak-ctl` is different: it is the server admin
 tool that `install.sh` puts on the control-plane host.
 ```bash
 falak login --url https://falak.example.com          # or FALAK_URL / FALAK_TOKEN in CI

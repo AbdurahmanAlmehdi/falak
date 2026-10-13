@@ -480,7 +480,8 @@ func TestLogsAndFollow(t *testing.T) {
 		cp.mu.Lock()
 		n := cp.logPolls
 		cp.mu.Unlock()
-		if n >= 4 {
+		// The 5th request means the 4th response was printed: the follow loop polls one request at a time.
+		if n >= 5 {
 			break
 		}
 		select {

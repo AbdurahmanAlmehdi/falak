@@ -64,6 +64,10 @@ type API interface {
 	CreateSecret(ctx context.Context, scope, scopeID, name, value string) (Secret, error)
 	SetSecretValue(ctx context.Context, id, value string) (Secret, error)
 	DeleteSecret(ctx context.Context, id string) error
+
+	CliLoginStart(ctx context.Context, clientName string) (CliLoginStart, error)
+	CliLoginToken(ctx context.Context, deviceCode string) (CliLoginResult, string, error)
+	RevokeCurrentToken(ctx context.Context) error
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).

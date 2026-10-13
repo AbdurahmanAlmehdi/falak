@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestUpdate(t *testing.T) {
+func TestSelfUpdate(t *testing.T) {
 	asset := fmt.Sprintf("falak-%s-%s", runtime.GOOS, runtime.GOARCH)
 	newBin := []byte("#!/bin/sh\necho v9.9.9\n")
 	sum := sha256.Sum256(newBin)

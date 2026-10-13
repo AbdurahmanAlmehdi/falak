@@ -62,6 +62,24 @@ The agent protocol (`/agent/v1`, mTLS) is documented in `contracts/agent-protoco
           "token": {"name": "cli", "abilities": ["*"]}}}
 ```
 
+### `DELETE /api/v1/me/token`
+Revokes the token making the request (`falak logout`). `204`.
+
+### `POST /api/v1/cli/login` · `POST /api/v1/cli/login/token` — no token
+`falak login` in the browser, the [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628) device flow. Start with
+`{"client_name": "ada-laptop"}` (rate-limited per address, 10/min):
+```json
+{"data": {"device_code": "…48 chars…", "user_code": "WDJB-MJHT", "expires_in": 600, "interval": 5,
+          "verification_uri": "https://falak.example.com/cli/authorize",
+          "verification_uri_complete": "https://falak.example.com/cli/authorize/WDJB-MJHT"}}
+```
+The person opens `verification_uri_complete`, signs in, confirms their password (and 2FA code) and approves for one
+of their organizations. Poll `/cli/login/token` with `{"device_code": "…"}` every `interval` seconds: `400
+{"error": "authorization_pending" | "slow_down" | "access_denied" | "expired_token"}` until approved, then once
+`200 {"data": {"token": "…", "user": {…}, "organization": {"id", "name"}}}`. The token has the `*` ability (the
+user's role decides), is named `CLI — <client_name>` and expires 90 days after its last use, and a year after the login at most. Codes are stored hashed;
+a request expires after 10 minutes and its token can be collected once.
+
 ### `GET /api/v1/organizations`
 Token requests return the token's organization only; session requests every membership.
 ```json
