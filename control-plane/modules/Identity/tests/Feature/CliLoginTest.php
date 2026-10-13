@@ -104,6 +104,14 @@ it('expires unanswered logins and unknown device codes', function () {
         ->assertSessionHasErrors('code');
 });
 
+it('keeps polling and starting on separate rate limits', function () {
+    $started = startCliLogin();
+    foreach (range(1, 15) as $i) { // within one minute (slow_down answers are fine here)
+        $this->postJson('/api/v1/cli/login/token', ['device_code' => $started['device_code']])->assertStatus(400);
+    }
+    startCliLogin(); // the polls above did not use up the 10 starts a minute
+});
+
 it('asks a CLI that polls too fast to slow down', function () {
     $started = startCliLogin();
     $this->postJson('/api/v1/cli/login/token', ['device_code' => $started['device_code']])->assertJson(['error' => 'authorization_pending']);

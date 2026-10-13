@@ -13,6 +13,6 @@ Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->group(function () {
 
 // `falak login` in the browser: no token yet, so no auth; the device code is the secret.
 Route::prefix('v1')->group(function () {
-    Route::post('cli/login', [CliLoginController::class, 'start'])->middleware('throttle:10,1')->name('api.v1.cli.login');
-    Route::post('cli/login/token', [CliLoginController::class, 'token'])->middleware('throttle:60,1')->name('api.v1.cli.login.token');
+    Route::post('cli/login', [CliLoginController::class, 'start'])->middleware('throttle:10,1,cli-login')->name('api.v1.cli.login');
+    Route::post('cli/login/token', [CliLoginController::class, 'token'])->middleware('throttle:60,1,cli-login-poll')->name('api.v1.cli.login.token');
 });
