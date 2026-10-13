@@ -59,6 +59,24 @@ func TestRefreshEdgeUnitUpgradesAnOldUnitOnce(t *testing.T) {
 	}
 }
 
+func TestRefreshEdgeUnitKeepsAFrankenPHPUnitFrankenPHP(t *testing.T) {
+	fs := hostfs.FS{Root: t.TempDir()}
+	old := "# Managed by Falak\n[Service]\nUser=caddy\nEnvironment=PHPRC=/etc/frankenphp\nExecStart=" + FrankenPHPBinary + " run --environ --config /etc/falak/caddy/config.json\n"
+	if _, err := fs.WriteFile(EdgeUnitPath, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := (&runnertest.Fake{}).On("getent passwd caddy", runner.Result{Stdout: []byte("caddy:x:998:998::/var/lib/caddy:/usr/sbin/nologin\n")})
+	if changed, err := RefreshEdgeUnit(context.Background(), f, fs); err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	b, _ := fs.ReadFile(EdgeUnitPath)
+	for _, want := range []string{"Environment=PHPRC=/etc/frankenphp\n", "ExecStart=" + FrankenPHPBinary + " run", "RuntimeDirectory=falak-edge\n"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("missing %q in:\n%s", want, b)
+		}
+	}
+}
+
 func TestRefreshEdgeUnitLeavesOtherUnitsAlone(t *testing.T) {
 	f := &runnertest.Fake{}
 	// No unit (not an edge server).
