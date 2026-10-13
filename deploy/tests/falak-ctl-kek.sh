@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329  # stubs (is_running, compose, …) are called by the sourced falak-ctl
+# shellcheck disable=SC2317,SC2329  # stubs (is_running, compose, …) are called by the sourced falak-ctl (SC2317 before shellcheck 0.11)
 # Scripted test for the key-encryption key in falak-ctl: `kek init` creates 32 random bytes at secrets/kek once
 # (0400, directory 0711) and never replaces it, a wrong-size file stops it, the emergency kit round-trips through
 # `kek export` / `kek import`, and the KEK id matches the control plane's. Docker is not needed.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329  # stubs (curl, compose, docker, systemctl …) are called by the sourced falak-ctl
+# shellcheck disable=SC2317,SC2329  # stubs (curl, compose, docker, systemctl …) are called by the sourced falak-ctl (SC2317 before shellcheck 0.11)
 # Scripted test for disaster recovery in falak-ctl and install.sh: `dr setup` writes dr/dr.env (0600 in a 0700
 # directory) and the backup / drill timers, never prints a secret and refuses secrets on the command line; uploads
 # are refused without the DR passphrase; s3://latest and s3://NAME resolve through a fake S3 (paged listing, SHA-256
@@ -54,7 +54,7 @@ curl() {
     prefix="$(printf '%s' "$query" | sed -n 's/.*prefix=\([^&]*\).*/\1/p' | sed 's/%2F/\//g')"
     token="$(printf '%s' "$query" | sed -n 's/.*continuation-token=\([^&]*\).*/\1/p')"
     [ -n "$token" ] && start="${token#page}"
-    keys="$(cd "$S3/$bucket" && find . -type f | sed 's#^\./##' | grep "^$prefix" | sort || true)"
+    keys="$(if cd "$S3/$bucket"; then find . -type f | sed 's#^\./##' | { grep "^$prefix" || true; } | sort; fi)"
     printf '<ListBucketResult>'
     printf '%s\n' "$keys" | sed -n "$((start + 1)),$((start + 2))p" | while read -r k; do [ -n "$k" ] && printf '<Contents><Key>%s</Key></Contents>' "$k"; done
     if [ "$(printf '%s\n' "$keys" | grep -c .)" -gt $((start + 2)) ]; then printf '<NextContinuationToken>page%s</NextContinuationToken>' $((start + 2)); fi
