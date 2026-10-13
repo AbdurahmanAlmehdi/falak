@@ -6,6 +6,7 @@ use Falak\Deployments\Application\Actions\TriggerDeployment;
 use Falak\Deployments\Application\Orchestration\Orchestrator;
 use Falak\Deployments\Contracts\ConfigReleases;
 use Falak\Deployments\Contracts\Exceptions\DeploymentTriggerBusy;
+use Falak\Deployments\Domain\Enums\DeploymentStatus;
 use Falak\Deployments\Domain\Enums\Trigger;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Deployments\Domain\Models\Release;
@@ -65,5 +66,16 @@ final class EloquentConfigReleases implements ConfigReleases
     public function releaseOf(string $deploymentId): ?string
     {
         return Deployment::query()->whereKey(strtolower($deploymentId))->value('release_id');
+    }
+
+    public function ended(string $deploymentId): ?array
+    {
+        $deployment = Deployment::query()->find(strtolower($deploymentId));
+
+        if ($deployment === null || ! in_array($deployment->status, [DeploymentStatus::Failed, DeploymentStatus::Cancelled], true)) {
+            return null;
+        }
+
+        return ['status' => $deployment->status->value, 'number' => $deployment->number, 'error' => $deployment->error];
     }
 }

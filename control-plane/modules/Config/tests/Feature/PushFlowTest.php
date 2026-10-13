@@ -41,6 +41,22 @@ it('Config deploys only the units of the file applied to the pushed branch; othe
         ->and(ConfigRun::query()->where('commit', config_sha('e'))->exists())->toBeFalse();
 });
 
+it('fails the run when the deployment of a unit fails while it is being queued (a build refused at once)', function () {
+    $world = config_world();
+    $world->file(CONFIG_PUSH_FILE);
+    $world->deploy->builds->refuse = 'VITE_KEY would put a sensitive secret into the public front-end build';
+
+    $world->push(config_sha('b'));
+    $world->settle();
+    $run = ConfigRun::query()->sole();
+
+    // Its DeploymentFailed fired before the run had recorded the deployment: the run must not wait for it forever.
+    expect(Deployment::query()->pluck('status')->map->value->unique()->all())->toBe(['failed'])
+        ->and($run->status)->toBe(RunStatus::Failed)
+        ->and($run->deploy[0])->toMatchArray(['unit' => 'web', 'status' => 'failed'])
+        ->and($run->deploy[0]['error'])->toContain('would put a sensitive secret');
+});
+
 it('a push never deploys a unit whose site has push to deploy off', function () {
     $world = config_world(['push_to_deploy' => false]);
     $world->file(str_replace('php: \"8.4\" }', 'php: \"8.4\", env: { FEATURE: \"on\" } }', CONFIG_PUSH_FILE));

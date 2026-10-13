@@ -27,6 +27,9 @@ final class FakeBuildService implements BuildService
 
     public bool $autoSucceed = false;
 
+    /** When set, request() refuses every build with this message (as BuildConfiguration does for a leaking secret). */
+    public ?string $refuse = null;
+
     /** Compose file a compose build "finds" in the repository, and the services it builds. */
     public string $composeContent = "services:\n  app:\n    build: .\n";
 
@@ -48,6 +51,10 @@ final class FakeBuildService implements BuildService
 
     public function request(BuildRequest $request): BuildData
     {
+        if ($this->refuse !== null) {
+            throw new \RuntimeException($this->refuse);
+        }
+
         $id = strtolower((string) Str::ulid());
         $site = app(SiteDirectory::class)->find($request->siteId);
         $this->builds[$id] = [

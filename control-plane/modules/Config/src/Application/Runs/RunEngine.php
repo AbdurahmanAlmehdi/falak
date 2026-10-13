@@ -234,6 +234,17 @@ final class RunEngine
         }
 
         $run->forceFill(['deploy' => $entries])->save();
+
+        // A deployment that ended while it was being queued fired its event before this run knew its id: catch up.
+        foreach ($entries as $entry) {
+            if ($entry['status'] === 'deploying' && ($ended = $this->releases->ended($entry['deployment_id'])) !== null) {
+                $ended['status'] === 'cancelled'
+                    ? $this->entryFailed($run, $entry['deployment_id'], 'The deployment was cancelled.', 'cancelled')
+                    : $this->entryFailed($run, $entry['deployment_id'], "deployment #{$ended['number']} failed: {$ended['error']}");
+            }
+        }
+        $entries = array_values((array) $run->refresh()->deploy);
+
         $this->audit->record('config.run_applied', 'project', $run->project_id, ['run_id' => $run->id, 'environment' => $run->environment, 'commit' => $run->commit,
             'summary' => $run->plan['summary'] ?? []], $run->organization_id, $run->requested_by);
 

@@ -35,6 +35,14 @@ interface ConfigReleases
      */
     public function config(string $releaseId): ?array;
 
+    /**
+     * How a deployment ended when it already failed or was cancelled (null while it runs, or once it succeeded): a
+     * deployment can end while it is being queued (a build refused at once), before the caller knows its id.
+     *
+     * @return ?array{status: 'failed'|'cancelled', number: int, error: ?string}
+     */
+    public function ended(string $deploymentId): ?array;
+
     /** The release a deployment created (null before it is planned). */
     public function releaseOf(string $deploymentId): ?string;
 }
