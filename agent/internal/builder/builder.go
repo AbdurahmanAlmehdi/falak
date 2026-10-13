@@ -259,6 +259,12 @@ func (b *Builder) buildNative(ctx context.Context, j *job) (*ArtifactResult, *Ma
 		}
 		fmt.Fprintf(j.out, "note: %s is not installed; using corepack's shim (version from packageManager, else corepack's default)\n", plan.PackageManager)
 	}
+	if ok, err := b.viaComposerPhar(ctx, &plan, filepath.Join(j.ws, "bin")); err != nil {
+		return nil, nil, err
+	} else if ok {
+		j.binDir = filepath.Join(j.ws, "bin")
+		fmt.Fprintf(j.out, "note: composer is not installed; using composer %s (checksum verified)\n", composerVersion)
+	}
 	j.st.Progress(0.2)
 	if err := b.runSteps(ctx, j, plan.Steps, 0.2, 0.8); err != nil {
 		return nil, nil, err
