@@ -321,7 +321,9 @@ final class DecisionEngine
         $versions = implode(', ', $wanted->phpVersions);
 
         if ($present === []) {
-            return new ComponentDecision('php', 'PHP', Decision::Install, "Installs PHP {$versions} with Falak's extensions".($runtime === 'frankenphp' ? ' and FrankenPHP.' : ' and PHP-FPM.'), $found, notes: $notes);
+            return new ComponentDecision('php', 'PHP', Decision::Install, "Installs PHP {$versions} with Falak's extensions".match ($runtime) {
+                'frankenphp' => ' and FrankenPHP.', 'cli' => ' (the CLI, for builds).', default => ' and PHP-FPM.'
+            }, $found, notes: $notes);
         }
 
         $sources = array_values(array_unique(array_map(fn (array $b) => $this->binarySource($b), array_filter($packaged, fn (array $b) => in_array($b['version'] ?? '', $present, true)))));

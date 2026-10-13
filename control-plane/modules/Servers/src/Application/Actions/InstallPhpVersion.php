@@ -24,9 +24,11 @@ final class InstallPhpVersion
     public function __invoke(Server $server, string $version): PhpVersion
     {
         if (! $server->type->hostsSites() || $server->stack->phpRuntime === null) {
-            throw ValidationException::withMessages(['version' => $server->type->hostsSites()
-                ? 'This server does not run PHP: add PHP to it first (POST /api/v1/servers/{server}/stack, or `falak servers stack`).'
-                : 'This server does not run PHP.']);
+            throw ValidationException::withMessages(['version' => match (true) {
+                $server->type->hostsSites() => 'This server does not run PHP: add PHP to it first (POST /api/v1/servers/{server}/stack, or `falak servers stack`).',
+                $server->stack->phpRuntime !== null => 'A builder runs one PHP version, for builds; it hosts no PHP sites.',
+                default => 'This server does not run PHP.',
+            }]);
         }
 
         if (! in_array($version, (array) config('servers.php_versions'), true)) {
