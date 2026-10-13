@@ -43,6 +43,8 @@ type App struct {
 	Interactive bool
 	// ReadSecret reads a line without echo (interactive login); nil falls back to Stdin.
 	ReadSecret func() (string, error)
+	// Executable is the binary `falak update` replaces; nil means os.Executable.
+	Executable func() (string, error)
 	// Dir is the working directory ("" = the process's).
 	Dir string
 	// GitBranch returns the current branch of the repository holding dir (nil: runs git).
@@ -130,6 +132,7 @@ func (a *App) commands() []*command {
 		{name: "approve", args: "<run> [--comment TEXT] [--yes]", summary: "approve a config run waiting for an approval", run: cmdApprove},
 		{name: "reject", args: "<run> [--comment TEXT] [--yes]", summary: "reject a config run waiting for an approval", run: cmdReject},
 		{name: "drift", args: "[-e ENV] [-p PROJECT] [--check]", summary: "compare an environment with its last applied falak.yaml", run: cmdDrift},
+		{name: "update", args: "[--version vX.Y.Z] [--check]", summary: "update this falak binary to the latest release (checksum verified)", run: cmdUpdate},
 		{name: "version", summary: "print the version", run: func(_ context.Context, a *App, _ []string) error {
 			fmt.Fprintln(a.Stdout, a.Version)
 			return nil

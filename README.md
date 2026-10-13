@@ -126,7 +126,7 @@ curl -fsSL https://falak.sh/install-cli.sh | sh
 # install and log in in one go
 curl -fsSL https://falak.sh/install-cli.sh | FALAK_URL=https://falak.example.com sh
 ```
-`FALAK_VERSION=v0.2.6` pins a version and `FALAK_INSTALL_DIR` changes the target. Log in with an API token from
+`FALAK_VERSION=v0.2.6` pins a version and `FALAK_INSTALL_DIR` changes the target. Later, `falak update` updates the CLI in place. Log in with an API token from
 **Settings → API tokens**. The token is checked, then stored in `~/Library/Application Support/falak/credentials.json`
 (macOS) or `~/.config/falak/credentials.json` (Linux), mode 0600. `falak whoami` shows who you are, `falak logout`
 forgets the token, and revoking it in the panel cuts the CLI off. `falak-ctl` is different: it is the server admin
@@ -161,6 +161,9 @@ op read op://vault/stripe/key | falak secret set STRIPE_SECRET -p shop
 falak secret set --from-env .env.production -p shop # every KEY=VALUE line
 falak secret list -p shop                           # names and versions, never values
 falak secret delete STRIPE_SECRET -p shop --yes
+
+# Update the CLI itself (checksum verified against the release's SHA256SUMS)
+falak update                                        # latest release; --check only reports, --version vX.Y.Z pins
 
 # Config as code (falak.yaml)
 falak init                                          # writes falak.yaml from the code; --stdout, --json, --full, --yes

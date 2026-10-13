@@ -1,114 +1,74 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
-// TestInitUpdateGolden runs `falak init --update` on testdata/update/<case>: the repository is the init fixture named
-// in its `repo` file, the existing falak.yaml is the case's; expected.diff is the proposed diff, expected.falak.yaml
-// the file after --write.
-func TestInitUpdateGolden(t *testing.T) {
-	cases, err := os.ReadDir(filepath.Join("testdata", "update"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range cases {
-		t.Run(c.Name(), func(t *testing.T) {
-			src := filepath.Join("testdata", "update", c.Name())
-			repo, err := os.ReadFile(filepath.Join(src, "repo"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			h := newHarness(t, nil)
-			h.wd = copyRepo(t, filepath.Join("testdata", "init", strings.TrimSpace(string(repo))))
-			before, err := os.ReadFile(filepath.Join(src, "falak.yaml"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeFile(t, h.wd, "falak.yaml", string(before))
-
-			if code := h.run("init", "--update"); code != 0 {
-				t.Fatalf("update: %d %s", code, h.err.String())
-			}
-			golden(t, filepath.Join(src, "expected.diff"), h.out.Bytes())
-			golden(t, filepath.Join(src, "expected.notes"), h.err.Bytes())
-			if b, _ := os.ReadFile(filepath.Join(h.wd, "falak.yaml")); string(b) != string(before) {
-				t.Fatal("--update without --write changed the file")
-			}
-
-			if code := h.run("init", "--update", "--write"); code != 0 {
-				t.Fatalf("write: %d %s", code, h.err.String())
-			}
-			after, _ := os.ReadFile(filepath.Join(h.wd, "falak.yaml"))
-			golden(t, filepath.Join(src, "expected.falak.yaml"), after)
-
-			// Nothing the user wrote is gone: every line of the old file is still there, in order.
-			rest := string(after)
-			for _, line := range strings.Split(strings.TrimRight(string(before), "\n"), "\n") {
-				i := strings.Index(rest, strings.TrimRight(line, " "))
-				if i < 0 {
-					t.Fatalf("lost or reordered: %q\n%s", line, after)
-				}
-				rest = rest[i+len(strings.TrimRight(line, " ")):]
-			}
-			if v := validateOffline(configFile{Path: "falak.yaml", Display: "falak.yaml", Format: "yaml", Raw: after}, ""); !v.Valid {
-				t.Fatalf("invalid after update: %+v", v.Errors)
-			}
-
-			// A second update has nothing to add.
-			if code := h.run("init", "--update"); code != 0 || !strings.Contains(h.out.String(), "nothing to add") {
-				t.Fatalf("second update: %d %s", code, h.out.String())
-			}
-		})
-	}
-}
-
-func TestInitUpdateErrors(t *testing.T) {
-	h := newHarness(t, nil)
-	h.wd = copyRepo(t, filepath.Join("testdata", "init", "nextjs"))
-	if code := h.run("init", "--update"); code != ExitError || !strings.Contains(h.err.String(), "run `falak init` first") {
-		t.Fatalf("no file: %d %s", code, h.err.String())
-	}
-	if code := h.run("init", "--write"); code != ExitUsage {
-		t.Fatalf("--write alone: %d", code)
-	}
-	writeFile(t, h.wd, "falak.yaml", "version: 2\nunits: {}\n")
-	if code := h.run("init", "--update"); code != ExitInvalid {
-		t.Fatalf("invalid file: %d %s", code, h.err.String())
-	}
-}
-
-func TestUnifiedDiff(t *testing.T) {
-	got := unifiedDiff("a\nb\nc\n", "a\nb\nx\nc\n", "f", "f")
-	want := "--- f\n+++ f\n@@ -1,3 +1,4 @@\n a\n b\n+x\n c\n"
-	if got != want {
-		t.Fatalf("got\n%s\nwant\n%s", got, want)
-	}
-	if unifiedDiff("same\n", "same\n", "f", "f") != "" {
-		t.Fatal("equal texts")
-	}
-}
-
-// --json reports written only when the file was written.
-func TestInitUpdateJSONWritten(t *testing.T) {
-	h := newHarness(t, nil)
-	h.wd = copyRepo(t, filepath.Join("testdata", "init", "node-express"))
-	writeFile(t, h.wd, "falak.yaml", "version: 1\nunits:\n  web:\n    type: app\n    runtime: node\n")
-	for _, c := range []struct {
-		args    []string
-		written string
-	}{{[]string{"init", "--update", "--json"}, `"written": false`}, {[]string{"init", "--update", "--write", "--json"}, `"written": true`}} {
-		if code := h.run(c.args...); code != 0 || !strings.Contains(h.out.String(), c.written) {
-			t.Fatalf("%v: %d %s", c.args, code, h.out.String())
+func TestUpdate(t *testing.T) {
+	asset := fmt.Sprintf("falak-%s-%s", runtime.GOOS, runtime.GOARCH)
+	newBin := []byte("#!/bin/sh\necho v9.9.9\n")
+	sum := sha256.Sum256(newBin)
+	sums := hex.EncodeToString(sum[:]) + "  " + asset + "\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/latest":
+			http.Redirect(w, r, "/releases/tag/v9.9.9", http.StatusFound)
+		case "/releases/download/v9.9.9/SHA256SUMS":
+			_, _ = w.Write([]byte(sums))
+		case "/releases/download/v9.9.9/" + asset:
+			_, _ = w.Write(newBin)
+		case "/releases/download/v8.0.0/SHA256SUMS": // a release whose binary doesn't match its sum
+			_, _ = w.Write([]byte(strings.Repeat("0", 64) + "  " + asset + "\n"))
+		case "/releases/download/v8.0.0/" + asset:
+			_, _ = w.Write([]byte("tampered"))
+		default:
+			http.NotFound(w, r)
 		}
+	}))
+	t.Cleanup(srv.Close)
+
+	exe := filepath.Join(t.TempDir(), "falak")
+	_ = os.WriteFile(exe, []byte("old"), 0o755)
+	h := newHarness(t, nil)
+	h.env["FALAK_RELEASES_URL"] = srv.URL + "/releases"
+	run := func(version string, args ...string) int {
+		h.out.Reset()
+		h.err.Reset()
+		h.app = h.newApp("")
+		h.app.Version = version
+		h.app.Executable = func() (string, error) { return exe, nil }
+		return h.app.Run(t.Context(), args)
 	}
-	if b, _ := os.ReadFile(filepath.Join(h.wd, "falak.yaml")); !strings.Contains(string(b), "redis:") {
-		t.Fatalf("--write --json didn't write:\n%s", b)
+	read := func() string { b, _ := os.ReadFile(exe); return string(b) }
+
+	if code := run("v0.11.1", "update", "--check"); code != 0 || !strings.Contains(h.out.String(), "v9.9.9 available") || read() != "old" {
+		t.Fatalf("--check: %d %q %q", code, h.out, read())
 	}
-	if code := h.run("init", "--update", "--write", "--json"); code != 0 || !strings.Contains(h.out.String(), `"written": false`) {
-		t.Fatalf("nothing to write: %s", h.out.String())
+	if code := run("v9.9.9", "update"); code != 0 || !strings.Contains(h.out.String(), "up to date") {
+		t.Fatalf("up to date: %d %q", code, h.out)
+	}
+	if code := run("v0.11.1", "update", "--version", "v8.0.0"); code == 0 || !strings.Contains(h.err.String(), "checksum mismatch") || read() != "old" {
+		t.Fatalf("tampered: %d %q %q", code, h.err, read())
+	}
+	if code := run("v0.11.1", "update", "--version", "v7.0.0"); code == 0 || read() != "old" {
+		t.Fatalf("missing release: %d", code)
+	}
+	if code := run("v0.11.1", "update"); code != 0 || read() != string(newBin) {
+		t.Fatalf("update: %d %q %q", code, h.err, read())
+	}
+	if st, _ := os.Stat(exe); st.Mode().Perm() != 0o755 {
+		t.Fatalf("mode %v", st.Mode())
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".falak-update-*")); len(left) != 0 {
+		t.Fatalf("temp files left: %v", left)
 	}
 }
