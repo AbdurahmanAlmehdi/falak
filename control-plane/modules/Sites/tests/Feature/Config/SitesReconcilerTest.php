@@ -239,6 +239,20 @@ it('validates versions and runtime-only fields', function () {
     ]);
 });
 
+it('refuses in the plan a unit switching between a container and a native runtime (it needs a new site)', function () {
+    $toDocker = $this->reconciler->validate(($this->scope)(), config_doc('production', ['web' => ['type' => 'app', 'runtime' => 'docker', 'port' => 8080]]));
+    expect(collect($toDocker)->map(fn ($i) => $i->code.' '.$i->pointer)->all())->toBe(['value.conflict /units/web/runtime'])
+        ->and($toDocker[0]->message)->toContain('needs a new site');
+
+    $this->site->forceFill(['runtime' => 'docker', 'build_mode' => 'docker', 'framework' => 'docker'])->save();
+    $toNative = $this->reconciler->validate(($this->scope)(), config_doc('production', ['web' => ['type' => 'app', 'runtime' => 'php-fpm', 'framework' => 'laravel', 'php' => '8.4', 'build' => ['mode' => 'native']]]));
+    expect(collect($toNative)->map(fn ($i) => $i->code.' '.$i->pointer)->all())->toBe(['value.conflict /units/web/runtime']);
+
+    // Another native runtime is fine.
+    $this->site->forceFill(['runtime' => 'frankenphp', 'build_mode' => 'native', 'framework' => 'laravel'])->save();
+    expect($this->reconciler->validate(($this->scope)(), config_doc('production', ['web' => ['type' => 'app', 'runtime' => 'php-fpm', 'php' => '8.4']])))->toBe([]);
+});
+
 it('splits and recomposes deploy scripts like the deployment planner', function () {
     $script = "echo one\n\$FALAK_FETCH\nmigrate\n\$FALAK_ACTIVATE\n# done\n\$FALAK_RESTART_PROCS\nnotify\n";
 

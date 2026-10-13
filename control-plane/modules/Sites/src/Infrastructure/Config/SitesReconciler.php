@@ -457,13 +457,19 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
                 $attributes[$map[$path]] = $path === '/root' && $value($path) === '.' ? null : $value($path);
             } elseif ($path === '/framework') {
                 $framework = Framework::from((string) $value($path));
-                app(SiteRules::class)->runtimeAndFramework($framework, isset($attributes['runtime']) ? SiteRuntime::from((string) $attributes['runtime']) : $site->runtime, $site->build_mode);
-                $site->forceFill(['framework' => $framework])->save();
             } elseif (($key = self::envKey($path)) !== null) {
                 $env[$key] = (string) $value($path);
             } elseif (str_starts_with($path, '/deploy/hooks/')) {
                 $hooks[substr($path, 14)] = (string) $value($path);
             }
+        }
+
+        // Checked against the runtime and build mode this change sets, whatever order the paths come in.
+        if (isset($framework)) {
+            app(SiteRules::class)->runtimeAndFramework($framework,
+                isset($attributes['runtime']) ? SiteRuntime::from((string) $attributes['runtime']) : $site->runtime,
+                isset($attributes['build_mode']) ? BuildMode::from((string) $attributes['build_mode']) : $site->build_mode);
+            $site->forceFill(['framework' => $framework])->save();
         }
 
         if ($attributes !== []) {
@@ -650,6 +656,13 @@ final class SitesReconciler implements Reconcilable, ValidatesConfig
             }
 
             $runtime = SiteRuntime::tryFrom((string) ($body['runtime'] ?? ''));
+
+            // UpdateSite refuses these at apply time (phase A); say so in the plan instead.
+            if ($site !== null && $runtime !== null && $runtime->isContainer() !== $site->runtime->isContainer()) {
+                $issues[] = ConfigIssue::error('value.conflict', "{$base}/runtime", "The unit {$unit} runs ".($site->runtime->isContainer() ? 'in a container' : 'natively')." ({$site->runtime->label()}); {$runtime->label()} needs a new site: give the unit another key.");
+
+                continue;
+            }
 
             if (isset($body['php']) && ! in_array($body['php'], (array) config('sites.php_versions'), true)) {
                 $issues[] = ConfigIssue::error('value.unsupported', "{$base}/php", "PHP {$body['php']} is not available; use one of ".implode(', ', (array) config('sites.php_versions')).'.');

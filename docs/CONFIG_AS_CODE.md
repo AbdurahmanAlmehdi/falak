@@ -200,10 +200,10 @@ units:
 
 | Field | What | Default |
 |---|---|---|
-| `runtime` | `frankenphp`, `php-fpm`, `node`, `bun`, `deno`, `static` or `docker` | — (required for a new unit) |
+| `runtime` | `frankenphp`, `php-fpm`, `node`, `bun`, `deno`, `static` or `docker`. A unit never switches between `docker` and a native runtime (it needs a new site): give it another key | — (required for a new unit) |
 | `framework` | Sets defaults such as the web directory and the deploy script | from the runtime; `laravel` for a new unit on a PHP runtime with a `laravel` block |
 | `php` / `node` | PHP version (`"8.4"`) / Node.js major version (`"22"`), among the versions the installation offers | the installation's |
-| `web_directory` | The public directory served, relative to `root` (`public`, `dist`) | the framework's |
+| `web_directory` | The public directory served, relative to the release (`public`). A `static` unit built natively ships its build output (`dist/`, `build/`…) as the release itself: leave it unset | the framework's |
 | `port` | `docker` runtime: the port the app listens on inside its container | — |
 | `image` | `docker` runtime: deploy this prebuilt image instead of building (`ghcr.io/acme/web:1.2`) | — |
 | `health_path` | The unit's health path: deploys wait for it on the new release (unless `deploy.health.path` is set), and the edge checks it to keep each server in rotation (2xx only, so not a path that redirects) | deploys check `/`; no edge check |
