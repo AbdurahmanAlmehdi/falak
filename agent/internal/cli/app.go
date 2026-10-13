@@ -84,7 +84,7 @@ type command struct {
 
 func (a *App) commands() []*command {
 	return []*command{
-		{name: "login", args: "[--url URL] [--token TOKEN | --token-stdin]", summary: "store an API token for a control plane", run: cmdLogin},
+		{name: "login", args: "[--url URL] [--token TOKEN | --token-stdin] [--no-browser]", summary: "sign in through the browser (or store an API token)", run: cmdLogin},
 		{name: "logout", summary: "forget the stored token", run: cmdLogout},
 		{name: "whoami", summary: "show the current user and organization", run: cmdWhoami},
 		{name: "orgs", summary: "list organizations", run: cmdOrgs},

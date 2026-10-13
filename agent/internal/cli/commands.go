@@ -18,7 +18,8 @@ import (
 func cmdLogin(ctx context.Context, a *App, args []string) error {
 	fs := a.flagSet("login")
 	fromStdin := fs.Bool("token-stdin", false, "read the token from stdin")
-	if _, err := a.parse(fs, args, 0, 0, "[--url URL] [--token TOKEN | --token-stdin]"); err != nil {
+	noBrowser := fs.Bool("no-browser", false, "print the sign-in link instead of opening a browser")
+	if _, err := a.parse(fs, args, 0, 0, "[--url URL] [--token TOKEN | --token-stdin] [--no-browser]"); err != nil {
 		return err
 	}
 	creds, err := a.creds()
@@ -37,24 +38,19 @@ func cmdLogin(ctx context.Context, a *App, args []string) error {
 	if !strings.HasPrefix(creds.URL, "https://") && !strings.HasPrefix(creds.URL, "http://") {
 		return usagef("url must start with https:// (got %q)", creds.URL)
 	}
-	if *fromStdin || (a.token == "" && a.Getenv("FALAK_TOKEN") == "") {
-		if !*fromStdin && a.Interactive {
-			fmt.Fprintf(a.Stderr, "Create a token at %s/settings/api-tokens\nAPI token: ", creds.URL)
-		}
-		var line string
-		if a.Interactive && !*fromStdin && a.ReadSecret != nil {
-			line, err = a.ReadSecret()
-			fmt.Fprintln(a.Stderr)
-		} else {
-			line, err = in.ReadString('\n')
-			if errors.Is(err, io.EOF) {
-				err = nil
-			}
-		}
-		if err != nil {
+	noToken := a.token == "" && a.Getenv("FALAK_TOKEN") == ""
+	switch {
+	case *fromStdin || (noToken && !a.Interactive): // scripts pipe the token in
+		line, err := in.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
 		creds.Token = strings.TrimSpace(line)
+	case noToken:
+		// On a terminal without a token: sign in through the browser.
+		if creds.Token, err = a.browserLogin(ctx, creds.URL, !*noBrowser); err != nil {
+			return err
+		}
 	}
 	if creds.Token == "" {
 		return usagef("no token given")
@@ -78,7 +74,7 @@ func cmdLogin(ctx context.Context, a *App, args []string) error {
 	return nil
 }
 
-func cmdLogout(_ context.Context, a *App, args []string) error {
+func cmdLogout(ctx context.Context, a *App, args []string) error {
 	if _, err := a.parse(a.flagSet("logout"), args, 0, 0, ""); err != nil {
 		return err
 	}
@@ -86,10 +82,15 @@ func cmdLogout(_ context.Context, a *App, args []string) error {
 	if err != nil {
 		return err
 	}
+	stored, err := LoadCredentials(dir)
+	if err != nil {
+		return err
+	}
+	note := a.revokeStoredToken(ctx, stored)
 	if err := DeleteCredentials(dir); err != nil {
 		return err
 	}
-	fmt.Fprintln(a.Stdout, "Logged out")
+	fmt.Fprintln(a.Stdout, "Logged out"+note)
 	return nil
 }
 

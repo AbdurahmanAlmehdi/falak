@@ -15,6 +15,7 @@ use Falak\Identity\Http\Controllers\Organizations\MemberController;
 use Falak\Identity\Http\Controllers\Organizations\OrganizationController;
 use Falak\Identity\Http\Controllers\Organizations\TeamController;
 use Falak\Identity\Http\Controllers\Settings\ApiTokenController;
+use Falak\Identity\Http\Controllers\Settings\CliAuthorizeController;
 use Falak\Identity\Http\Controllers\Settings\PasswordController;
 use Falak\Identity\Http\Controllers\Settings\ProfileController;
 use Falak\Identity\Http\Controllers\Settings\TwoFactorController;
@@ -48,6 +49,14 @@ Route::middleware('auth')->group(function () {
     Route::get('confirm-password', [ConfirmablePasswordController::class, 'show'])->name('password.confirm');
     Route::post('confirm-password', [ConfirmablePasswordController::class, 'store']);
     Route::post('logout', [AuthenticatedSessionController::class, 'destroy'])->name('logout');
+
+    // `falak login` in the browser. Approving mints a token, so it needs the same fresh password (+ 2FA) check as
+    // Settings → API tokens; the code is in the path, so the confirmation comes back to this page.
+    Route::get('cli/authorize', [CliAuthorizeController::class, 'show'])->name('cli.authorize');
+    Route::post('cli/authorize', [CliAuthorizeController::class, 'lookup'])->middleware('throttle:20,1')->name('cli.authorize.lookup');
+    Route::get('cli/authorize/{code}', [CliAuthorizeController::class, 'show'])->name('cli.authorize.show');
+    Route::post('cli/authorize/{code}', [CliAuthorizeController::class, 'approve'])->middleware(['reauthenticated', 'throttle:20,1'])->name('cli.authorize.approve');
+    Route::post('cli/authorize/{code}/deny', [CliAuthorizeController::class, 'deny'])->middleware('throttle:20,1')->name('cli.authorize.deny');
 
     // Personal settings
     Route::redirect('settings', 'settings/profile');

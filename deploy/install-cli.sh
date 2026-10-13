@@ -79,11 +79,11 @@ esac
 
 if [ -n "${FALAK_URL:-}" ]; then
   if [ -r /dev/tty ]; then
-    info "Logging in to $FALAK_URL (create a token at $FALAK_URL/settings/api-tokens)"
+    info "Logging in to $FALAK_URL (approve it in the browser)"
     "$FALAK_INSTALL_DIR/falak" login --url "$FALAK_URL" </dev/tty || die "login failed — retry: falak login --url $FALAK_URL"
   else
     printf '\n  No terminal for the token prompt. Log in with: falak login --url %s\n' "$FALAK_URL"
   fi
 else
-  printf '\n  Next: falak login --url https://<your-panel>   (token from <panel>/settings/api-tokens)\n'
+  printf '\n  Next: falak login --url https://<your-panel>   (signs in through the browser)\n'
 fi
