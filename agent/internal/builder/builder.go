@@ -413,6 +413,8 @@ func (b *Builder) buildEnv(j *job) []string {
 	env := []string{
 		"CI=true", "FALAK_BUILD=1", "FALAK_BUILD_ID=" + j.ID, "FALAK_COMMIT=" + j.checkout.Commit,
 		"COMPOSER_CACHE_DIR=" + filepath.Join(c, "composer"), "COMPOSER_NO_INTERACTION=1", "COMPOSER_ALLOW_SUPERUSER=1",
+		// Composer refuses to run without HOME or COMPOSER_HOME, and a builder started by systemd has no HOME.
+		"COMPOSER_HOME=" + filepath.Join(c, "composer-home"),
 		"npm_config_cache=" + filepath.Join(c, "npm"), "npm_config_store_dir=" + filepath.Join(c, "pnpm"),
 		"YARN_CACHE_FOLDER=" + filepath.Join(c, "yarn"), "BUN_INSTALL_CACHE_DIR=" + filepath.Join(c, "bun"),
 		"DENO_DIR=" + filepath.Join(c, "deno"), "NEXT_TELEMETRY_DISABLED=1",

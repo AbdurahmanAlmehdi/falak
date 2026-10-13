@@ -107,7 +107,7 @@ func TestNativeLaravelBuildLocalArtifact(t *testing.T) {
 		}
 		if c.Name == "composer" {
 			env := strings.Join(c.Env, "\n")
-			for _, want := range []string{"COMPOSER_CACHE_DIR=" + filepath.Join(b.CacheDir, "composer"), "VITE_APP_NAME=Acme", "CI=true", "SOURCE_DATE_EPOCH=1700000000"} {
+			for _, want := range []string{"COMPOSER_CACHE_DIR=" + filepath.Join(b.CacheDir, "composer"), "COMPOSER_HOME=" + filepath.Join(b.CacheDir, "composer-home"), "VITE_APP_NAME=Acme", "CI=true", "SOURCE_DATE_EPOCH=1700000000"} {
 				if !strings.Contains(env, want) {
 					t.Fatalf("composer env missing %s", want)
 				}
