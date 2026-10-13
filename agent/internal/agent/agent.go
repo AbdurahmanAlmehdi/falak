@@ -221,6 +221,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	_ = version.BinarySHA256()
 	host, _ := os.Hostname()
 	r := runner.Exec{}
+	// An agent upgrade never re-ran provisioning: bring an older falak-edge.service up to date (see RefreshEdgeUnit).
+	if changed, err := runtime.RefreshEdgeUnit(ctx, r, fs); err != nil {
+		log.Warn("falak-edge.service refresh failed", "err", err)
+	} else if changed {
+		log.Info("falak-edge.service updated to the current unit")
+	}
 
 	tel, err := telemetry.New(telemetry.Options{
 		FS: fs, EtcDir: cfg.EtcDir, StateDir: cfg.StateDir, UnixSocket: cfg.OTLPSocket, HTTPAddr: cfg.OTLPHTTP,
