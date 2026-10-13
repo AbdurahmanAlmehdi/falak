@@ -399,7 +399,10 @@ func TestAdminListensOnAUnixSocketAndTheClientDialsIt(t *testing.T) {
 	}
 	// No socket yet (a Caddy still on its old config): the TCP fallback, which wants a matching Origin.
 	var origin string
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { origin = r.Header.Get("Origin"); _, _ = w.Write([]byte("null")) }))
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin = r.Header.Get("Origin")
+		_, _ = w.Write([]byte("null"))
+	}))
 	t.Cleanup(tcp.Close)
 	missing := &Client{Base: "unix://" + filepath.Join(dir, "missing.sock"), Fallback: tcp.URL}
 	if _, err := missing.Config(context.Background()); err != nil || origin != tcp.URL {

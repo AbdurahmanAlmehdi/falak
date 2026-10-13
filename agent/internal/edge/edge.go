@@ -48,8 +48,9 @@ func (c *Client) socket() string {
 	return ""
 }
 
-func (c *Client) base() string {
-	if c.socket() != "" {
+// base and hc take the socket() result of one request, so a socket appearing mid-request can't mix the two paths.
+func (c *Client) base(sock string) string {
+	if sock != "" {
 		// Caddy accepts Host: localhost on its unix socket admin listener.
 		return "http://localhost"
 	}
@@ -59,11 +60,11 @@ func (c *Client) base() string {
 	return strings.TrimRight(c.Base, "/")
 }
 
-func (c *Client) hc() *http.Client {
+func (c *Client) hc(sock string) *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	if sock := c.socket(); sock != "" {
+	if sock != "" {
 		return &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return (&net.Dialer{}).DialContext(ctx, "unix", sock)
@@ -78,7 +79,8 @@ func (c *Client) req(ctx context.Context, method, p string, body []byte, headers
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	base := c.base()
+	sock := c.socket()
+	base := c.base(sock)
 	r, err := http.NewRequestWithContext(ctx, method, base+p, rd)
 	if err != nil {
 		return nil, err
@@ -89,13 +91,13 @@ func (c *Client) req(ctx context.Context, method, p string, body []byte, headers
 	// Over TCP, Caddy checks Host/Origin against the listen address: a matching Origin keeps requests accepted. On the
 	// unix socket it allows no origins at all and checks one only when the request carries it, so none is sent there
 	// (with one, every admin call got 403 "client is not allowed to access from origin").
-	if c.socket() == "" {
+	if sock == "" {
 		r.Header.Set("Origin", base)
 	}
 	for i := 0; i+1 < len(headers); i += 2 {
 		r.Header.Set(headers[i], headers[i+1])
 	}
-	resp, err := c.hc().Do(r)
+	resp, err := c.hc(sock).Do(r)
 	if err != nil {
 		return nil, err
 	}
