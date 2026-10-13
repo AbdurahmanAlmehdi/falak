@@ -59,6 +59,11 @@ type API interface {
 	ConfigUnmanaged(ctx context.Context, project, environment string) ([]UnmanagedResource, error)
 	ConfigSource(ctx context.Context, project string) (ConfigSource, error)
 	SetConfigSource(ctx context.Context, project string, r ConfigSourceRequest) (ConfigSource, error)
+
+	Secrets(ctx context.Context, scope, scopeID string) ([]Secret, error)
+	CreateSecret(ctx context.Context, scope, scopeID, name, value string) (Secret, error)
+	SetSecretValue(ctx context.Context, id, value string) (Secret, error)
+	DeleteSecret(ctx context.Context, id string) error
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).

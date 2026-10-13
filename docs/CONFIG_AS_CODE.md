@@ -623,7 +623,8 @@ env:
 ```
 
 - `${{ secrets.NAME }}`: a secret of the store, the nearest scope of the unit's service (service, environment,
-  project, organization). `NAME` is upper case letters, digits and `_`. It must exist when the file is planned.
+  project, organization). `NAME` is upper case letters, digits and `_`. It must exist when the file is planned:
+  `falak secret set NAME` sets a project secret before the first push (`-e ENV` for one environment).
 - `${{ <unit>.<KEY> }}`: another unit's variable. A `database` unit exposes `DATABASE_URL`, `DB_CONNECTION`, `DB_HOST`,
   `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD`; a `redis` unit `REDIS_URL`, `REDIS_CLIENT`, `REDIS_HOST`,
   `REDIS_PORT`, `REDIS_PASSWORD`; an app, compose or function unit the keys of its `env`. A name that isn't a unit of
@@ -736,6 +737,7 @@ whose `branch` is the current git branch (production for a file without environm
 | `falak drift` | The environment against its last applied file. `--check` checks now |
 | `falak config export [project]` | Today's state as a file. `-e`, `-o FILE`, `--format yaml\|json` |
 | `falak config unmanaged` | What runs detached |
+| `falak secret set NAME` / `list` / `delete NAME` | The project's secrets (`-e ENV`: one environment's). `set` reads the value from a hidden prompt or stdin, never an argument, and adds a version when the secret exists; `--from-env FILE` imports every `KEY=VALUE` line. `list` shows names, never values; `delete` needs `--yes` without a terminal |
 | `falak config source show` / `falak config source set` | The file the project follows. `set` changes only what its flags name: `--repo owner/name`, `--connection <id>`, `--path falak.yaml`, `--enable` / `--disable` (a new source is enabled), `--allow-server NAME` (repeatable; replaces the list, `""` clears it; admins only) |
 
 `--json` prints the API's data as is. Issues print as `falak.yaml:12:17: schema: /units/web/deploy/strategy: value must

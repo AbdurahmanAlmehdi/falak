@@ -122,6 +122,11 @@ func (a *App) commands() []*command {
 			}},
 		}},
 		runsCommands(),
+		{name: "secret", summary: "project and environment secrets, for ${{ secrets.NAME }}", subs: []*command{
+			{name: "list", args: "[-p PROJECT] [-e ENV]", summary: "list secret names (never values)", run: cmdSecretList},
+			{name: "set", args: "<NAME> [-p PROJECT] [-e ENV] | --from-env FILE", summary: "create or update a secret; the value comes from a hidden prompt or stdin", run: cmdSecretSet},
+			{name: "delete", args: "<NAME> [-p PROJECT] [-e ENV] --yes", summary: "delete a secret", run: cmdSecretDelete},
+		}},
 		{name: "approve", args: "<run> [--comment TEXT] [--yes]", summary: "approve a config run waiting for an approval", run: cmdApprove},
 		{name: "reject", args: "<run> [--comment TEXT] [--yes]", summary: "reject a config run waiting for an approval", run: cmdReject},
 		{name: "drift", args: "[-e ENV] [-p PROJECT] [--check]", summary: "compare an environment with its last applied falak.yaml", run: cmdDrift},

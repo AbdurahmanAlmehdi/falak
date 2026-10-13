@@ -155,6 +155,13 @@ falak fn logs hooks --follow
 falak db list
 falak db delete shop --confirm shop                 # the data volume stays; add --delete-volume to remove it too
 
+# Secrets, for ${{ secrets.NAME }} (the value comes from a hidden prompt or stdin, never an argument)
+falak secret set STRIPE_SECRET -p shop              # project secret; -e staging for one environment
+op read op://vault/stripe/key | falak secret set STRIPE_SECRET -p shop
+falak secret set --from-env .env.production -p shop # every KEY=VALUE line
+falak secret list -p shop                           # names and versions, never values
+falak secret delete STRIPE_SECRET -p shop --yes
+
 # Config as code (falak.yaml)
 falak init                                          # writes falak.yaml from the code; --stdout, --json, --full, --yes
 falak init --dockerfile                             # Go, Python, Ruby, Rust, Java: also a starter Dockerfile

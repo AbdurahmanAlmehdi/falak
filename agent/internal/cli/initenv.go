@@ -462,7 +462,7 @@ func buildEnv(u *detectedUnit, db, redis *detectedUnit, d *detection) {
 		d.Notes = append(d.Notes, fmt.Sprintf("%s: the example values of %s look like credentials: they became secret references", u.Key, strings.Join(valueSecrets, ", ")))
 	}
 	if len(secrets) > 0 {
-		d.Notes = append(d.Notes, fmt.Sprintf("%s: create these secrets before applying (falak validate checks them when logged in): %s", u.Key, strings.Join(secrets, ", ")))
+		d.Notes = append(d.Notes, fmt.Sprintf("%s: create these secrets before applying with `falak secret set NAME` (falak validate checks them when logged in): %s", u.Key, strings.Join(secrets, ", ")))
 	}
 	if len(expanded) > 0 {
 		d.Notes = append(d.Notes, fmt.Sprintf("%s: expanded ${VAR} in %s", u.Key, strings.Join(expanded, ", ")))
