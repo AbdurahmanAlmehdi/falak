@@ -15,11 +15,13 @@ use Falak\Network\Application\Actions\RecordNetworkObservation;
 use Falak\Network\Application\Listeners\ForgetDeletedServer;
 use Falak\Network\Application\Listeners\HandleCommandOutcome;
 use Falak\Network\Application\Listeners\ReconfigureConnections;
+use Falak\Network\Application\Listeners\HandleProtectionOutcome;
 use Falak\Network\Application\Listeners\SeedFirewallOnProvisioning;
 use Falak\Network\Contracts\Firewalls;
 use Falak\Network\Contracts\PrivateNetwork as PrivateNetworkContract;
 use Falak\Network\Contracts\WebOriginPolicy;
 use Falak\Network\Domain\Models\FirewallRule;
+use Falak\Network\Domain\Models\IpBlock;
 use Falak\Network\Domain\Models\PrivateNetwork;
 use Falak\Network\Domain\Policies\FirewallRulePolicy;
 use Falak\Network\Domain\Policies\PrivateNetworkPolicy;
@@ -27,11 +29,13 @@ use Falak\Network\Events\FirewallApplied;
 use Falak\Network\Events\FirewallApplyFailed;
 use Falak\Network\Events\PrivateNetworkChanged;
 use Falak\Network\Infrastructure\AgentRequests\NetworkObserved;
+use Falak\Network\Infrastructure\AgentRequests\ProtectionObserved;
 use Falak\Network\Infrastructure\EloquentPrivateNetwork;
 use Falak\Network\Infrastructure\NoWebOriginPolicy;
 use Falak\Network\Infrastructure\QueuedFirewalls;
 use Falak\Servers\Events\ServerDeleted;
 use Falak\Servers\Events\ServerProvisioned;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 
@@ -62,6 +66,7 @@ class NetworkServiceProvider extends ModuleServiceProvider
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register('network.view', [Role::Admin, Role::Developer, Role::Viewer], 'View firewalls, private networks and load balancers', 'network');
         $registry->register('network.manage', [Role::Admin, Role::Developer], 'Manage firewall rules and private networks', 'network');
+        $registry->register('network.protect', [Role::Admin], 'Block IP addresses and configure SSH auto-ban', 'network');
 
         $types = $this->app->make(AlertTypes::class);
         $types->register(FirewallApplyFailed::ALERT_TYPE, 'Firewall apply failed', 'Network', Severity::Critical);
@@ -81,5 +86,15 @@ class NetworkServiceProvider extends ModuleServiceProvider
         Event::listen(ServerDeleted::class, ForgetDeletedServer::class);
         Event::listen(PrivateNetworkChanged::class, [ReconfigureConnections::class, 'handleNetworkChanged']);
         Event::listen(AgentVersionChanged::class, [ReconfigureConnections::class, 'handleAgentVersion']);
+
+        // Protection (docs/plans/network/protection.md).
+        $this->app->make(AgentRequests::class)->register('net.protection.observed', ProtectionObserved::class);
+        Event::listen(CommandFinished::class, [HandleProtectionOutcome::class, 'handleFinished']);
+        Event::listen(CommandFailed::class, [HandleProtectionOutcome::class, 'handleFailed']);
+        Event::listen(AgentVersionChanged::class, [HandleProtectionOutcome::class, 'handleUpgrade']);
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            $schedule->call(fn () => IpBlock::query()->where('expires_at', '<', now()->subDays((int) config('network.protection.retention_days', 7)))->delete())
+                ->dailyAt('03:40')->name('network:prune-blocks')->withoutOverlapping();
+        });
     }
 }

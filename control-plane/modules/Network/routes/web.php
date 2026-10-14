@@ -4,6 +4,7 @@ use Falak\Network\Http\Controllers\ConnectionsController;
 use Falak\Network\Http\Controllers\FirewallController;
 use Falak\Network\Http\Controllers\NetworkController;
 use Falak\Network\Http\Controllers\PrivateNetworkController;
+use Falak\Network\Http\Controllers\ProtectionController;
 use Illuminate\Support\Facades\Route;
 
 // Server page tabs (/servers/{id}/{tab}) owned by Network.
@@ -26,6 +27,12 @@ Route::middleware(['auth', 'org'])->prefix('network')->name('network.')->group(f
     Route::put('servers/{server}/firewall/rules/{rule}', [FirewallController::class, 'update'])->name('firewall.rules.update');
     Route::delete('servers/{server}/firewall/rules/{rule}', [FirewallController::class, 'destroy'])->name('firewall.rules.destroy');
     Route::post('servers/{server}/firewall/apply', [FirewallController::class, 'apply'])->name('firewall.apply');
+
+    // Protection (docs/plans/network/protection.md).
+    Route::get('blocked', [ProtectionController::class, 'index'])->name('blocked');
+    Route::post('blocks', [ProtectionController::class, 'store'])->name('blocks.store');
+    Route::delete('blocks/{block}', [ProtectionController::class, 'destroy'])->name('blocks.destroy');
+    Route::put('servers/{server}/protection', [ProtectionController::class, 'settings'])->name('protection.settings');
 
     Route::post('private-networks', [PrivateNetworkController::class, 'store'])->name('private-networks.store');
     Route::get('private-networks/{network}', [PrivateNetworkController::class, 'show'])->name('private-networks.show');

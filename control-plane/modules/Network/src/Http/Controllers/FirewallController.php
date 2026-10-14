@@ -59,6 +59,9 @@ final class FirewallController extends Controller
             'networkRules' => collect($compiler->compile($data->id)['rules'])->filter(fn (array $rule) => str_starts_with((string) $rule['id'], 'wg-'))->values(),
             'state' => $state ? self::presentState($state) : null,
             'sshPort' => (int) config('network.ssh_port', 22),
+            // Packets / bytes per rule since the ruleset was last loaded (docs/plans/network/protection.md).
+            'counters' => $state?->counters,
+            'countersAt' => $state?->counters_at?->toIso8601String(),
             'can' => ['manage' => $this->access->can($request->user(), $data->organizationId, 'network.manage')],
         ]);
     }

@@ -20,6 +20,8 @@ use Illuminate\Support\Carbon;
  * @property ?string $error
  * @property ?Carbon $applied_at
  * @property ?Carbon $failed_at first failure of the current failing streak (null while applies succeed)
+ * @property ?array<string, array{packets: int, bytes: int}> $counters rule id ("ssh" too) => its nftables counter (net.protection)
+ * @property ?Carbon $counters_at
  */
 class FirewallState extends Model
 {
@@ -44,6 +46,8 @@ class FirewallState extends Model
             'revision' => 'integer',
             'applied_at' => 'datetime',
             'failed_at' => 'datetime',
+            'counters' => 'array',
+            'counters_at' => 'datetime',
         ];
     }
 }

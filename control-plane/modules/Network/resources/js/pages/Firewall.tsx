@@ -14,6 +14,7 @@ import { router, useForm, usePoll } from '@inertiajs/react';
 import { Lock, Pencil, Plus, RefreshCw, Shield, Trash2 } from 'lucide-react';
 import { useMemo, useState, type FormEventHandler } from 'react';
 import { ApplyStatusBadge } from '../components/network-ui';
+import { formatCount, type RuleCounters } from '../protection';
 import { type FirewallStateSummary } from '../types';
 
 type RuleAction = 'allow' | 'deny';
@@ -45,6 +46,9 @@ interface Props {
     networkRules: CompiledRule[];
     state: FirewallStateSummary | null;
     sshPort: number;
+    /** Packets / bytes per rule id since the ruleset was loaded; null before the agent reports them (net.protection). */
+    counters?: RuleCounters | null;
+    countersAt?: string | null;
     can: { manage: boolean };
 }
 
@@ -60,7 +64,7 @@ type Row = { kind: 'rule'; rule: Rule } | { kind: 'managed'; rule: CompiledRule 
 
 const EMPTY: RuleForm = { name: '', action: 'allow', protocol: 'tcp', port: '', source: '' };
 const PORT = /^\d{1,5}(-\d{1,5})?$/;
-const RELOAD = ['server', 'rules', 'networkRules', 'state'];
+const RELOAD = ['server', 'rules', 'networkRules', 'state', 'counters', 'countersAt'];
 
 const PRESETS: { label: string; form: Partial<RuleForm> }[] = [
     { label: 'HTTP', form: { name: 'HTTP', protocol: 'tcp', port: '80' } },
@@ -70,7 +74,7 @@ const PRESETS: { label: string; form: Partial<RuleForm> }[] = [
     { label: 'Redis', form: { name: 'Redis', protocol: 'tcp', port: '6379', source: '10.0.0.0/8' } },
 ];
 
-export default function Firewall({ server, rules, networkRules, state, sshPort, can }: Props) {
+export default function Firewall({ server, rules, networkRules, state, sshPort, counters, countersAt, can }: Props) {
     const [editing, setEditing] = useState<Rule | 'new' | null>(null);
     const [deleting, setDeleting] = useState<Rule | null>(null);
     const [deleteBusy, setDeleteBusy] = useState(false);
@@ -185,6 +189,13 @@ export default function Firewall({ server, rules, networkRules, state, sshPort, 
                         )}
                         {state && !state.in_sync && state.status === 'applied' ? ' · changes pending' : ''} · deny rules run before allow rules · ICMP
                         is always allowed
+                        {counters?.ssh && ` · SSH ${formatCount(counters.ssh.packets)} pkts`}
+                        {countersAt && (
+                            <>
+                                {' '}
+                                · hits as of <RelativeTime value={countersAt} />
+                            </>
+                        )}
                     </p>
                 </div>
                 <ApplyStatusBadge status={state?.status} />
@@ -261,6 +272,26 @@ export default function Firewall({ server, rules, networkRules, state, sshPort, 
                             </span>
                         ),
                     },
+                    ...(counters
+                        ? [
+                              {
+                                  id: 'hits',
+                                  header: 'Hits',
+                                  hideOnMobile: true,
+                                  cell: (row: Row) => {
+                                      const c = counters[row.rule.id];
+
+                                      return c ? (
+                                          <span className="tabular text-fg-muted text-xs" title={`${c.packets} packets, ${c.bytes} bytes`}>
+                                              {formatCount(c.packets)} pkts · {formatCount(c.bytes, 'B')}
+                                          </span>
+                                      ) : (
+                                          <span className="text-fg-faint text-xs">—</span>
+                                      );
+                                  },
+                              },
+                          ]
+                        : []),
                 ]}
                 rowActions={
                     can.manage

@@ -76,6 +76,11 @@ final class PayloadCompatibility
         'edge.request_id' => [
             'edge.caddy.apply' => ['request_id'],
         ],
+        // Network protection (docs/plans/network/protection.md): rule counters; older agents render the same rules
+        // without them. net.protection.apply itself is only ever sent to agents with the feature.
+        'net.protection' => [
+            'net.firewall.apply' => ['counters'],
+        ],
     ];
 
     /**

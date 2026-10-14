@@ -13,6 +13,7 @@ use Falak\Insights\Application\Listeners\DeleteOrganizationInsights;
 use Falak\Insights\Application\Listeners\ExpectScheduledJobs;
 use Falak\Insights\Application\Listeners\IngestReceivedInsights;
 use Falak\Insights\Contracts\DatabaseIssues;
+use Falak\Insights\Contracts\HostSecurityIssues;
 use Falak\Insights\Contracts\IssueDirectory;
 use Falak\Insights\Contracts\PerformanceFindings;
 use Falak\Insights\Contracts\SecurityFindings;
@@ -29,6 +30,7 @@ use Falak\Insights\Infrastructure\TrackedDatabaseIssues;
 use Falak\Insights\Infrastructure\TrackedSecurityIssues;
 use Falak\Insights\Infrastructure\TrackedTrafficFindings;
 use Falak\Insights\Infrastructure\TrackedUptimeIssues;
+use Falak\Insights\Infrastructure\TrackedHostSecurityIssues;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Processes\Events\SchedulesApplied;
 use Illuminate\Console\Scheduling\Schedule;
@@ -57,6 +59,8 @@ class InsightsServiceProvider extends ModuleServiceProvider
 
         // Default only: the Sites module (registered earlier) binds the real resolver, which must win.
         $this->app->singletonIf(SiteNameResolver::class, IdSiteNameResolver::class);
+        // Server security findings (docs/plans/network/protection.md).
+        $this->app->singleton(HostSecurityIssues::class, TrackedHostSecurityIssues::class);
     }
 
     protected function bootModule(): void

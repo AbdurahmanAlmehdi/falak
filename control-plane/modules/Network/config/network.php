@@ -34,4 +34,16 @@ return [
         // answers with a RST (the round trip) and no service logs a connection.
         'probe_port' => (int) env('FALAK_NETWORK_PROBE_PORT', 1),
     ],
+
+    // Blocking and auto-ban (docs/plans/network/protection.md).
+    'protection' => [
+        // Never blocked, on top of the resolved panel and agent API hosts (comma-separated IPs / CIDRs).
+        'control_plane_addresses' => array_values(array_filter(array_map('trim', explode(',', (string) env('FALAK_CONTROL_PLANE_IPS', ''))))),
+        'changes_per_minute' => 30,
+        'max_blocks' => 5000,
+        // A brute-force Issue occurrence: at least this many failed SSH logins in one report (a minute).
+        'ssh_issue_min_failures' => 20,
+        // Expired blocks are kept this long (listed as history in the audit log only).
+        'retention_days' => 7,
+    ],
 ];

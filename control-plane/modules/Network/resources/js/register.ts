@@ -1,6 +1,7 @@
-import { registerCommands, registerNavigation, registerServiceTabs, type ServiceTabProps } from '@/lib/registry';
-import { Network, Shield } from 'lucide-react';
+import { registerCommands, registerIpActions, registerNavigation, registerServiceTabs, type ServiceTabProps } from '@/lib/registry';
+import { Ban, Network, Shield } from 'lucide-react';
 import { createElement, lazy } from 'react';
+import { BlockIpAction } from './components/block-ip-action';
 
 registerNavigation({ id: 'network', title: 'Network', url: '/network', icon: Network, order: 400, permission: 'network.view' });
 
@@ -32,6 +33,9 @@ registerServiceTabs(
     },
 );
 
+// "Block" in the network.ip-actions slot on the client and peer rows (docs/plans/network/protection.md).
+registerIpActions({ id: 'network.block', order: 100, permission: 'network.protect', component: BlockIpAction });
+
 registerCommands({
     id: 'network.navigation',
     commands: () => [
@@ -52,6 +56,15 @@ registerCommands({
             href: '/network',
             permission: 'network.view',
             keywords: ['nftables', 'ports', 'firewall rules'],
+        },
+        {
+            id: 'network.blocked',
+            title: 'Blocked IPs',
+            group: 'Navigation',
+            icon: Ban,
+            href: '/network/blocked',
+            permission: 'network.view',
+            keywords: ['block', 'ban', 'fail2ban', 'brute force', 'ssh'],
         },
     ],
 });

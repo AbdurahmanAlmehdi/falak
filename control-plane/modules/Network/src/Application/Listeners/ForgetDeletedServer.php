@@ -6,7 +6,9 @@ use Falak\Network\Application\Actions\RemoveNetworkMember;
 use Falak\Network\Domain\Models\FirewallRule;
 use Falak\Network\Domain\Models\FirewallState;
 use Falak\Network\Domain\Models\NetworkObservation;
+use Falak\Network\Domain\Models\IpBlock;
 use Falak\Network\Domain\Models\PrivateNetworkMember;
+use Falak\Network\Domain\Models\ProtectionState;
 use Falak\Servers\Events\ServerDeleted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 
@@ -22,6 +24,8 @@ final class ForgetDeletedServer implements ShouldQueue
         FirewallRule::query()->where('server_id', $event->serverId)->where('organization_id', $event->organizationId)->delete();
         FirewallState::query()->where('server_id', $event->serverId)->where('organization_id', $event->organizationId)->delete();
         NetworkObservation::query()->where('server_id', $event->serverId)->where('organization_id', $event->organizationId)->delete();
+        IpBlock::query()->where('server_id', $event->serverId)->where('organization_id', $event->organizationId)->delete();
+        ProtectionState::query()->where('server_id', $event->serverId)->where('organization_id', $event->organizationId)->delete();
 
         PrivateNetworkMember::query()
             ->with('network')

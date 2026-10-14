@@ -42,6 +42,8 @@ final class FirewallCompiler
             'input_policy' => 'drop',
             'ssh_port' => (int) config('network.ssh_port', 22),
             'allow_icmp' => true,
+            // Rule counters (feature net.protection; stripped for older agents by PayloadCompatibility).
+            'counters' => true,
             'rules' => [...$this->networkRules($serverId), ...$this->webOrigins($serverId, $rules->map(fn (FirewallRule $rule) => $this->rule($rule))->all())],
         ];
     }

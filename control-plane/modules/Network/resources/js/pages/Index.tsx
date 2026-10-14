@@ -6,7 +6,7 @@ import { Input } from '@/components/falak/input';
 import { Section } from '@/components/falak/section';
 import InfrastructureLayout from '@/layouts/infrastructure-layout';
 import { Link, router, useForm } from '@inertiajs/react';
-import { Network, Plus, Scale, Shield } from 'lucide-react';
+import { Ban, Network, Plus, Scale, Shield } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
 import { ApplyStatusBadge } from '../components/network-ui';
 import { type FirewallStateSummary, type PrivateAddress } from '../types';
@@ -84,11 +84,16 @@ export default function Index({ servers, networks, loadBalancers, defaults, can 
             section="networks"
             description="WireGuard networks between your servers, their firewalls and load balancers."
             actions={
-                can.manage && (
-                    <Button variant="primary" icon={<Plus />} onClick={openCreate}>
-                        New network
+                <>
+                    <Button icon={<Ban />} onClick={() => router.visit('/network/blocked')}>
+                        Blocked IPs
                     </Button>
-                )
+                    {can.manage && (
+                        <Button variant="primary" icon={<Plus />} onClick={openCreate}>
+                            New network
+                        </Button>
+                    )}
+                </>
             }
         >
             <DataTable
