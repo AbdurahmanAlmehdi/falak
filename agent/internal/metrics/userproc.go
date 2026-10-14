@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 
@@ -144,14 +145,17 @@ func parseProcIO(b []byte) (read, write uint64) {
 	return kv["read_bytes"], kv["write_bytes"]
 }
 
-// scanUsers is one pass over /proc for every wanted uid: status of every process (the uid is only there), then stat
-// and io of the matching ones. counters carries each uid's state between passes (created on demand, dropped for uids
-// no longer wanted). Processes that vanish between listing and reading are skipped.
-func scanUsers(fs hostfs.FS, uids map[int]bool, counters map[int]*userCounter) map[int]userTotals {
-	live := map[int]map[int]procTimes{}
-	out := map[int]userTotals{}
-	for uid := range uids {
-		live[uid] = map[int]procTimes{}
+// scanProcs is one pass over /proc for every wanted uid: status of every process (the uid is only there), then stat
+// and io of the matching ones. owner names the counter a process counts under ("" = none, e.g. in a container): a
+// uid's own key for an isolated site's user, a site's key for a process of a shared user attributed to that site.
+// counters carries each key's state
+// between passes (created on demand for every wanted key, dropped for keys no longer wanted). Processes that vanish
+// between listing and reading are skipped.
+func scanProcs(fs hostfs.FS, uids map[int]bool, owner func(uid, pid int, start uint64) string, wanted map[string]bool, counters map[string]*userCounter) map[string]userTotals {
+	live := map[string]map[int]procTimes{}
+	out := map[string]userTotals{}
+	for key := range wanted {
+		live[key] = map[int]procTimes{}
 	}
 	entries, _ := os.ReadDir(fs.P("/proc"))
 	for _, e := range entries {
@@ -176,29 +180,33 @@ func scanUsers(fs hostfs.FS, uids map[int]bool, counters map[int]*userCounter) m
 		if !ok {
 			continue
 		}
+		key := owner(uid, pid, start)
+		if !wanted[key] {
+			continue
+		}
 		p := procTimes{start: start, ticks: ticks}
 		if b, err := fs.ReadFile(dir + "/io"); err == nil {
 			p.read, p.write = parseProcIO(b)
 		}
-		live[uid][pid] = p
-		t := out[uid]
+		live[key][pid] = p
+		t := out[key]
 		t.rss += rss
 		t.pids++
-		out[uid] = t
+		out[key] = t
 	}
-	for uid := range counters {
-		if !uids[uid] {
-			delete(counters, uid)
+	for key := range counters {
+		if !wanted[key] {
+			delete(counters, key)
 		}
 	}
-	for uid, procs := range live {
-		c := counters[uid]
+	for key, procs := range live {
+		c := counters[key]
 		if c == nil {
 			c = &userCounter{base: make(map[int]procTimes, len(procs))}
 			for pid, p := range procs {
 				c.base[pid] = p
 			}
-			counters[uid] = c
+			counters[key] = c
 		}
 		for pid, old := range c.procs {
 			if cur, ok := procs[pid]; ok && cur.start == old.start {
@@ -211,7 +219,7 @@ func scanUsers(fs hostfs.FS, uids map[int]bool, counters map[int]*userCounter) m
 			delete(c.base, pid)
 		}
 		c.procs = procs
-		t := out[uid]
+		t := out[key]
 		t.cpuTicks, t.read, t.write = c.offTicks, c.offRead, c.offWrt
 		for pid, p := range procs {
 			p = c.since(pid, p)
@@ -219,7 +227,80 @@ func scanUsers(fs hostfs.FS, uids map[int]bool, counters map[int]*userCounter) m
 			t.read += p.read
 			t.write += p.write
 		}
-		out[uid] = t
+		out[key] = t
 	}
 	return out
+}
+
+// fpmPoolPrefix starts the process title PHP-FPM gives a pool's workers ("php-fpm: pool <name>"); its master is
+// "php-fpm: master process (...)", which a freshly forked child still carries until it titles itself.
+const (
+	fpmTitlePrefix = "php-fpm: "
+	fpmPoolPrefix  = fpmTitlePrefix + "pool "
+)
+
+// procOrigin is what the per-user pass learns of a process once (pid + start time): whether it runs in a container
+// (a container's processes can run as a site user's uid, they are never a native site's), and for a shared user's
+// process the PHP-FPM pool it works for, else the site directory its working directory lies in ("" when neither).
+type procOrigin struct {
+	start     uint64
+	container bool
+	pool, dir string
+	// retry: a PHP-FPM process not titled with its pool yet (a child forked from the master, before its
+	// setproctitle): not cached, read again next pass.
+	retry bool
+}
+
+// containerCgroups are what a process's cgroup path holds when a container runtime started it: Docker (cgroupfs
+// "/docker/<id>", systemd "docker-<id>.scope"), containerd, Kubernetes and Podman.
+var containerCgroups = []string{"/docker/", "docker-", "containerd", "kubepods", "libpod"}
+
+// inContainer reports whether /proc/<pid>/cgroup places the process in a container (false when unreadable).
+func inContainer(fs hostfs.FS, dir string) bool {
+	b, err := fs.ReadFile(dir + "/cgroup")
+	if err != nil {
+		return false
+	}
+	for _, m := range containerCgroups {
+		if bytes.Contains(b, []byte(m)) {
+			return true
+		}
+	}
+	return false
+}
+
+// readOrigin reads where a process comes from: its container, its PHP-FPM pool from its title (argv[0] of
+// /proc/<pid>/cmdline), else the first path segment of its working directory under one of sitesRoots (/proc/<pid>/cwd:
+// a host path, also when fs is re-rooted; the sites root as configured and as its symlinks resolve).
+func readOrigin(fs hostfs.FS, sitesRoots []string, pid int, start uint64) procOrigin {
+	o := procOrigin{start: start}
+	dir := "/proc/" + strconv.Itoa(pid)
+	if o.container = inContainer(fs, dir); o.container {
+		return o
+	}
+	if b, err := fs.ReadFile(dir + "/cmdline"); err == nil {
+		arg0, _, _ := bytes.Cut(b, []byte{0})
+		title := strings.TrimSpace(string(arg0))
+		if pool, ok := strings.CutPrefix(title, fpmPoolPrefix); ok {
+			o.pool = strings.TrimSpace(pool)
+			return o
+		}
+		if strings.HasPrefix(title, fpmTitlePrefix) {
+			o.retry = true
+			return o
+		}
+	}
+	target, err := fs.Readlink(dir + "/cwd")
+	if err != nil {
+		return o
+	}
+	// A working directory removed since (a pruned release) reads "<path> (deleted)".
+	target = path.Clean(strings.TrimSuffix(target, " (deleted)"))
+	for _, root := range sitesRoots {
+		if rel, ok := strings.CutPrefix(target, strings.TrimSuffix(root, "/")+"/"); ok {
+			o.dir, _, _ = strings.Cut(rel, "/")
+			return o
+		}
+	}
+	return o
 }

@@ -80,10 +80,14 @@ export function memorySeries(labels: { rest: string; limit: string; capacity: st
     ];
 }
 
-/** Why the CPU / memory charts show only the servers (null when the site's own usage is there). */
-export function unmeasuredNote(measured: boolean, sharedUser: boolean): string | null {
+/**
+ * Why the CPU / memory charts show only the servers (null when the site's own usage is there). agentOutdated: a
+ * shared-user site on a server whose agent cannot attribute that user's processes per site yet.
+ */
+export function unmeasuredNote(measured: boolean, sharedUser: boolean, agentOutdated = false): string | null {
     if (measured) return null;
-    if (sharedUser) return 'This site shares its system user with other sites, so only the server’s usage is shown.';
+    if (sharedUser && agentOutdated) return 'Update this server’s agent to see this site’s own usage; the server’s is shown.';
+    if (sharedUser) return 'No usage of this site’s own has arrived yet; the server’s is shown.';
 
     return 'No workload metrics for this site yet: the charts show its servers. Servers report each site’s own CPU, memory and processes once their agent is updated.';
 }

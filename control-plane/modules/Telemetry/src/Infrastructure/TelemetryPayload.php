@@ -50,6 +50,9 @@ final class TelemetryPayload
                 'deployment_id' => $site->deploymentId ? strtoupper($site->deploymentId) : null,
                 'release_id' => $site->releaseId ? strtoupper($site->releaseId) : null,
                 'unix_user' => $site->unixUser,
+                // Only an isolated site's user is all its own; agents without telemetry.workloads.shared get unix_user
+                // for isolated sites only (Fleet's PayloadCompatibility).
+                'isolated' => $site->unixUser !== null && $site->isolated ? true : null,
                 'runtime' => $site->runtime,
             ], fn ($v) => $v !== null && $v !== '');
 

@@ -47,6 +47,10 @@ func def(v, d int) int {
 	return v
 }
 
+// FPMPoolName is the name of a site's PHP-FPM pool (its section in the pool file): PHP-FPM titles the pool's workers
+// "php-fpm: pool <name>", which the workload collector attributes them by.
+func FPMPoolName(pool string) string { return "falak-" + pool }
+
 // RenderPool renders a pool file; listenGroup is the edge user's group so Caddy can connect.
 func RenderPool(p FPMPoolPayload, listenGroup string) string {
 	group := p.Group
@@ -62,7 +66,7 @@ func RenderPool(p FPMPoolPayload, listenGroup string) string {
 		maxReq = *p.MaxRequests
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "; Managed by Falak — do not edit\n[falak-%s]\nuser = %s\ngroup = %s\n", p.Pool, p.User, group)
+	fmt.Fprintf(&b, "; Managed by Falak — do not edit\n[%s]\nuser = %s\ngroup = %s\n", FPMPoolName(p.Pool), p.User, group)
 	fmt.Fprintf(&b, "listen = %s\nlisten.owner = %s\nlisten.group = %s\nlisten.mode = 0660\n", p.Listen, p.User, listenGroup)
 	fmt.Fprintf(&b, "pm = %s\npm.max_children = %d\n", pm, def(p.MaxChildren, 5))
 	if pm == "dynamic" {

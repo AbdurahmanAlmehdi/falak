@@ -93,7 +93,7 @@ it('configures immediately once a server is provisioned', function () {
 it('includes organization overrides, the bearer token and sites from the ServerSites binding', function () {
     $server = telemetry_server($this->organization->id);
     // An agent with workload metrics gets each site's unix user and runtime.
-    fleet_enroll($this->organization->id, $server->id, ['features' => ['telemetry.workloads']]);
+    fleet_enroll($this->organization->id, $server->id, ['features' => ['telemetry.workloads', 'telemetry.workloads.shared']]);
     TelemetrySettings::query()->create([
         'organization_id' => $this->organization->id,
         'otlp_endpoint' => 'https://collector.example.com',
@@ -108,7 +108,7 @@ it('includes organization overrides, the bearer token and sites from the ServerS
         {
             return [new SiteTelemetryTarget('01jsqte000000000000000000a', 'shop-example-com', 'production', '01jdep0000000000000000000a', null, [
                 ['path' => '/srv/falak/sites/shop-example-com/shared/storage/logs/*.log', 'format' => 'json'],
-            ], 'shop', 'php-fpm')];
+            ], 'shop', 'php-fpm', isolated: true)];
         }
     });
 
@@ -121,8 +121,49 @@ it('includes organization overrides, the bearer token and sites from the ServerS
         ->and($payload['resource']['environment'])->toBe('staging')
         ->and($payload['sampling'])->toBe(['traces_ratio' => 0.25])
         ->and($payload['metrics']['interval_s'])->toBe(30)
-        ->and($payload['sites'])->toBe([['slug' => 'shop-example-com', 'site_id' => '01JSQTE000000000000000000A', 'environment' => 'production', 'deployment_id' => '01JDEP0000000000000000000A', 'unix_user' => 'shop', 'runtime' => 'php-fpm']])
+        ->and($payload['sites'])->toBe([['slug' => 'shop-example-com', 'site_id' => '01JSQTE000000000000000000A', 'environment' => 'production', 'deployment_id' => '01JDEP0000000000000000000A', 'unix_user' => 'shop', 'isolated' => true, 'runtime' => 'php-fpm']])
         ->and($payload['log_sources'])->toBe([['path' => '/srv/falak/sites/shop-example-com/shared/storage/logs/*.log', 'site' => 'shop-example-com', 'format' => 'json']]);
+});
+
+it('sends a non-isolated site\'s shared user only to agents that attribute its processes per site', function () {
+    app()->instance(ServerSites::class, new class implements ServerSites
+    {
+        public function forServer(string $serverId): array
+        {
+            return [
+                new SiteTelemetryTarget('01jsqte000000000000000000a', 'iso', unixUser: 'iso', runtime: 'php-fpm', isolated: true),
+                new SiteTelemetryTarget('01jsqte000000000000000000b', 'blog', unixUser: 'falak', runtime: 'php-fpm'),
+                new SiteTelemetryTarget('01jsqte000000000000000000c', 'dock', runtime: 'docker'),
+            ];
+        }
+    });
+    $sites = function (array $features): array {
+        $server = telemetry_server($this->organization->id);
+        fleet_enroll($this->organization->id, $server->id, ['features' => $features]);
+        app(TelemetryConfigurator::class)->reconfigure($server->id);
+        $payload = telemetry_payload(telemetry_commands($server->id)[0]);
+        expect(fleet_schema_errors('commands/telemetry.configure.schema.json', $payload))->toBe([]);
+
+        return $payload['sites'];
+    };
+
+    expect($sites(['telemetry.workloads', 'telemetry.workloads.shared']))->toBe([
+        ['slug' => 'iso', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'iso', 'isolated' => true, 'runtime' => 'php-fpm'],
+        ['slug' => 'blog', 'site_id' => '01JSQTE000000000000000000B', 'unix_user' => 'falak', 'runtime' => 'php-fpm'],
+        ['slug' => 'dock', 'site_id' => '01JSQTE000000000000000000C', 'runtime' => 'docker'],
+    ])
+        // v0.14.0 agents measure a site by every process of its user: exactly what that control plane sent them, the
+        // user of isolated sites only (and no `isolated`, which they would reject).
+        ->and($sites(['telemetry.workloads']))->toBe([
+            ['slug' => 'iso', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'iso', 'runtime' => 'php-fpm'],
+            ['slug' => 'blog', 'site_id' => '01JSQTE000000000000000000B', 'runtime' => 'php-fpm'],
+            ['slug' => 'dock', 'site_id' => '01JSQTE000000000000000000C', 'runtime' => 'docker'],
+        ])
+        ->and($sites([]))->toBe([
+            ['slug' => 'iso', 'site_id' => '01JSQTE000000000000000000A'],
+            ['slug' => 'blog', 'site_id' => '01JSQTE000000000000000000B'],
+            ['slug' => 'dock', 'site_id' => '01JSQTE000000000000000000C'],
+        ]);
 });
 
 it('skips servers without an agent and unknown servers', function () {

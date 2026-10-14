@@ -92,10 +92,13 @@ type Site struct {
 	Environment  string `json:"environment,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
 	ReleaseID    string `json:"release_id,omitempty"`
-	// UnixUser and Runtime let the workload metrics measure a native site without a slice: the sum of every process
-	// its unix user owns. Runtime is the control plane's SiteRuntime value (php-fpm, frankenphp, node, … docker,
-	// compose, function); container runtimes are measured through their containers.
+	// UnixUser, Isolated and Runtime let the workload metrics measure a native site without a slice by its unix
+	// user's processes: all of them for an isolated site (a user of its own), those attributed to the site for a
+	// non-isolated one (its user is the one every such site, and the servers' admin logins, share). Runtime is the
+	// control plane's SiteRuntime value (php-fpm, frankenphp, node, … docker, compose, function); container runtimes
+	// are measured through their containers.
 	UnixUser string `json:"unix_user,omitempty"`
+	Isolated bool   `json:"isolated,omitempty"`
 	Runtime  string `json:"runtime,omitempty"`
 }
 

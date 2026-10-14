@@ -15,6 +15,8 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
+require_once __DIR__.'/../../../Fleet/tests/Support/helpers.php';
+
 beforeEach(function () {
     Http::preventStrayRequests();
     config([
@@ -23,6 +25,7 @@ beforeEach(function () {
         'telemetry.loki.url' => 'http://loki:3100',
         'telemetry.tempo.url' => null,
     ]);
+    config(['fleet.ca_path' => sys_get_temp_dir().'/falak-ca-test']);
     [$this->user, $this->organization] = actingAsMember(Role::Viewer);
     $this->servers = Server::factory()->count(2)->create(['organization_id' => $this->organization->id]);
     $this->site = Site::query()->create([
@@ -93,7 +96,20 @@ it('flags a native site that runs as the shared unix user', function () {
     Http::fake(['vm:8428/api/v1/query_range' => $empty, 'loki:3100/*' => $empty]);
 
     $this->site->forceFill(['unix_user' => 'falak', 'isolated' => false])->save();
-    $this->getJson("/telemetry/sites/{$this->site->id}/metrics/data")->assertOk()->assertJsonPath('shared_user', true);
+    $this->getJson("/telemetry/sites/{$this->site->id}/metrics/data")->assertOk()->assertJsonPath('shared_user', true)
+        // No agent enrolled: nothing to update.
+        ->assertJsonPath('agent_outdated', false);
+
+    // One server's agent predates per-site attribution of the shared user's processes: the panel asks for its update.
+    fleet_enroll($this->organization->id, $this->servers[0]->id, ['features' => ['telemetry.workloads', 'telemetry.workloads.shared']]);
+    fleet_enroll($this->organization->id, $this->servers[1]->id, ['features' => ['telemetry.workloads']]);
+    $this->getJson("/telemetry/sites/{$this->site->id}/metrics/data")->assertOk()->assertJsonPath('agent_outdated', true);
+    $this->getJson("/telemetry/sites/{$this->site->id}/metrics/data?server={$this->servers[0]->id}")->assertOk()->assertJsonPath('agent_outdated', false);
+
+    // An isolated site is measured by its own user, which every agent with workload metrics does.
+    $this->site->forceFill(['unix_user' => 'shop', 'isolated' => true])->save();
+    $this->getJson("/telemetry/sites/{$this->site->id}/metrics/data")->assertOk()->assertJsonPath('shared_user', false)->assertJsonPath('agent_outdated', false);
+    $this->site->forceFill(['unix_user' => 'falak', 'isolated' => false])->save();
 
     // Containers are measured through their cgroups, whatever user the site has.
     $this->site->forceFill(['runtime' => SiteRuntime::Docker])->save();

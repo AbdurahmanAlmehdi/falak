@@ -88,7 +88,7 @@ func TestConfigurePersistsAndIsIdempotent(t *testing.T) {
 	}
 	// The workload collector gets the sites too (slice keys → slugs, native sites measured by their unix user).
 	wsites := s.workloads.Sites()
-	if len(wsites) != 1 || wsites[0].UnixUser != "shop" || wsites[0].Runtime != "php-fpm" {
+	if len(wsites) != 1 || wsites[0].UnixUser != "shop" || !wsites[0].Isolated || wsites[0].Runtime != "php-fpm" {
 		t.Fatalf("workload sites not applied: %+v", wsites)
 	}
 	// Reload from disk on a fresh service.

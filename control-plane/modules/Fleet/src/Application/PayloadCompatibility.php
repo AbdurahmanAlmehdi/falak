@@ -33,6 +33,10 @@ final class PayloadCompatibility
         'telemetry.workloads' => [
             'telemetry.configure' => ['sites.*.unix_user', 'sites.*.runtime'],
         ],
+        // A shared user's processes attributed per site; older agents get unix_user for isolated sites only (UNLESS).
+        'telemetry.workloads.shared' => [
+            'telemetry.configure' => ['sites.*.isolated'],
+        ],
         // Split-out compose services joining their stack's network; older agents run them on their own network only.
         'docker.networks' => [
             'docker.run' => ['networks'],
@@ -52,6 +56,20 @@ final class PayloadCompatibility
         // field is stripped all the same (a plan built from a report an upgraded agent sent, then downgraded).
         'provision.v2' => [
             'provision.apply' => ['components'],
+        ],
+    ];
+
+    /**
+     * feature => [command type => [field path => flag]]: agents without the feature get the field only in the objects
+     * where its sibling flag is true (applied before FIELDS, which may strip the flag itself).
+     *
+     * @var array<string, array<string, array<string, string>>>
+     */
+    public const UNLESS = [
+        // Older agents measure a site with a unix_user by every process that user owns: a non-isolated site's user is
+        // the one every such site (and the servers' admin logins) shares.
+        'telemetry.workloads.shared' => [
+            'telemetry.configure' => ['sites.*.unix_user' => 'isolated'],
         ],
     ];
 
@@ -81,6 +99,16 @@ final class PayloadCompatibility
             }
         }
 
+        foreach (self::UNLESS as $feature => $commands) {
+            if (in_array($feature, $features, true) || ! isset($commands[$type])) {
+                continue;
+            }
+
+            foreach ($commands[$type] as $path => $flag) {
+                self::strip($document, explode('.', $path), $flag);
+            }
+        }
+
         foreach (self::FIELDS as $feature => $commands) {
             if (in_array($feature, $features, true) || ! isset($commands[$type])) {
                 continue;
@@ -96,14 +124,15 @@ final class PayloadCompatibility
 
     /**
      * @param  list<string>  $segments
+     * @param  ?string  $unless  a sibling flag that keeps the field where it is true
      */
-    private static function strip(mixed $node, array $segments): void
+    private static function strip(mixed $node, array $segments, ?string $unless = null): void
     {
         $key = array_shift($segments);
 
         if ($key === '*') {
             foreach (is_array($node) ? $node : [] as $item) {
-                self::strip($item, $segments);
+                self::strip($item, $segments, $unless);
             }
 
             return;
@@ -114,11 +143,13 @@ final class PayloadCompatibility
         }
 
         if ($segments === []) {
-            unset($node->{$key});
+            if ($unless === null || ($node->{$unless} ?? false) !== true) {
+                unset($node->{$key});
+            }
 
             return;
         }
 
-        self::strip($node->{$key}, $segments);
+        self::strip($node->{$key}, $segments, $unless);
     }
 }

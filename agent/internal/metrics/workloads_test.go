@@ -126,11 +126,11 @@ func TestWorkloadUsers(t *testing.T) {
 	writeProc(t, root, 30, 1003, 500, 10, 10, 300, 0, 0)         // dock: a docker site, never per user
 	c := NewWorkloadCollector(hostfs.FS{Root: root}, nil, nil)
 	c.SetSites([]otlp.Site{
-		{Slug: "blog", SiteID: "S1", UnixUser: "blog", Runtime: "php-fpm"},
-		{Slug: "api", SiteID: "S2", UnixUser: "api", Runtime: "node"},
-		{Slug: "dock", SiteID: "S3", UnixUser: "dock", Runtime: "docker"},
-		{Slug: "old", SiteID: "S4"},                                         // no unix_user (older control plane): skipped
-		{Slug: "ghost", SiteID: "S5", UnixUser: "ghost", Runtime: "static"}, // no such user: skipped
+		{Slug: "blog", SiteID: "S1", UnixUser: "blog", Isolated: true, Runtime: "php-fpm"},
+		{Slug: "api", SiteID: "S2", UnixUser: "api", Isolated: true, Runtime: "node"},
+		{Slug: "dock", SiteID: "S3", UnixUser: "dock", Isolated: true, Runtime: "docker"},
+		{Slug: "old", SiteID: "S4"}, // no unix_user (older control plane): skipped
+		{Slug: "ghost", SiteID: "S5", UnixUser: "ghost", Isolated: true, Runtime: "static"}, // no such user: skipped
 	})
 	cpu := func(rms []*metricspb.ResourceMetrics, slug string) float64 {
 		return pointWith(resourceBy(rms, "service.name", slug), "falak.workload.cpu.time", "falak.workload.kind", "user").GetAsDouble()
@@ -218,38 +218,269 @@ func TestWorkloadUsers(t *testing.T) {
 		if pointWith(blog, "falak.workload.cpu.time", "falak.workload.kind", "user") != nil || pointWith(blog, "falak.workload.cpu.time", "falak.workload.kind", "slice") == nil {
 			t.Fatal("the slice wins")
 		}
-		if _, ok := c.users[1001]; ok {
+		if _, ok := c.users[userKey(1001)]; ok {
 			t.Fatal("counter of a uid no longer measured is dropped")
 		}
 	})
 }
 
+// writeOrigin gives a fake process a command line (NUL-separated, as the kernel has it) and, unless cwd is "", a
+// working directory: like /proc/<pid>/cwd, a symlink to a host path (dangling under the temp root).
+func writeOrigin(t *testing.T, root string, pid int, cmdline, cwd string) {
+	t.Helper()
+	writeTree(t, root, map[string]string{fmt.Sprintf("proc/%d/cmdline", pid): cmdline})
+	if cwd == "" {
+		return
+	}
+	link := filepath.Join(root, fmt.Sprintf("proc/%d/cwd", pid))
+	os.Remove(link)
+	if err := os.Symlink(cwd, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkloadUsersSharedUser(t *testing.T) {
 	root := t.TempDir()
-	writeTree(t, root, map[string]string{"etc/passwd": "falak:x:1000:1000::/:/bin/bash\nshop:x:1001:1001::/:/bin/bash\n"})
-	writeProc(t, root, 10, 1000, 1000, 100, 0, 100, 0, 0)
-	writeProc(t, root, 11, 1001, 1000, 100, 0, 100, 0, 0)
+	writeTree(t, root, map[string]string{"etc/passwd": "root:x:0:0::/root:/bin/bash\nfalak:x:1000:1000::/:/bin/bash\niso:x:1001:1001::/:/bin/bash\n"})
 	files := cgroupFiles("sys/fs/cgroup/falak.slice/falak-site_limited.slice", "1", "max 100000\n", "max\n")
 	files["sys/fs/cgroup/falak.slice/falak-site_limited.slice/pids.current"] = "0\n"
 	writeTree(t, root, files)
+	type proc struct {
+		pid, uid     int
+		rssKB        int64
+		cmdline, cwd string
+	}
+	for _, p := range []proc{
+		{1, 0, 9000, "php-fpm: master process (/etc/php/8.3/fpm/php-fpm.conf)\x00\x00\x00", "/"}, // shared master: root's
+		{10, 1000, 1000, "php-fpm: pool falak-backend\x00\x00\x00\x00", "/"},                     // pool title wins over cwd
+		{11, 1000, 2000, "php-fpm: pool falak-backend   ", ""},
+		{12, 1000, 400, "php\x00artisan\x00horizon\x00", "/srv/falak/sites/backend/releases/01J"},
+		{13, 1000, 300, "node\x00server.js\x00", "/srv/falak/sites/shop2/current"},     // shop2, not shop
+		{14, 1000, 200, "node\x00server.js\x00", "/srv/falak/sites/shop"},              // the site directory itself
+		{15, 1000, 50, "sshd: falak@pts/0\x00", "/home/falak"},                         // unattributable: ignored
+		{16, 1000, 50, "/lib/systemd/systemd\x00--user\x00", "/"},                      // ignored
+		{17, 1000, 50, "php\x00artisan\x00tinker\x00", "/srv/falak/sites/iso/current"}, // iso does not run as falak
+		{18, 1000, 100, "php-fpm: pool falak-limited\x00", "/"},                        // limited: its slice is empty
+		{19, 1000, 50, "bash\x00", "/srv/falak/sitesx/backend"},                        // not under the sites root
+		{20, 1001, 700, "php-fpm: pool falak-iso\x00", "/"},                            // an isolated site's own user
+		{21, 1000, 100, "php\x00artisan\x00queue:work\x00", "/srv/falak/sites/backend/releases/00X (deleted)"},
+		{22, 1000, 100, "php-fpm: pool falak-gone\x00", "/"}, // a pool of no configured site
+		// A container's processes running as falak's / iso's uid: never a native site's.
+		{23, 1000, 100, "php-fpm: pool www\x00", "/srv/falak/sites/backend/current"},
+		{24, 1000, 100, "node\x00server.js\x00", "/srv/falak/sites/shop/current"},
+		{25, 1001, 100, "php-fpm: pool falak-iso\x00", "/"},
+		// A worker the master forked that has not titled itself yet: retried, not cached as unattributable.
+		{26, 1000, 100, "php-fpm: master process (/etc/php/8.3/fpm/php-fpm.conf)\x00", "/"},
+	} {
+		writeProc(t, root, p.pid, p.uid, p.rssKB, 100, 0, uint64(100+p.pid), 0, 0)
+		writeOrigin(t, root, p.pid, p.cmdline, p.cwd)
+		writeTree(t, root, map[string]string{fmt.Sprintf("proc/%d/cgroup", p.pid): "0::/user.slice/user-1000.slice/session-3.scope\n"})
+	}
+	writeTree(t, root, map[string]string{
+		"proc/23/cgroup": "0::/system.slice/docker-4f1c2d.scope\n",
+		"proc/24/cgroup": "12:pids:/docker/4f1c2d\n0::/docker/4f1c2d\n",
+		"proc/25/cgroup": "0::/kubepods/besteffort/pod1/4f1c2d\n",
+	})
 	c := NewWorkloadCollector(hostfs.FS{Root: root}, nil, nil)
+	c.SitesRoot = "/srv/falak/sites/"
+	c.SetSites([]otlp.Site{
+		{Slug: "backend", SiteID: "S1", UnixUser: "falak", Runtime: "php-fpm"},
+		{Slug: "storefront", SiteID: "S2", UnixUser: "falak", Runtime: "static"},
+		{Slug: "shop", SiteID: "S3", UnixUser: "falak", Runtime: "node"},
+		{Slug: "shop2", SiteID: "S4", UnixUser: "falak", Runtime: "node"},
+		{Slug: "limited", SiteID: "S5", UnixUser: "falak", Runtime: "php-fpm"},
+		{Slug: "iso", SiteID: "S6", UnixUser: "iso", Isolated: true, Runtime: "php-fpm"},
+		{Slug: "dock", SiteID: "S7", UnixUser: "falak", Runtime: "docker"}, // containers: never per process
+	})
+	procs := func(rms []*metricspb.ResourceMetrics, slug string) (cpu float64, rss, pids int64) {
+		rm := resourceBy(rms, "service.name", slug)
+		p := pointWith(rm, "falak.workload.cpu.time", "falak.workload.kind", "processes", "falak.workload.name", slug)
+		if p == nil {
+			t.Fatalf("%s: no processes workload", slug)
+		}
+		return p.GetAsDouble(), pointWith(rm, "falak.workload.memory.usage", "falak.memory.type", "used").GetAsInt(), pointWith(rm, "falak.workload.pids").GetAsInt()
+	}
+
+	rms := c.Collect(context.Background())
+	if resourceBy(rms, "service.name", "dock") != nil {
+		t.Fatal("a docker site is never measured per process")
+	}
+	for _, tc := range []struct {
+		slug      string
+		rssKB     int64
+		pids      int64
+		processes string
+	}{
+		{"backend", 1000 + 2000 + 400 + 100, 4, "pool workers by title, horizon and a worker in a removed release by cwd"},
+		{"storefront", 0, 0, "a static site has no process: zeros"},
+		{"shop", 200, 1, "cwd is the site directory"},
+		{"shop2", 300, 1, "shop2's process is not shop's"},
+		{"limited", 100, 1, "an empty slice leaves the site to its processes"},
+	} {
+		t.Run(tc.slug, func(t *testing.T) {
+			cpu, rss, pids := procs(rms, tc.slug)
+			// Counters start at zero (the processes' earlier 1 s each happened before the agent looked).
+			if cpu != 0 || rss != tc.rssKB*1024 || pids != tc.pids {
+				t.Fatalf("%s: cpu %v rss %d pids %d", tc.processes, cpu, rss, pids)
+			}
+			if pointWith(resourceBy(rms, "service.name", tc.slug), "falak.workload.cpu.time", "falak.workload.kind", "user") != nil {
+				t.Fatal("a shared user is never measured whole")
+			}
+		})
+	}
+	if pointWith(resourceBy(rms, "service.name", "limited"), "falak.workload.cpu.time", "falak.workload.kind", "slice") != nil {
+		t.Fatal("the empty slice is skipped")
+	}
+	iso := resourceBy(rms, "service.name", "iso")
+	if pointWith(iso, "falak.workload.cpu.time", "falak.workload.kind", "user", "falak.workload.name", "iso") == nil || pointWith(iso, "falak.workload.pids").GetAsInt() != 1 {
+		t.Fatal("an isolated site is measured by its whole user")
+	}
+	if _, ok := c.origins[1]; ok {
+		t.Fatal("root's processes are not read")
+	}
+	if o, ok := c.origins[23]; !ok || !o.container || !c.origins[25].container || c.origins[20].container {
+		t.Fatal("container processes are told apart once, by their cgroup")
+	}
+	if _, ok := c.origins[26]; ok {
+		t.Fatal("an FPM process without its pool title yet is not cached")
+	}
+
+	steps := []struct {
+		name    string
+		change  func()
+		backend float64
+		shop2   float64
+	}{
+		{"processes advance", func() {
+			writeProc(t, root, 10, 1000, 1000, 150, 0, 110, 0, 0)
+			writeProc(t, root, 11, 1000, 2000, 120, 0, 111, 0, 0)
+			writeProc(t, root, 13, 1000, 300, 130, 0, 113, 0, 0)
+			writeProc(t, root, 15, 1000, 50, 900, 0, 115, 0, 0) // ssh: never counted
+		}, 0.7, 0.3},
+		{"an exited worker keeps only what it used since", func() {
+			os.RemoveAll(filepath.Join(root, "proc/11"))
+		}, 0.7, 0.3},
+		{"a new worker counts fully", func() {
+			writeProc(t, root, 30, 1000, 1000, 40, 0, 500, 0, 0)
+			writeOrigin(t, root, 30, "php-fpm: pool falak-backend\x00", "/")
+		}, 1.1, 0.3},
+		{"the origin is read once per process", func() {
+			writeOrigin(t, root, 10, "something else\x00", "/home/falak")
+			writeProc(t, root, 10, 1000, 1000, 160, 0, 110, 0, 0)
+		}, 1.2, 0.3},
+		{"a reused pid is a new process, attributed again", func() {
+			os.RemoveAll(filepath.Join(root, "proc/13"))
+			writeProc(t, root, 13, 1000, 300, 10, 0, 600, 0, 0)
+			writeOrigin(t, root, 13, "php\x00artisan\x00horizon\x00", "/srv/falak/sites/backend/current")
+		}, 1.3, 0.3},
+		{"a forked FPM worker is attributed once it has its pool title", func() {
+			writeOrigin(t, root, 26, "php-fpm: pool falak-backend\x00", "/")
+			writeProc(t, root, 26, 1000, 100, 150, 0, 126, 0, 0)
+		}, 2.8, 0.3},
+	}
+	for _, s := range steps {
+		t.Run(s.name, func(t *testing.T) {
+			s.change()
+			rms := c.Collect(context.Background())
+			if got, _, _ := procs(rms, "backend"); got < s.backend-1e-9 || got > s.backend+1e-9 {
+				t.Fatalf("backend cpu %v want %v", got, s.backend)
+			}
+			if got, _, _ := procs(rms, "shop2"); got < s.shop2-1e-9 || got > s.shop2+1e-9 {
+				t.Fatalf("shop2 cpu %v want %v", got, s.shop2)
+			}
+		})
+	}
+	if _, ok := c.origins[11]; ok {
+		t.Fatal("an exited process's origin is dropped")
+	}
+
+	t.Run("a site moved into a slice is measured by it, its processes no other site's", func(t *testing.T) {
+		writeTree(t, root, cgroupFiles("sys/fs/cgroup/falak.slice/falak-site_backend.slice", "1", "max 100000\n", "max\n"))
+		rms := c.Collect(context.Background())
+		backend := resourceBy(rms, "service.name", "backend")
+		if pointWith(backend, "falak.workload.cpu.time", "falak.workload.kind", "processes") != nil || pointWith(backend, "falak.workload.cpu.time", "falak.workload.kind", "slice") == nil {
+			t.Fatal("the slice wins")
+		}
+		if _, _, pids := procs(rms, "storefront"); pids != 0 {
+			t.Fatalf("storefront got backend's processes: %d", pids)
+		}
+		if _, ok := c.users[siteKey("backend")]; ok {
+			t.Fatal("the counter of a site no longer measured by processes is dropped")
+		}
+	})
+}
+
+func TestWorkloadUsersLoneSharedSiteAndLinkedRoot(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{"etc/passwd": "root:x:0:0::/root:/bin/bash\nfalak:x:1000:1000::/home/falak:/bin/bash\n"})
+	for _, p := range []struct {
+		pid          int
+		cmdline, cwd string
+	}{
+		{10, "php-fpm: pool falak-blog\x00", "/"},
+		{11, "php\x00artisan\x00queue:work\x00", "/data/srv/falak/sites/blog/current"}, // cwd as the kernel resolves it
+		{12, "-bash\x00", "/home/falak"},                                               // an admin's login session
+		{13, "tmux\x00", "/"},
+		{14, "npm\x00run\x00build\x00", "/data/srv/falak/sites/dock/releases/01J"}, // a docker site's deploy hook
+	} {
+		writeProc(t, root, p.pid, 1000, 100, 100, 0, uint64(100+p.pid), 0, 0)
+		writeOrigin(t, root, p.pid, p.cmdline, p.cwd)
+	}
+	c := NewWorkloadCollector(hostfs.FS{Root: root}, nil, nil)
+	c.SitesRoot = "/srv/falak/sites"
+	// The only native site, not isolated: its user is the servers' shared login user, so only its own processes count.
 	c.SetSites([]otlp.Site{
 		{Slug: "blog", SiteID: "S1", UnixUser: "falak", Runtime: "php-fpm"},
-		{Slug: "docs", SiteID: "S2", UnixUser: "falak", Runtime: "static"},
-		{Slug: "limited", SiteID: "S3", UnixUser: "falak", Runtime: "php-fpm"},
-		{Slug: "shop", SiteID: "S4", UnixUser: "shop", Runtime: "php-fpm"},
+		{Slug: "dock", SiteID: "S2", Runtime: "docker"},
 	})
-	rms := c.Collect(context.Background())
-	for _, slug := range []string{"blog", "docs"} {
-		if resourceBy(rms, "service.name", slug) != nil {
-			t.Fatalf("%s shares its user: it would report every sharing site's processes", slug)
+	pids := func() int64 {
+		rm := resourceBy(c.Collect(context.Background()), "service.name", "blog")
+		if pointWith(rm, "falak.workload.cpu.time", "falak.workload.kind", "user") != nil {
+			t.Fatal("a non-isolated site is never measured by its whole user")
 		}
+		return pointWith(rm, "falak.workload.pids", "falak.workload.kind", "processes").GetAsInt()
 	}
-	// An empty slice of a site without a user of its own is still its only measurement.
-	if pointWith(resourceBy(rms, "service.name", "limited"), "falak.workload.cpu.time", "falak.workload.kind", "slice") == nil {
-		t.Fatal("limited keeps its slice")
+	// /srv is not a link yet: only the pool worker is the site's (the cwd under /data/srv matches no root).
+	if got := pids(); got != 1 {
+		t.Fatalf("pids %d", got)
 	}
-	if pointWith(resourceBy(rms, "service.name", "shop"), "falak.workload.cpu.time", "falak.workload.kind", "user") == nil {
-		t.Fatal("an isolated site is measured by its user")
+	// /srv -> /data/srv: the resolution failed before, so it is tried again; new processes match the resolved root.
+	if err := os.MkdirAll(filepath.Join(root, "data/srv/falak/sites"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/data/srv", filepath.Join(root, "srv")); err != nil {
+		t.Fatal(err)
+	}
+	writeProc(t, root, 15, 1000, 100, 100, 0, 115, 0, 0)
+	writeOrigin(t, root, 15, "php\x00artisan\x00schedule:work\x00", "/data/srv/falak/sites/blog/current")
+	if got := pids(); got != 2 {
+		t.Fatalf("pids %d (pool worker, scheduler)", got)
+	}
+	if c.rootResolved != "/data/srv/falak/sites" {
+		t.Fatalf("resolved %q", c.rootResolved)
+	}
+	// A process working under the configured (unresolved) path still matches.
+	writeProc(t, root, 16, 1000, 100, 100, 0, 116, 0, 0)
+	writeOrigin(t, root, 16, "node\x00x\x00", "/srv/falak/sites/blog/current")
+	if got := pids(); got != 3 {
+		t.Fatalf("pids %d", got)
+	}
+}
+
+func TestNativeUsersModes(t *testing.T) {
+	own, shared := nativeUsers([]otlp.Site{
+		{Slug: "iso", UnixUser: "iso", Isolated: true},
+		{Slug: "lone", UnixUser: "falak"},                    // non-isolated, alone: still per process
+		{Slug: "twin-a", UnixUser: "twin", Isolated: true},   // an isolated user claimed twice: per process
+		{Slug: "twin-b", UnixUser: "twin", Isolated: true},   //
+		{Slug: "fn", UnixUser: "falak", Runtime: "function"}, // containers: never per user
+		{Slug: "legacy", UnixUser: "legacy"},                 // no isolated flag: per process
+		{Slug: "none", Isolated: true, Runtime: "php-fpm"},   // no user
+	})
+	if len(own) != 1 || own["iso"] != "iso" {
+		t.Fatalf("own %v", own)
+	}
+	if len(shared) != 3 || len(shared["falak"]) != 1 || len(shared["twin"]) != 2 || len(shared["legacy"]) != 1 {
+		t.Fatalf("shared %v", shared)
 	}
 }

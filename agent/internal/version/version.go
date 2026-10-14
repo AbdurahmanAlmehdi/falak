@@ -51,6 +51,9 @@ var Features = []string{
 	// system.cpu.logical.count, and telemetry.configure sites[].unix_user / sites[].runtime (native sites measured by
 	// their unix user's processes).
 	"telemetry.workloads",
+	// telemetry.configure sites[].isolated, and sites[].unix_user for non-isolated sites too: the shared user's
+	// processes attributed per site (its PHP-FPM pool, else its working directory), falak.workload.kind=processes.
+	"telemetry.workloads.shared",
 }
 
 var (

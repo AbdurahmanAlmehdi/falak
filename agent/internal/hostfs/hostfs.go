@@ -13,6 +13,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // FS maps absolute host paths under Root. Root "" or "/" is the real filesystem.
@@ -33,6 +34,52 @@ func (f FS) IsReal() bool { return f.Root == "" || f.Root == "/" }
 
 // ReadFile reads a host file.
 func (f FS) ReadFile(p string) ([]byte, error) { return os.ReadFile(f.P(p)) }
+
+// Readlink returns the target of the symlink at host path p, as stored: an absolute target is a host path (the link
+// lives on the host, e.g. /proc/<pid>/cwd), not one under Root.
+func (f FS) Readlink(p string) (string, error) { return os.Readlink(f.P(p)) }
+
+// EvalSymlinks resolves every symlink in host path p (like filepath.EvalSymlinks) and returns the host path it
+// names: under a re-rooted FS an absolute link target is a host path too, resolved under Root.
+func (f FS) EvalSymlinks(p string) (string, error) {
+	if f.IsReal() {
+		return filepath.EvalSymlinks(filepath.Clean(p))
+	}
+	rest := strings.Split(filepath.Clean("/"+p), "/")
+	cur := "/"
+	for hops := 0; len(rest) > 0; {
+		name := rest[0]
+		rest = rest[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
+		}
+		next := filepath.Join(cur, name)
+		fi, err := os.Lstat(f.P(next))
+		if err != nil {
+			return "", err
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			cur = next
+			continue
+		}
+		if hops++; hops > 255 {
+			return "", fmt.Errorf("%s: too many levels of symbolic links", p)
+		}
+		target, err := os.Readlink(f.P(next))
+		if err != nil {
+			return "", err
+		}
+		if filepath.IsAbs(target) {
+			cur = "/"
+		}
+		rest = append(strings.Split(target, "/"), rest...)
+	}
+	return cur, nil
+}
 
 // Exists reports whether p exists (without following a final symlink).
 func (f FS) Exists(p string) bool {

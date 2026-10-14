@@ -88,7 +88,12 @@
           "unix_user": {
             "type": "string",
             "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
-            "description": "The site's own unix user (isolated sites only; a user several sites share is never sent, and the agent skips one claimed by several sites). A native site without a cgroup slice (falak-site_<slug>.slice) is measured as the sum of the processes this user owns (falak.workload.kind=user)"
+            "description": "The unix user a native site runs as (never sent for container runtimes). A native site without a cgroup slice (falak-site_<slug>.slice) is measured by this user's processes: all of them when the site is isolated and no other site claims the user (falak.workload.kind=user); otherwise those attributed to the site, by PHP-FPM pool title (falak-<slug>) else working directory under the sites root (falak.workload.kind=processes). Agents without the telemetry.workloads.shared feature get it for isolated sites only"
+          },
+          "isolated": {
+            "type": "boolean",
+            "default": false,
+            "description": "The site runs as a unix user of its own (feature telemetry.workloads.shared). Only an isolated site is measured by its whole user; a non-isolated site's user is the shared one (also the servers' login user)"
           },
           "runtime": {
             "type": "string",

@@ -42,3 +42,23 @@ it('strips machine-check decisions from provision.apply for agents without provi
         ->and(PayloadCompatibility::adapt('provision.apply', $plan(), ['provision.v2'])->components[0]->decision)->toBe('adopt')
         ->and(PayloadCompatibility::adapt('provision.apply', $plan(), [])->hostname)->toBe('app-1');
 });
+
+it('keeps a site\'s unix_user for agents without telemetry.workloads.shared only where the site is isolated', function () {
+    $configure = fn () => json_decode(json_encode(['sites' => [
+        ['slug' => 'iso', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'iso', 'isolated' => true],
+        ['slug' => 'blog', 'site_id' => '01JSQTE000000000000000000B', 'unix_user' => 'falak'],
+        ['slug' => 'odd', 'site_id' => '01JSQTE000000000000000000C', 'unix_user' => 'odd', 'isolated' => false],
+    ]]));
+
+    $old = PayloadCompatibility::adapt('telemetry.configure', $configure(), ['telemetry.workloads']);
+    $new = PayloadCompatibility::adapt('telemetry.configure', $configure(), ['telemetry.workloads', 'telemetry.workloads.shared']);
+
+    expect(json_decode(json_encode($old), true)['sites'])->toBe([
+        ['slug' => 'iso', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'iso'],
+        ['slug' => 'blog', 'site_id' => '01JSQTE000000000000000000B'],
+        ['slug' => 'odd', 'site_id' => '01JSQTE000000000000000000C'],
+    ])
+        ->and($new->sites[1]->unix_user)->toBe('falak')
+        ->and($new->sites[0]->isolated)->toBeTrue()
+        ->and(property_exists($new->sites[2], 'isolated'))->toBeTrue();
+});

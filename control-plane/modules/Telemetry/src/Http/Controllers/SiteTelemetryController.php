@@ -3,6 +3,8 @@
 namespace Falak\Telemetry\Http\Controllers;
 
 use Carbon\CarbonImmutable;
+use Falak\Fleet\Contracts\AgentDirectory;
+use Falak\Fleet\Contracts\Data\AgentInfo;
 use Falak\Identity\Contracts\CurrentOrganization;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
@@ -65,10 +67,12 @@ final class SiteTelemetryController extends Controller
      * processes, per service) against its limits and its servers, the servers' utilisation, and its traffic. Traffic
      * comes from span metrics when the site sends spans (`traffic_source: app`), else from its edge access log
      * (`edge`). `server` narrows everything to one of the site's servers. `shared_user`: a native site that is not
-     * isolated runs as the unix user every such site shares, so the agent cannot measure it per user (only a cgroup
-     * slice, when it has limits, measures it); without workload series the panel then says why.
+     * isolated runs as the unix user every such site shares; the agent attributes that user's processes per site (its
+     * PHP-FPM pool, its working directory), so without workload series yet the panel says its own usage has not
+     * arrived. `agent_outdated`: one of those servers runs an agent too old for that (no `telemetry.workloads.shared`),
+     * so the panel asks for its update instead.
      */
-    public function metrics(Request $request, string $siteId, MetricsBackend $metrics, LogMetrics $logMetrics): JsonResponse
+    public function metrics(Request $request, string $siteId, MetricsBackend $metrics, LogMetrics $logMetrics, AgentDirectory $agents): JsonResponse
     {
         $site = $this->site($request, $siteId);
         $input = $request->validate([
@@ -129,6 +133,10 @@ final class SiteTelemetryController extends Controller
             }
         }
 
+        $sharedUser = ! $site->runtime->usesDocker() && ! $site->isolated;
+        $agentOutdated = $sharedUser && collect($agents->forServers($server !== null ? [$server] : $serverIds))
+            ->contains(fn (AgentInfo $agent) => ! $agent->supports('telemetry.workloads.shared'));
+
         return response()->json([
             'range' => $range,
             'start' => $start->getTimestamp(),
@@ -138,7 +146,8 @@ final class SiteTelemetryController extends Controller
             'servers' => $this->serversOf($site),
             'runtime' => $site->runtime->value,
             'containers' => $site->runtime->usesDocker(),
-            'shared_user' => ! $site->runtime->usesDocker() && ! $site->isolated,
+            'shared_user' => $sharedUser,
+            'agent_outdated' => $agentOutdated,
             'traffic_source' => $source,
             'charts' => $charts,
             'errors' => (object) $errors,

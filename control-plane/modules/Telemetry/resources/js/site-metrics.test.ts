@@ -146,7 +146,10 @@ describe('memorySeries', () => {
 describe('unmeasuredNote', () => {
     it('says why only the server is shown', () => {
         expect(unmeasuredNote(true, true)).toBeNull();
-        expect(unmeasuredNote(false, true)).toBe('This site shares its system user with other sites, so only the server’s usage is shown.');
+        expect(unmeasuredNote(false, true)).toBe('No usage of this site’s own has arrived yet; the server’s is shown.');
+        expect(unmeasuredNote(false, true, true)).toBe('Update this server’s agent to see this site’s own usage; the server’s is shown.');
+        expect(unmeasuredNote(true, true, true)).toBeNull();
+        expect(unmeasuredNote(false, false, true)).toContain('once their agent is updated');
         expect(unmeasuredNote(false, false)).toContain('once their agent is updated');
     });
 });

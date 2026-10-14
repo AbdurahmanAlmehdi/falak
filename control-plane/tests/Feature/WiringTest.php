@@ -86,11 +86,15 @@ it('binds the real Sites implementations of Insights and Telemetry contracts', f
 
     $targets = app(ServerSites::class)->forServer($server->id);
     expect($targets)->toHaveCount(1)->and($targets[0]->slug)->toBe('shop')->and($targets[0]->siteId)->toBe($site->id)
-        // A non-isolated site runs as the shared user: no user of its own to measure it by.
-        ->and($targets[0]->unixUser)->toBeNull()->and($targets[0]->runtime)->toBe('frankenphp');
+        // A non-isolated site runs as the shared user: sent too, the agent attributes that user's processes per site.
+        ->and($targets[0]->unixUser)->toBe('falak')->and($targets[0]->isolated)->toBeFalse()->and($targets[0]->runtime)->toBe('frankenphp');
 
     $site->forceFill(['unix_user' => 'shop', 'isolated' => true])->save();
-    expect(app(ServerSites::class)->forServer($server->id)[0]->unixUser)->toBe('shop');
+    expect(app(ServerSites::class)->forServer($server->id)[0])->unixUser->toBe('shop')->isolated->toBeTrue();
+
+    // Docker sites are measured through their containers.
+    $site->forceFill(['runtime' => SiteRuntime::Docker, 'build_mode' => BuildMode::Docker])->save();
+    expect(app(ServerSites::class)->forServer($server->id)[0]->unixUser)->toBeNull();
 });
 
 it('sends the site list upper-case in telemetry.configure and resends it when sites change', function () {
@@ -101,7 +105,7 @@ it('sends the site list upper-case in telemetry.configure and resends it when si
     $site = wiring_site($organization->id, $server);
 
     app(TelemetryConfigurator::class)->reconfigure($server->id);
-    expect($agents->last('telemetry.configure')['payload']['sites'])->toBe([['slug' => 'shop', 'site_id' => strtoupper($site->id), 'runtime' => 'frankenphp']]);
+    expect($agents->last('telemetry.configure')['payload']['sites'])->toBe([['slug' => 'shop', 'site_id' => strtoupper($site->id), 'unix_user' => 'falak', 'runtime' => 'frankenphp']]);
 
     SiteDeleted::dispatch($site->id, $organization->id, 'shop', [$server->id]);
     expect($agents->dispatched('telemetry.configure'))->toHaveCount(2);
@@ -136,8 +140,8 @@ it('tails PHP sites\' shared log directories and labels records with the live re
     expect($payload['log_sources'])->toBe([
         ['path' => '/srv/falak/sites/shop/shared/storage/logs/*.log', 'site' => 'shop', 'kind' => 'app', 'multiline' => 'laravel'],
         ['path' => '/srv/falak/sites/symfony/shared/var/log/*.log', 'site' => 'symfony', 'kind' => 'app'],
-    ])->and($payload['sites'])->toContain(['slug' => 'shop', 'site_id' => strtoupper($site->id), 'deployment_id' => '01JDEP0000000000000000000A', 'release_id' => '01JRE00000000000000000000A', 'runtime' => 'frankenphp'])
-        ->and($payload['sites'])->toContain(['slug' => 'node', 'site_id' => strtoupper($node->id), 'runtime' => 'node']);
+    ])->and($payload['sites'])->toContain(['slug' => 'shop', 'site_id' => strtoupper($site->id), 'deployment_id' => '01JDEP0000000000000000000A', 'release_id' => '01JRE00000000000000000000A', 'unix_user' => 'falak', 'runtime' => 'frankenphp'])
+        ->and($payload['sites'])->toContain(['slug' => 'node', 'site_id' => strtoupper($node->id), 'unix_user' => 'falak', 'runtime' => 'node']);
 
     // An activation re-sends the configuration (new deployment / release ids).
     ReleaseActivated::dispatch('01jre00000000000000000000b', $organization->id, $site->id, '01jdep0000000000000000000b', null, null, [$server->id]);

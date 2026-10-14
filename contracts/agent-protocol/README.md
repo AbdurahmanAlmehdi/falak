@@ -34,10 +34,12 @@ Owned by the agent implementation; the control plane builds payloads against the
 ## Evolving payloads (features)
 Agents decode payloads strictly: an unknown field fails the command. A new **optional** field therefore needs a
 feature name: the agent lists it in `facts.features` (`agent/internal/version.Features`) and the control plane
-removes the field for agents that do not (`Fleet\Application\PayloadCompatibility::FIELDS`). When an agent reports
-a new version (`Fleet\Events\AgentVersionChanged`), modules re-send state they would otherwise deduplicate.
+removes the field for agents that do not (`Fleet\Application\PayloadCompatibility::FIELDS`; `UNLESS` keeps it only
+in the list items whose sibling flag is true). When an agent reports a new version (`Fleet\Events\AgentVersionChanged`),
+modules re-send state they would otherwise deduplicate.
 Current features: `edge.access_log`, `telemetry.log_kind`, `system.upgrade_agent.v2`, `fn.v1`, `fn.v2`, `fn.v3`,
-`compose.v2`, `docker.networks`, `docker.networks.create`, `compose.up.services`, `provision.v2`, `db.instances`.
+`compose.v2`, `docker.networks`, `docker.networks.create`, `compose.up.services`, `provision.v2`, `db.instances`,
+`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`.
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`

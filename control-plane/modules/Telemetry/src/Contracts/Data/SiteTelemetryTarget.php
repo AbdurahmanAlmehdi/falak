@@ -12,8 +12,10 @@ final readonly class SiteTelemetryTarget
      * stack traces into their record. The edge access logs are tailed without an entry.
      *
      * @param  list<array{path: string, service?: string, format?: 'plain'|'json', kind?: 'app'|'access', multiline?: 'laravel'}>  $logSources
-     * @param  ?string  $unixUser  the site's unix user: the agent sums the processes it owns when the site has no slice
+     * @param  ?string  $unixUser  the site's unix user: the agent sums the processes it owns when the site has no slice (a
+     *                             user several sites share: those it attributes to this site)
      * @param  ?string  $runtime  the site's runtime (Sites' SiteRuntime value, e.g. "php-fpm", "compose")
+     * @param  bool  $isolated  the site runs as a user of its own: only then is the user's every process the site's
      */
     public function __construct(
         public string $siteId,
@@ -24,5 +26,6 @@ final readonly class SiteTelemetryTarget
         public array $logSources = [],
         public ?string $unixUser = null,
         public ?string $runtime = null,
+        public bool $isolated = false,
     ) {}
 }

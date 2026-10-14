@@ -15,6 +15,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/docker"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 	"github.com/OthmanHaba/falak/agent/internal/otlp"
+	"github.com/OthmanHaba/falak/agent/internal/runtime"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -43,26 +44,33 @@ var containerRuntimes = map[string]bool{"docker": true, "compose": true, "functi
 
 // WorkloadCollector samples every workload on the server into falak.workload.* metrics (docs/plans/OBSERVABILITY.md,
 // phase 1): site and database containers and falak slices from their cgroup v2 directories, native sites without a
-// slice from their unix user's processes. One ResourceMetrics per owner: service.name = the site slug (enriched to
-// falak.site.id by the relay), "falak-db" with falak.db.instance.id, or "falak-agent" with falak.slice for a worker /
-// daemon slice. Data points carry falak.workload.kind (container | slice | user) and falak.workload.name.
+// slice from their unix user's processes (a user several sites share: each process attributed to one of them). One
+// ResourceMetrics per owner: service.name = the site slug (enriched to falak.site.id by the relay), "falak-db" with
+// falak.db.instance.id, or "falak-agent" with falak.slice for a worker / daemon slice. Data points carry
+// falak.workload.kind (container | slice | user | processes) and falak.workload.name.
 type WorkloadCollector struct {
 	// Socket, when set, is checked before each collection (Docker may be installed after the agent started).
 	Socket string
-	fs     hostfs.FS
-	engine ContainerEngine // nil: no Docker on this server, only slices and users
-	out    Emitter
-	now    func() time.Time
+	// SitesRoot is the host directory holding every native site's tree (/srv/falak/sites): a shared user's process
+	// working under <SitesRoot>/<slug>/ belongs to that site.
+	SitesRoot string
+	fs        hostfs.FS
+	engine    ContainerEngine // nil: no Docker on this server, only slices and users
+	out       Emitter
+	now       func() time.Time
 
 	enabled  atomic.Bool
 	interval atomic.Int64
 	wake     chan struct{}
 
-	mu    sync.Mutex
-	sites []otlp.Site
-	cts   map[string]*containerInfo // by container id, dropped when it is no longer listed
-	users map[int]*userCounter      // by uid
-	uids  map[string]int            // /etc/passwd as last read (kept when a read fails)
+	mu      sync.Mutex
+	sites   []otlp.Site
+	cts     map[string]*containerInfo // by container id, dropped when it is no longer listed
+	users   map[string]*userCounter   // by counter key: userKey (an isolated site's own user) or siteKey (a shared user's site)
+	origins map[int]procOrigin        // by pid: where a measured user's process comes from, read once per process
+	uids    map[string]int            // /etc/passwd as last read (kept when a read fails)
+	// rootResolved is SitesRoot (as rootOf, cleaned) with its symlinks resolved; "" until that succeeds.
+	rootOf, rootResolved string
 }
 
 // containerInfo is what the collector learns of a container once (one inspect): where its cgroup lives, its init pid
@@ -79,7 +87,7 @@ type containerInfo struct {
 // NewWorkloadCollector creates an enabled collector with a 15 s interval. engine may be nil (no Docker).
 func NewWorkloadCollector(fs hostfs.FS, engine ContainerEngine, out Emitter) *WorkloadCollector {
 	c := &WorkloadCollector{fs: fs, engine: engine, out: out, now: time.Now, wake: make(chan struct{}, 1),
-		cts: map[string]*containerInfo{}, users: map[int]*userCounter{}}
+		cts: map[string]*containerInfo{}, users: map[string]*userCounter{}, origins: map[int]procOrigin{}}
 	c.enabled.Store(true)
 	c.interval.Store(int64(15 * time.Second))
 	return c
@@ -220,31 +228,63 @@ func (c *WorkloadCollector) Collect(ctx context.Context) []*metricspb.ResourceMe
 	sites := c.sites
 	c.mu.Unlock()
 	all := owners{}
-	users := ownUsers(sites)
+	own, shared := nativeUsers(sites)
 	withContainers := c.collectContainers(ctx, all)
-	withSlice := c.collectSlices(sites, users, withContainers, all)
-	c.collectUsers(users, withContainers, withSlice, all)
+	withSlice := c.collectSlices(sites, own, shared, withContainers, all)
+	c.collectUsers(own, shared, withContainers, withSlice, all)
 	return c.encode(all)
 }
 
-// ownUsers maps each native site that has a unix user of its own to that user (slug => user). A user several sites
-// share (every non-isolated site runs as the same one) is nobody's: its processes are all those sites' together, so
-// none of them is measured per user (the panel then shows the server's usage only).
-func ownUsers(sites []otlp.Site) map[string]string {
-	claims := map[string]int{}
+// nativeUsers sorts the native sites' unix users. own maps an isolated site whose user no other site claims to it
+// (slug => user): all that user's processes are the site's. shared maps every other user to the sites that claim it
+// (user => slugs): its processes are attributed one by one (collectUsers). A non-isolated site's user is always
+// shared, even when it is the only site on the server: it is the user every such site runs as and the servers' login
+// user (admin sessions, other sites' deploy hooks), never the site's alone.
+func nativeUsers(sites []otlp.Site) (own map[string]string, shared map[string][]string) {
+	claims := map[string][]otlp.Site{}
 	for _, s := range sites {
-		if s.UnixUser != "" {
-			claims[s.UnixUser]++
+		if s.UnixUser != "" && !containerRuntimes[s.Runtime] {
+			claims[s.UnixUser] = append(claims[s.UnixUser], s)
 		}
 	}
-	out := map[string]string{}
-	for _, s := range sites {
-		if s.UnixUser != "" && claims[s.UnixUser] == 1 && !containerRuntimes[s.Runtime] {
-			out[s.Slug] = s.UnixUser
+	own, shared = map[string]string{}, map[string][]string{}
+	for user, ss := range claims {
+		if len(ss) == 1 && ss[0].Isolated {
+			own[ss[0].Slug] = user
+			continue
+		}
+		for _, s := range ss {
+			shared[user] = append(shared[user], s.Slug)
 		}
 	}
-	return out
+	return own, shared
 }
+
+// sitesRoots is SitesRoot as configured and, when it differs, the host path its symlinks resolve to (a /srv linked to
+// /data/srv: a process's cwd reads the resolved path). The resolution is kept, and tried again each pass until it
+// succeeds. Called with c.mu held.
+func (c *WorkloadCollector) sitesRoots() []string {
+	if c.SitesRoot == "" {
+		return nil
+	}
+	clean := path.Clean(c.SitesRoot)
+	if c.rootOf != clean {
+		c.rootOf, c.rootResolved = clean, ""
+	}
+	if c.rootResolved == "" {
+		if r, err := c.fs.EvalSymlinks(clean); err == nil {
+			c.rootResolved = path.Clean(r)
+		}
+	}
+	if c.rootResolved == "" || c.rootResolved == clean {
+		return []string{clean}
+	}
+	return []string{clean, c.rootResolved}
+}
+
+// Counter keys of the per-user pass.
+func userKey(uid int) string     { return "user/" + strconv.Itoa(uid) }
+func siteKey(slug string) string { return "site/" + slug }
 
 // collectContainers samples site and database containers; returns the slugs that have containers.
 func (c *WorkloadCollector) collectContainers(ctx context.Context, out owners) map[string]bool {
@@ -451,12 +491,21 @@ func (c *WorkloadCollector) sampleDockerStats(ctx context.Context, id string, in
 // collectSlices samples falak.slice's children; returns the slugs that have a site slice. A site_<key> slice whose
 // site is not (or no longer) configured is skipped: it has no slug to report under. An empty site slice (no process:
 // the slice exists but the site's processes still run outside it, e.g. until its PHP-FPM master restarts) is skipped
-// too when the site can be measured by its own unix user instead.
-func (c *WorkloadCollector) collectSlices(sites []otlp.Site, users map[string]string, withContainers map[string]bool, out owners) map[string]bool {
+// too when the site can be measured by its unix user's processes instead.
+func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]string, shared map[string][]string, withContainers map[string]bool, out owners) map[string]bool {
 	withSlice := map[string]bool{}
 	entries, err := os.ReadDir(c.fs.P(cgroup.CgroupRoot))
 	if err != nil {
 		return withSlice
+	}
+	byProcs := map[string]bool{}
+	for slug := range own {
+		byProcs[slug] = true
+	}
+	for _, slugs := range shared {
+		for _, slug := range slugs {
+			byProcs[slug] = true
+		}
 	}
 	byKey := make(map[string]string, len(sites))
 	for _, s := range sites {
@@ -489,7 +538,7 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, users map[string]st
 			continue
 		}
 		if slug != "" {
-			if s.HasPids && s.Pids == 0 && users[slug] != "" && !withContainers[slug] {
+			if s.HasPids && s.Pids == 0 && byProcs[slug] && !withContainers[slug] {
 				continue
 			}
 			withSlice[slug] = true
@@ -505,21 +554,31 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, users map[string]st
 	return withSlice
 }
 
-// collectUsers measures native sites that have neither containers nor a slice by their own unix user's processes
-// (users: ownUsers): one /proc pass for all of them, skipped entirely when there is none. No network (not attributable
-// per process without eBPF) and no limits (an unlimited site has none).
-func (c *WorkloadCollector) collectUsers(users map[string]string, withContainers, withSlice map[string]bool, out owners) {
+// collectUsers measures native sites that have neither containers nor a slice by their unix user's processes: all of
+// them for an isolated site's own user (kind "user"), those attributed to the site for a shared user (kind
+// "processes": its PHP-FPM pool, else its working directory, see readOrigin). Processes running in a container are
+// never counted, whatever their uid. One /proc pass for all of them, skipped entirely when there is none. No network
+// (not attributable per process without eBPF) and no limits (an unlimited site has none).
+func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[string][]string, withContainers, withSlice map[string]bool, out owners) {
+	measured := func(slug string) bool { return !withContainers[slug] && !withSlice[slug] }
 	type want struct{ slug, user string }
-	var wants []want
-	for slug, user := range users {
-		if withContainers[slug] || withSlice[slug] {
-			continue
+	var wantOwn, wantShared []want
+	for slug, user := range own {
+		if measured(slug) {
+			wantOwn = append(wantOwn, want{slug, user})
 		}
-		wants = append(wants, want{slug, user})
 	}
-	if len(wants) == 0 {
+	for user, slugs := range shared {
+		for _, slug := range slugs {
+			if measured(slug) {
+				wantShared = append(wantShared, want{slug, user})
+			}
+		}
+	}
+	if len(wantOwn)+len(wantShared) == 0 {
 		c.mu.Lock()
 		clear(c.users)
+		clear(c.origins)
 		c.mu.Unlock()
 		return
 	}
@@ -532,24 +591,90 @@ func (c *WorkloadCollector) collectUsers(users map[string]string, withContainers
 		c.uids = ids
 	}
 	c.mu.Unlock()
-	uids := map[int]bool{}
-	for _, w := range wants {
-		if uid, ok := ids[w.user]; ok && uid != 0 {
-			uids[uid] = true
+	uidOf := func(user string) (int, bool) {
+		uid, ok := ids[user]
+		return uid, ok && uid != 0
+	}
+	uids, wanted := map[int]bool{}, map[string]bool{}
+	for _, w := range wantOwn {
+		if uid, ok := uidOf(w.user); ok {
+			uids[uid], wanted[userKey(uid)] = true, true
+		}
+	}
+	// The sites a shared uid's processes can belong to (with a slice or not: a process of a site measured by its
+	// slice is that site's, never another's), and the PHP-FPM pool of each.
+	sharing := map[int]map[string]bool{}
+	pools := map[string]string{}
+	for user, slugs := range shared {
+		uid, ok := uidOf(user)
+		if !ok {
+			continue
+		}
+		sharing[uid] = map[string]bool{}
+		for _, slug := range slugs {
+			sharing[uid][slug] = true
+			pools[runtime.FPMPoolName(slug)] = slug
+		}
+	}
+	for _, w := range wantShared {
+		if uid, ok := uidOf(w.user); ok {
+			uids[uid], wanted[siteKey(w.slug)] = true, true
 		}
 	}
 	c.mu.Lock()
-	totals := scanUsers(c.fs, uids, c.users)
-	c.mu.Unlock()
-	for _, w := range wants {
-		uid, ok := ids[w.user]
-		if !ok || !uids[uid] {
-			continue
+	roots := c.sitesRoots()
+	seen := map[int]bool{}
+	owner := func(uid, pid int, start uint64) string {
+		seen[pid] = true
+		o, ok := c.origins[pid]
+		if !ok || o.start != start {
+			if o = readOrigin(c.fs, roots, pid, start); o.retry {
+				delete(c.origins, pid)
+			} else {
+				c.origins[pid] = o
+			}
 		}
-		t := totals[uid]
+		if o.container {
+			return ""
+		}
+		slugs := sharing[uid]
+		if slugs == nil {
+			return userKey(uid)
+		}
+		slug := o.dir
+		if o.pool != "" {
+			slug = pools[o.pool]
+		}
+		if !slugs[slug] {
+			return ""
+		}
+		return siteKey(slug)
+	}
+	totals := scanProcs(c.fs, uids, owner, wanted, c.users)
+	for pid := range c.origins {
+		if !seen[pid] {
+			delete(c.origins, pid)
+		}
+	}
+	c.mu.Unlock()
+	emit := func(w want, key, kind, name string) {
+		if !wanted[key] {
+			return
+		}
+		t := totals[key]
 		u := usage{has: hasCPU | hasMem | hasIO | hasPids, cpuSec: float64(t.cpuTicks) / userHZ, memUsed: t.rss,
 			read: int64(t.read), write: int64(t.write), pids: t.pids}
-		out.add("site/"+w.slug, []*commonpb.KeyValue{str("service.name", w.slug)}, point{attrs: workloadAttrs("user", w.user), u: u})
+		out.add("site/"+w.slug, []*commonpb.KeyValue{str("service.name", w.slug)}, point{attrs: workloadAttrs(kind, name), u: u})
+	}
+	for _, w := range wantOwn {
+		if uid, ok := uidOf(w.user); ok {
+			emit(w, userKey(uid), "user", w.user)
+		}
+	}
+	for _, w := range wantShared {
+		if _, ok := uidOf(w.user); ok {
+			emit(w, siteKey(w.slug), "processes", w.slug)
+		}
 	}
 }
 

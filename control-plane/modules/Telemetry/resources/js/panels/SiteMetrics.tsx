@@ -64,8 +64,10 @@ interface SiteMetricsResponse {
     servers: { id: string; name: string }[];
     runtime: string;
     containers: boolean;
-    /** A native site running as the unix user it shares with other sites: not measurable per user. */
+    /** A native site running as the unix user it shares with other sites: measured by the processes attributed to it. */
     shared_user?: boolean;
+    /** A shared-user site on a server whose agent cannot attribute that user's processes per site yet. */
+    agent_outdated?: boolean;
     /** Where requests / 5xx / p95 come from: span metrics ("app") or the edge access log ("edge"). */
     traffic_source: 'app' | 'edge';
     charts: Partial<Record<ChartKey, MetricSeriesDto[]>>;
@@ -222,7 +224,7 @@ export default function SiteMetrics({ siteId }: SiteMetricsProps) {
         { key: 'capacity', label: several ? 'Servers’ cores' : 'Server cores', color: CAPACITY, dashed: true },
     ];
     const memoryChartSeries = memorySeries({ rest: restLabel, limit: limitLabel, capacity: `${capacityLabel} memory` });
-    const note = data ? unmeasuredNote(measured, data.shared_user === true) : null;
+    const note = data ? unmeasuredNote(measured, data.shared_user === true, data.agent_outdated === true) : null;
     const throttledPeak = peak(throttled);
     const siteCores = latest(cpu, 'site');
     const siteMemory = latest(memory, 'used');

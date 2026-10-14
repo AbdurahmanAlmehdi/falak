@@ -20,8 +20,10 @@ use Falak\Volumes\Contracts\VolumeMounts;
  * Symfony's `var/log`) is tailed as the site's `app` logs, with Laravel's multi-line stack traces merged into their
  * record. Supervised programs, cron and containers are attributed by the agent itself; the edge's per-site access
  * logs are always tailed. The unix user and runtime let the agent measure a native site without a cgroup slice by the
- * processes its user owns; only an isolated site's user is sent, as every non-isolated site runs as the same shared
- * user (its processes are all of those sites together).
+ * processes its user owns: all of them for an isolated site's own user (`isolated`); for the user every non-isolated
+ * site shares, the agent attributes each process to one site (its PHP-FPM pool, else its working directory under the
+ * site's tree). Agents too old for that get the user of isolated sites only (Fleet's PayloadCompatibility).
+ * Sites running in Docker (containers, functions) are measured through their containers and get no user.
  */
 final class EloquentServerSites implements ServerSites
 {
@@ -44,8 +46,9 @@ final class EloquentServerSites implements ServerSites
                 $site->id,
                 $site->slug,
                 logSources: $this->logSources($site),
-                unixUser: $site->isolated ? $site->unix_user : null,
+                unixUser: $site->runtime->usesDocker() ? null : $site->unix_user,
                 runtime: $site->runtime->value,
+                isolated: (bool) $site->isolated,
             ))
             ->values()
             ->all();

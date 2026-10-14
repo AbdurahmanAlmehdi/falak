@@ -34,16 +34,37 @@ tables (30 days), alerts → Alerting events. No new service runs.
 | Database container (`falak.db.instance` label) | Same | Same |
 | Native site with limits (`falak-site_<slug>.slice`) | `/sys/fs/cgroup/falak.slice/falak-site_<slug>.slice`: its own PHP-FPM master, web process, Octane, Horizon | The slice's `cpu.max`, `memory.max`, `pids.max` |
 | Native isolated site without limits | Every process owned by the site's unix user (`/proc/<pid>/status` Uid): its pool in the shared PHP-FPM master, its programs, schedules, consoles | None (the chart shows the server's capacity instead) |
+| Native site sharing a unix user, without limits | The shared user's processes attributed to the site: its PHP-FPM pool workers by title (`php-fpm: pool falak-<slug>` in `/proc/<pid>/cmdline`), else its processes by working directory (`/proc/<pid>/cwd` under `<sites root>/<slug>/`): Horizon, workers, daemons, schedules, consoles | None |
 | Worker / daemon slice (`falak-worker_<id>.slice`, `falak-daemon_<id>.slice`) | Their slice directories | The slice's |
 
 Native sites are **not** moved into a slice to be measured: that would restart the PHP-FPM master of every unlimited
 site. The per-user sum covers the same processes. When a site has a slice, the slice wins (exact, and it carries the
 limits), unless the slice has no process yet (`pids.current` 0: the site still runs outside it), then its user does.
 
-Only an isolated site has a unix user of its own: every non-isolated site runs as the shared `falak` user, so the
-control plane sends `unix_user` for isolated sites only, and the agent also skips a user claimed by several sites.
-A non-isolated native site without a slice is therefore not measured; its Metrics tab shows the server's usage and
-says why (`shared_user` in the response).
+Only an isolated site has a unix user of its own: every non-isolated site runs as the shared `falak` user, which is
+also the servers' login user (admin SSH sessions, tmux, the deploy hooks of Docker sites run as it). The control plane
+sends `unix_user` for every native site (not for Docker, compose and function sites) and `isolated: true` for an
+isolated one. Only an isolated site whose user no other site claims is measured whole (`falak.workload.kind` `user`);
+every other user, including the user of a non-isolated site that is the only site on its server, is attributed
+process by process (`processes`, `falak.workload.name` = the slug). Only that user's processes are read further:
+argv[0] of `cmdline` names the PHP-FPM pool (`runtime.FPMPoolName` of the slug, as in the pool file; the shared master
+runs as root and is never counted), else `cwd` is matched against the agent's sites root by whole path segment (`shop`
+does not take `shop2`'s processes; a removed release's `(deleted)` suffix is ignored), both as configured and as its
+symlinks resolve on the host (a `/srv` linked to `/data/srv`; resolved once, retried each pass until it succeeds).
+The answer is cached per pid and start time, except for a process titled `php-fpm: …` but not with a pool (a worker
+the master just forked, before it titles itself), which is read again next pass. A process of the shared user that
+matches neither (SSH sessions, `systemd --user`) counts for no site. The counters work as the per-user ones (below),
+one per site. A site with a slice is measured by it, and its processes count for no other site.
+
+In both modes a process running in a container (its `/proc/<pid>/cgroup` holds `/docker/`, `docker-`, `containerd`,
+`kubepods` or `libpod`) is skipped whatever its uid: a container's processes may run as a site user's uid. That check
+is cached with the attribution.
+
+Per-process attribution needs the agent feature `telemetry.workloads.shared`. Agents without it (v0.14.0) measure a
+site with a `unix_user` by its whole user, so Fleet's `PayloadCompatibility::UNLESS` sends them `unix_user` only where
+`isolated` is true (and strips `isolated`): exactly what they got before. Until a shared-user site's series arrive,
+its Metrics tab shows the server's usage and says so (`shared_user` in the response); when one of its servers' agents
+lacks the feature (`agent_outdated`), it asks for that agent's update instead.
 
 ### Reading cgroup v2
 
@@ -81,8 +102,9 @@ user → uid map (and the counters).
 
 One resource per workload, `service.name` = the site slug (enriched to `falak.site.id` by the relay as today), or
 `falak-db` with `falak.db.instance.id` for databases, or `falak-agent` with `falak.slice` for worker / daemon slices.
-Data point attributes: `falak.workload.kind` (`container` | `slice` | `user`), `falak.workload.name` (container
-name, slice key or unix user), `falak.compose.service` (compose), `container.id` (containers). Workload resources
+Data point attributes: `falak.workload.kind` (`container` | `slice` | `user` | `processes`), `falak.workload.name`
+(container name, slice key, unix user or, for `processes`, the site slug), `falak.compose.service` (compose),
+`container.id` (containers). Workload resources
 (scope `falak-agent/workloads`) get no `falak.deployment.id` / `falak.release.id`: they describe the site's processes,
 not a release, and a deployment must not split every workload series (which would double `sum(rate())` while the old
 and new series are both in the window).
@@ -112,9 +134,10 @@ network series; the panel shows the server's.
 
 ### telemetry.configure
 
-`sites[]` entries gain `unix_user` and `runtime` (additive; agents without them skip the per-user collector). The
-schema in `contracts/agent-protocol/commands/telemetry.configure.schema.json` is updated. A Docker / compose site
-needs neither: its containers are labelled.
+`sites[]` entries gain `unix_user` and `runtime` (additive, feature `telemetry.workloads`; agents without them skip
+the per-user collector), then `isolated` and `unix_user` for non-isolated sites (feature `telemetry.workloads.shared`,
+see above). The schema in `contracts/agent-protocol/commands/telemetry.configure.schema.json` is updated. A Docker /
+compose site needs neither: its containers are labelled.
 
 ### Requests without the APM package
 

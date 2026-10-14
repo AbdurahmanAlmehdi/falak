@@ -84,6 +84,7 @@ type Options struct {
 	ServerID     string
 	HostName     string
 	DockerSocket string
+	SitesRoot    string // host directory of the native sites' trees: attributes a shared user's processes to sites
 	Insights     interface {
 		PostInsights(ctx context.Context, ndjson []byte) error
 	}
@@ -144,6 +145,7 @@ func New(opts Options) (*Service, error) {
 	}
 	s.workloads = metrics.NewWorkloadCollector(opts.FS, engine, relay)
 	s.workloads.Socket = opts.DockerSocket
+	s.workloads.SitesRoot = opts.SitesRoot
 	// Persisted configuration from a previous telemetry.configure.
 	if b, err := opts.FS.ReadFile(s.configPath()); err == nil {
 		var p Payload

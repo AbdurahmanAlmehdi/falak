@@ -235,7 +235,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	tel, err := telemetry.New(telemetry.Options{
 		FS: fs, EtcDir: cfg.EtcDir, StateDir: cfg.StateDir, UnixSocket: cfg.OTLPSocket, HTTPAddr: cfg.OTLPHTTP,
 		Endpoint: id.State.Endpoints.OTLP, ServerID: id.State.AgentID, HostName: host, DockerSocket: cfg.DockerSock,
-		Insights: client, Logger: log.With("component", "telemetry"),
+		SitesRoot: cfg.SitesRoot, Insights: client, Logger: log.With("component", "telemetry"),
 	})
 	if err != nil {
 		return err

@@ -41,7 +41,7 @@ it('strips optional fields an agent does not list in its features', function () 
 
 it('keeps them for agents that support the feature', function () {
     $serverId = strtolower((string) Str::ulid());
-    fleet_enroll($this->organization->id, $serverId, ['features' => ['edge.access_log', 'telemetry.log_kind', 'telemetry.workloads']]);
+    fleet_enroll($this->organization->id, $serverId, ['features' => ['edge.access_log', 'telemetry.log_kind', 'telemetry.workloads', 'telemetry.workloads.shared']]);
 
     $handle = app(AgentGateway::class)->dispatch($serverId, 'edge.caddy.apply', compat_payload());
     expect(json_decode(Command::query()->findOrFail($handle->id)->payload, true)['sites'][0]['access_log'])->toBe('shop');
