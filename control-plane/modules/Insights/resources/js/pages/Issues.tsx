@@ -244,6 +244,7 @@ export default function Issues({ issues, filters, counts, members, sites, priori
                             { value: 'exception', label: 'Exceptions' },
                             { value: 'performance', label: 'Performance' },
                             { value: 'heartbeat', label: 'Scheduled tasks' },
+                            { value: 'database', label: 'Databases' },
                         ]}
                     />
                     <Select

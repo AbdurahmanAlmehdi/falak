@@ -139,6 +139,10 @@
             }
           }
         },
+        "query_insights": {
+          "type": "boolean",
+          "description": "agent feature db.observability: top queries need a restart to be collected (PostgreSQL pg_stat_statements in shared_preload_libraries, MariaDB performance_schema). Written to /etc/falak/db/<id>/conf/query-insights.json, read by falak-db v0.16.0+ at start (older images ignore it). A running container is restarted for a change only with apply_query_insights (db.instance.update); otherwise it applies at the next restart. MariaDB needs 1 GiB of memory; MySQL and Redis / Valkey ignore it"
+        },
         "pitr": {
           "type": "object",
           "additionalProperties": false,

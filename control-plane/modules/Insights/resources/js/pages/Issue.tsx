@@ -570,10 +570,13 @@ export default function Issue({ issue, occurrences, timeline, monitor, activity,
                             </div>
                         </Block>
                     )}
-                    {issue.meta && issue.kind === 'heartbeat' && (
+                    {issue.meta && (issue.kind === 'heartbeat' || issue.kind === 'database') && (
                         <Block title="Context">
                             <div className="p-3">
-                                <CodeBlock code={JSON.stringify(issue.meta, null, 2)} maxHeight={200} />
+                                <CodeBlock
+                                    code={JSON.stringify(issue.kind === 'database' ? { ...issue.meta, ...issue.sample } : issue.meta, null, 2)}
+                                    maxHeight={issue.kind === 'database' ? 400 : 200}
+                                />
                             </div>
                         </Block>
                     )}

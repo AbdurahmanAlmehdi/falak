@@ -3,6 +3,7 @@
 namespace Falak\Databases\Application\Actions;
 
 use Falak\Databases\Application\InstancePorts;
+use Falak\Databases\Application\QueryInsights;
 use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Identity\Contracts\AuditLog;
@@ -32,6 +33,7 @@ final class UpgradeInstance
         private readonly ServiceVolumes $volumes,
         private readonly InstancePorts $ports,
         private readonly AuditLog $audit,
+        private readonly QueryInsights $queryInsights,
     ) {}
 
     /**
@@ -81,6 +83,8 @@ final class UpgradeInstance
             $target->forceFill([
                 ...collect($instance->getAttributes())->only(['organization_id', 'server_id', 'server_name', 'environment_id', 'name', 'engine', 'port', 'public_access', 'require_tls', 'memory_bytes', 'cpus', 'pitr_enabled', 'pitr_storage_provider_id', 'pitr_encryption_mode', 'pitr_age_recipient', 'pitr_window_days', 'pitr_base_interval_days'])->all(),
                 'settings' => $instance->settings,
+                // The new container starts with it (no restart of a running one): kept where it still applies.
+                'query_insights' => $instance->query_insights && $this->queryInsights->forNewInstance($engine, (int) $instance->memory_bytes, $instance->server_id),
                 'root_password' => $instance->root_password,
                 'version' => $version,
                 'image' => $engine->image($version),

@@ -61,6 +61,9 @@ final class CommandPayloads
                 'publish' => $publish !== [] ? $publish : null,
                 'tls' => $tls,
                 // The agent ships the spool of SQL instances with point-in-time recovery on (and empties it otherwise).
+                // Top queries (pg_stat_statements / MariaDB performance_schema) need a restart: omitted unless on, so
+                // instances that never had it keep the same spec (agent feature db.observability).
+                'query_insights' => $instance->query_insights ? true : null,
                 'pitr' => $instance->supportsPitr() ? ['enabled' => $instance->pitr_enabled && $instance->pitr_storage_provider_id !== null] : null,
             ], fn ($value) => $value !== null),
             'password' => $instance->root_password,

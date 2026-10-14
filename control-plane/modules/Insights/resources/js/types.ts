@@ -1,4 +1,4 @@
-export type IssueKind = 'exception' | 'performance' | 'heartbeat';
+export type IssueKind = 'exception' | 'performance' | 'heartbeat' | 'database';
 export type IssueStatus = 'open' | 'resolved' | 'ignored';
 export type IssuePriority = 'none' | 'low' | 'medium' | 'high' | 'urgent';
 

@@ -34,6 +34,9 @@ type InstanceSpec struct {
 	TLS     *TLS     `json:"tls,omitempty"`
 	// PITR: the spool is shipped (point-in-time recovery). Not part of the container: changing it touches nothing.
 	PITR *PITRSpec `json:"pitr,omitempty"`
+	// QueryInsights (feature db.observability) loads what top queries need (pg_stat_statements, MariaDB
+	// performance_schema): a file next to the settings, read by falak-db at start. Changing it restarts the engine.
+	QueryInsights bool `json:"query_insights,omitempty"`
 }
 
 // Publish is where else the engine's port is published: private / WireGuard addresses, or every address when Public.
@@ -224,7 +227,7 @@ func repository(ref string) string {
 // The password lives in the secrets directory (db.instance.password rotates it).
 func (s InstanceSpec) hash() string {
 	q := s
-	q.TLS, q.Settings, q.MemoryBytes, q.CPUs, q.PITR = nil, nil, 0, 0, nil
+	q.TLS, q.Settings, q.MemoryBytes, q.CPUs, q.PITR, q.QueryInsights = nil, nil, 0, 0, nil, false
 	if s.Publish != nil {
 		p := *s.Publish
 		p.AllowedSources = nil

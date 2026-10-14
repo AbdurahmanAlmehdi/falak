@@ -199,6 +199,7 @@ func (d *Docker) follow(ctx context.Context, c containerSummary) {
 		d.mu.Unlock()
 	}
 	backoff := time.Second
+	filter := dbLineFilter(c.Labels) // PostgreSQL: no SQL text or values (dbredact.go)
 	for ctx.Err() == nil {
 		err := d.stream(ctx, c.ID, func(stream string, ts time.Time, line string) {
 			d.mu.Lock()
@@ -206,6 +207,12 @@ func (d *Docker) follow(ctx context.Context, c containerSummary) {
 				d.since[c.ID] = ts
 			}
 			d.mu.Unlock()
+			if filter != nil {
+				var keep bool
+				if line, keep = filter(line); !keep {
+					return
+				}
+			}
 			rec := ParseLine([]byte(line), "")
 			rec.Time = ts
 			rec.Site, rec.Service = site, service
@@ -215,6 +222,10 @@ func (d *Docker) follow(ctx context.Context, c containerSummary) {
 			rec.Attrs["container.id"] = c.ID
 			rec.Attrs["container.name"] = name
 			rec.Attrs["log.iostream"] = stream
+			// Database containers (docs/plans/OBSERVABILITY.md phase 3): the engine's log, queryable per instance.
+			if inst := c.Labels["falak.db.instance"]; inst != "" {
+				rec.Kind, rec.Attrs["falak.db.instance.id"] = "db.engine", inst
+			}
 			if composeService != "" {
 				rec.Attrs["falak.compose.service"] = composeService
 				if r := c.Labels["falak.release"]; r != "" {

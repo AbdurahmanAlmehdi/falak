@@ -59,6 +59,9 @@ var Features = []string{
 	"logs.container_files",
 	// runtime.fpm.pool slowlog_timeout (the pool's slow log, /var/log/falak/php-fpm-slow/<pool>.log).
 	"runtime.fpm.slowlog",
+	// Database observability (docs/plans/OBSERVABILITY.md phase 3): db.instance.create|update instance.query_insights,
+	// and the db.observed request (engine metrics, slow queries, top statements).
+	"db.observability",
 }
 
 var (

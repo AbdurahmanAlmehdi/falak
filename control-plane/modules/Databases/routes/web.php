@@ -4,6 +4,7 @@ use Falak\Databases\Http\Controllers\BackupController;
 use Falak\Databases\Http\Controllers\BackupScheduleController;
 use Falak\Databases\Http\Controllers\DatabaseController;
 use Falak\Databases\Http\Controllers\DatabaseInstanceController;
+use Falak\Databases\Http\Controllers\DatabaseObservabilityController;
 use Falak\Databases\Http\Controllers\DatabasePanelController;
 use Falak\Databases\Http\Controllers\DatabaseUserController;
 use Falak\Databases\Http\Controllers\PitrController;
@@ -27,6 +28,11 @@ Route::middleware(['auth', 'org'])->prefix('databases')->name('databases.')->gro
     Route::post('instances/{instance}/network', [DatabaseInstanceController::class, 'network'])->name('instances.network');
     Route::post('instances/{instance}/upgrade', [DatabaseInstanceController::class, 'upgrade'])->name('instances.upgrade');
     Route::post('instances/{instance}/password', [DatabaseInstanceController::class, 'password'])->name('instances.password');
+    // Metrics, Logs and Insights tabs (docs/plans/OBSERVABILITY.md phase 3), JSON.
+    Route::get('instances/{instance}/metrics/data', [DatabaseObservabilityController::class, 'metrics'])->name('instances.metrics');
+    Route::get('instances/{instance}/logs/data', [DatabaseObservabilityController::class, 'logs'])->name('instances.logs');
+    Route::get('instances/{instance}/insights', [DatabaseObservabilityController::class, 'insights'])->name('instances.insights');
+    Route::post('instances/{instance}/query-insights', [DatabaseObservabilityController::class, 'enableQueryInsights'])->middleware('throttle:10,1')->name('instances.query-insights');
     Route::delete('instances/{instance}', [DatabaseInstanceController::class, 'destroy'])->name('instances.destroy');
     Route::post('instances/{instance}/databases', [DatabaseController::class, 'store'])->name('databases.store');
     Route::post('instances/{instance}/users', [DatabaseUserController::class, 'store'])->name('users.store');

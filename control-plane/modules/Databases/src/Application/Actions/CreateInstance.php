@@ -7,6 +7,7 @@ use Falak\Databases\Application\Identifiers;
 use Falak\Databases\Application\InstanceCertificates;
 use Falak\Databases\Application\InstancePorts;
 use Falak\Databases\Application\Passwords;
+use Falak\Databases\Application\QueryInsights;
 use Falak\Databases\Domain\Enums\Engine;
 use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Enums\ResourceStatus;
@@ -46,6 +47,7 @@ final class CreateInstance
         private readonly InstanceCertificates $certificates,
         private readonly ProjectDirectory $projects,
         private readonly AuditLog $audit,
+        private readonly QueryInsights $queryInsights,
     ) {}
 
     /**
@@ -106,7 +108,9 @@ final class CreateInstance
             Identifiers::assertValid($engine, $username, 'username', 'username');
         }
 
-        $instance = DB::transaction(function () use ($organizationId, $server, $engine, $version, $name, $memory, $disk, $settings, $data, $databaseName, $username, $actorId, $sources, $public) {
+        $queryInsights = $this->queryInsights->forNewInstance($engine, $memory, $server->id);
+
+        $instance = DB::transaction(function () use ($organizationId, $server, $engine, $version, $name, $memory, $disk, $settings, $data, $databaseName, $username, $actorId, $sources, $public, $queryInsights) {
             // Serializes port allocation on the server.
             DatabaseInstance::query()->where('server_id', $server->id)->lockForUpdate()->get(['id']);
 
@@ -133,6 +137,10 @@ final class CreateInstance
                 'require_tls' => $public || (bool) ($data['require_tls'] ?? false),
                 'allowed_sources' => $sources !== [] ? $sources : null,
                 'root_password' => Passwords::generate(),
+                // New instances start with query insights (it loads at their first start, so no restart): PostgreSQL
+                // pg_stat_statements, MariaDB performance_schema from 1 GiB, only through an agent that passes it on.
+                // MySQL has performance_schema from 1 GiB; Redis / Valkey always have SLOWLOG.
+                'query_insights' => $queryInsights,
                 'status' => InstanceStatus::Pending,
                 'created_by' => $actorId,
                 ...$this->pitrDefaults($organizationId, $engine, $data['environment_id'] ?? null),

@@ -4,7 +4,7 @@
 #   images/db/test.sh <engine> <version>          # build (images/db/build.sh), then test
 #   IMAGE=falak-postgres:17-ci images/db/test.sh postgres 17   # test an image that is already loaded
 #   SKIP_PITR=1 images/db/test.sh mysql 8.4       # skip physical backup + point-in-time recovery
-#   ONLY_STATS=1 images/db/test.sh redis 8         # start, healthcheck and `falak-db stats` only
+#   ONLY_STATS=1 images/db/test.sh redis 8         # start, healthcheck, `falak-db stats` and `observe` only
 #
 # Checks: start with *_FILE secrets and a TLS certificate, healthcheck, config tuned to the memory limit, TLS
 # served, create a database, logical backup + restore, WAL archiving into the spool (postgres) or binlog rotation and
@@ -144,7 +144,10 @@ volume "$id-spool"
 c="$id-1"
 
 step "start ($IMAGE)"
-start "$c" "$id-data"
+# PostgreSQL starts with query insights (pg_stat_statements preloaded), as new instances do.
+qi_env=()
+[ "$engine" = postgres ] && qi_env=(-e FALAK_DB_QUERY_INSIGHTS=1)
+start "$c" "$id-data" ${qi_env[@]+"${qi_env[@]}"}
 wait_healthy "$c"
 docker exec "$c" falak-db health | jq -e '.status == "healthy"' >/dev/null || fail "health JSON"
 docker exec "$c" falak-db version | jq -e ".engine == \"$engine\"" >/dev/null || fail "version JSON"
@@ -160,6 +163,42 @@ echo "$stats" | jq -e '(.connections | type == "number") and .connections >= 0 a
 case "$engine" in
 mysql | mariadb) echo "performance_schema: $(sql "$c" mysql 'SELECT @@performance_schema')" ;; # 0 below 1 GiB: stats must not need it
 esac
+
+step "observe (engine metrics, slow queries, query insights)"
+obs=$(docker exec "$c" falak-db observe --detail) || fail "falak-db observe failed"
+echo "$obs" | jq -c '{version, query_insights, gauges, warnings}'
+echo "$obs" | jq -e '(.counters | length) > 0 and .gauges.max_connections > 0 and .gauges.connections >= 0 and .cursor.started == true and (.features | index("observe"))' >/dev/null ||
+	fail "observe JSON: $obs"
+cursor=$(echo "$obs" | jq -c .cursor)
+case "$engine" in
+postgres)
+	echo "$obs" | jq -e '.query_insights.status == "on" and (.databases | length) > 0 and .settings.shared_buffers_bytes > 0' >/dev/null ||
+		fail "postgres observe: $obs"
+	expect "pg_stat_statements" "$(sql "$c" postgres "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")" 1
+	;;
+mysql | mariadb)
+	sql "$c" mysql "SELECT SLEEP(1.2), 'secret-literal'" >/dev/null
+	obs=$(docker exec "$c" falak-db observe --cursor "$cursor") || fail "falak-db observe --cursor failed"
+	echo "$obs" | jq -c '.slow'
+	echo "$obs" | jq -e '[.slow[] | select(.query | startswith("SELECT SLEEP(?), ?"))] | length == 1' >/dev/null || fail "slow log entry: $obs"
+	echo "$obs" | grep -q secret-literal && fail "a literal reached the observation"
+	echo "$obs" | jq -e '.counters.slow_queries >= 1 and .counters.cache_hits >= 0' >/dev/null || fail "mysql counters: $obs"
+	;;
+redis | valkey)
+	kv "$c" EVAL 'local i = 0 while i < 3000000 do i = i + 1 end return i' 0 >/dev/null
+	obs=$(docker exec "$c" falak-db observe --cursor "$cursor") || fail "falak-db observe --cursor failed"
+	echo "$obs" | jq -c '.slow'
+	echo "$obs" | jq -e '[.slow[] | select(.query | startswith("EVAL"))] | length >= 1' >/dev/null || fail "SLOWLOG entry: $obs"
+	echo "$obs" | grep -q '3000000' && fail "an argument reached the observation"
+	echo "$obs" | jq -e '.gauges.used_memory > 0 and .gauges.maxmemory > 0 and .labels.maxmemory_policy == "noeviction"' >/dev/null || fail "kv gauges: $obs"
+	;;
+esac
+case "$engine" in
+postgres | mysql | mariadb)
+	docker exec "$c" falak-db reload | jq -e '.reloaded == true' >/dev/null || fail "falak-db reload"
+	;;
+esac
+
 if [ -n "${ONLY_STATS:-}" ]; then
 	echo "ok: stats only"
 	exit 0

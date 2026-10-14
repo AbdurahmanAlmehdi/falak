@@ -39,7 +39,7 @@ in the list items whose sibling flag is true). When an agent reports a new versi
 modules re-send state they would otherwise deduplicate.
 Current features: `edge.access_log`, `telemetry.log_kind`, `system.upgrade_agent.v2`, `fn.v1`, `fn.v2`, `fn.v3`,
 `compose.v2`, `docker.networks`, `docker.networks.create`, `compose.up.services`, `provision.v2`, `db.instances`,
-`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`.
+`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`, `db.observability`.
 Logs (docs/plans/OBSERVABILITY.md phase 2): `logs.container_files` (telemetry.configure `log_sources[]` `container`,
 `compose_service`, `multiline_pattern`, `origin`; container sources are removed whole for older agents,
 `PayloadCompatibility::DROP`), `runtime.fpm.slowlog` (runtime.fpm.pool `slowlog_timeout`).
@@ -142,6 +142,15 @@ have their spool shipped by the agent (`agent/internal/db/pitr.go`, docs/BACKUPS
   and fully verified before use; `segments.*.encryption.key` and `identity` forgotten when it settled), recovered to
   `target_time`, read-only, with row counts. `db.pitr.promote`: `readonly off`, and with `stop` the replaced instance
   stops.
+
+## Database observability (v0.16.0)
+Agents with `db.observability` run `falak-db observe` in every running database container once a minute
+(docs/plans/OBSERVABILITY.md phase 3) and send `db.observed` (`{instances: [{id, engine, at, window_s, gauges, deltas,
+errors, statements, …}]}` → `{accepted}`), one request per server; query text in it is normalized. Control planes
+without the type answer 404 and the agent keeps the metrics and logs only. `db.instance.create|update`
+`instance.query_insights` writes `/etc/falak/db/<id>/conf/query-insights.json` (pg_stat_statements / MariaDB
+performance_schema at the next start; a running container restarts for a change only when the update carries `apply_query_insights`, the user's action). A settings change that only moves
+`slow_query_ms` runs `falak-db reload` instead of a restart (SQL engines; an image without it is restarted).
 
 ## Secrets on servers (v0.10.0)
 **Env files on tmpfs.** `deploy.prepare` writes `env_file` to `/run/falak/env/<site>.env` (directory 0711 root, file

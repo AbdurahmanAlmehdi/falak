@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/requests/db.observed.schema.json",
+  "title": "POST /agent/v1/requests/db.observed — what `falak-db observe` found in the server's database containers in the last minute (docs/plans/OBSERVABILITY.md phase 3). Query text is normalized (no literals); Redis commands keep their name and key count only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "instances"
+  ],
+  "properties": {
+    "instances": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/instance"
+      }
+    }
+  },
+  "$defs": {
+    "reply": {
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "number_map": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "string_map": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 200
+      }
+    },
+    "instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "engine",
+        "at",
+        "window_s"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-z]{26}$"
+        },
+        "engine": {
+          "enum": [
+            "postgres",
+            "mysql",
+            "mariadb",
+            "redis",
+            "valkey"
+          ]
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "window_s": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "Seconds the deltas cover (0: the first call since the agent started; deltas are empty)."
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "The engine's version string."
+        },
+        "query_insights": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "on",
+                "off",
+                "unavailable"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 300
+            }
+          }
+        },
+        "gauges": {
+          "$ref": "#/$defs/number_map",
+          "description": "connections, connections_<state>, max_connections, locks_waiting, replication_lag_s, used_memory, maxmemory, blocked_clients, keys, …"
+        },
+        "deltas": {
+          "$ref": "#/$defs/number_map",
+          "description": "Counter increases over window_s: slow_queries, deadlocks, cache_hits, cache_misses, transactions, queries, aborted_connects, evicted_keys, oom_kills, …"
+        },
+        "labels": {
+          "$ref": "#/$defs/string_map",
+          "description": "role (primary | replica), maxmemory_policy"
+        },
+        "settings": {
+          "$ref": "#/$defs/number_map",
+          "description": "shared_buffers_bytes, innodb_buffer_pool_bytes, max_connections, slow_query_ms, maxmemory_bytes, uptime_s, stats_age_s"
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "used_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "0: no limit"
+            }
+          }
+        },
+        "errors": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "count"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "deadlock",
+                  "too_many_connections",
+                  "auth_failed",
+                  "oom",
+                  "replication",
+                  "disk_full",
+                  "crash"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 300
+              }
+            }
+          }
+        },
+        "statements": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fingerprint",
+              "query",
+              "calls",
+              "total_ms",
+              "source"
+            ],
+            "properties": {
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^[a-z]+:[A-Za-z0-9_:.-]{1,100}$",
+                "description": "pg:<queryid>, my:<digest>, sql:<hash of the normalized text>, cmd:<NAME>:<keys>"
+              },
+              "database": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "query": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "calls": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "max_ms": {
+                "type": "number",
+                "minimum": 0
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "no_index": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "mysql/mariadb: executions that used no index"
+              },
+              "source": {
+                "enum": [
+                  "pg_stat_statements",
+                  "digest",
+                  "slowlog"
+                ]
+              }
+            }
+          }
+        },
+        "databases": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "keys": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "tables": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "database",
+              "name"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "schema": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rows": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "seq_scan": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "seq_tup_read": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "idx_scan": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "indexes": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "database",
+              "table",
+              "name"
+            ],
+            "properties": {
+              "database": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "schema": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "table": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 128
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "scans": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

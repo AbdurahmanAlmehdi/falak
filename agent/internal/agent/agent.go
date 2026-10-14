@@ -332,6 +332,11 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	shipper := comps.DB.NewShipper(client)
 	loops.Add(1)
 	go func() { defer loops.Done(); shipper.Run(runCtx) }()
+	// Database observability: engine metrics, slow queries and the db.observed report (docs/plans/OBSERVABILITY.md
+	// phase 3).
+	observer := comps.DB.NewObserver(client, tel.Sink(), tel.Relay())
+	loops.Add(1)
+	go func() { defer loops.Done(); observer.Run(runCtx) }()
 	loops.Add(1)
 	go func() {
 		defer loops.Done()

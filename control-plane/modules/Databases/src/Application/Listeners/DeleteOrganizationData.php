@@ -10,6 +10,7 @@ use Falak\Databases\Domain\Models\PitrSegment;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Identity\Events\OrganizationDeleted;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Tenant cleanup. Objects already uploaded to the organization's buckets are left in place.
@@ -24,5 +25,7 @@ final class DeleteOrganizationData implements ShouldQueue
         PitrSegment::query()->where('organization_id', $event->organizationId)->delete();
         PitrGap::query()->where('organization_id', $event->organizationId)->delete();
         StorageProvider::query()->where('organization_id', $event->organizationId)->delete();
+        // Query shapes (their hourly stats and size samples go with the daily prune of what deleted instances left).
+        DB::table('databases_query_shapes')->where('organization_id', $event->organizationId)->delete();
     }
 }

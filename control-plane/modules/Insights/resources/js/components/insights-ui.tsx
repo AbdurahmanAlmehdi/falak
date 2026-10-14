@@ -5,7 +5,7 @@ import { StatusBadge } from '@/components/falak/status';
 import { Tag } from '@/components/falak/tag';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNowStrict } from 'date-fns';
-import { ChevronDown, ChevronRight, Gauge, HeartPulse, OctagonAlert, SignalHigh, SignalLow, SignalMedium, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight, Database, Gauge, HeartPulse, OctagonAlert, SignalHigh, SignalLow, SignalMedium, Zap } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
 import { type Frame, type IssueKind, type IssuePriority, type IssueStatus } from '../types';
 
@@ -51,6 +51,7 @@ export const KIND: Record<IssueKind, { label: string; icon: typeof Zap }> = {
     exception: { label: 'Exception', icon: Zap },
     performance: { label: 'Performance', icon: Gauge },
     heartbeat: { label: 'Scheduled task', icon: HeartPulse },
+    database: { label: 'Database', icon: Database },
 };
 
 export function IssueKindTag({ kind }: { kind: IssueKind }) {

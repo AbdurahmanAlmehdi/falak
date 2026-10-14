@@ -75,6 +75,26 @@ return [
     'connections_alert_percent' => 80,
     'connections_alert_seconds' => 300,
 
+    // What the agent's `falak-db observe` reports once a minute (db.observed, docs/plans/OBSERVABILITY.md phase 3).
+    'observability' => [
+        // Top query stats and daily size samples are kept this long.
+        'retention_days' => 30,
+        // databases.slow_queries_spike: at least this many slow queries a minute, held for alert_seconds.
+        'slow_spike_per_minute' => 30,
+        // databases.replication_lag: a replica this far behind, held for alert_seconds.
+        'replication_lag_seconds' => 60,
+        // databases.memory_high: Redis / Valkey used_memory against maxmemory, or the container against its limit.
+        'memory_percent' => 90,
+        'alert_seconds' => 300,
+        // Authentication failures in one minute that make an Issue ("repeated"); every other engine error does at once.
+        'auth_failed_min' => 5,
+        // A slow query shape becomes an Issue once its hour has this many calls (Redis / Valkey commands: _kv).
+        'issue_min_calls' => (int) env('FALAK_DB_ISSUE_MIN_CALLS', 5),
+        'issue_min_calls_kv' => (int) env('FALAK_DB_ISSUE_MIN_CALLS_KV', 20),
+        // An instance whose last report is older than this counts as not reporting (an older image or agent).
+        'stale_seconds' => 600,
+    ],
+
     // Providers whose servers of one account and region share a private network by default, used when no Falak private
     // network connects an instance's server with a consumer's: DigitalOcean (each region's default VPC) and Lightsail.
     // Not Hetzner, Vultr, Linode: their private networks are opt-in and can differ per server, so a private IPv4 says

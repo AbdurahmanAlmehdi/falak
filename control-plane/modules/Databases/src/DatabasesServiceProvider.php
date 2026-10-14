@@ -5,9 +5,11 @@ namespace Falak\Databases;
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
 use Falak\Config\Contracts\Reconcilable;
+use Falak\Databases\Application\Actions\RecordObservation;
 use Falak\Databases\Application\Jobs\CheckBackupHealth;
 use Falak\Databases\Application\Jobs\MaintainInstances;
 use Falak\Databases\Application\Jobs\MaintainPitr;
+use Falak\Databases\Application\Jobs\PruneObservations;
 use Falak\Databases\Application\Jobs\RunDueBackups;
 use Falak\Databases\Application\Jobs\RunDueDrills;
 use Falak\Databases\Application\Listeners\ConvergeInstanceNetwork;
@@ -37,6 +39,7 @@ use Falak\Databases\Events\DrillFinished;
 use Falak\Databases\Events\PitrAlert;
 use Falak\Databases\Events\RestoreFinished;
 use Falak\Databases\Infrastructure\ActionDatabaseProvisioner;
+use Falak\Databases\Infrastructure\AgentRequests\DatabaseObserved;
 use Falak\Databases\Infrastructure\AgentRequests\PitrGapReported;
 use Falak\Databases\Infrastructure\AgentRequests\PitrShipped;
 use Falak\Databases\Infrastructure\AgentRequests\PitrUploadUrls;
@@ -116,12 +119,19 @@ class DatabasesServiceProvider extends ModuleServiceProvider
         $types->register(PitrAlert::BASE_FAILED, 'Point-in-time recovery base backup failed', 'Databases', Severity::Critical);
         $types->register(PitrAlert::STOPPED, 'Point-in-time recovery stopped shipping', 'Databases', Severity::Critical);
         $types->register(PitrAlert::RECOVERED, 'Point-in-time recovery is fine again', 'Databases', Severity::Info);
+        // Engine observability (falak-db observe, docs/plans/OBSERVABILITY.md phase 3).
+        $types->register(RecordObservation::ALERT_SLOW, 'Slow queries spike on a database', 'Databases', Severity::Warning, 'Review slow queries');
+        $types->register(RecordObservation::ALERT_LAG, 'Database replication lags', 'Databases', Severity::Warning, 'Check replication');
+        $types->register(RecordObservation::ALERT_DEADLOCKS, 'Deadlocks on a database', 'Databases', Severity::Warning, 'Review database issues');
+        $types->register(RecordObservation::ALERT_MEMORY, 'Database memory above 90% of its limit', 'Databases', Severity::Warning, 'Tune instance settings');
 
         // The agent's point-in-time recovery shipper (POST /agent/v1/requests/<type>).
         $requests = $this->app->make(AgentRequests::class);
         $requests->register('pitr.upload_urls', PitrUploadUrls::class);
         $requests->register('pitr.shipped', PitrShipped::class);
         $requests->register('pitr.gap', PitrGapReported::class);
+        // What falak-db observe found, once a minute per server.
+        $requests->register('db.observed', DatabaseObserved::class);
 
         Event::listen(CommandFinished::class, [HandleCommandOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleCommandOutcome::class, 'handleFailed']);
@@ -140,6 +150,7 @@ class DatabasesServiceProvider extends ModuleServiceProvider
             $schedule->job(new MaintainInstances)->everyTenMinutes()->name('databases:maintenance')->withoutOverlapping();
             $schedule->job(new MaintainPitr)->everyMinute()->name('databases:pitr')->withoutOverlapping();
             $schedule->job(new MaintainPitr(prune: true))->hourly()->name('databases:pitr-prune')->withoutOverlapping();
+            $schedule->job(new PruneObservations)->dailyAt('03:40')->name('databases:observations-prune')->withoutOverlapping();
             $schedule->job(new CheckBackupHealth)->everyFiveMinutes()->name('databases:backup-health')->withoutOverlapping()
                 ->when(fn () => now()->minute % 30 !== 0);
             // Every 30 minutes the same check also probes the storage providers.

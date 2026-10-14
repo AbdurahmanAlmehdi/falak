@@ -27,14 +27,20 @@ final class ApplyInstance
      * @param  bool  $background  record "agent not connected" on the instance instead of throwing
      * @param  bool  $applyNetwork  send the pending published addresses (the container is recreated)
      * @param  bool  $renewCertificate  issue a new certificate (renewal, a new DNS name or address) and restart with it
+     * @param  bool  $applyQueryInsights  the user turned query insights on: the agent restarts the engine for it. Every
+     *                                    other update leaves a query insights change for the next restart.
      *
      * @throws ValidationException
      */
-    public function __invoke(DatabaseInstance $instance, bool $background = false, bool $applyNetwork = false, bool $renewCertificate = false): void
+    public function __invoke(DatabaseInstance $instance, bool $background = false, bool $applyNetwork = false, bool $renewCertificate = false, bool $applyQueryInsights = false): void
     {
         $instance->forceFill(['firewall_sources' => $this->network->allowedSources($instance) ?: null])->save();
         $addresses = $applyNetwork && $instance->pending_published_addresses !== null ? array_values($instance->pending_published_addresses) : null;
         $payload = CommandPayloads::instance($instance, $renewCertificate ? $this->certificates->issue($instance) : null, $addresses);
+
+        if ($applyQueryInsights && $instance->query_insights) {
+            $payload['apply_query_insights'] = true;
+        }
         $key = "db.instance.update:{$instance->id}:".Str::ulid();
         $timeout = (int) config('databases.timeouts.instance', 1800);
 

@@ -1,5 +1,6 @@
 <?php
 
+use Falak\Fleet\Application\PayloadCompatibility;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Domain\Models\Command;
 use Illuminate\Support\Str;
@@ -51,4 +52,17 @@ it('keeps them for agents that support the feature', function () {
 
     $handle = app(AgentGateway::class)->dispatch($serverId, 'telemetry.configure', ['sites' => [['slug' => 'shop', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'shop', 'runtime' => 'php-fpm']]]);
     expect(json_decode(Command::query()->findOrFail($handle->id)->payload, true)['sites'][0])->toBe(['slug' => 'shop', 'site_id' => '01JSQTE000000000000000000A', 'unix_user' => 'shop', 'runtime' => 'php-fpm']);
+});
+
+it('sends query insights only to agents with database observability', function () {
+    $document = fn () => json_decode('{"instance":{"id":"01hzyinst00000000000000001","query_insights":true},"password":"x"}');
+
+    foreach (['db.instance.create', 'db.instance.update'] as $type) {
+        expect((array) PayloadCompatibility::adapt($type, $document(), [])->instance)->not->toHaveKey('query_insights')
+            ->and(PayloadCompatibility::adapt($type, $document(), ['db.observability'])->instance->query_insights)->toBeTrue();
+    }
+
+    $apply = fn () => json_decode('{"instance":{"id":"01hzyinst00000000000000001","query_insights":true},"apply_query_insights":true,"password":"x"}');
+    expect((array) PayloadCompatibility::adapt('db.instance.update', $apply(), []))->not->toHaveKey('apply_query_insights')
+        ->and(PayloadCompatibility::adapt('db.instance.update', $apply(), ['db.observability'])->apply_query_insights)->toBeTrue();
 });

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -69,6 +70,27 @@ func (h *Helper) settingsJSON() string {
 	return h.Env("FALAK_DB_SETTINGS")
 }
 
+// queryInsights reports whether the agent asked for query insights: query-insights.json ({"enabled": true}) next to
+// FALAK_DB_SETTINGS_FILE, else FALAK_DB_QUERY_INSIGHTS (1 / true).
+func (h *Helper) queryInsights() bool {
+	if f := h.Env("FALAK_DB_SETTINGS_FILE"); f != "" {
+		if b, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Clean(f)), queryInsightsFile)); err == nil {
+			var v struct {
+				Enabled bool `json:"enabled"`
+			}
+			return json.Unmarshal(b, &v) == nil && v.Enabled
+		}
+	}
+	switch strings.ToLower(h.Env("FALAK_DB_QUERY_INSIGHTS")) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
+}
+
+// queryInsightsFile is written by the agent next to the settings file (agent/internal/db).
+const queryInsightsFile = "query-insights.json"
+
 func (h *Helper) tlsSource() string { return h.Env.or("FALAK_DB_TLS_DIR", defaultTLS) }
 
 func fileExists(p string) bool {
@@ -78,7 +100,7 @@ func fileExists(p string) bool {
 
 // renderInput gathers what Render needs from the environment.
 func (h *Helper) renderInput(mem int64, s Settings) (RenderInput, error) {
-	in := RenderInput{Engine: h.Engine, MemoryBytes: mem, Settings: s, DataDir: dataDir(h.Engine, h.Env)}
+	in := RenderInput{Engine: h.Engine, MemoryBytes: mem, Settings: s, DataDir: dataDir(h.Engine, h.Env), QueryInsights: h.queryInsights()}
 	if s.tls() {
 		in.TLSCA = fileExists(filepath.Join(h.path(h.tlsSource()), "ca.crt"))
 	}

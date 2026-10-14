@@ -102,6 +102,10 @@ func healthFromStatus(status string) string {
 
 // connections returns the instance's cached connection figures, refreshing them in the background when stale.
 func (db *DB) connections(id string) *Connections {
+	// The observer's last pass has them (an image with `falak-db observe`): no `stats` exec needed.
+	if c := db.observer.Load().Connections(id); c != nil {
+		return c
+	}
 	db.stats.mu.Lock()
 	defer db.stats.mu.Unlock()
 	if db.stats.m == nil {

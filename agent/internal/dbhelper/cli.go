@@ -21,6 +21,9 @@ commands:
                                         write the engine config tuned to the memory limit
   health                                liveness probe (the image's HEALTHCHECK)
   stats                                 open client connections and the limit: {"connections": n, "max_connections": m}
+  observe [--detail] [--cursor JSON]    engine metrics, slow queries and (--detail) top statements, sizes, unused indexes
+  reload                                render the config again and apply the slow query threshold without a restart
+                                        (postgres, mysql, mariadb)
   backup logical --database DB --out -  dump to stdout (postgres, mysql, mariadb; redis/valkey: RDB, no --database)
   backup physical --out -               base backup to stdout (postgres tar, mysql/mariadb xbstream)
   restore logical [--database DB] --in - [--clean | --swap] [--owner ROLE]
@@ -115,6 +118,8 @@ func dispatch(ctx context.Context, h *Helper, args []string) error {
 		owner    = new(string)
 		swap     = new(bool)
 		keep     = new(bool)
+		detail   = new(bool)
+		cursor   = new(string)
 	)
 	var extra []string
 	switch cmd {
@@ -171,8 +176,11 @@ func dispatch(ctx context.Context, h *Helper, args []string) error {
 	case "reassign":
 		fs.StringVar(database, "database", "", "database")
 		fs.StringVar(owner, "owner", "", "the new owner role")
+	case "observe":
+		fs.BoolVar(detail, "detail", false, "add statements, sizes, tables and unused indexes")
+		fs.StringVar(cursor, "cursor", "", "the previous call's cursor (JSON)")
 	case "readonly":
-	case "health", "promote", "wal-push", "stats":
+	case "health", "promote", "wal-push", "stats", "reload":
 	default:
 		fmt.Fprint(h.Stderr, usageText)
 		return usageErr("unknown command %q", cmd)
@@ -205,6 +213,14 @@ func dispatch(ctx context.Context, h *Helper, args []string) error {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		return h.Stats(ctx)
+	case "observe":
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return h.Observe(ctx, *detail, *cursor)
+	case "reload":
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return h.Reload(ctx)
 	case "backup logical":
 		return h.BackupLogical(ctx, *database, *out)
 	case "backup physical":

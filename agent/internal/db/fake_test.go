@@ -162,6 +162,7 @@ func (f *fakeDocker) ContainerStart(_ context.Context, id string) error {
 		return &docker.APIError{Status: 404, Message: "no such container"}
 	}
 	c.State.Running, c.State.Status = true, "running"
+	c.State.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	c.State.Health = &struct {
 		Status string `json:"Status"`
 	}{f.health}
@@ -193,6 +194,7 @@ func (f *fakeDocker) ContainerRestart(_ context.Context, id string, timeout time
 		return &docker.APIError{Status: 404, Message: "no such container"}
 	}
 	c.State.Running, c.State.Status = true, "running"
+	c.State.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	f.log("restart %s %s", strings.TrimPrefix(c.Name, "/"), timeout)
 	return nil
 }

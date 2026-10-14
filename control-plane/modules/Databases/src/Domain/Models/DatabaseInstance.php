@@ -67,6 +67,9 @@ use Illuminate\Support\Carbon;
  * @property ?string $command_id
  * @property ?string $upgrade_of the instance a major upgrade replaces
  * @property ?Carbon $retire_at
+ * @property bool $query_insights top queries collected (pg_stat_statements / MariaDB performance_schema: a restart)
+ * @property ?array<string, mixed> $observed the agent's latest db.observed report (docs/plans/OBSERVABILITY.md phase 3)
+ * @property ?Carbon $observed_at
  * @property ?string $created_by
  * @property Carbon $created_at
  * @property-read Collection<int, Database> $databases
@@ -110,6 +113,9 @@ class DatabaseInstance extends Model
             'pitr_next_base_at' => 'datetime',
             'pitr_last_shipped_at' => 'datetime',
             'pitr_report' => 'array',
+            'query_insights' => 'boolean',
+            'observed' => 'array',
+            'observed_at' => 'datetime',
             'root_password' => Sealed::class,
             'next_root_password' => Sealed::class,
             'previous_password' => Sealed::class,

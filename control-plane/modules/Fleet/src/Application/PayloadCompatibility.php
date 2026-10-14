@@ -65,6 +65,13 @@ final class PayloadCompatibility
         'provision.v2' => [
             'provision.apply' => ['components'],
         ],
+        // Database observability (docs/plans/OBSERVABILITY.md phase 3): query insights need a restart; older agents keep
+        // the container as it is.
+        'db.observability' => [
+            'db.instance.create' => ['instance.query_insights'],
+            // apply_query_insights: only EnableQueryInsights sends it, the one update that may restart for it.
+            'db.instance.update' => ['instance.query_insights', 'apply_query_insights'],
+        ],
     ];
 
     /**

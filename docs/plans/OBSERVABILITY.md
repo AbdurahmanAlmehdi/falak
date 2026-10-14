@@ -395,24 +395,259 @@ Laravel log exceptions need no feature: the agent derives them from records it a
 
 ## Phase 3: databases (v0.16.0)
 
-The `falak-db` helper inside each database container (already polled every minute for connections) collects:
+Every managed database runs `falak-db` inside its container (docs/DB_IMAGES.md); the agent already runs
+`falak-db stats` once a minute for the heartbeat's connection figures. Phase 3 adds one helper command, `observe`,
+that reads everything the engine knows about itself in one `docker exec`, and an agent loop that turns its answer into
+metrics, slow-query logs and a per-minute report to the control plane, which keeps top queries, raises database Issues
+and alerts, and computes recommendations.
 
-| | PostgreSQL | MySQL / MariaDB | Redis / Valkey |
+```
+falak-db observe ──► agent (db.Observer, every 60 s per running instance)
+                       ├─► OTLP metrics falak.db.*            → VictoriaMetrics (30 d)
+                       ├─► OTLP logs kind db.slow             → Loki (15 d)
+                       └─► POST /agent/v1/requests/db.observed → Databases: snapshot on the instance,
+                                                                   top queries (hourly, 30 d), size samples,
+                                                                   Issues (Insights, kind database), alerts,
+                                                                   recommendations (computed on read)
+docker logs (engine stderr) ──► agent log follower (kind db.engine, falak.db.instance.id) → Loki
+                           └──► db.Observer scans the same lines once a minute: Postgres slow statements, engine errors
+```
+
+### What an instance needs
+
+| | New image (v0.16.0+) | Older image |
+|---|---|---|
+| Engine metrics, slow logs, report | yes | no: `observe` exits 2 (unknown command), the instance keeps its connection figures and the UI asks for a minor upgrade ("Update the image to see engine metrics") |
+| Container CPU / memory (phase 1) | yes | yes |
+| Engine logs in the Logs tab | yes | yes (docker logs) |
+
+The agent tells the two apart by the exit code of `observe` (2), remembered per container id until the container
+changes, so an old image costs one failed exec per container start, not one a minute.
+
+Agent feature: **`db.observability`** (`db.instance.create|update` `instance.query_insights`, the `db.observed`
+request). Older agents get no `query_insights` (PayloadCompatibility) and send no report; nothing else changes for them.
+
+### `falak-db observe [--detail] [--cursor JSON]`
+
+One JSON object. Every section is best effort: a failing query is reported in `warnings` and the rest still comes back.
+`--detail` (every fifth call: five minutes) adds the heavier sections (`statements`, `tables`, `indexes`, `databases`).
+`--cursor` is the previous answer's `cursor`, so slow-log entries are read once; without one (agent start) nothing
+older is replayed.
+
+| Section | PostgreSQL | MySQL / MariaDB | Redis / Valkey |
 |---|---|---|---|
-| Metrics | transactions/s, cache hit %, connections by state, locks, deadlocks, replication lag, database and table sizes | queries/s, threads, InnoDB buffer pool hit %, row lock waits, slow queries | ops/s, hit rate, memory vs `maxmemory`, evictions, clients, keys |
-| Logs | engine log + slow queries (`log_min_duration_statement`) | error log + slow log (`long_query_time`) | `SLOWLOG` |
-| Top queries | `pg_stat_statements` | `performance_schema` statement digests | slowest commands |
+| `counters` (cumulative) | `pg_stat_database` summed: `xact_commit`, `xact_rollback`, `blks_hit`, `blks_read`, `tup_returned/fetched/inserted/updated/deleted`, `deadlocks`, `temp_bytes` | `SHOW GLOBAL STATUS`: `Questions`, `Com_select/insert/update/delete/commit/rollback`, `Innodb_buffer_pool_read_requests`, `Innodb_buffer_pool_reads`, `Innodb_rows_read/inserted/updated/deleted`, `Innodb_row_lock_waits`, `Innodb_row_lock_time`, `Slow_queries`, `Aborted_connects`, `Connection_errors_max_connections`, `Bytes_received/sent`; deadlocks from `Innodb_deadlocks` (MariaDB) or `information_schema.INNODB_METRICS` `lock_deadlocks` (MySQL) | `INFO`: `total_commands_processed`, `keyspace_hits/misses`, `evicted_keys`, `expired_keys`, `rejected_connections`, `total_net_input/output_bytes`, `errorstat_OOM`, `errorstat_NOAUTH` + `errorstat_WRONGPASS` |
+| `gauges` | connections by state (`pg_stat_activity` client backends: active, idle, idle_in_transaction, other), `max_connections`, locks waiting (`pg_locks` not granted), replication lag (only on a streaming replica: a WAL receiver exists) | `Threads_connected`, `Threads_running`, `max_connections` (no replication: Falak runs no MySQL replicas) | `connected_clients`, `blocked_clients`, `maxclients`, `used_memory`, `maxmemory`, keys; on a replica `master_last_io_seconds_ago` as the lag and a broken link (`master_link_status` not up) |
+| `labels` | `role` primary / replica | `role` | `maxmemory_policy`, `role` |
+| `settings` | `shared_buffers`, `max_connections`, `log_min_duration_statement`, `shared_preload_libraries` | `innodb_buffer_pool_size`, `max_connections`, `long_query_time`, `performance_schema` | `maxmemory`, `maxmemory_policy` |
+| `memory` | the container's cgroup as seen from inside: `memory.current`, `memory.max`, `memory.events` `oom_kill` | same | same |
+| `databases` (detail) | `pg_database_size` of the 20 largest | `information_schema.TABLES` summed per schema, 20 largest | keys per logical database (`INFO keyspace`) |
+| `tables` (detail) | `pg_stat_user_tables` of the 10 largest databases: 20 largest tables each with `n_live_tup`, `seq_scan`, `seq_tup_read`, `idx_scan`, size | `information_schema.TABLES`, 20 largest | — |
+| `indexes` (detail) | `pg_stat_user_indexes` with `idx_scan = 0`, not unique / primary, 20 largest, and `stats_since` (the later of the statistics reset and the server start) | `performance_schema.table_io_waits_summary_by_index_usage` `COUNT_STAR = 0` (performance_schema on) | — |
+| `statements` (detail) | `pg_stat_statements`, 100 by total time (falak-db's own left out: they start with `/* falak-db observe */`; apps using the superuser count) | `events_statements_summary_by_digest`, 100 by total time (statements without a default schema, falak-db's own, left out) | — |
+| `slow` | — (Postgres writes its slow log to stderr, read by the agent) | the slow log file `/var/log/falak-db/slow.log` from the cursor's offset (inode + offset; 4 MiB per call); truncated by the helper once read past 64 MiB, so it no longer grows forever | `SLOWLOG GET 128` newer than the cursor's id (an id lower than the cursor: the server restarted, everything is new) |
+| `query_insights` | `on` when `pg_stat_statements` is preloaded (the helper creates the extension in `postgres` when missing), else `off` | `on` with `performance_schema`, else `off` (MySQL turns it off below 1 GiB of memory; MariaDB has it off by default) | always `on` (SLOWLOG) |
 
-Plus the phase 1 container metrics against the server and the instance's memory setting.
+Query text is normalized in the helper and again in the agent (`agent/internal/sqlnorm`), never shipped raw: string,
+numeric, hex, bit and dollar-quoted literals become `?`, lists of placeholders `(?, ?, ?)` become `(?, ...)` and
+repeated `VALUES` tuples one, comments are dropped, whitespace collapses, 2,000 characters at most.
+`pg_stat_statements` and MySQL digests are normalized already, except utility statements, which
+`pg_stat_statements.track_utility = off` keeps out (and the normalizer catches `PASSWORD '…'`, `IDENTIFIED BY '…'` all
+the same). Redis entries keep the command name and the number of keys: `MGET <3 keys>`, `SET <1 key>`; arguments are
+dropped.
 
-- **Database Issues** (Insights, new source `database`): a slow query is grouped by its normalized shape (`queryid` /
-  digest) into one Issue with status, assignee, comments; engine errors (deadlocks, too many connections, repeated
-  auth failures, broken replication, OOM) become Issues too.
-- **Recommendations:** sequential scans of large tables, unused indexes, low cache hit (suggested
-  `shared_buffers` / `innodb_buffer_pool_size`), Redis near `maxmemory` with `noeviction`, disk-full forecast.
-- **Privacy:** only normalized query text (`WHERE id = ?`) is stored; Redis command arguments are dropped.
-- **Alerts:** slow-query spike, replication lag, deadlocks, memory near the limit.
-- **UI:** database instance tabs gain Metrics, Logs and Insights.
+### Query insights (`pg_stat_statements`, MariaDB `performance_schema`)
+
+Both need a restart, and these are users' production databases: **nothing restarts without the user's action.**
+
+- **New instances** get `instance.query_insights: true` when their server's agent has `db.observability` (PostgreSQL;
+  MariaDB from 1 GiB of memory: `performance_schema` takes a few hundred MiB, and the helper never renders it below
+  1 GiB either). The agent writes `query-insights.json` next to the settings file
+  (`/run/falak/db/conf`); a v0.16.0 helper renders `shared_preload_libraries = 'pg_stat_statements'`,
+  `pg_stat_statements.max = 1000`, `pg_stat_statements.track = top`, `pg_stat_statements.track_utility = off`
+  (PostgreSQL) or `performance_schema = ON` (MariaDB). An older helper never reads the file (the settings file stays as
+  it was: an older helper rejects unknown settings).
+- **Existing instances** show *Enable query insights (restarts the database)* in the Insights tab, offered only when the
+  agent has `db.observability` and the instance's latest report shows a helper that can (`query_insights` in it). It
+  sets the flag and sends `db.instance.update` with `apply_query_insights: true`: the only update that restarts a
+  running container for a query insights change. Every other update carrying the flag (network convergence, a renewed
+  certificate, PITR settling) only writes the file, which applies at the next restart the user causes; the enable
+  action still restarts an engine started before the file was written (its mtime against the container's start).
+- MySQL has `performance_schema` on from 1 GiB of memory (below, it is off to save memory): instances below get top
+  queries from the slow log instead.
+- `pg_stat_statements` ships with the official PostgreSQL images (contrib): no image change beyond the new `falak-db`.
+
+Without query insights, top queries come from slow-log entries grouped by their normalized text (`source: slowlog`).
+
+### Settings changes without a restart
+
+`slow_query_ms` is reloaded in place: when it is the only setting that changed, the agent rewrites the settings file
+and runs `falak-db reload` (renders the config again; PostgreSQL `pg_reload_conf()`, MySQL / MariaDB
+`SET GLOBAL slow_query_log` / `long_query_time`) instead of restarting. Redis / Valkey can't: `CONFIG` is denied to the
+`default` user, so their threshold applies at the next restart, and so does every other setting, as before. An older
+helper without `reload` (exit 2) gets the restart.
+
+### Metrics (agent → OTLP → VictoriaMetrics)
+
+Resource: `service.name` `falak-db`, `falak.db.instance.id` (the instance id **in lowercase**, as phase 1's container
+metrics: `falak_db_instance_id="01k…"`, while `falak_server_id` is uppercase), `db.system.name` (`postgresql`,
+`mysql`, `mariadb`, `redis`, `valkey`). Scope `falak-agent/databases`. Emitted every minute (detail-only gauges from the
+last detail call).
+
+| Metric (OTLP) | Type | Unit | Attributes | Prometheus name | Engines |
+|---|---|---|---|---|---|
+| `falak.db.up` | gauge | (none: `1` would become `falak_db_up_ratio`) | | `falak_db_up` | all (0: `observe` failed, or the container is starting / unhealthy) |
+| `falak.db.connections` | gauge | {connection} | `falak.db.connection.state` | `falak_db_connections` | pg: active, idle, idle_in_transaction, other; my: running, idle; kv: blocked, normal |
+| `falak.db.connections.max` | gauge | {connection} | | `falak_db_connections_max` | all |
+| `falak.db.connections.aborted` | counter | {connection} | | `falak_db_connections_aborted_total` | my (`Aborted_connects`), kv (`rejected_connections`) |
+| `falak.db.queries` | counter | {query} | | `falak_db_queries_total` | my (`Questions`), kv (commands) |
+| `falak.db.operations` | counter | {operation} | `falak.db.operation` select / insert / update / delete | `falak_db_operations_total` | my |
+| `falak.db.transactions` | counter | {transaction} | `falak.db.transaction.outcome` commit / rollback | `falak_db_transactions_total` | pg, my |
+| `falak.db.rows` | counter | {row} | `falak.db.row.operation` returned / fetched / read / inserted / updated / deleted | `falak_db_rows_total` | pg, my |
+| `falak.db.cache.requests` | counter | {request} | `falak.db.cache.result` hit / miss | `falak_db_cache_requests_total` | pg (blocks), my (buffer pool), kv (keyspace) |
+| `falak.db.locks.waiting` | gauge | {lock} | | `falak_db_locks_waiting` | pg |
+| `falak.db.lock.waits` | counter | {wait} | | `falak_db_lock_waits_total` | my |
+| `falak.db.lock.wait.time` | counter | s | | `falak_db_lock_wait_time_seconds_total` | my |
+| `falak.db.deadlocks` | counter | {deadlock} | | `falak_db_deadlocks_total` | pg, my |
+| `falak.db.slow_queries` | counter | {query} | | `falak_db_slow_queries_total` | all (pg and kv: counted by the agent from the log / SLOWLOG, from 0 at agent start) |
+| `falak.db.temp.io` | counter | By | | `falak_db_temp_io_bytes_total` | pg |
+| `falak.db.network.io` | counter | By | `network.io.direction` | `falak_db_network_io_bytes_total` | my, kv |
+| `falak.db.replication.lag` | gauge | s | | `falak_db_replication_lag_seconds` | replicas only |
+| `falak.db.memory.usage` | gauge | By | | `falak_db_memory_usage_bytes` | kv (`used_memory`) |
+| `falak.db.memory.limit` | gauge | By | `falak.db.maxmemory_policy` | `falak_db_memory_limit_bytes` | kv (`maxmemory`, when set) |
+| `falak.db.keys` | gauge | {key} | `falak.db.name` (db0 …) | `falak_db_keys` | kv |
+| `falak.db.keys.evicted` / `.expired` | counter | {key} | | `falak_db_keys_evicted_total`, `falak_db_keys_expired_total` | kv |
+| `falak.db.size` | gauge | By | `falak.db.name` (20 largest) | `falak_db_size_bytes` | pg, my |
+| `falak.db.table.size` | gauge | By | `falak.db.name`, `falak.db.table` (10 largest) | `falak_db_table_size_bytes` | pg, my |
+
+Cardinality per instance is bounded: ≤ 20 database names, ≤ 10 tables, fixed state / operation sets.
+
+### Logs (Loki)
+
+| Records | `service.name` | `falak.log.kind` | Record attributes |
+|---|---|---|---|
+| Engine stderr (docker logs follower, unchanged path) | `falak-db-<id>` (the container name, as before) | `db.engine` | `falak.db.instance.id`, `container.*` |
+| Slow queries (the observer) | `falak-db-<id>` | `db.slow` | `falak.db.instance.id`, `db.system.name`, `db.namespace`, `db.query.text` (normalized), `falak.db.query.fingerprint`, `falak.db.duration_ms` |
+
+An instance's logs are `{falak_org_id="…", service_name="falak-db-<id>"}` (+ `falak_log_kind="db.slow"` for the slow
+ones). The changes to the shared follower (`agent/internal/logs/docker.go`) are tagging containers labelled
+`falak.db.instance` with the kind and the instance id, and a line filter hook for PostgreSQL (`logs/dbredact.go`). At most 100 slow records per instance a minute are written
+(the rest are counted).
+
+**No SQL text or values from PostgreSQL's stderr.** PostgreSQL writes slow statements, failing statements and bind
+parameters with their literals. The follower drops, per container, `LOG: duration: … statement|execute|bind|parse`,
+`LOG: statement:`, `STATEMENT:`, `QUERY:`, `DETAIL: parameters:` and SQL `CONTEXT:` lines with their tab-indented
+continuation lines, and rewrites `Key (…)=(…)` / `Failing row contains (…)` to `(?)`; the observer reads the container's
+log itself and ships the slow ones normalized. New instances' config also has `log_parameter_max_length = 0`,
+`log_parameter_max_length_on_error = 0` and `log_min_error_statement = panic`; existing ones pick them up at their next
+start (the agent does not reload them for it; the rendered config is not part of the spec hash, so an agent upgrade
+recreates or restarts nothing). MySQL / MariaDB keep `innodb_print_all_deadlocks` off.
+
+**Limits.** Every observe query runs with PostgreSQL `statement_timeout = 15s`, `lock_timeout = 1s`,
+`client_connection_check_interval = 5s`; MySQL `lock_wait_timeout = 2`, `max_execution_time = 15000`; MariaDB
+`max_statement_time = 15`. Sizes come from information_schema's cache (MySQL: up to a day old) rather than refreshing
+every table's statistics.
+
+**Counters.** PostgreSQL's are summed over databases, so dropping one (or a statistics reset) lowers them without a
+restart: the agent keeps every counter monotonic (it adds what was lost) unless the engine's uptime went down (a real
+restart). Container memory is the working set (`memory.current` − `inactive_file`).
+
+### Engine errors
+
+Counted per minute from counter deltas where the engine has a counter, else from the engine's stderr (`docker logs
+--since`, read by the observer once a minute, 5,000 lines at most):
+
+| Kind | PostgreSQL | MySQL / MariaDB | Redis / Valkey |
+|---|---|---|---|
+| `deadlock` | `deadlocks` delta | deadlock counter delta | — |
+| `too_many_connections` | `too many clients already`, `remaining connection slots are reserved` | `Connection_errors_max_connections` delta | `rejected_connections` delta |
+| `auth_failed` | `password authentication failed` | `Aborted_connects` delta | `errorstat_NOAUTH` + `errorstat_WRONGPASS` delta |
+| `oom` | cgroup `oom_kill` delta, `out of memory`, `terminated by signal 9` | cgroup `oom_kill` delta | cgroup `oom_kill` delta, `errorstat_OOM` delta (writes refused at `maxmemory`) |
+| `replication` | `could not receive data from WAL stream`, `could not connect to the primary server` | — | the replica's link down, `MASTER <-> REPLICA sync: Error` |
+| `disk_full` | `No space left on device` | same | same |
+| `crash` | `PANIC:`, `was terminated by signal` (other than 9) | `got signal`, `Assertion failure` | `crashed by signal`, the bug report header |
+
+### `db.observed` (agent → control plane)
+
+One request per server a minute (`contracts/agent-protocol/requests/db.observed.schema.json`), every observed
+instance in it (≤ 50): `id`, `engine`, `at`, `window_s`, `query_insights`, `gauges`, `deltas` (counter increases since
+the previous call: `slow_queries`, `deadlocks`, …), `labels`, `settings`, `memory`, `errors` (`kind`, `count`,
+`message` sample, normalized, ≤ 300 chars) and with detail `statements` (deltas since the previous detail call: `calls`,
+`total_ms`, `rows`, plus `max_ms` and `fingerprint`, `database`, `query`, `source`), `tables`, `indexes`, `databases`.
+A statement first seen is only a baseline (its delta is unknown); the agent's first detail call after start sends none.
+Old control planes answer 404 `unknown_request`: the agent logs it once and keeps the metrics and logs going.
+
+The control plane (Databases module, `DatabaseObserved` handler):
+
+- stores the latest report on the instance (`observed`, `observed_at`) for the UI and the recommendations;
+- adds statements to `databases_query_shapes` (instance, fingerprint, normalized text, database, source, first / last
+  seen) and `databases_query_stats` (shape × hour: calls, total ms, max ms, rows, no-index calls), pruned after 30 days
+  (`databases.observability.retention_days`, daily `PruneObservations`). PostgreSQL's `max_ms` is
+  `pg_stat_statements`' running maximum, not the hour's: Issues are decided on the mean;
+- records a daily size sample per instance (`databases_size_samples`) for the disk forecast;
+- raises Issues and alerts (below).
+
+### Database Issues (Insights, kind `database`)
+
+Issues are the Insights ones (`insights_issues`: status, assignee, priority, comments), kind `database`, `server_id`
+the instance's server, `meta.instance_id`; the Databases module records them through the Insights contract
+`DatabaseIssues` (Insights owns the table).
+
+- **Slow query shapes:** a statement whose mean in the window is at least the instance's `slow_query_ms` (every
+  slow-log statement is) is an occurrence of the Issue fingerprinted `sha256(instance | fingerprint)` (`queryid`, digest,
+  or the normalized text's hash), counted by its calls, once the shape has at least `issue_min_calls` (5; Redis / Valkey `issue_min_calls_kv`, 20) calls in the hour and, for engine statistics, an hourly mean at the threshold; title "Slow query: <normalized text>", sample with mean / max /
+  calls. A resolved shape that is slow again regresses, as exceptions do.
+- **Engine errors:** one Issue per instance and error kind (`auth_failed` from 5 in a minute, the others from 1).
+
+### Recommendations (computed on read)
+
+From the latest report (and the size samples), shown as a card in the Insights tab:
+
+| Recommendation | When |
+|---|---|
+| Add an index to `<table>` | pg: `seq_scan` > 1,000 and `seq_tup_read / seq_scan` > 10,000 rows on a table above 100 MB and `seq_scan` > `idx_scan` |
+| Drop unused index `<index>` | pg: `idx_scan` 0, above 10 MB, statistics at least 7 days old; my: no use since the server started (performance_schema), uptime ≥ 7 days |
+| Queries without an index | my: digests with `SUM_NO_INDEX_USED` among the top statements |
+| Raise the memory (`shared_buffers` / `innodb_buffer_pool_size`) | cache hit ratio below 95% (pg) / 99% (InnoDB) over the report's counters, with enough reads to matter |
+| Redis near `maxmemory` with `noeviction` | `used_memory` ≥ 90% of `maxmemory` and policy `noeviction`: writes will be refused |
+| Connections near the limit | ≥ 80% of `max_connections` |
+| Disk full in N days | linear fit of 14 days of size samples reaches the volume size within 30 days |
+| Enable query insights | pg / mariadb with `query_insights: off` |
+
+### Alerts (Alerting, `databases.*`, in the default rule pack's Databases area)
+
+| Type | Condition (AlertConditions, per instance) |
+|---|---|
+| `databases.slow_queries_spike` | ≥ `databases.observability.slow_spike_per_minute` (30) slow queries a minute, held 5 minutes |
+| `databases.replication_lag` | lag ≥ 60 s, held 5 minutes |
+| `databases.deadlocks` | deadlocks in the last minute: raised directly (`Alerts`), deduplicated per instance and hour (`databases.deadlocks:<id>:<YmdH>`), no recovery |
+| `databases.memory_high` | Redis / Valkey `used_memory` ≥ 90% of `maxmemory`, or the container's memory ≥ 90% of its limit, held 5 minutes |
+
+### UI (database panel tabs)
+
+- **Metrics** (`GET /databases/instances/{id}/metrics/data?range=`): per engine — throughput (transactions / queries /
+  ops per second), cache hit %, connections by state against the limit, rows, lock waits and deadlocks, slow queries,
+  replication lag, database sizes; Redis memory against `maxmemory`, evictions; and the phase 1 container CPU and
+  memory against the server and the instance's limits (`falak_workload_*{falak_db_instance_id="<id>"}`).
+- **Logs** (`GET /databases/instances/{id}/logs/data?kind=all|slow|engine&search=`): engine and slow-query records.
+- **Insights** (`GET /databases/instances/{id}/insights?range=`): query insights status (and the enable action,
+  `POST /databases/instances/{id}/query-insights`, `databases.manage`), open Issues, top queries by total time (calls,
+  mean, max, rows), recommendations. `reporting` tells the UI why there is nothing: `agent_outdated` (no
+  `db.observability`), `image_outdated` (no report although the agent reports: an image without `observe`), `stopped`.
+
+Permissions: the tabs need `databases.view`; Logs and Metrics also `telemetry.view` as the site tabs do.
+
+Config (`databases.observability`): `retention_days` 30, `slow_spike_per_minute` 30, `replication_lag_seconds` 60,
+`memory_percent` 90 (Redis / Valkey `used_memory` against `maxmemory` only with `noeviction`, else the container's working set against its limit), `alert_seconds` 300, `auth_failed_min` 5, `issue_min_calls` 5, `issue_min_calls_kv` 20, `stale_seconds` 600 (a report older than this is not
+`ok`).
+
+### Images
+
+No Dockerfile changes: `pg_stat_statements` is in the official PostgreSQL images (contrib). The images must be rebuilt
+for the new `falak-db` (`observe`, `reload`, `query-insights.json`); `.github/workflows/db-images.yml` does on `main`,
+weekly and on release tags, and running instances pick it up through a minor upgrade. `images/db/test.sh` checks
+`observe` (and `reload`) on every engine: a slow MySQL / MariaDB query and a slow Redis / Valkey `EVAL` read back
+normalized through the cursor, PostgreSQL started with query insights.
 
 ## Phase 4: network (v0.17.0)
 

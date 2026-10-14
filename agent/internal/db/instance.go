@@ -26,6 +26,10 @@ type InstancePayload struct {
 	Instance     InstanceSpec `json:"instance"`
 	Password     string       `json:"password"`
 	RegistryAuth *docker.Auth `json:"registry_auth,omitempty"`
+	// ApplyQueryInsights (db.instance.update, feature db.observability) is the user's "enable query insights" action:
+	// only then does a query_insights change restart a running engine. Any other update (network, certificate, PITR)
+	// writes the file and leaves the change to the next restart the user causes.
+	ApplyQueryInsights bool `json:"apply_query_insights,omitempty"`
 }
 
 // Secrets are the payload's secret values (masked in output).
@@ -100,7 +104,11 @@ func (db *DB) apply(ctx context.Context, p InstancePayload, st commands.Stream) 
 	if err != nil {
 		return nil, err
 	}
-	settingsChanged, err := db.writeSettings(s, tls)
+	prevSettings, settingsChanged, err := db.writeSettings(s, tls)
+	if err != nil {
+		return nil, err
+	}
+	qiChanged, err := db.writeQueryInsights(s)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +144,13 @@ func (db *DB) apply(ctx context.Context, p InstancePayload, st commands.Stream) 
 				return nil, fmt.Errorf("new limits for %s: %w", name, err)
 			}
 		}
+		qiApply := p.ApplyQueryInsights && (qiChanged || db.queryInsightsPending(s.ID, cur))
 		switch {
-		case cur.State.Running && (limits || settingsChanged || tlsChanged):
+		case cur.State.Running && settingsChanged && !limits && !tlsChanged && !qiApply && !isKeyValue(s.Engine) &&
+			onlySlowQueryChanged(prevSettings, s.settingsJSON(tls)) && db.reload(ctx, s.ID, st):
+			// The slow query threshold applies without a restart (falak-db reload); an older image restarts instead.
+			res.Changed = true
+		case cur.State.Running && (limits || settingsChanged || tlsChanged || qiApply):
 			// falak-db renders the config (tuned to the memory limit) and installs the certificate at every start.
 			fmt.Fprintf(st.Stdout(), "restarting %s for its new settings\n", name)
 			if err := db.d.Docker.ContainerRestart(ctx, cur.ID, stopGrace); err != nil {
@@ -180,14 +193,40 @@ func (db *DB) recreate(ctx context.Context, cur *docker.Container, name, why str
 }
 
 // writeSettings writes the settings file falak-db renders the config from at every start (TLS off when no certificate
-// is installed: falak-db refuses TLS without one) and reports whether it changed.
-func (db *DB) writeSettings(s InstanceSpec, tls bool) (bool, error) {
+// is installed: falak-db refuses TLS without one) and reports whether it changed, with the previous content.
+func (db *DB) writeSettings(s InstanceSpec, tls bool) (string, bool, error) {
 	dir := db.d.FS.P(db.confDir(s.ID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return false, err
+		return "", false, err
 	}
 	content := []byte(s.settingsJSON(tls))
 	p := filepath.Join(dir, "settings.json")
+	cur, err := os.ReadFile(p)
+	if err == nil && bytes.Equal(cur, content) {
+		return string(cur), false, nil
+	}
+	if err := os.WriteFile(p+".tmp", content, 0o644); err != nil {
+		return "", false, err
+	}
+	return string(cur), true, os.Rename(p+".tmp", p)
+}
+
+// queryInsightsFile is read by falak-db v0.16.0+ next to the settings file (dbhelper.queryInsightsFile); older images
+// never look at it.
+const queryInsightsFile = "query-insights.json"
+
+// writeQueryInsights writes (or removes) the query insights file and reports whether that changed anything.
+func (db *DB) writeQueryInsights(s InstanceSpec) (bool, error) {
+	p := filepath.Join(db.d.FS.P(db.confDir(s.ID)), queryInsightsFile)
+	_, err := os.Stat(p)
+	exists := err == nil
+	if !s.QueryInsights {
+		if !exists {
+			return false, nil
+		}
+		return true, os.Remove(p)
+	}
+	content := []byte(`{"enabled":true}` + "\n")
 	if cur, err := os.ReadFile(p); err == nil && bytes.Equal(cur, content) {
 		return false, nil
 	}
@@ -195,6 +234,41 @@ func (db *DB) writeSettings(s InstanceSpec, tls bool) (bool, error) {
 		return false, err
 	}
 	return true, os.Rename(p+".tmp", p)
+}
+
+// queryInsightsPending reports whether the query insights file was written after the running engine started (an
+// earlier update deferred it to the next restart): the user's enable action then still restarts it.
+func (db *DB) queryInsightsPending(id string, cur *docker.Container) bool {
+	st, err := os.Stat(filepath.Join(db.d.FS.P(db.confDir(id)), queryInsightsFile))
+	if err != nil {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339Nano, cur.State.StartedAt)
+	return err != nil || st.ModTime().After(started)
+}
+
+// onlySlowQueryChanged reports whether two settings documents differ in slow_query_ms alone.
+func onlySlowQueryChanged(prev, next string) bool {
+	var a, b map[string]any
+	if json.Unmarshal([]byte(prev), &a) != nil || json.Unmarshal([]byte(next), &b) != nil {
+		return false
+	}
+	delete(a, "slow_query_ms")
+	delete(b, "slow_query_ms")
+	pa, _ := json.Marshal(a)
+	pb, _ := json.Marshal(b)
+	return bytes.Equal(pa, pb)
+}
+
+// reload applies a new slow query threshold to the running engine (`falak-db reload`); false when it could not (an
+// older image without the command, or a failure): the caller restarts instead.
+func (db *DB) reload(ctx context.Context, id string, st commands.Stream) bool {
+	if _, _, err := db.exec(ctx, id, nil, nil, nil, "reload"); err != nil {
+		fmt.Fprintf(st.Stdout(), "reload failed (%v): restarting instead\n", err)
+		return false
+	}
+	fmt.Fprintf(st.Stdout(), "reloaded %s: new slow query threshold, no restart\n", Container(id))
+	return true
 }
 
 // awaitVolume waits for the instance's sized volume to be mounted (volume.create runs concurrently with the first

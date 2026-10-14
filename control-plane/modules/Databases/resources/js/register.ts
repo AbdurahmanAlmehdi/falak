@@ -8,6 +8,9 @@ const DatabaseOverviewTab = lazy(() => import('./panel/overview-tab').then((modu
 const DatabaseUsersTab = lazy(() => import('./panel/users-tab').then((module) => ({ default: module.DatabaseUsersTab })));
 const DatabaseBackupsTab = lazy(() => import('./panel/backups-tab').then((module) => ({ default: module.DatabaseBackupsTab })));
 const DatabaseSettingsTab = lazy(() => import('./panel/settings-tab').then((module) => ({ default: module.DatabaseSettingsTab })));
+const DatabaseMetricsTab = lazy(() => import('./panel/metrics-tab').then((module) => ({ default: module.DatabaseMetricsTab })));
+const DatabaseLogsTab = lazy(() => import('./panel/logs-tab').then((module) => ({ default: module.DatabaseLogsTab })));
+const DatabaseInsightsTab = lazy(() => import('./panel/insights-tab').then((module) => ({ default: module.DatabaseInsightsTab })));
 
 registerNavigation({ id: 'databases', title: 'Databases', url: '/databases', icon: Database, order: 300, permission: 'databases.view' });
 
@@ -32,6 +35,10 @@ registerServiceTabs(
         permission: 'databases.view',
         component: DatabaseBackupsTab,
     },
+    // The container's engine metrics, logs and query insights (docs/plans/OBSERVABILITY.md phase 3).
+    { id: 'metrics', kinds: ['database'], title: 'Metrics', order: 250, permission: 'telemetry.view', component: DatabaseMetricsTab },
+    { id: 'logs', kinds: ['database'], title: 'Logs', order: 260, permission: 'telemetry.view', component: DatabaseLogsTab },
+    { id: 'insights', kinds: ['database'], title: 'Insights', order: 270, permission: 'databases.view', component: DatabaseInsightsTab },
     { id: 'settings', kinds: ['database'], title: 'Settings', order: 900, permission: 'databases.view', component: DatabaseSettingsTab },
 );
 

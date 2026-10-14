@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
@@ -86,6 +87,8 @@ type DB struct {
 	shipper *Shipper
 	// stats caches the instances' connection figures for the heartbeat (Report).
 	stats statsCache
+	// observer, once started, has fresher connection figures than `stats` (NewObserver).
+	observer atomic.Pointer[Observer]
 }
 
 // lock takes the instances' locks (in id order, so two commands never deadlock) and returns the release.

@@ -1,0 +1,37 @@
+# Server
+redis_version:7.4.1
+uptime_in_seconds:86400
+
+# Clients
+connected_clients:12
+blocked_clients:2
+maxclients:10000
+
+# Memory
+used_memory:94371840
+maxmemory:107374182
+maxmemory_policy:noeviction
+
+# Stats
+total_commands_processed:123456
+rejected_connections:3
+expired_keys:40
+evicted_keys:0
+keyspace_hits:900
+keyspace_misses:100
+total_net_input_bytes:5000
+total_net_output_bytes:7000
+
+# Replication
+role:master
+connected_slaves:0
+
+# Errorstats
+errorstat_ERR:count=4
+errorstat_NOAUTH:count=1
+errorstat_OOM:count=7
+errorstat_WRONGPASS:count=2
+
+# Keyspace
+db0:keys=1500,expires=10,avg_ttl=0
+db3:keys=20,expires=0,avg_ttl=0

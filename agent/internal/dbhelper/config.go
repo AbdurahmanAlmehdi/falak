@@ -130,6 +130,10 @@ type RenderInput struct {
 	PasswordSHA256 string
 	// PreviousPasswordSHA256 stays valid next to it while a rotation overlaps (FALAK_DB_PREVIOUS_PASSWORD_FILE).
 	PreviousPasswordSHA256 string
+	// QueryInsights loads what top queries need at start: PostgreSQL pg_stat_statements, MariaDB performance_schema
+	// (query-insights.json next to the settings file, or FALAK_DB_QUERY_INSIGHTS). Not a setting: an older helper
+	// rejects unknown settings, and never reads the file.
+	QueryInsights bool
 }
 
 // File is one rendered file.
@@ -235,6 +239,14 @@ func renderPostgres(in RenderInput) ([]File, Tuning, error) {
 		w.line("ssl = off")
 	}
 	w.line("")
+	if in.QueryInsights {
+		w.line("# Query insights: per-statement figures (normalized text), without utility statements (they may hold passwords).")
+		w.line("shared_preload_libraries = 'pg_stat_statements'")
+		w.line("pg_stat_statements.max = 1000")
+		w.line("pg_stat_statements.track = top")
+		w.line("pg_stat_statements.track_utility = off")
+		w.line("")
+	}
 	w.line("log_destination = 'stderr'")
 	w.line("logging_collector = off")
 	if ms := in.Settings.slowMS(Postgres); ms > 0 {
@@ -243,6 +255,10 @@ func renderPostgres(in RenderInput) ([]File, Tuning, error) {
 		w.line("log_min_duration_statement = -1")
 	}
 	w.line("log_line_prefix = '%%m [%%p] %%q%%u@%%d '")
+	w.line("# No query text or bind values in the log beyond the slow statements (normalized by the agent).")
+	w.line("log_parameter_max_length = 0")
+	w.line("log_parameter_max_length_on_error = 0")
+	w.line("log_min_error_statement = panic")
 	w.line("log_timezone = 'UTC'")
 	w.line("timezone = 'UTC'")
 	w.line("datestyle = 'iso, mdy'")
@@ -332,6 +348,10 @@ func renderMySQL(in RenderInput) ([]File, Tuning, error) {
 		if mem < 1024 {
 			w.line("performance_schema = OFF")
 		}
+	} else if in.QueryInsights && mem >= 1024 {
+		// performance_schema takes a few hundred MiB: below 1 GiB, as MySQL, top queries come from the slow log.
+		w.line("# Query insights: statement digests.")
+		w.line("performance_schema = ON")
 	}
 	w.line("")
 	w.line("# Point-in-time recovery: binlogs are rotated and spooled every 60 s; the agent ships the spool.")
