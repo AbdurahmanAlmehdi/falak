@@ -20,6 +20,9 @@ use InvalidArgumentException;
  */
 final class GuardedProber implements Prober
 {
+    /** A plain host name: letters, digits, dashes and dots only (no percent-encoding, no IDN, no underscores). */
+    public const HOSTNAME = '/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/';
+
     public function __construct(
         private readonly HostResolver $resolver,
         private readonly Transport $transport,
@@ -65,7 +68,7 @@ final class GuardedProber implements Prober
             }
 
             [$scheme, $host, $port] = $parts;
-            $resolved = $this->resolve($host);
+            $resolved = $this->resolve($host, $target->allowSelf);
 
             if ($resolved instanceof ProbeResult) {
                 return $redirects > 0 ? ProbeResult::failure($resolved->errorKind ?? ErrorKind::Redirects, "Redirect to {$host}: {$resolved->error}", ['redirects' => $redirects]) : $resolved;
@@ -83,6 +86,11 @@ final class GuardedProber implements Prober
                 'totalMs' => $elapsed,
                 'redirects' => $redirects,
             ];
+
+            // The transport must have connected to the pinned address; anything else is a bypass attempt.
+            if ($exchange->primaryIp !== null && ! self::sameIp($exchange->primaryIp, $ip)) {
+                return ProbeResult::failure(ErrorKind::Blocked, "Connected to {$exchange->primaryIp} instead of the checked address", $timings);
+            }
 
             if ($exchange->failed()) {
                 return ProbeResult::failure($exchange->errorKind ?? ErrorKind::Http, (string) $exchange->error, $timings);
@@ -119,13 +127,20 @@ final class GuardedProber implements Prober
 
             $result = new ProbeResult(true, null, null, $status, ...$timings);
 
-            return $target->inspectTls && $scheme === 'https' ? $result->withTls($this->inspect($ip, $port, $host, $target->timeoutSeconds)) : $result;
+            if (! $target->inspectTls || $scheme !== 'https') {
+                return $result;
+            }
+
+            // The certificate inspection shares the attempt's deadline.
+            $left = (int) floor(($deadline - hrtime(true)) / 1e9);
+
+            return $left >= 1 ? $result->withTls($this->inspect($ip, $port, $host, $left)) : $result;
         }
     }
 
     private function tcp(ProbeTarget $target): ProbeResult
     {
-        $resolved = $this->resolve((string) $target->host);
+        $resolved = $this->resolve((string) $target->host, $target->allowSelf);
 
         if ($resolved instanceof ProbeResult) {
             return $resolved;
@@ -143,7 +158,7 @@ final class GuardedProber implements Prober
     private function tls(ProbeTarget $target): ProbeResult
     {
         $host = (string) $target->host;
-        $resolved = $this->resolve($host);
+        $resolved = $this->resolve($host, $target->allowSelf);
 
         if ($resolved instanceof ProbeResult) {
             return $resolved;
@@ -177,11 +192,11 @@ final class GuardedProber implements Prober
     /**
      * @return array{0: string, 1: int}|ProbeResult the pinned address and the lookup time, or why the host is refused
      */
-    private function resolve(string $host): array|ProbeResult
+    private function resolve(string $host, bool $allowSelf = false): array|ProbeResult
     {
         $host = self::bare($host);
 
-        if ($host === '' || ! $this->guard->allowsHost($host)) {
+        if (! self::validHost($host) || ! $this->guard->allowsHost($host)) {
             return ProbeResult::failure(ErrorKind::Blocked, "{$host} is not a public host");
         }
 
@@ -198,10 +213,10 @@ final class GuardedProber implements Prober
             }
         }
 
-        $ip = $this->guard->pick($ips);
+        $ip = $this->guard->pick($ips, $allowSelf);
 
         if ($ip === null) {
-            return ProbeResult::failure(ErrorKind::Blocked, "{$host} resolves to a private or reserved address", ['dnsMs' => $dnsMs]);
+            return ProbeResult::failure(ErrorKind::Blocked, "{$host} resolves to a private, reserved or control-plane address", ['dnsMs' => $dnsMs]);
         }
 
         return [$ip, $dnsMs];
@@ -224,9 +239,28 @@ final class GuardedProber implements Prober
             return null;
         }
 
+        $host = strtolower($parts['host']);
+
+        // parse_url leaves %xx in the host, curl decodes it: only plain names and IP literals get through.
+        if (! self::validHost(self::bare($host))) {
+            return null;
+        }
+
         $port = $parts['port'] ?? ($scheme === 'https' ? 443 : 80);
 
-        return [$scheme, strtolower($parts['host']), (int) $port];
+        return [$scheme, $host, (int) $port];
+    }
+
+    /** A plain host name or an IP literal (brackets already removed). */
+    public static function validHost(string $host): bool
+    {
+        return $host !== '' && strlen($host) <= 253
+            && (filter_var($host, FILTER_VALIDATE_IP) !== false || preg_match(self::HOSTNAME, $host) === 1);
+    }
+
+    private static function sameIp(string $a, string $b): bool
+    {
+        return @inet_pton(trim($a, '[]')) === @inet_pton(trim($b, '[]'));
     }
 
     /** A redirect target, absolute or relative to $base. */

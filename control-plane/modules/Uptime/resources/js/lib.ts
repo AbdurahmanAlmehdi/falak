@@ -62,6 +62,13 @@ export interface UptimeLimits {
     max_interval: number;
     max_timeout: number;
     max_redirects: number;
+    /** Worst-case worker load allowed per organization, and what its active monitors use. */
+    budget: number;
+    load: number | null;
+    /** Seconds the organization's oldest due check has waited. */
+    lag_seconds: number | null;
+    /** Set while the control plane cannot reach the internet (checks are recorded as unknown). */
+    offline_since: string | null;
 }
 
 export interface MonitorData {

@@ -34,7 +34,12 @@ export default function UptimeIndex({ monitors, incidents, sites, selected, limi
                 <Stat label="Monitors" value={active.length} hint={`${monitors.length - active.length} paused`} />
                 <Stat label="Up" value={active.filter((monitor) => monitor.status === 'up').length} tone="success" />
                 <Stat label="Down" value={down} tone={down > 0 ? 'danger' : undefined} />
-                <Stat label="Open incidents" value={open} tone={open > 0 ? 'danger' : undefined} hint="checked from the control plane" />
+                <Stat
+                    label="Open incidents"
+                    value={open}
+                    tone={open > 0 ? 'danger' : undefined}
+                    hint={`checks ${limits.lag_seconds ? `${limits.lag_seconds} s late` : 'on time'} · load ${limits.load ?? 0}/${limits.budget}`}
+                />
             </section>
             <MonitorsView
                 monitors={monitors}

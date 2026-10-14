@@ -30,7 +30,7 @@ final class CurlTransport implements Transport
             return new HttpExchange(errorKind: ErrorKind::Http, error: 'Invalid URL');
         }
 
-        [, $host, $port] = $parts;
+        [, , $port] = $parts;
         $body = '';
         $location = null;
         $capped = false;
@@ -38,7 +38,9 @@ final class CurlTransport implements Transport
 
         curl_setopt_array($handle, [
             CURLOPT_URL => $url,
-            CURLOPT_RESOLVE => [trim($host, '[]').":{$port}:".(str_contains($ip, ':') ? "[{$ip}]" : $ip)],
+            // Name-agnostic pin: whatever host curl derives from the URL (it decodes %xx, the guard saw the raw form), the
+            // connection goes to the checked address. A literal IP needs no lookup.
+            CURLOPT_CONNECT_TO => ['::'.(str_contains($ip, ':') ? "[{$ip}]" : $ip).":{$port}"],
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_PROXY => '',
@@ -96,6 +98,8 @@ final class CurlTransport implements Transport
             'totalMs' => $ms(CURLINFO_TOTAL_TIME_T),
         ];
         $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+        $primaryIp = (string) curl_getinfo($handle, CURLINFO_PRIMARY_IP);
+        $timings['primaryIp'] = $primaryIp !== '' ? $primaryIp : null;
         curl_close($handle);
 
         // 23: our write callback stopped the transfer at the body limit: the response is complete enough.
@@ -140,16 +144,28 @@ final class CurlTransport implements Transport
             return new TlsHandshake(false, $connectMs, errorKind: self::connectKind($error, $connectMs, $timeoutSeconds), error: $error !== '' ? $error : 'Connection failed');
         }
 
-        stream_set_timeout($socket, $timeoutSeconds);
+        // The handshake gets what is left of the timeout (the socket timeout bounds the blocking handshake).
+        $leftMs = $timeoutSeconds * 1000 - $connectMs;
+
+        if ($leftMs <= 0) {
+            fclose($socket);
+
+            return new TlsHandshake(false, $connectMs, 0, errorKind: ErrorKind::Timeout, error: "No TLS handshake within {$timeoutSeconds} s");
+        }
+
+        stream_set_timeout($socket, intdiv($leftMs, 1000), ($leftMs % 1000) * 1000);
         $started = hrtime(true);
         $crypto = @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT);
         $handshakeMs = (int) round((hrtime(true) - $started) / 1e6);
 
         if ($crypto !== true) {
+            $timedOut = (stream_get_meta_data($socket)['timed_out'] ?? false) || $handshakeMs >= $leftMs - 50;
             fclose($socket);
             $message = error_get_last()['message'] ?? 'TLS handshake failed';
 
-            return new TlsHandshake(false, $connectMs, $handshakeMs, errorKind: ErrorKind::Tls, error: mb_substr($message, 0, 300));
+            return $timedOut
+                ? new TlsHandshake(false, $connectMs, $handshakeMs, errorKind: ErrorKind::Timeout, error: "No TLS handshake within {$timeoutSeconds} s")
+                : new TlsHandshake(false, $connectMs, $handshakeMs, errorKind: ErrorKind::Tls, error: mb_substr($message, 0, 300));
         }
 
         $chain = [];

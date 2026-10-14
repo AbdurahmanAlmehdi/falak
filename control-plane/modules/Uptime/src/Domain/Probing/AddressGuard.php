@@ -13,7 +13,11 @@ final class AddressGuard
     /** Always refused. */
     private const ALWAYS = [
         '0.0.0.0/8', '169.254.0.0/16', '224.0.0.0/4', '255.255.255.255/32',
+        // Cloud metadata services outside link-local: Alibaba, Oracle.
+        '100.100.100.200/32', '192.0.0.192/32',
         '::/128', 'fe80::/10', 'ff00::/8', 'fd00:ec2::254/128',
+        // SIIT (IPv4-translated ::ffff:0:a.b.c.d) and local-use NAT64: may translate to any IPv4 address.
+        '::ffff:0:0:0/96', '64:ff9b:1::/48',
     ];
 
     /** Refused unless private targets are allowed. */
@@ -28,10 +32,13 @@ final class AddressGuard
 
     /**
      * @param  list<string>  $blockedCidrs  extra refused ranges
+     * @param  list<string>  $selfIps  the control plane's own public addresses: refused unless the caller allows them
+     *                                 (site domain monitors on a single-host install)
      */
     public function __construct(
         private readonly bool $allowPrivate = false,
         private readonly array $blockedCidrs = [],
+        private readonly array $selfIps = [],
     ) {}
 
     public function allowsHost(string $host): bool
@@ -60,7 +67,7 @@ final class AddressGuard
         return true;
     }
 
-    public function allows(string $ip): bool
+    public function allows(string $ip, bool $allowSelf = false): bool
     {
         $packed = @inet_pton(trim($ip, '[]'));
 
@@ -68,12 +75,20 @@ final class AddressGuard
             return false;
         }
 
+        if (! $allowSelf) {
+            foreach ($this->selfIps as $self) {
+                if (@inet_pton(trim($self, '[]')) === $packed) {
+                    return false;
+                }
+            }
+        }
+
         // IPv4 embedded in IPv6 (mapped ::ffff:a.b.c.d, NAT64 64:ff9b::/96, 6to4 2002::/16): judge the IPv4 address.
         if (strlen($packed) === 16) {
             $embedded = self::embeddedIpv4($packed);
 
             if ($embedded !== null) {
-                return $this->allows((string) inet_ntop($embedded));
+                return $this->allows((string) inet_ntop($embedded), $allowSelf);
             }
         }
 
@@ -93,14 +108,14 @@ final class AddressGuard
      * @return string|null the first address, when every address is allowed (one refused address refuses the host:
      *                     a round-robin answer must not reach the control plane's network on some attempts)
      */
-    public function pick(array $ips): ?string
+    public function pick(array $ips, bool $allowSelf = false): ?string
     {
         if ($ips === []) {
             return null;
         }
 
         foreach ($ips as $ip) {
-            if (! $this->allows($ip)) {
+            if (! $this->allows($ip, $allowSelf)) {
                 return null;
             }
         }

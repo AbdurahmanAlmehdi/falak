@@ -4,6 +4,8 @@ namespace Falak\Uptime\Application\Actions;
 
 use Carbon\CarbonImmutable;
 use Falak\Edge\Contracts\DomainRecords;
+use Falak\Projects\Contracts\ProjectDirectory;
+use Falak\Projects\Contracts\ServiceKind;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Uptime\Domain\Enums\MonitorSource;
 use Falak\Uptime\Domain\Enums\MonitorStatus;
@@ -14,6 +16,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 /**
  * Keeps one automatic `https://<domain>/` monitor per non-wildcard domain of every site (and its test domain): creates
  * the missing ones, deletes those whose domain is gone (history included). Run on domain events and every 10 minutes.
+ * Sites of preview environments are skipped: short-lived, often behind basic auth (401), never worth an outage.
  */
 final class SyncSiteMonitors
 {
@@ -21,11 +24,12 @@ final class SyncSiteMonitors
         private readonly SiteDirectory $sites,
         private readonly DomainRecords $domains,
         private readonly DeleteMonitor $delete,
+        private readonly ProjectDirectory $projects,
     ) {}
 
     public function organization(string $organizationId): void
     {
-        $sites = $this->sites->forOrganization($organizationId);
+        $sites = array_values(array_filter($this->sites->forOrganization($organizationId), fn ($site) => ! $this->isPreview($site->id)));
         $wanted = [];
 
         foreach ($sites as $site) {
@@ -61,6 +65,20 @@ final class SyncSiteMonitors
         Monitor::query()->where('organization_id', $organizationId)->where('source', MonitorSource::Auto)
             ->when($keep !== [], fn ($q) => $q->whereNotIn('auto_key', $keep))
             ->get()->each(fn (Monitor $monitor) => ($this->delete)($monitor));
+    }
+
+    /** @var array<string, bool> preview flag by environment id (one sync) */
+    private array $previews = [];
+
+    private function isPreview(string $siteId): bool
+    {
+        $service = $this->projects->projectOf(ServiceKind::Site, $siteId);
+
+        if ($service === null) {
+            return false;
+        }
+
+        return $this->previews[$service->environmentId] ??= (bool) $this->projects->environment($service->environmentId)?->isPreview;
     }
 
     public static function key(string $siteId, string $host): string

@@ -9,6 +9,7 @@ use Falak\Alerting\Contracts\Severity;
 use Falak\Insights\Contracts\UptimeIssues;
 use Falak\Uptime\Application\MonitorLinks;
 use Falak\Uptime\Application\Rollups;
+use Falak\Uptime\Domain\Enums\ErrorKind;
 use Falak\Uptime\Domain\Enums\MonitorStatus;
 use Falak\Uptime\Domain\Models\Check;
 use Falak\Uptime\Domain\Models\Incident;
@@ -75,7 +76,9 @@ final class RecordCheck
                 'attempts' => max(1, min(255, $attempts)),
             ]);
 
-            $this->rollups->add($locked->id, $at, $result, $state->status === MonitorStatus::Down);
+            // Time-weighted: the check stands for the time since the previous one, at most the interval.
+            $gap = $locked->last_checked_at !== null ? (int) $locked->last_checked_at->diffInSeconds($at, true) : $locked->interval_seconds;
+            $this->rollups->add($locked->id, $at, $result, $state->status === MonitorStatus::Down, min($gap, $locked->interval_seconds));
             $incident = $this->applyIncident($locked, $state, $transition, $check, $at);
 
             $changes = [
@@ -98,13 +101,8 @@ final class RecordCheck
                 $changes += ['tls' => $result->tls->toArray(), 'tls_checked_at' => $at];
             }
 
-            if (! $result->ok) {
-                $retry = $at->addSeconds(min($locked->interval_seconds, (int) config('uptime.retry_interval', 30)));
-
-                if ($locked->next_check_at === null || $locked->next_check_at->greaterThan($retry)) {
-                    $changes['next_check_at'] = $retry;
-                }
-            }
+            $changes['next_check_at'] = $at->addSeconds(self::nextIn($locked, $state, $result->ok));
+            $changes['claimed_at'] = null;
 
             if ($transition === MonitorState::CLOSED && $this->recentIncidents($locked, $at) >= (int) config('uptime.flapping.incidents', 3)) {
                 $changes['flapping_until'] = $at->addMinutes((int) config('uptime.flapping.hold_minutes', 15));
@@ -164,6 +162,49 @@ final class RecordCheck
         }
     }
 
+    /**
+     * A check while the control plane itself is offline: recorded (visible in the failed checks), no state, no rollup,
+     * no incident, no alert; the monitor is checked again after its interval.
+     */
+    public function unknown(Monitor $monitor, ?CarbonImmutable $at = null): void
+    {
+        $at ??= CarbonImmutable::now();
+
+        Check::query()->create([
+            'monitor_id' => $monitor->id,
+            'checked_at' => $at,
+            'ok' => false,
+            'error_kind' => ErrorKind::Offline->value,
+            'error' => 'The control plane could not reach the internet (canaries failed): check skipped',
+            'attempts' => 2,
+        ]);
+
+        $monitor->forceFill(['next_check_at' => $at->addSeconds($monitor->interval_seconds), 'claimed_at' => null])->save();
+    }
+
+    /**
+     * Seconds to the next check: the interval after a success; after a failure at most uptime.retry_interval (outages
+     * are confirmed quickly), except for a site domain monitor that has never been up, which backs off exponentially
+     * (interval x 2^(failures-1), at most uptime.pending_backoff_max): a domain whose DNS is not pointed yet must not be
+     * checked every 30 s forever.
+     */
+    public static function nextIn(Monitor $monitor, MonitorState $state, bool $ok): int
+    {
+        $interval = max(1, $monitor->interval_seconds);
+
+        if ($ok) {
+            return $interval;
+        }
+
+        if ($state->status === MonitorStatus::Pending && ! $state->armed && $monitor->isAutomatic()) {
+            $max = max($interval, (int) config('uptime.pending_backoff_max', 3600));
+
+            return (int) min($max, $interval * 2 ** min(16, max(0, $state->failures - 1)));
+        }
+
+        return min($interval, max(1, (int) config('uptime.retry_interval', 30)));
+    }
+
     public static function key(string $kind, string $monitorId): string
     {
         return "uptime.{$kind}:{$monitorId}";
@@ -172,10 +213,14 @@ final class RecordCheck
     private function applyIncident(Monitor $monitor, MonitorState $state, ?string $transition, Check $check, CarbonImmutable $at): ?Incident
     {
         if ($transition === MonitorState::OPENED) {
-            // The outage started with the first failed check after the last success.
+            // The outage started with the first failed check after the last success, the previous incident's end and the
+            // last resume (a pause must not glue an old outage to this one); unknown (offline) checks do not count.
             $lastOk = Check::query()->where('monitor_id', $monitor->id)->where('ok', true)->where('checked_at', '<', $at)->max('checked_at');
-            $first = Check::query()->where('monitor_id', $monitor->id)->where('ok', false)
-                ->when($lastOk, fn ($q) => $q->where('checked_at', '>', $lastOk))
+            $lastResolved = Incident::query()->where('monitor_id', $monitor->id)->whereNotNull('resolved_at')->max('resolved_at');
+            $floor = collect([$lastOk, $lastResolved, $monitor->resumed_at])->filter()
+                ->map(fn ($value) => CarbonImmutable::parse($value))->max();
+            $first = Check::query()->where('monitor_id', $monitor->id)->where('ok', false)->where('error_kind', '!=', ErrorKind::Offline->value)
+                ->when($floor, fn ($q) => $q->where('checked_at', '>', $floor))
                 ->orderBy('checked_at')->orderBy('id')->first() ?? $check;
 
             return Incident::query()->create([

@@ -8,6 +8,7 @@ use Falak\Uptime\Domain\Enums\MonitorStatus;
 use Falak\Uptime\Domain\Models\StatusPage;
 use Falak\Uptime\Domain\Probing\ProbeResult;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -88,6 +89,35 @@ it('validates slugs and monitors of other organizations', function () {
     $this->putJson("/uptime/status-pages/{$this->project->id}", ['slug' => 'Bad Slug', 'title' => 'x', 'enabled' => true, 'monitors' => []])->assertJsonValidationErrors('slug');
     $this->putJson("/uptime/status-pages/{$this->project->id}", ['slug' => 'acme', 'title' => 'x', 'enabled' => true, 'monitors' => [['id' => $foreign->id, 'display_name' => 'x']]])
         ->assertJsonValidationErrors('monitors.0.id');
+});
+
+it('refuses reserved and taken addresses with the same answer, also when the race is lost', function () {
+    [, $other] = memberOf(null, Role::Owner);
+    $theirs = app(ProjectDirectory::class)->forOrganization($other->id)[0];
+    StatusPage::query()->create(['organization_id' => $other->id, 'project_id' => $theirs->id, 'slug' => 'theirs', 'title' => 'x', 'enabled' => true]);
+
+    foreach (['stripe', 'falak', 'github-status', 'status', 'theirs'] as $slug) {
+        $this->putJson("/uptime/status-pages/{$this->project->id}", ['slug' => $slug, 'title' => 'x', 'enabled' => true, 'monitors' => []])
+            ->assertUnprocessable()->assertJsonPath('errors.slug.0', 'This address is not available.');
+    }
+
+    // Another organization takes the address between the check and the insert.
+    StatusPage::creating(function (StatusPage $page) use ($other) {
+        if ($page->slug === 'raced') {
+            DB::table('uptime_status_pages')->insert(['id' => (string) str()->ulid(), 'organization_id' => $other->id, 'project_id' => (string) str()->ulid(), 'slug' => 'raced', 'title' => 'x', 'enabled' => true]);
+        }
+    });
+    $this->putJson("/uptime/status-pages/{$this->project->id}", ['slug' => 'raced', 'title' => 'x', 'enabled' => true, 'monitors' => []])
+        ->assertUnprocessable()->assertJsonPath('errors.slug.0', 'This address is not available.');
+    expect(StatusPage::query()->where('organization_id', $this->organization->id)->count())->toBe(0);
+});
+
+it('says how often the shown monitors are checked', function () {
+    $this->api->forceFill(['interval_seconds' => 120])->save();
+    $this->web->forceFill(['interval_seconds' => 300])->save();
+    uptime_publish($this);
+
+    $this->get('/status/acme')->assertSee('checked every 2 minutes')->assertDontSee('every minute');
 });
 
 it('needs uptime.publish to change status pages', function () {

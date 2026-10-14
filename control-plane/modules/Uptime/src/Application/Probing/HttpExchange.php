@@ -20,6 +20,8 @@ final readonly class HttpExchange
         public ?int $totalMs = null,
         public ?ErrorKind $errorKind = null,
         public ?string $error = null,
+        /** The address the transport actually connected to (null: unknown / not connected). */
+        public ?string $primaryIp = null,
     ) {}
 
     public function failed(): bool

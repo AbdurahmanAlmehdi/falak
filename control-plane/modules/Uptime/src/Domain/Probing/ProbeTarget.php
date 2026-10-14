@@ -24,5 +24,7 @@ final readonly class ProbeTarget
         public int $bodyBytes = 65536,
         /** Inspect the certificate chain (always for tls; for https once an hour). */
         public bool $inspectTls = false,
+        /** Site domain monitors may reach the control plane's own public addresses (single-host installs). */
+        public bool $allowSelf = false,
     ) {}
 }

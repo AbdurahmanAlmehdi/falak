@@ -1,5 +1,6 @@
 import {
     Button,
+    Callout,
     DataTable,
     MetricChart,
     RelativeTime,
@@ -310,6 +311,16 @@ export function MonitorsView({
 
     return (
         <div className="grid gap-6">
+            {limits.offline_since && (
+                <Callout tone="warning" title="Monitoring paused: the control plane is offline">
+                    The control plane could not reach the internet, so failed checks are recorded as unknown and open no incident.
+                </Callout>
+            )}
+            {(limits.lag_seconds ?? 0) >= 60 && (
+                <Callout tone="warning" title={`Checks are running ${limits.lag_seconds} s late`}>
+                    Monitors whose targets time out keep the uptime workers busy. Lower their timeouts or raise their intervals.
+                </Callout>
+            )}
             <Section
                 title="Monitors"
                 description="Checked from the control plane. An incident opens after two failed checks in a row, each confirmed by a second attempt."

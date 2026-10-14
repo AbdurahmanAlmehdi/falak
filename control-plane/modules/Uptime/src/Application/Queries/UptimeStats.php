@@ -42,11 +42,11 @@ final class UptimeStats
                 ->where('period', $period)
                 ->where('bucket_start', '>=', $since)
                 ->groupBy('monitor_id')
-                ->selectRaw('monitor_id, SUM(checks) AS checks, SUM(down_checks) AS down_checks')
+                ->selectRaw('monitor_id, SUM(checks) AS checks, SUM(down_checks) AS down_checks, SUM(seconds) AS seconds, SUM(down_seconds) AS down_seconds')
                 ->get();
 
             foreach ($rows as $row) {
-                $out[$row->monitor_id][$window] = self::percent((int) $row->checks, (int) $row->down_checks);
+                $out[$row->monitor_id][$window] = self::uptime($row);
             }
         }
 
@@ -67,7 +67,7 @@ final class UptimeStats
             ->whereIn('monitor_id', $monitorIds)
             ->where('period', Rollups::DAY)
             ->where('bucket_start', '>=', $first)
-            ->get(['monitor_id', 'bucket_start', 'checks', 'down_checks']);
+            ->get(['monitor_id', 'bucket_start', 'checks', 'down_checks', 'seconds', 'down_seconds']);
 
         $byDay = [];
 
@@ -80,13 +80,10 @@ final class UptimeStats
         foreach ($monitorIds as $id) {
             for ($day = $first; $day->lessThanOrEqualTo($today); $day = $day->addDay()) {
                 $row = $byDay[$id][$day->toDateString()] ?? null;
-                $checks = (int) ($row->checks ?? 0);
-                $down = (int) ($row->down_checks ?? 0);
                 $out[$id][] = [
                     'date' => $day->toDateString(),
-                    'uptime' => self::percent($checks, $down),
-                    // Approximation: each down check stands for its share of the day's checks.
-                    'down_minutes' => $checks > 0 ? (int) round($down / $checks * 1440) : 0,
+                    'uptime' => $row ? self::uptime($row) : null,
+                    'down_minutes' => $row ? (int) round((int) $row->down_seconds / 60) : 0,
                 ];
             }
         }
@@ -130,7 +127,7 @@ final class UptimeStats
 
                 return [
                     't' => CarbonImmutable::parse($row->bucket_start, 'UTC')->toIso8601String(),
-                    'uptime' => self::percent((int) $row->checks, (int) $row->down_checks),
+                    'uptime' => self::uptime($row),
                     'dns' => $avg('dns_sum_ms'),
                     'connect' => $avg('connect_sum_ms'),
                     'tls' => $avg('tls_sum_ms'),
@@ -141,9 +138,19 @@ final class UptimeStats
             })->values()->all();
     }
 
-    public static function percent(int $checks, int $down): ?float
+    /**
+     * Time-weighted uptime of rollup rows (seconds / down_seconds), by check counts for rows without time.
+     */
+    public static function uptime(object $row): ?float
     {
-        return $checks > 0 ? round(100 * (1 - $down / $checks), 3) : null;
+        return (int) ($row->seconds ?? 0) > 0
+            ? self::percent((int) $row->seconds, (int) $row->down_seconds)
+            : self::percent((int) $row->checks, (int) $row->down_checks);
+    }
+
+    public static function percent(int $total, int $down): ?float
+    {
+        return $total > 0 ? round(100 * (1 - $down / $total), 3) : null;
     }
 
     /** Server wait: time to first byte minus connect and TLS (stacked in the chart). */

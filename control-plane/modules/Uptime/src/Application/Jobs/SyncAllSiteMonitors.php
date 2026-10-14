@@ -26,8 +26,9 @@ final class SyncAllSiteMonitors implements ShouldQueue
             return;
         }
 
+        // Fanned out: one job per organization on the uptime queue.
         foreach ($organizations->all() as $organization) {
-            $sync->organization($organization->id);
+            self::dispatch($organization->id)->onQueue((string) config('uptime.queue', 'uptime'));
         }
     }
 }

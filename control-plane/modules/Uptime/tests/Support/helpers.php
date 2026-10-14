@@ -17,7 +17,8 @@ require_once __DIR__.'/Pki.php';
  */
 function uptime_fakes(): array
 {
-    config(['uptime.retry_delay_ms' => 0]);
+    // No real network in tests: no connectivity canaries, no APP_URL lookup.
+    config(['uptime.retry_delay_ms' => 0, 'uptime.canaries' => []]);
     $prober = new FakeProber;
     $alerts = new RecordingAlerts;
     app()->instance(Prober::class, $prober);

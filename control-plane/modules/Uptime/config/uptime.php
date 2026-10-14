@@ -8,6 +8,20 @@ return [
     // Monitors claimed per scheduler run (every 10 s).
     'dispatch_batch' => 500,
 
+    // Fairness between organizations: at most this many checks of one organization queued or running at once (a
+    // claimed check holds a lease until it is recorded or the job timeout passes). Size the uptime workers
+    // (FALAK_UPTIME_WORKERS) at least twice this, so an organization whose targets all time out only slows its own
+    // checks.
+    'max_in_flight_per_org' => (int) env('FALAK_UPTIME_MAX_IN_FLIGHT_PER_ORG', 2),
+
+    // Worst-case load budget per organization: the sum over its active monitors of (2 attempts x timeout) / interval,
+    // i.e. how many workers it would keep busy if every target timed out. Creating or changing a monitor past it is
+    // refused; site domain monitors count but are never refused.
+    'org_budget' => (float) env('FALAK_UPTIME_ORG_BUDGET', 20),
+
+    // Checks waiting longer than this past their time raise uptime.checks_delayed for the organization.
+    'lag_alert_seconds' => 120,
+
     // A failed attempt is confirmed by a second one after this delay; a check fails only when both fail.
     'retry_delay_ms' => (int) env('FALAK_UPTIME_RETRY_DELAY_MS', 1000),
 
@@ -17,6 +31,14 @@ return [
 
     // A failed check schedules the next one after at most this many seconds (outages are confirmed quickly).
     'retry_interval' => 30,
+
+    // A site domain monitor that has never been up (DNS not pointed, nothing deployed) backs off: interval x 2^n,
+    // at most this many seconds.
+    'pending_backoff_max' => 3600,
+
+    // Control-plane connectivity canaries (host:port, TCP): when a check fails and none of them answers either, the
+    // control plane is offline, the check is recorded as unknown and changes no state (no incident, no alert).
+    'canaries' => array_values(array_filter(array_map('trim', explode(',', (string) env('FALAK_UPTIME_CANARIES', '1.1.1.1:443,8.8.8.8:443'))))),
 
     'default_interval' => 60,
     'min_interval' => 30,
@@ -47,6 +69,9 @@ return [
     'allow_private_targets' => (bool) env('FALAK_UPTIME_ALLOW_PRIVATE_TARGETS', false),
     // Extra refused ranges (CIDR), e.g. the control plane's own public subnet.
     'blocked_cidrs' => array_values(array_filter(array_map('trim', explode(',', (string) env('FALAK_UPTIME_BLOCKED_CIDRS', ''))))),
+
+    // The control plane's own public addresses, refused for user monitors (APP_URL's host is added on its own).
+    'self_ips' => array_values(array_filter(array_map('trim', explode(',', (string) env('FALAK_UPTIME_SELF_IPS', ''))))),
 
     // CA bundle for chain checks (null: OpenSSL's default file, then the usual system paths).
     'ca_file' => env('FALAK_UPTIME_CA_FILE'),

@@ -95,7 +95,11 @@
         @endif
     </div>
 
-    <p class="muted" style="margin-top: 24px">Updated {{ \Carbon\CarbonImmutable::parse($page['updated_at'])->format('M j, H:i') }} UTC · checked every minute</p>
+    @php
+        $every = $page['interval_seconds'] ?? null;
+        $every = $every === null ? null : ($every % 60 === 0 ? ($every === 60 ? 'every minute' : 'every '.($every / 60).' minutes') : "every {$every} seconds");
+    @endphp
+    <p class="muted" style="margin-top: 24px">Updated {{ \Carbon\CarbonImmutable::parse($page['updated_at'])->format('M j, H:i') }} UTC{{ $every ? " · checked {$every}" : '' }}</p>
 </main>
 </body>
 </html>

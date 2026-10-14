@@ -11,6 +11,8 @@ use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Uptime\Application\Actions\DeleteMonitor;
 use Falak\Uptime\Application\Actions\RecordCheck;
 use Falak\Uptime\Application\Actions\SyncSiteMonitors;
+use Falak\Uptime\Application\Jobs\DispatchChecks;
+use Falak\Uptime\Application\Probing\Connectivity;
 use Falak\Uptime\Application\Queries\UptimeStats;
 use Falak\Uptime\Domain\Enums\MonitorSource;
 use Falak\Uptime\Domain\Enums\MonitorStatus;
@@ -53,7 +55,7 @@ final class MonitorController extends Controller
             'incidents' => $this->incidents(Incident::query()->where('organization_id', $organizationId), $monitors),
             'sites' => $sites->map(fn (string $name, string $id) => ['id' => $id, 'name' => $name])->values(),
             'selected' => $request->query('monitor'),
-            'limits' => $this->limits(),
+            'limits' => $this->limits($organizationId),
             'can' => [
                 'manage' => $this->access->can($request->user(), $organizationId, UptimePolicy::MANAGE),
                 'publish' => $this->access->can($request->user(), $organizationId, UptimePolicy::PUBLISH),
@@ -75,7 +77,7 @@ final class MonitorController extends Controller
         return response()->json(['data' => [
             'monitors' => $this->present($monitors, [$site->id => $site->name]),
             'incidents' => $this->incidents(Incident::query()->whereIn('monitor_id', $monitors->modelKeys()), $monitors),
-            'limits' => $this->limits(),
+            'limits' => $this->limits($organizationId),
             'can' => ['manage' => $this->access->can($request->user(), $organizationId, UptimePolicy::MANAGE)],
         ]]);
     }
@@ -125,7 +127,10 @@ final class MonitorController extends Controller
         }
 
         $type = MonitorType::from($data['type']);
-        $monitor = Monitor::query()->create([
+        $monitor = new Monitor([
+            'timeout_seconds' => (int) config('uptime.default_timeout', 10),
+            'interval_seconds' => (int) config('uptime.default_interval', 60),
+            'max_redirects' => (int) config('uptime.max_redirects', 5),
             ...$this->settings($data),
             'organization_id' => $organizationId,
             'site_id' => $data['site_id'] ?? null,
@@ -142,6 +147,8 @@ final class MonitorController extends Controller
             'status' => MonitorStatus::Pending,
             'next_check_at' => CarbonImmutable::now(),
         ]);
+        $this->checkBudget($organizationId, $monitor);
+        $monitor->save();
 
         $this->audit->record('uptime.monitor.created', 'uptime_monitor', $monitor->id, ['name' => $monitor->name, 'target' => $monitor->target()], $organizationId);
 
@@ -153,7 +160,9 @@ final class MonitorController extends Controller
         $this->authorize('update', $monitor);
         $data = $request->validate($rules->settings());
 
-        $monitor->forceFill([...$this->settings($data), ...(isset($data['name']) ? ['name' => $data['name']] : [])])->save();
+        $monitor->forceFill([...$this->settings($data), ...(isset($data['name']) ? ['name' => $data['name']] : [])]);
+        $this->checkBudget($monitor->organization_id, $monitor);
+        $monitor->save();
         $this->audit->record('uptime.monitor.updated', 'uptime_monitor', $monitor->id, ['name' => $monitor->name, 'changes' => array_keys($data)], $monitor->organization_id);
 
         return response()->json(['data' => $this->present(collect([$monitor]))[0]]);
@@ -177,8 +186,11 @@ final class MonitorController extends Controller
         $this->authorize('update', $monitor);
 
         if ($monitor->isPaused()) {
-            // Back as pending: an automatic monitor opens no incident until it has been up again.
-            $monitor->forceFill(['paused_at' => null, 'next_check_at' => now(), 'armed' => $monitor->armed && ! $monitor->isAutomatic()])->save();
+            // Back as pending: an automatic monitor opens no incident until it has been up again; an incident never
+            // starts before the resume.
+            $monitor->forceFill(['paused_at' => null, 'resumed_at' => now(), 'next_check_at' => now(), 'claimed_at' => null, 'armed' => $monitor->armed && ! $monitor->isAutomatic()]);
+            $this->checkBudget($monitor->organization_id, $monitor);
+            $monitor->save();
             $this->audit->record('uptime.monitor.resumed', 'uptime_monitor', $monitor->id, ['name' => $monitor->name], $monitor->organization_id);
         }
 
@@ -229,11 +241,32 @@ final class MonitorController extends Controller
     }
 
     /**
-     * @return array{max_monitors: int, min_interval: int, max_interval: int, max_timeout: int, max_redirects: int}
+     * Refuses settings that would let the organization's monitors keep more than uptime.org_budget workers busy when
+     * every target times out (2 attempts x timeout / interval, summed).
      */
-    private function limits(): array
+    private function checkBudget(string $organizationId, Monitor $candidate): void
+    {
+        $budget = (float) config('uptime.org_budget', 20);
+        $load = DispatchChecks::load($organizationId, $candidate);
+
+        if ($load > $budget + 1e-9) {
+            throw ValidationException::withMessages(['interval_seconds' => sprintf(
+                'Too many checks for this organization: if every target timed out they would keep %.1f workers busy (limit %s). Raise the interval or lower the timeout of this or other monitors.',
+                $load, rtrim(rtrim(number_format($budget, 1), '0'), '.'),
+            )]);
+        }
+    }
+
+    /**
+     * @return array<string, int|float|string|null>
+     */
+    private function limits(?string $organizationId = null): array
     {
         return [
+            'budget' => (float) config('uptime.org_budget', 20),
+            'load' => $organizationId ? round(DispatchChecks::load($organizationId), 2) : null,
+            'lag_seconds' => $organizationId ? DispatchChecks::lag($organizationId) : null,
+            'offline_since' => Connectivity::offlineSince(),
             'max_monitors' => (int) config('uptime.max_monitors', 50),
             'min_interval' => (int) config('uptime.min_interval', 30),
             'max_interval' => (int) config('uptime.max_interval', 600),

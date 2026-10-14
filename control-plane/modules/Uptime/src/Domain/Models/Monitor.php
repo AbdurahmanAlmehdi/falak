@@ -45,6 +45,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property ?array<string, mixed> $tls
  * @property ?CarbonImmutable $tls_checked_at
  * @property ?CarbonImmutable $flapping_until
+ * @property ?CarbonImmutable $claimed_at a check is queued or running (lease)
+ * @property ?CarbonImmutable $resumed_at
  * @property CarbonImmutable $created_at
  */
 class Monitor extends Model
@@ -83,6 +85,8 @@ class Monitor extends Model
             'status_changed_at' => 'immutable_datetime',
             'tls_checked_at' => 'immutable_datetime',
             'flapping_until' => 'immutable_datetime',
+            'claimed_at' => 'immutable_datetime',
+            'resumed_at' => 'immutable_datetime',
             'created_at' => 'immutable_datetime',
             'updated_at' => 'immutable_datetime',
         ];
@@ -117,6 +121,15 @@ class Monitor extends Model
     public function state(): MonitorState
     {
         return new MonitorState($this->status, $this->armed, $this->consecutive_failures, $this->consecutive_successes);
+    }
+
+    /** Workers this monitor keeps busy if its target always times out: two attempts per interval. */
+    public function cost(): float
+    {
+        $timeout = $this->timeout_seconds ?? (int) config('uptime.default_timeout', 10);
+        $interval = $this->interval_seconds ?? (int) config('uptime.default_interval', 60);
+
+        return $this->isPaused() ? 0.0 : 2 * $timeout / max(1, $interval);
     }
 
     public function slowThreshold(): int
@@ -158,6 +171,7 @@ class Monitor extends Model
             keywordAbsent: $this->keyword_absent,
             bodyBytes: (int) config('uptime.body_bytes', 65536),
             inspectTls: $inspectTls,
+            allowSelf: $this->isAutomatic(),
         );
     }
 

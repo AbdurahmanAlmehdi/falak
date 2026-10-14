@@ -32,6 +32,7 @@ use Falak\Uptime\Infrastructure\SystemHostResolver;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
@@ -55,9 +56,10 @@ class UptimeServiceProvider extends ModuleServiceProvider
     {
         $this->mergeConfigFrom($this->modulePath().'/config/uptime.php', 'uptime');
 
-        $this->app->singleton(AddressGuard::class, fn () => new AddressGuard(
+        $this->app->singleton(AddressGuard::class, fn ($app) => new AddressGuard(
             (bool) config('uptime.allow_private_targets', false),
             array_values((array) config('uptime.blocked_cidrs', [])),
+            self::selfIps($app->make(HostResolver::class)),
         ));
         $this->app->singleton(Transport::class, fn () => new CurlTransport(config('uptime.ca_file') ?: null));
         $this->app->singleton(Prober::class, fn ($app) => new GuardedProber(
@@ -67,6 +69,19 @@ class UptimeServiceProvider extends ModuleServiceProvider
             new CertificateInspector,
             config('uptime.ca_file') ?: null,
         ));
+    }
+
+    /**
+     * The control plane's own public addresses: uptime.self_ips plus what APP_URL's host resolves to (cached an hour).
+     *
+     * @return list<string>
+     */
+    private static function selfIps(HostResolver $resolver): array
+    {
+        $host = (string) parse_url((string) config('app.url'), PHP_URL_HOST);
+        $resolved = $host === '' ? [] : Cache::remember('uptime:self-ips:'.$host, 3600, fn () => filter_var(trim($host, '[]'), FILTER_VALIDATE_IP) ? [trim($host, '[]')] : $resolver->resolve($host));
+
+        return array_values(array_unique([...array_values((array) config('uptime.self_ips', [])), ...$resolved]));
     }
 
     protected function bootModule(): void
@@ -86,12 +101,13 @@ class UptimeServiceProvider extends ModuleServiceProvider
         $types->register(RecordCheck::ALERT_TLS, 'Certificate chain, host name or expiry problem', 'Uptime', Severity::Warning, 'Open monitor');
         $types->register(RecordCheck::ALERT_SLOW, 'Slow responses', 'Uptime', Severity::Warning, 'Open monitor');
         $types->register(RecordCheck::ALERT_RECOVERED, 'Monitor recovered', 'Uptime', Severity::Info);
+        $types->register(DispatchChecks::ALERT_DELAYED, 'Uptime checks are delayed', 'Uptime', Severity::Warning, 'Open uptime');
 
         // Public status pages: outside the web group (no session, no cookies, no CSRF), rate-limited per IP.
         RateLimiter::for('uptime-status', fn (Request $request) => Limit::perMinute(max(1, (int) config('uptime.status_page.rate_per_minute', 60)))->by((string) $request->ip()));
         Route::middleware('throttle:uptime-status')->get('status/{slug}', [StatusPageController::class, 'show'])->name('uptime.status-page');
 
-        $sync = fn (DomainAdded|DomainRemoved $event) => SyncAllSiteMonitors::dispatch($event->organizationId)->afterCommit();
+        $sync = fn (DomainAdded|DomainRemoved $event) => SyncAllSiteMonitors::dispatch($event->organizationId)->onQueue((string) config('uptime.queue', 'uptime'))->afterCommit();
         Event::listen(DomainAdded::class, $sync);
         Event::listen(DomainRemoved::class, $sync);
         Event::listen(SiteDeleted::class, function (SiteDeleted $event) {
@@ -111,8 +127,9 @@ class UptimeServiceProvider extends ModuleServiceProvider
         });
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
-            $schedule->job(new DispatchChecks)->everyTenSeconds()->name('uptime:dispatch')->withoutOverlapping();
-            $schedule->job(new SyncAllSiteMonitors)->everyTenMinutes()->name('uptime:sync')->withoutOverlapping();
+            $queue = (string) config('uptime.queue', 'uptime');
+            $schedule->job(new DispatchChecks, $queue)->everyTenSeconds()->name('uptime:dispatch')->withoutOverlapping();
+            $schedule->job(new SyncAllSiteMonitors, $queue)->everyTenMinutes()->name('uptime:sync')->withoutOverlapping();
             $schedule->job(new PruneUptime)->dailyAt('03:40')->name('uptime:prune')->withoutOverlapping();
         });
     }

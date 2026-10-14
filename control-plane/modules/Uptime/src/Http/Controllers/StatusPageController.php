@@ -11,12 +11,14 @@ use Falak\Uptime\Application\StatusPageView;
 use Falak\Uptime\Domain\Models\Monitor;
 use Falak\Uptime\Domain\Models\StatusPage;
 use Falak\Uptime\Domain\Policies\UptimePolicy;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response as HttpResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -66,7 +68,7 @@ final class StatusPageController extends Controller
 
         $page = StatusPage::query()->where('project_id', $project->id)->first();
         $data = $request->validate([
-            'slug' => ['required', 'string', 'regex:'.StatusPage::SLUG, Rule::unique('uptime_status_pages', 'slug')->ignore($page?->id)],
+            'slug' => ['required', 'string', 'regex:'.StatusPage::SLUG],
             'title' => ['required', 'string', 'max:120'],
             'description' => ['nullable', 'string', 'max:500'],
             'enabled' => ['required', 'boolean'],
@@ -75,15 +77,28 @@ final class StatusPageController extends Controller
             'monitors.*.display_name' => ['required', 'string', 'max:120'],
         ]);
 
+        // Taken and reserved addresses get the same answer: whether another organization uses one is not revealed.
+        $unavailable = ValidationException::withMessages(['slug' => 'This address is not available.']);
+
+        if (StatusPage::isReserved($data['slug'])
+            || StatusPage::query()->where('slug', $data['slug'])->when($page, fn ($q) => $q->whereKeyNot($page->id))->exists()) {
+            throw $unavailable;
+        }
+
         $old = $page?->slug;
 
-        $page = DB::transaction(function () use ($page, $project, $organizationId, $data) {
-            $page ??= new StatusPage(['organization_id' => $organizationId, 'project_id' => $project->id]);
-            $page->fill(['slug' => $data['slug'], 'title' => $data['title'], 'description' => $data['description'] ?? null, 'enabled' => $data['enabled']])->save();
-            $page->monitors()->sync(collect($data['monitors'])->values()->mapWithKeys(fn (array $m, int $i) => [$m['id'] => ['display_name' => $m['display_name'], 'position' => $i]])->all());
+        try {
+            $page = DB::transaction(function () use ($page, $project, $organizationId, $data) {
+                $page ??= new StatusPage(['organization_id' => $organizationId, 'project_id' => $project->id]);
+                $page->fill(['slug' => $data['slug'], 'title' => $data['title'], 'description' => $data['description'] ?? null, 'enabled' => $data['enabled']])->save();
+                $page->monitors()->sync(collect($data['monitors'])->values()->mapWithKeys(fn (array $m, int $i) => [$m['id'] => ['display_name' => $m['display_name'], 'position' => $i]])->all());
 
-            return $page;
-        });
+                return $page;
+            });
+        } catch (UniqueConstraintViolationException) {
+            // Taken concurrently (slug), or the project's page created concurrently.
+            throw $unavailable;
+        }
 
         Cache::forget($page->cacheKey());
 

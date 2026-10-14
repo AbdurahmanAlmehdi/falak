@@ -24,6 +24,8 @@ enum ErrorKind: string
     case Redirects = 'redirects';
     /** Any other transfer error. */
     case Http = 'http';
+    /** The control plane itself was offline (canaries failed): the check says nothing about the target. */
+    case Offline = 'offline';
 
     public function label(): string
     {
@@ -37,6 +39,7 @@ enum ErrorKind: string
             self::Keyword => 'Keyword check failed',
             self::Redirects => 'Redirect error',
             self::Http => 'Request failed',
+            self::Offline => 'Control plane offline',
         };
     }
 }

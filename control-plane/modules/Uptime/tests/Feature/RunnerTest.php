@@ -59,9 +59,11 @@ it('claims due monitors once and queues them on the uptime queue', function () {
     uptime_monitor($this->organization->id, ['paused_at' => now()]);
     uptime_monitor($this->organization->id, ['next_check_at' => now()->addMinute()]);
 
-    expect((new DispatchChecks)->handle())->toBe(1)
-        ->and((new DispatchChecks)->handle())->toBe(0)
-        ->and($due->refresh()->next_check_at->equalTo($this->now->addSeconds(60)))->toBeTrue();
+    expect(app()->call([new DispatchChecks, 'handle']))->toBe(1)
+        ->and(app()->call([new DispatchChecks, 'handle']))->toBe(0)
+        // Claimed with a lease past the job timeout; the recorded check sets the real next time.
+        ->and($due->refresh()->next_check_at->equalTo($this->now->addSeconds(RunCheck::leaseSeconds())))->toBeTrue()
+        ->and($due->claimed_at)->not->toBeNull();
 
     Queue::assertPushedOn('uptime', RunCheck::class, fn (RunCheck $job) => $job->monitorId === $due->id);
 });
@@ -70,7 +72,7 @@ it('confirms a failure with a second attempt before counting it', function () {
     $monitor = uptime_monitor($this->organization->id, ['status' => MonitorStatus::Up, 'armed' => true]);
     $this->prober->queue(uptime_down(), uptime_up());
 
-    (new RunCheck($monitor->id))->handle($this->prober, app(RecordCheck::class));
+    app()->call([new RunCheck($monitor->id), 'handle']);
 
     $check = Check::query()->sole();
     expect($check->ok)->toBeTrue()->and($check->attempts)->toBe(2)

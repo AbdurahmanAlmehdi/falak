@@ -55,7 +55,7 @@ final class MonitorRules
                 $parts = GuardedProber::parts($value);
 
                 if ($parts === null) {
-                    $fail('Enter an http:// or https:// URL without credentials.');
+                    $fail('Enter an http:// or https:// URL without credentials, with a plain host name (letters, digits, dashes, dots) or an IP address.');
                 } elseif (! $this->allowed($parts[1])) {
                     $fail('This host is private or reserved: checks only reach public addresses.');
                 }
@@ -67,7 +67,7 @@ final class MonitorRules
 
                 $host = trim(strtolower($value), '[]');
 
-                if (filter_var($host, FILTER_VALIDATE_IP) === false && ! preg_match('/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/', $host)) {
+                if (! GuardedProber::validHost($host)) {
                     $fail('Enter a host name or an IP address.');
                 } elseif (! $this->allowed($host)) {
                     $fail('This host is private or reserved: checks only reach public addresses.');
@@ -86,6 +86,6 @@ final class MonitorRules
             return false;
         }
 
-        return filter_var($host, FILTER_VALIDATE_IP) === false || $this->guard->allows($host);
+        return filter_var($host, FILTER_VALIDATE_IP) === false || $this->guard->pick([$host]) !== null;
     }
 }

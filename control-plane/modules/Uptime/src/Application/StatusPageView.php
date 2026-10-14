@@ -18,7 +18,7 @@ final class StatusPageView
     public function __construct(private readonly UptimeStats $stats) {}
 
     /**
-     * @return array{title: string, description: ?string, overall: string, updated_at: string, monitors: list<array<string, mixed>>, incidents: list<array<string, mixed>>}
+     * @return array{title: string, description: ?string, overall: string, updated_at: string, interval_seconds: ?int, monitors: list<array<string, mixed>>, incidents: list<array<string, mixed>>}
      */
     public function build(StatusPage $page): array
     {
@@ -58,6 +58,8 @@ final class StatusPageView
                 default => 'operational',
             },
             'updated_at' => $now->utc()->toIso8601String(),
+            // The shortest interval among the shown monitors (the page says how often things are checked).
+            'interval_seconds' => $monitors->isEmpty() ? null : (int) $monitors->min('interval_seconds'),
             'monitors' => $rows,
             'incidents' => $incidents,
         ];
