@@ -7,10 +7,13 @@ use Falak\Fleet\Events\CommandFinished;
 use Falak\Fleet\Events\CommandOutputReceived;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
+use Falak\Identity\Events\MemberRemoved;
+use Falak\Identity\Events\MemberRoleChanged;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Servers\Events\ServerDeleted;
 use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Application\Listeners\CloseSessionsOfDeletedServer;
+use Falak\Terminal\Application\Listeners\DropRelayClientsOfMember;
 use Falak\Terminal\Application\Listeners\HandleTerminalCommandOutcome;
 use Falak\Terminal\Application\Listeners\StreamTerminalOutput;
 use Falak\Terminal\Domain\Models\TerminalSession;
@@ -61,6 +64,8 @@ class TerminalServiceProvider extends ModuleServiceProvider
         Event::listen(CommandFinished::class, [HandleTerminalCommandOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleTerminalCommandOutcome::class, 'handleFailed']);
         Event::listen(ServerDeleted::class, CloseSessionsOfDeletedServer::class);
+        Event::listen(MemberRemoved::class, DropRelayClientsOfMember::class);
+        Event::listen(MemberRoleChanged::class, DropRelayClientsOfMember::class);
 
         Broadcast::channel(TerminalSessionChannel::NAME, TerminalSessionChannel::class);
 

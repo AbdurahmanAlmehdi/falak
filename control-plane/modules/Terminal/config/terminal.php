@@ -21,4 +21,18 @@ return [
 
     // Frames returned per catch-up request.
     'frames_page_size' => 500,
+
+    // The terminal relay (docs/plans/CONSOLE.md): browsers and `falak console` exchange bytes with the agent over a WebSocket
+    // instead of Reverb + POSTs. Tokens are signed with a key derived from APP_KEY, which the relay shares.
+    'relay' => [
+        'enabled' => (bool) env('FALAK_TERMINAL_RELAY', false),
+        // Base URL clients dial (…/sessions/<id>?ticket=…); null = APP_URL with ws(s):// plus /terminal/v1.
+        'url' => env('FALAK_TERMINAL_RELAY_URL'),
+        // Where the control plane reaches the relay's internal API (dropping clients whose access ended).
+        'internal_url' => env('FALAK_TERMINAL_RELAY_INTERNAL_URL', 'http://relay:8080'),
+        // Seconds a client ticket is valid for connecting (single use).
+        'ticket_ttl' => 60,
+        // Agent tokens outlive the session's maximum duration by this many seconds.
+        'agent_token_grace' => 300,
+    ],
 ];

@@ -78,6 +78,23 @@ func New(apiBase string, tlsConf *tls.Config) *Client {
 	return NewWithHTTPClient(apiBase, &http.Client{Transport: tr})
 }
 
+// NewHTTP1Client returns a client with the same mTLS identity that speaks HTTP/1.1 only (no h2 in ALPN): the
+// terminal relay's WebSocket upgrade needs it. The transport's timeouts bound the handshake; the connection itself
+// lives as long as the WebSocket.
+func NewHTTP1Client(tlsConf *tls.Config) *http.Client {
+	tc := tlsConf.Clone()
+	tc.NextProtos = []string{"http/1.1"}
+	return &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSClientConfig:       tc,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		ForceAttemptHTTP2:     false,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}}
+}
+
 // NewWithHTTPClient uses a caller-provided http.Client (tests).
 func NewWithHTTPClient(apiBase string, hc *http.Client) *Client {
 	return &Client{base: strings.TrimRight(apiBase, "/"), hc: hc, UserAgent: "falak-agent"}

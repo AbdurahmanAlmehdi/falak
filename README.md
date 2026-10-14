@@ -149,7 +149,11 @@ falak releases shop
 falak rollback shop --wait
 falak env pull shop > .env.production && falak env push shop < .env.production
 falak logs shop --follow
-falak ssh app-1
+falak ssh app-1                                     # OpenSSH to a server (port 22, your key)
+falak console shop                                  # shell where the site runs: its container, or its release dir as the site user
+falak console shop --service worker                 # a compose site's service
+falak console --db shop-db                          # shell in a database container
+falak console --host app-1                          # server shell without SSH (root; --user NAME)
 
 # Functions
 falak fn list

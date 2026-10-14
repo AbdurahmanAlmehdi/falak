@@ -1,3 +1,5 @@
+import { type TerminalSessionData } from './types';
+
 /** Decode base64 (raw PTY bytes) into a byte array for xterm.write(). */
 export function base64ToBytes(data: string): Uint8Array {
     const binary = atob(data);
@@ -10,8 +12,8 @@ export function base64ToBytes(data: string): Uint8Array {
     return bytes;
 }
 
-/** Encode terminal input (a JS string from xterm onData, or a binary string from onBinary) as UTF-8 base64. */
-export function encodeInput(chunks: { text: string; binary: boolean }[]): string {
+/** Terminal input (a JS string from xterm onData, or a binary string from onBinary) as bytes: UTF-8 / raw. */
+export function inputBytes(chunks: { text: string; binary: boolean }[]): Uint8Array {
     const encoder = new TextEncoder();
     const parts: number[] = [];
 
@@ -25,12 +27,32 @@ export function encodeInput(chunks: { text: string; binary: boolean }[]): string
         }
     }
 
+    return Uint8Array.from(parts);
+}
+
+/** Encode terminal input as base64 of its bytes (the POST input path). */
+export function encodeInput(chunks: { text: string; binary: boolean }[]): string {
     let binary = '';
-    for (const byte of parts) {
+    for (const byte of inputBytes(chunks)) {
         binary += String.fromCharCode(byte);
     }
 
     return btoa(binary);
+}
+
+/**
+ * What a session runs in, for headers and tables: `root@web-1` for server shells, `shop (container web) on main-1` for
+ * consoles (docs/plans/CONSOLE.md).
+ */
+export function targetLabel(session: Pick<TerminalSessionData, 'target_type' | 'target_name' | 'container' | 'unix_user' | 'server_name'>): string {
+    if (session.target_type === 'server') {
+        return `${session.unix_user}@${session.server_name}`;
+    }
+
+    const service = session.container?.startsWith('compose:') ? session.container.slice('compose:'.length) : null;
+    const where = service ? ` (container ${service})` : session.target_type === 'site' && session.container ? ' (container)' : '';
+
+    return `${session.target_name ?? session.target_type}${where} on ${session.server_name}`;
 }
 
 export function csrfToken(): string {

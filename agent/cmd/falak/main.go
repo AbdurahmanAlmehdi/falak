@@ -3,6 +3,7 @@
 //	falak login --url https://falak.example.com
 //	falak sites list
 //	falak deploy my-site --wait
+//	falak console my-site
 //
 // CI: set FALAK_URL and FALAK_TOKEN; add --json for machine-readable output.
 package main
@@ -30,6 +31,7 @@ func main() {
 		Getenv:      os.Getenv,
 		Version:     version.Version,
 		Interactive: isTerminal(os.Stdin),
+		Terminal:    cli.StdTerminal(),
 		ReadSecret:  readSecret,
 		Exec:        execReplace,
 		Open:        openBrowser,

@@ -67,6 +67,8 @@ x-control-plane: &control-plane
     QUEUE_CONNECTION: redis
     SESSION_DRIVER: redis
     BROADCAST_CONNECTION: reverb
+    # Consoles stream through the relay service (wss://FALAK_DOMAIN/terminal/v1, edge).
+    FALAK_TERMINAL_RELAY: "1"
     REVERB_APP_ID: ${REVERB_APP_ID:?set REVERB_APP_ID}
     REVERB_APP_KEY: ${REVERB_APP_KEY:?set REVERB_APP_KEY}
     REVERB_APP_SECRET: ${REVERB_APP_SECRET:?set REVERB_APP_SECRET}
@@ -283,6 +285,30 @@ services:
     deploy:
       resources:
         limits: { memory: 192m }
+
+  # Terminal relay (Go, same image): pipes console bytes between agents and browsers/the CLI, so typing costs one
+  # round trip instead of a command long-poll per keystroke. Holds no state worth keeping; needs only APP_KEY.
+  relay:
+    <<: *control-plane
+    command: ["relay"]
+    # Internet-facing through the edge: only what it needs, not the control plane's env (merging replaces the map).
+    env_file: []
+    environment:
+      APP_KEY: ${APP_KEY:?set APP_KEY}
+      GOMEMLIMIT: 48MiB
+    volumes: []
+    # edge: browsers, the CLI and agents; backend: the control plane revokes access (POST /internal/v1/..., never
+    # routed by the edge).
+    networks: [edge, backend]
+    healthcheck:
+      test: ["CMD", "falak-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { memory: 64m }
 
   scheduler:
     <<: *control-plane

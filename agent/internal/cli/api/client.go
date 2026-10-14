@@ -47,6 +47,13 @@ type API interface {
 	DatabaseInstance(ctx context.Context, id string) (DatabaseInstance, error)
 	DeleteDatabaseInstance(ctx context.Context, id, confirm string, deleteVolume bool) (DatabaseInstance, error)
 
+	SiteConsoleOptions(ctx context.Context, site string) (ConsoleOptions, error)
+	OpenSiteConsole(ctx context.Context, site string, r ConsoleRequest) (ConsoleSession, error)
+	OpenDatabaseConsole(ctx context.Context, instance string, r ConsoleRequest) (ConsoleSession, error)
+	OpenServerConsole(ctx context.Context, server string, r ConsoleRequest) (ConsoleSession, error)
+	ConsoleTicket(ctx context.Context, session string) (ConsoleTicket, error)
+	CloseConsole(ctx context.Context, session string) error
+
 	Projects(ctx context.Context) ([]Project, error)
 	ConfigValidate(ctx context.Context, project string, r ConfigRequest) (ConfigValidation, error)
 	ConfigPlan(ctx context.Context, project string, r ConfigRequest) (ConfigPlanResult, error)

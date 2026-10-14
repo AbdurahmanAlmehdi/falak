@@ -2,7 +2,6 @@
 
 namespace Falak\Fleet\Domain\Models;
 
-use DateTimeImmutable;
 use Falak\Fleet\Contracts\AgentStatus;
 use Falak\Fleet\Contracts\Data\AgentInfo;
 use Falak\Fleet\Database\Factories\AgentFactory;
@@ -95,7 +94,12 @@ class Agent extends Model
 
     public function toInfo(): AgentInfo
     {
-        $expires = $this->certificates()->whereNull('revoked_at')->max('not_after');
+        $certificates = $this->certificates()->whereNull('revoked_at')->get(['fingerprint', 'not_before', 'not_after', 'superseded_at']);
+        $expires = $certificates->max('not_after');
+        $current = $certificates
+            ->filter(fn (Certificate $certificate) => $certificate->superseded_at === null && $certificate->not_after->isFuture())
+            ->sortByDesc('not_before')
+            ->first();
         $metrics = $this->metrics ?? [];
 
         return new AgentInfo(
@@ -109,8 +113,9 @@ class Agent extends Model
             metrics: $metrics,
             enrolledAt: $this->enrolled_at->toDateTimeImmutable(),
             lastHeartbeatAt: $this->last_heartbeat_at?->toDateTimeImmutable(),
-            certificateExpiresAt: $expires ? new DateTimeImmutable((string) $expires) : null,
+            certificateExpiresAt: $expires instanceof Carbon ? $expires->toDateTimeImmutable() : null,
             runningCommands: array_values(array_map('strval', (array) ($metrics['running_commands'] ?? []))),
+            certificateFingerprint: $current !== null ? strtolower($current->fingerprint) : null,
         );
     }
 }

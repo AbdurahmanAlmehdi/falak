@@ -71,4 +71,12 @@ interface SiteDirectory
      * @return array<string, string>
      */
     public function deployVariables(string $siteId, string $serverId, array $context = []): array;
+
+    /**
+     * The static FALAK_* variables of the site on one of its servers (what site commands and consoles get). Empty for
+     * an unknown site.
+     *
+     * @return array<string, string>
+     */
+    public function variables(string $siteId, string $serverId): array;
 }

@@ -10,10 +10,11 @@ import { Head, Link, router } from '@inertiajs/react';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { Eye, Film, Power, Share2 } from 'lucide-react';
+import { Eye, Film, Power, Share2, Zap } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SessionStatusBadge } from '../components/session-status';
-import { base64ToBytes, encodeInput, onThemeChange, postJson, REASON_LABELS, TERMINAL_FONT, terminalTheme } from '../lib';
+import { base64ToBytes, encodeInput, inputBytes, onThemeChange, postJson, REASON_LABELS, targetLabel, TERMINAL_FONT, terminalTheme } from '../lib';
+import { openRelay, pageFrames } from '../relay';
 import { type OutputPart, type Participant, type SessionUpdate, type TerminalSessionData } from '../types';
 
 interface Props {
@@ -38,11 +39,19 @@ const INPUT_BATCH_CHARS = 4096;
 
 const isLive = (status: TerminalSessionData['status']) => status === 'opening' || status === 'open';
 
+/** The relay takes at most 64 KiB of input per message. */
+const RELAY_INPUT_CHUNK = 32 * 1024;
+
+/** How the page talks to the session: the relay WebSocket (or waiting for it), or POST input + Reverb output. */
+type Transport = 'relay' | 'connecting' | 'reverb';
+
 export default function Session({ session: initial, isOwner, can }: Props) {
     const [session, setSession] = useState<TerminalSessionData>(initial);
     const [participants, setParticipants] = useState<Participant[]>([]);
     const [connected, setConnected] = useState(false);
     const [inputError, setInputError] = useState<string | null>(null);
+    const [transport, setTransport] = useState<Transport>(initial.relayed && isLive(initial.status) ? 'connecting' : 'reverb');
+    const [relayNotice, setRelayNotice] = useState<string | null>(null);
     const container = useRef<HTMLDivElement>(null);
     const terminal = useRef<Terminal | null>(null);
     const live = isLive(session.status);
@@ -50,12 +59,24 @@ export default function Session({ session: initial, isOwner, can }: Props) {
     const canTypeRef = useRef(canType);
     canTypeRef.current = canType;
 
+    const label = targetLabel(session);
+    const title = session.target_type === 'server' ? label : `Console · ${label}`;
     const breadcrumbs: BreadcrumbItem[] = [
         { title: 'Infrastructure', href: '/servers' },
         { title: session.server_name, href: `/servers/${session.server_id}` },
         { title: 'Terminal', href: `/servers/${session.server_id}/terminal` },
-        { title: `${session.unix_user}@${session.server_name}`, href: route('terminal.sessions.show', session.id) },
+        { title: label, href: route('terminal.sessions.show', session.id) },
     ];
+
+    // Relay (docs/plans/CONSOLE.md): `relayActive` until the page falls back to POST + Reverb for good; `relayLive`
+    // while the relay is ready (the server attached) and so the output's source — Reverb parts and catch-up frames are
+    // then only tracked, not written. Before `ready` and while the relay waits for the server, Reverb output is written:
+    // the replay on connect resets the screen, and falling back redraws it from the recording.
+    const relayActive = useRef(initial.relayed && isLive(initial.status));
+    const relayLive = useRef(false);
+    const socket = useRef<WebSocket | null>(null);
+    // A fallback restarts the catch-up from the first frame; loops of an older generation stop.
+    const catchUpGeneration = useRef(0);
 
     // ---- output: catch-up through /frames, then live parts over the presence channel ----------------
     const lastSeq = useRef(-1);
@@ -71,34 +92,38 @@ export default function Session({ session: initial, isOwner, can }: Props) {
 
         lastSeq.current = part.seq;
         lastPart.current = part.parts - 1 === part.part ? Number.MAX_SAFE_INTEGER : part.part;
-        terminal.current?.write(base64ToBytes(part.data));
+
+        if (!relayLive.current) {
+            terminal.current?.write(base64ToBytes(part.data));
+        }
     }, []);
 
     const catchUp = useCallback(async () => {
-        let more = true;
+        const generation = catchUpGeneration.current;
+        const finished = await pageFrames<FramesResponse>(
+            async () => {
+                const response = await fetch(`${route('terminal.sessions.frames', initial.id)}?after=${cursor.current}`, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                });
 
-        while (more) {
-            const response = await fetch(`${route('terminal.sessions.frames', initial.id)}?after=${cursor.current}`, {
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-            });
+                return response.ok ? ((await response.json()) as FramesResponse) : null;
+            },
+            () => generation !== catchUpGeneration.current,
+            (body) => {
+                body.frames.forEach((frame) => writePart({ seq: frame.seq ?? lastSeq.current + 1, part: 0, parts: 1, data: frame.data }));
+                cursor.current = body.last_id;
 
-            if (!response.ok) {
-                return;
-            }
+                if (!body.more && !isLive(body.status)) {
+                    setSession((current) => (isLive(current.status) ? { ...current, status: body.status } : current));
+                }
+            },
+        );
 
-            const body = (await response.json()) as FramesResponse;
-            body.frames.forEach((frame) => writePart({ seq: frame.seq ?? lastSeq.current + 1, part: 0, parts: 1, data: frame.data }));
-            cursor.current = body.last_id;
-            more = body.more;
-
-            if (!more && !isLive(body.status)) {
-                setSession((current) => (isLive(current.status) ? { ...current, status: body.status } : current));
-            }
+        if (finished) {
+            caughtUp.current = true;
+            buffered.current.splice(0).forEach(writePart);
         }
-
-        caughtUp.current = true;
-        buffered.current.splice(0).forEach(writePart);
     }, [initial.id, writePart]);
 
     // ---- terminal setup -----------------------------------------------------------------------------
@@ -208,6 +233,56 @@ export default function Session({ session: initial, isOwner, can }: Props) {
         return () => window.clearInterval(timer);
     }, [connected, live, catchUp]);
 
+    // ---- relay: ticket → WebSocket (binary frames both ways), with fallback to POST + Reverb ----------------
+    useEffect(() => {
+        if (!relayActive.current) return;
+
+        return openRelay({
+            ticket: async () => {
+                const response = await postJson(route('terminal.sessions.ticket', initial.id), {});
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                return ((await response.json()) as { url: string }).url;
+            },
+            reset: () => terminal.current?.reset(),
+            write: (bytes) => terminal.current?.write(bytes),
+            live: (live) => {
+                relayLive.current = live;
+            },
+            state: setTransport,
+            notice: setRelayNotice,
+            socket: (ws) => {
+                socket.current = ws;
+            },
+            // The relay showed all the output; the final status comes from Reverb or the frames endpoint.
+            ended: () => void catchUp(),
+            fallback: () => {
+                relayActive.current = false;
+                setTransport('reverb');
+                // Redraw from the recording; live parts wait for this catch-up, older loops stop.
+                terminal.current?.reset();
+                lastSeq.current = -1;
+                lastPart.current = Number.MAX_SAFE_INTEGER;
+                cursor.current = 0;
+                catchUpGeneration.current += 1;
+                caughtUp.current = false;
+                buffered.current = [];
+                void catchUp();
+            },
+        });
+    }, [initial.id, catchUp]);
+
+    /** Send on the relay socket when it's open (false: use the POST path). */
+    const relaySend = (data: string | Uint8Array): boolean => {
+        const ws = socket.current;
+
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(data);
+
+        return true;
+    };
+
     // ---- input: batched, one request in flight, ordered by seq ------------------------------------------
     const pending = useRef<{ text: string; binary: boolean }[]>([]);
     const pendingChars = useRef(0);
@@ -260,6 +335,17 @@ export default function Session({ session: initial, isOwner, can }: Props) {
     }, [initial.id]);
 
     queueInput.current = (text: string, binary: boolean) => {
+        // Relay: keystrokes go out at once as binary frames (in order, over one socket).
+        if (socket.current?.readyState === WebSocket.OPEN && pending.current.length === 0 && !inFlight.current) {
+            const bytes = inputBytes([{ text, binary }]);
+
+            for (let offset = 0; offset < bytes.length; offset += RELAY_INPUT_CHUNK) {
+                relaySend(bytes.subarray(offset, offset + RELAY_INPUT_CHUNK));
+            }
+
+            return;
+        }
+
         // Split big pastes so each request stays under the server's batch limit.
         for (let offset = 0; offset < text.length; offset += INPUT_BATCH_CHARS) {
             const slice = text.slice(offset, offset + INPUT_BATCH_CHARS);
@@ -280,6 +366,8 @@ export default function Session({ session: initial, isOwner, can }: Props) {
     sendResize.current = (cols: number, rows: number) => {
         if (!canTypeRef.current) return;
 
+        // The relay resizes the PTY at once; the POST below still records the size (recording, other viewers).
+        relaySend(JSON.stringify({ t: 'resize', cols, rows }));
         window.clearTimeout(resizeTimer.current);
         resizeTimer.current = window.setTimeout(() => {
             void postJson(route('terminal.sessions.resize', initial.id), { cols, rows });
@@ -324,14 +412,23 @@ export default function Session({ session: initial, isOwner, can }: Props) {
 
     return (
         <AppShell breadcrumbs={breadcrumbs}>
-            <Head title={`Terminal · ${session.server_name}`} />
+            <Head
+                title={
+                    session.target_type === 'server' ? `Terminal · ${session.server_name}` : `Console · ${session.target_name ?? session.server_name}`
+                }
+            />
             <div className="flex flex-col gap-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                        <h1 className="text-fg truncate font-mono text-base font-semibold">
-                            {session.unix_user}@{session.server_name}
-                        </h1>
+                        <h1 className="text-fg truncate font-mono text-base font-semibold">{title}</h1>
                         <SessionStatusBadge status={session.status} />
+                        {live && transport === 'relay' && (
+                            <Tooltip content="Keystrokes and output go straight through the terminal relay.">
+                                <Tag tone="accent" icon={<Zap />}>
+                                    Relay
+                                </Tag>
+                            </Tooltip>
+                        )}
                         {session.shared && (
                             <Tag tone="accent" icon={<Share2 />}>
                                 Shared
@@ -390,6 +487,11 @@ export default function Session({ session: initial, isOwner, can }: Props) {
                     </div>
                 )}
                 {inputError && live && <p className="text-danger text-sm">{inputError}</p>}
+                {relayNotice && live && (
+                    <p className="text-fg-muted text-sm" aria-live="polite">
+                        {relayNotice}
+                    </p>
+                )}
                 {session.status === 'opening' && (
                     <p className="text-fg-muted flex items-center gap-2 text-sm" aria-live="polite">
                         <span className="animate-pulse-dot bg-warning text-warning size-1.5 rounded-full" aria-hidden />

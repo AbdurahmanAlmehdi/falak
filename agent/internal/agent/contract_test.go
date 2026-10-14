@@ -201,6 +201,47 @@ func TestSchemasRejectInvalidPayloads(t *testing.T) {
 	}
 }
 
+// terminal.open's terminal.v2 fields: the schema and the executor's decoding agree.
+func TestTerminalOpenV2Payloads(t *testing.T) {
+	c := compiler(t)
+	sch, err := c.Compile(idBase + "commands/terminal.open.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, cleanup := buildTestRegistry(t)
+	defer cleanup()
+	ex, _ := reg.Get("terminal.open")
+	tok := `"relay_token":"eyJ2IjoxfQ.c2lnbmF0dXJlLXNpZ25hdHVyZQ"` // gitleaks:allow (fake token)
+	for _, p := range []string{
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W",` + tok + `}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W",` + tok + `,"container":{"name":"falak-db-01jdb000000000000000000000"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","env":{"APP_ENV":"production"},"container":{"labels":{"com.docker.compose.project":"shop","com.docker.compose.service":"web"},"user":"www-data:www-data","workdir":"/app"}}`,
+	} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
+		if err := sch.Validate(v); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+		if err := ex.(commands.PayloadChecker).CheckPayload([]byte(p)); err != nil {
+			t.Errorf("%s does not decode: %v", p, err)
+		}
+	}
+	for _, p := range []string{
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","relay_token":"short"}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","labels":{"falak.site":"shop"}}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"-web"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"labels":{"falak.site":"a b"}}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","user":"root -v"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","workdir":"app"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","image":"x"}}`,
+	} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
+		if sch.Validate(v) == nil {
+			t.Errorf("%s: invalid payload accepted", p)
+		}
+	}
+}
+
 // Results of the compose executors validate against their schemas' $defs.result.
 func TestComposeResultsValidate(t *testing.T) {
 	c := compiler(t)

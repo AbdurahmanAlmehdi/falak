@@ -2,6 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/terminal.open.schema.json",
   "title": "terminal.open — open a PTY session; this command stays running and streams `output` events (data = base64 of raw PTY bytes, stream=stdout) until closed/idle/timeout",
+  "x-falak-forget-secrets": [
+    "relay_token"
+  ],
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -22,7 +25,8 @@
     },
     "cwd": {
       "type": "string",
-      "pattern": "^/"
+      "pattern": "^/",
+      "description": "a cwd that doesn't exist starts in the user's home (terminal.v2 agents print `falak: <cwd> does not exist; starting in <home>` first)"
     },
     "env": {
       "type": "object",
@@ -49,6 +53,59 @@
       "type": "integer",
       "minimum": 0,
       "default": 900
+    },
+    "relay_token": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 4096,
+      "description": "terminal.v2: the agent also pipes the session through the terminal relay: it dials wss://<agent API base>/relay/sessions/<session_id> with this bearer token (HTTP/1.1, its client certificate); PTY output goes out as binary frames as well as `output` events, binary frames in are keystrokes, text {t:resize} resizes, {t:exit,reason,code} ends it. Retried while the session lives; never fails the session"
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "terminal.v2: a shell in a container instead of on the host (`docker exec -it -e TERM=xterm-256color [-e env…] [-u user] [-w workdir] <container> sh -c <bash or sh>`, as root); user, shell and cwd don't apply, env is passed with -e. Fails with \"No running container for this console (is the site deployed?)\" when nothing matches",
+      "oneOf": [
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "labels"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]+$",
+          "description": "the container (must exist and run), e.g. falak-db-<id>"
+        },
+        "labels": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/@+-]{1,255}$"
+          },
+          "description": "the newest running container carrying all of them, e.g. {\"falak.site\": \"shop\"} or the compose project and service labels"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63})?$",
+          "description": "docker exec -u (user[:group])"
+        },
+        "workdir": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "docker exec -w"
+        }
+      }
     }
   },
   "$defs": {

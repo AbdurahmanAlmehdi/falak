@@ -343,6 +343,8 @@ final class DatabaseInstanceController extends Controller
             'reveal' => $this->access->can($user, $organizationId, DatabasesPolicy::REVEAL),
             'restore' => $this->access->can($user, $organizationId, DatabasesPolicy::RESTORE),
             'manageStorage' => $this->access->can($user, $organizationId, DatabasesPolicy::STORAGE),
+            // Terminal's database console (docs/plans/CONSOLE.md): a shell in the container.
+            'console' => $this->access->can($user, $organizationId, 'terminal.open'),
         ];
     }
 

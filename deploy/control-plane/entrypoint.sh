@@ -1,11 +1,13 @@
 #!/bin/sh
 # Falak control-plane entrypoint.
-#   roles: web (default) | agent-api | horizon | reverb | scheduler | <any command, e.g. php artisan ...>
+#   roles: web (default) | agent-api | horizon | reverb | scheduler | relay | <any command, e.g. php artisan ...>
 #
 #   web        the panel (FrankenPHP). Worker mode by default: Laravel boots once per worker thread.
 #   agent-api  FrankenPHP for machine traffic: agent API (/agent/*), installer (/install/*) and the builder's
 #              internal API (/api/internal/*). Agents and builders hold long-polls (one PHP thread each for
 #              up to 30 s), so they get their own thread pool and can never starve the panel.
+#   relay      the terminal relay (falak-relay, Go): pipes console bytes between agents and browsers/the CLI.
+#              Needs only APP_KEY (its tokens are signed with a key derived from it), no database.
 #
 #   FALAK_MIGRATE=1          web role runs `migrate --force` before serving (set on exactly one service)
 #   FALAK_WAIT_TIMEOUT=120   seconds to wait for Postgres/Valkey before giving up
@@ -230,6 +232,9 @@ case "$role" in
     check_keys --kek-only
     wait_for_migrations
     exec php artisan schedule:work
+    ;;
+  relay)
+    exec falak-relay
     ;;
   *)
     exec "$@"

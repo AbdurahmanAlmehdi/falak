@@ -13,6 +13,11 @@ final class TerminalSessionOpened
         public string $organizationId,
         public string $serverId,
         public string $userId,
+        /** Empty for container consoles */
         public string $unixUser,
+        /** server | site | database */
+        public string $targetType = 'server',
+        public ?string $targetId = null,
+        public ?string $targetName = null,
     ) {}
 }

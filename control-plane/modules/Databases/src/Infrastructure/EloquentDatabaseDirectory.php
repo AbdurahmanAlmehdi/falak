@@ -3,8 +3,11 @@
 namespace Falak\Databases\Infrastructure;
 
 use Falak\Databases\Contracts\Data\DatabaseData;
+use Falak\Databases\Contracts\Data\DatabaseInstanceData;
 use Falak\Databases\Contracts\DatabaseDirectory;
+use Falak\Databases\Domain\Enums\InstanceStatus;
 use Falak\Databases\Domain\Models\Database;
+use Falak\Databases\Domain\Models\DatabaseInstance;
 
 final class EloquentDatabaseDirectory implements DatabaseDirectory
 {
@@ -41,6 +44,34 @@ final class EloquentDatabaseDirectory implements DatabaseDirectory
     {
         return Database::query()->with('instance')->where('organization_id', $organizationId)->where('site_id', $siteId)->orderBy('name')->get()
             ->map(fn (Database $database) => $this->toData($database))->values()->all();
+    }
+
+    public function instance(string $instanceId): ?DatabaseInstanceData
+    {
+        $instance = DatabaseInstance::query()->find(strtolower($instanceId));
+
+        return $instance ? $this->toInstanceData($instance) : null;
+    }
+
+    public function instancesForOrganization(string $organizationId): array
+    {
+        return DatabaseInstance::query()->where('organization_id', $organizationId)->where('status', '!=', InstanceStatus::Retired->value)->orderBy('name')->get()
+            ->map(fn (DatabaseInstance $instance) => $this->toInstanceData($instance))->values()->all();
+    }
+
+    private function toInstanceData(DatabaseInstance $instance): DatabaseInstanceData
+    {
+        return new DatabaseInstanceData(
+            id: $instance->id,
+            organizationId: $instance->organization_id,
+            serverId: $instance->server_id,
+            serverName: $instance->server_name,
+            name: $instance->name,
+            engine: $instance->engine->value,
+            version: $instance->version,
+            status: $instance->status->value,
+            container: $instance->container(),
+        );
     }
 
     private function toData(Database $database): DatabaseData

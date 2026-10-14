@@ -1,5 +1,7 @@
 // Package pty implements web-terminal sessions (terminal.*): a shell in a PTY whose output is streamed
-// as `output` events (data = base64 of raw PTY bytes) on the long-running terminal.open command.
+// as `output` events (data = base64 of raw PTY bytes) on the long-running terminal.open command. A session can be a
+// shell in a container (docker exec, container.go), and with a relay token it is also piped through the terminal
+// relay (relay.go), the fast path for keystrokes and output.
 package pty
 
 import (
@@ -8,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"regexp"
 	"sort"
 	"sync"
@@ -27,6 +31,19 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxSessions bounds concurrent sessions (default 16).
 	MaxSessions int
+	// RelayBase is the agent API base (https://agents.example/agent/v1): sessions with a relay token dial
+	// wss://<base>/relay/sessions/<id> through RelayHTTP (HTTP/1.1 with the agent's client certificate). Empty: relay
+	// tokens are ignored and the session streams events only.
+	RelayBase string
+	RelayHTTP *http.Client
+	// Docker resolves container sessions' targets (nil: container sessions fail).
+	Docker ContainerLookup
+	// DockerCLI is the docker binary container sessions run (default "docker"; tests use a stand-in).
+	DockerCLI string
+	// ProcRoot is the host's /proc (default "/proc"), where a closed container session's processes are found;
+	// Signal signals one of them (default syscall.Kill). Tests fake both.
+	ProcRoot string
+	Signal   func(pid int, sig syscall.Signal) error
 }
 
 // Manager owns all live terminal sessions.
@@ -46,6 +63,15 @@ func New(o Options) *Manager {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = 16
 	}
+	if o.DockerCLI == "" {
+		o.DockerCLI = "docker"
+	}
+	if o.ProcRoot == "" {
+		o.ProcRoot = "/proc"
+	}
+	if o.Signal == nil {
+		o.Signal = syscall.Kill
+	}
 	return &Manager{opts: o, log: o.Logger.With("component", "pty"), sessions: map[string]*session{}}
 }
 
@@ -60,6 +86,11 @@ type (
 		Cols         int               `json:"cols,omitempty"`
 		Rows         int               `json:"rows,omitempty"`
 		IdleTimeoutS *int              `json:"idle_timeout_s,omitempty"`
+		// RelayToken (terminal.v2): also pipe the session through the terminal relay.
+		RelayToken string `json:"relay_token,omitempty"`
+		// Container (terminal.v2): a shell in a container (docker exec) instead of on the host; user, shell and cwd
+		// don't apply.
+		Container *ContainerTarget `json:"container,omitempty"`
 	}
 	OpenResult struct {
 		ExitCode *int   `json:"exit_code,omitempty"`
@@ -140,8 +171,8 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 	if !sidRe.MatchString(p.SessionID) {
 		return nil, &commands.PayloadError{Err: fmt.Errorf("invalid session_id")}
 	}
-	if p.Shell == "" {
-		p.Shell = "/bin/bash"
+	if err := p.validate(); err != nil {
+		return nil, &commands.PayloadError{Err: err}
 	}
 	if p.Cols <= 0 {
 		p.Cols = 80
@@ -154,35 +185,19 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 		idle = time.Duration(*p.IdleTimeoutS) * time.Second
 	}
 
-	cmd := exec.Command(p.Shell)
-	cmd.Dir = p.Cwd
-	env := []string{
-		"TERM=xterm-256color", "LANG=C.UTF-8", "SHELL=" + p.Shell,
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	var (
+		cmd  *exec.Cmd
+		note string // printed before the shell's output
+		err  error
+	)
+	if p.Container != nil {
+		cmd, err = m.containerCmd(ctx, p)
+	} else {
+		cmd, note, err = hostCmd(p)
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{}
-	if p.User != "" {
-		cred, home, err := runner.Credential(p.User)
-		if err != nil {
-			return nil, err
-		}
-		cmd.SysProcAttr.Credential = cred
-		env = append(env, "HOME="+home, "USER="+p.User, "LOGNAME="+p.User)
-		if cmd.Dir == "" {
-			cmd.Dir = home
-		}
-	} else if h, err := os.UserHomeDir(); err == nil {
-		env = append(env, "HOME="+h)
+	if err != nil {
+		return nil, err
 	}
-	keys := make([]string, 0, len(p.Env))
-	for k := range p.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		env = append(env, k+"="+p.Env[k])
-	}
-	cmd.Env = env
 
 	m.mu.Lock()
 	if _, ok := m.sessions[p.SessionID]; ok {
@@ -201,7 +216,12 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 	s := &session{id: p.SessionID, f: f, cmd: cmd, closeCh: make(chan struct{}), done: make(chan struct{}), activity: time.Now()}
 	m.sessions[p.SessionID] = s
 	m.mu.Unlock()
-	m.log.Info("terminal opened", "session", p.SessionID, "user", p.User)
+	m.log.Info("terminal opened", "session", p.SessionID, "user", p.User, "container", p.Container != nil, "relay", p.RelayToken != "")
+	link := m.startRelay(s, p.RelayToken)
+	if note != "" {
+		st.Emit("stdout", base64.StdEncoding.EncodeToString([]byte(note)))
+		link.send([]byte(note))
+	}
 
 	defer func() {
 		m.mu.Lock()
@@ -220,6 +240,7 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 			if n > 0 {
 				s.touch()
 				st.Emit("stdout", base64.StdEncoding.EncodeToString(buf[:n]))
+				link.send(buf[:n])
 			}
 			if err != nil {
 				return // EIO once the shell (and every holder of the tty) exits
@@ -268,6 +289,10 @@ loop:
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			waitErr = <-exited
 		}
+		if p.Container != nil {
+			// The docker CLI going away doesn't end what it exec'd in the container (moby#9098).
+			m.hangUpContainer(p.SessionID)
+		}
 	}
 	// Drain remaining output briefly, then close the master.
 	select {
@@ -288,8 +313,75 @@ loop:
 	if waitErr != nil && !errors.As(waitErr, &ee) {
 		m.log.Warn("terminal wait", "err", waitErr)
 	}
+	link.finish(res.Reason, res.ExitCode)
 	m.log.Info("terminal closed", "session", p.SessionID, "reason", reason)
 	return res, nil
+}
+
+// hostCmd is a shell on the server, as root or p.User. A cwd that doesn't exist (a native site that was never
+// deployed has no current release) starts in the home directory, with a note.
+func hostCmd(p OpenPayload) (*exec.Cmd, string, error) {
+	if p.Shell == "" {
+		p.Shell = "/bin/bash"
+	}
+	cmd := exec.Command(p.Shell)
+	env := []string{
+		"TERM=xterm-256color", "LANG=C.UTF-8", "SHELL=" + p.Shell,
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{}
+	var home string
+	if p.User != "" {
+		cred, h, err := runner.Credential(p.User)
+		if err != nil {
+			return nil, "", err
+		}
+		cmd.SysProcAttr.Credential = cred
+		home = h
+		env = append(env, "HOME="+home, "USER="+p.User, "LOGNAME="+p.User)
+	} else {
+		home = rootHome()
+		env = append(env, "HOME="+home)
+	}
+	note := ""
+	switch {
+	case p.Cwd != "":
+		if fi, err := os.Stat(p.Cwd); err == nil && fi.IsDir() {
+			cmd.Dir = p.Cwd
+		} else {
+			note = fmt.Sprintf("falak: %s does not exist; starting in %s\r\n", p.Cwd, home)
+			cmd.Dir = home
+		}
+	case p.User != "":
+		cmd.Dir = home
+	}
+	cmd.Env = append(env, sortedEnv(p.Env)...)
+	return cmd, note, nil
+}
+
+// rootHome is the agent user's home ("/" when it has none).
+func rootHome() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir
+	}
+	return "/"
+}
+
+// sortedEnv is env as K=V, sorted by key.
+func sortedEnv(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+env[k])
+	}
+	return out
 }
 
 func (m *Manager) get(id string) (*session, error) {

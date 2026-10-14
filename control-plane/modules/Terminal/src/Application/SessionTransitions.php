@@ -7,6 +7,7 @@ use Falak\Terminal\Domain\Enums\SessionStatus;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Falak\Terminal\Events\TerminalSessionClosed;
 use Falak\Terminal\Events\TerminalSessionUpdated;
+use Falak\Terminal\Infrastructure\RelayKicker;
 use Illuminate\Support\Carbon;
 
 /**
@@ -15,7 +16,10 @@ use Illuminate\Support\Carbon;
  */
 final class SessionTransitions
 {
-    public function __construct(private readonly AuditLog $audit) {}
+    public function __construct(
+        private readonly AuditLog $audit,
+        private readonly RelayKicker $relay,
+    ) {}
 
     public function markOpen(TerminalSession $session, ?Carbon $startedAt = null): void
     {
@@ -59,6 +63,8 @@ final class SessionTransitions
         ])->save();
 
         $this->broadcast($session);
+        // Relayed clients go too (the agent's exit normally ends them; this covers an agent that can't tell the relay).
+        $this->relay->kick($session);
 
         $this->audit->record('terminal.session_closed', 'terminal_session', $session->id, [
             'server_id' => $session->server_id,

@@ -13,8 +13,13 @@ use Illuminate\Support\Carbon;
  * @property string $organization_id
  * @property string $server_id
  * @property string $server_name
+ * @property ?string $target_type server|site|database (null: rows from before consoles, servers)
+ * @property ?string $target_id the site or database instance id
+ * @property ?string $target_name the site or instance name at open time
+ * @property ?string $container docker:<name> | compose:<service> (null: a host shell)
+ * @property ?bool $relayed the agent was given a relay token
  * @property string $user_id owner
- * @property string $unix_user
+ * @property string $unix_user empty for container consoles (docker exec runs as the image's user)
  * @property SessionStatus $status
  * @property ?string $command_id terminal.open command
  * @property int $cols
@@ -38,6 +43,12 @@ class TerminalSession extends Model
 {
     use HasUlids;
 
+    public const TARGET_SERVER = 'server';
+
+    public const TARGET_SITE = 'site';
+
+    public const TARGET_DATABASE = 'database';
+
     protected $table = 'terminal_sessions';
 
     /** Millisecond precision: recording offsets are computed against started_at. */
@@ -59,6 +70,7 @@ class TerminalSession extends Model
             'initial_rows' => 'integer',
             'idle_timeout_s' => 'integer',
             'shared' => 'boolean',
+            'relayed' => 'boolean',
             'channel_epoch' => 'integer',
             'started_at' => 'datetime',
             'last_activity_at' => 'datetime',
@@ -79,6 +91,17 @@ class TerminalSession extends Model
     public function isLive(): bool
     {
         return $this->status->isLive();
+    }
+
+    public function targetType(): string
+    {
+        return $this->target_type ?? self::TARGET_SERVER;
+    }
+
+    /** A relay session clients can still connect to. */
+    public function isRelayed(): bool
+    {
+        return (bool) $this->relayed;
     }
 
     public function isOwnedBy(string $userId): bool

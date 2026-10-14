@@ -61,6 +61,10 @@ type Deps struct {
 	Logger    *slog.Logger
 	// RestartAgent restarts the service after system.upgrade_agent.
 	RestartAgent func() error
+	// RelayBase and RelayHTTP reach the terminal relay: the API base the agent long-polls and an HTTP/1.1 client with
+	// its mTLS identity ("" = terminal sessions ignore relay tokens).
+	RelayBase string
+	RelayHTTP *http.Client
 }
 
 // Components are the long-running subsystems plus the populated registry.
@@ -126,7 +130,7 @@ func Build(d Deps) *Components {
 		EnvDir: envDir, Links: links, Logger: log.With("component", "docker")})
 	dep := deploy.New(deploy.Options{FS: d.FS, Runner: d.Runner, HTTP: d.HTTP, SitesRoot: cfg.SitesRoot, EnvDir: envDir, Containers: dock, Links: links,
 		Procs: sup, Workers: edgeClient, Events: sink, Logger: log.With("component", "deploy")})
-	terms := pty.New(pty.Options{Logger: log.With("component", "pty")})
+	terms := pty.New(pty.Options{Logger: log.With("component", "pty"), RelayBase: d.RelayBase, RelayHTTP: d.RelayHTTP, Docker: docker.NewClient(cfg.DockerSock)})
 
 	system.New(system.Deps{Runner: d.Runner, FS: d.FS, Logger: log, HTTP: d.HTTP, AgentVersion: version.Version, Restart: d.RestartAgent,
 		BinaryPath: installedBinary(d.FS), RunningSHA256: version.BinarySHA256, SiteSecrets: dep.SiteSecrets}).Register(reg)
@@ -238,6 +242,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	comps := Build(Deps{
 		Config: cfg, FS: fs, Runner: r, Insights: client, Telemetry: tel, Logger: log,
+		RelayBase: id.State.Endpoints.API, RelayHTTP: transport.NewHTTP1Client(id.TLSConfig()),
 		RestartAgent: func() error {
 			// --no-block queues the restart so the upgrade command's finished event is flushed first.
 			_, err := runner.Check(context.Background(), r, runner.Cmd{Name: "systemctl", Args: []string{"--no-block", "restart", "falak-agent.service"}})

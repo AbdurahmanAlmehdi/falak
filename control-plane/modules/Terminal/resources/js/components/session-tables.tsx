@@ -4,19 +4,27 @@ import { RelativeTime } from '@/components/falak/relative-time';
 import { Tag } from '@/components/falak/tag';
 import { type SharedData } from '@/types';
 import { Link, router, usePage } from '@inertiajs/react';
-import { Download, Film, Share2, SquareTerminal } from 'lucide-react';
-import { formatBytes, formatDuration, REASON_LABELS } from '../lib';
+import { Box, Database, Download, Film, Share2, SquareTerminal } from 'lucide-react';
+import { formatBytes, formatDuration, REASON_LABELS, targetLabel } from '../lib';
 import { type TerminalSessionData } from '../types';
 import { SessionStatusBadge } from './session-status';
 
 const target = (session: TerminalSessionData) => (
     <span className="flex min-w-0 items-center gap-2 py-1.5">
-        <SquareTerminal className="text-fg-faint size-4 shrink-0" aria-hidden />
-        <span className="truncate font-mono text-xs">
-            {session.unix_user}@{session.server_name}
-        </span>
+        {session.target_type === 'database' ? (
+            <Database className="text-fg-faint size-4 shrink-0" aria-hidden />
+        ) : session.target_type === 'site' ? (
+            <Box className="text-fg-faint size-4 shrink-0" aria-hidden />
+        ) : (
+            <SquareTerminal className="text-fg-faint size-4 shrink-0" aria-hidden />
+        )}
+        <span className="truncate font-mono text-xs">{targetLabel(session)}</span>
     </span>
 );
+
+/** On a server's own tab: the user of a shell, or the console's target without the server. */
+const shortLabel = (session: TerminalSessionData) =>
+    session.target_type === 'server' ? session.unix_user : targetLabel(session).replace(` on ${session.server_name}`, '');
 
 /** Live sessions the user owns or can attach to. */
 export function LiveSessionsTable({
@@ -34,7 +42,7 @@ export function LiveSessionsTable({
             header: 'Session',
             cell: (session) => (
                 <Link href={route('terminal.sessions.show', session.id)} className="hover:underline" onClick={(event) => event.stopPropagation()}>
-                    {showServer ? target(session) : <span className="font-mono text-xs">{session.unix_user}</span>}
+                    {showServer ? target(session) : <span className="font-mono text-xs">{shortLabel(session)}</span>}
                 </Link>
             ),
         },
@@ -95,7 +103,7 @@ export function RecordingsTable({
             id: 'session',
             header: 'Session',
             cell: (session) => {
-                const label = showServer ? target(session) : <span className="font-mono text-xs">{session.unix_user}</span>;
+                const label = showServer ? target(session) : <span className="font-mono text-xs">{shortLabel(session)}</span>;
 
                 return canReplay(session) ? (
                     <Link

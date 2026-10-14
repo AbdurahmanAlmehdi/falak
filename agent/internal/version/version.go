@@ -44,6 +44,9 @@ var Features = []string{
 	// db.instance.* and db.* on database containers (falak-db images), heartbeat `databases`, provision.apply
 	// docker.live_restore, docker.compose.up join_networks, networks[].environment.
 	"db.instances",
+	// terminal.open relay_token (the terminal relay: output and input over a WebSocket, docs/plans/CONSOLE.md) and
+	// container (a console in a container: docker exec), and a missing cwd starts in the home directory.
+	"terminal.v2",
 }
 
 var (

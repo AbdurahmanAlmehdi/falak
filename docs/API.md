@@ -525,6 +525,49 @@ The dashboard's delete: `confirm` must be the instance's name (`422` otherwise).
 `422` on `instance` during a major upgrade or when the server's agent is not connected. The token needs
 `databases.view` as well.
 
+## Consoles
+
+Shells where a site runs (its container, or its current release as the site user), in database containers and on
+servers. `falak console` uses these. The answer carries a `ws(s)://` relay URL with a single-use ticket valid for 60
+seconds; the client dials it and exchanges bytes as in `docs/plans/CONSOLE.md` ("Relay HTTP API"). Every console is a
+terminal session: audited, recorded and listed under Terminal. All routes answer `409 {"message": "The terminal relay
+is off on this installation."}` when the relay is off (`FALAK_TERMINAL_RELAY`), and `422` on `server` when the
+server's agent is too old (no `terminal.v2`), not connected or not active.
+
+### `POST /api/v1/sites/{site}/console` `{server_id?, service?, cols?, rows?}` — `terminal.open` + `sites.view`
+### `POST /api/v1/databases/instances/{instance}/console` `{cols?, rows?}` — `terminal.open` + `databases.view`
+### `POST /api/v1/servers/{server}/console` `{user?, cols?, rows?}` — `terminal.open`
+```json
+{"data": {
+  "session_id": "01k…", "url": "wss://falak.example.com/terminal/v1/sessions/01k…?ticket=…", "writable": true,
+  "server_id": "01k…", "server_name": "app-1", "target_type": "site", "target_name": "shop",
+  "container": "compose:web"
+}}
+```
+`201`. `{site}` is an id or slug, `{instance}` and `{server}` an id or name.
+
+| Target | Opens |
+|---|---|
+| Docker site | its running container (`container: "docker:<slug>"`) |
+| Compose site | the `service`'s running container (`compose:<service>`); `422` on `service` listing the services when the stack has several and none is given |
+| Native site (PHP, Node, Bun, Deno, static) | a shell as the site user in its current release, with its variables (`container: null`) |
+| Function | `422` on `site`: functions have no console |
+| Database instance | its container (`docker:falak-db-<id>`); `422` on `instance` unless it is running |
+| Server | a shell as `user` (default root); `target_name` and `container` are `null` |
+
+`server_id` picks one of the site's servers (id or name; default: the leader). `cols`/`rows` default to 80×24.
+
+### `GET /api/v1/sites/{site}/console` — `terminal.open` + `sites.view`
+What a site console can be opened on: `{"data": {"servers": [{"id", "name", "leader"}], "services": ["web", "worker"] | null, "runtime": "compose"}}`.
+
+### `POST /api/v1/terminal/sessions/{session}/ticket` — the session's view permission
+A new URL for the same session (reconnect): `{"data": {"url", "writable"}}`. `404` once the session is closed or when
+it doesn't use the relay, `403` when the token's user may not view it. `writable` is false for watchers of a shared
+session without `terminal.control`.
+
+### `DELETE /api/v1/terminal/sessions/{session}` — the session's close permission
+Closes the session (`204`).
+
 ## Secrets
 
 Organization secrets in four scopes (`organization`, `project`, `environment`, `service` — a project service id),

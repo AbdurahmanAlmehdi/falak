@@ -101,6 +101,13 @@ final class EloquentSiteDirectory implements SiteDirectory
         return array_merge($exposed, SiteVariables::for($site, $serverId), SiteVariables::normalizeIds(array_map('strval', $context)));
     }
 
+    public function variables(string $siteId, string $serverId): array
+    {
+        $site = $this->query()->find($siteId);
+
+        return $site ? SiteVariables::for($site, $serverId) : [];
+    }
+
     /**
      * @return Builder<Site>
      */

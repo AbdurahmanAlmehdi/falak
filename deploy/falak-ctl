@@ -44,7 +44,7 @@ FALAK_PROJECT="${FALAK_PROJECT:-falak}"
 ENV_FILE="$FALAK_DIR/.env"
 COMPOSE_FILE="$FALAK_DIR/deploy/compose.yml"
 BACKUP_DIR="$FALAK_DIR/backups"
-APP_SERVICES="control-plane agent-api horizon reverb scheduler builder"
+APP_SERVICES="control-plane agent-api horizon reverb scheduler relay builder"
 PHP_SERVICES="control-plane agent-api horizon reverb scheduler"
 FALAK_REPO_DEFAULT="OthmanHaba/falak"
 # Disaster recovery: the DR bucket's credentials and the passphrase live in dr/dr.env (dir 0700, file 0600, root;

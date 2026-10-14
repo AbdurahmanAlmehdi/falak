@@ -6,10 +6,12 @@ toolchain go1.27.2
 
 require (
 	filippo.io/age v1.3.2
+	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
 	github.com/klauspost/compress v1.19.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.opentelemetry.io/proto/otlp v1.11.0
+	golang.org/x/term v0.45.0
 	golang.org/x/text v0.41.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1

@@ -2,6 +2,7 @@
 # panel host, security headers, optional Grafana + OTLP).
 #
 #   {$FALAK_DOMAIN}         panel, installer (/install/*), enrollment (/agent/v1/enroll), Reverb (/app, /apps),
+#                           terminal relay for browsers and the CLI (/terminal/v1/*),
 #                           OTLP ingress (/otlp/v1/* -> gateway, observability profile).
 #                           TLS: Let's Encrypt (FALAK_TLS=acme) or Caddy's internal CA (FALAK_TLS=internal).
 #   {$FALAK_AGENT_API_HOST} agent mTLS API. Agents pin the Falak Fleet CA, so this host is served with a server
@@ -63,6 +64,13 @@
 	}
 	@with_cert not vars {http.request.tls.client.certificate_der_base64} ""
 	@reverb path /app/* /apps/*
+	# Terminal relay (docs/plans/CONSOLE.md): agents attach with their client cert, browsers and the CLI with a
+	# single-use ticket the panel signs.
+	@relay_agent {
+		path /agent/v1/relay/*
+		not vars {http.request.tls.client.certificate_der_base64} ""
+	}
+	@relay_client path /terminal/v1/*
 	@machine_with_cert {
 		path /agent/* /install/* /api/internal/*
 		not vars {http.request.tls.client.certificate_der_base64} ""
@@ -74,6 +82,16 @@
 
 		handle @reverb {
 			reverse_proxy reverb:8080
+		}
+		handle @relay_agent {
+			reverse_proxy relay:8080 {
+				header_up X-Falak-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+			}
+		}
+		handle @relay_client {
+			reverse_proxy relay:8080 {
+				header_up -X-Falak-Client-Cert-Fingerprint
+			}
 		}
 		handle @machine_with_cert {
 			reverse_proxy agent-api:8080 {

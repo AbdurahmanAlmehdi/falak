@@ -26,6 +26,11 @@ final readonly class AgentInfo
         public ?DateTimeImmutable $lastHeartbeatAt,
         public ?DateTimeImmutable $certificateExpiresAt,
         public array $runningCommands = [],
+        /**
+         * SHA-256 of the client certificate the agent uses now (lowercase hex, the format of the edge's fingerprint
+         * header): the newest one neither superseded, revoked nor expired; null when there is none
+         */
+        public ?string $certificateFingerprint = null,
     ) {}
 
     /** Whether the agent reported the protocol feature (facts `features`, e.g. "edge.access_log"). */

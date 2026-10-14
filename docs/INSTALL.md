@@ -7,6 +7,7 @@ Day-2 operations use `falak-ctl`.
 ```
 internet ──:80/:443──► edge (Caddy)
                         ├─ falak.example.com         Let's Encrypt ─► control-plane (FrankenPHP) · reverb (websockets)
+                        │                                                · relay (consoles: /terminal/v1)
                         ├─ agents.falak.example.com  Fleet-CA cert + client-cert (mTLS) check ─► control-plane
                         ├─ registry.falak.example.com Let's Encrypt + basic auth ─► registry (built-in image registry)
                         └─ grafana.falak.example.com Let's Encrypt ─► grafana            (optional)
@@ -42,11 +43,12 @@ volumes stay); where Docker's repository has no packages for the release yet, th
 | horizon (`FALAK_HORIZON_MAX_PROCESSES`, default 4, auto-balanced from 1) | 512 MB | 130–150 MB | |
 | reverb | 192 MB | 50 MB | |
 | scheduler | 256 MB | 45 MB | a short `schedule:run` process every minute |
+| relay (consoles, Go) | 64 MB | ~12 MB | pipes console bytes between agents and browsers/the CLI |
 | postgres (`shared_buffers=128MB`) | 512 MB | 40–150 MB | agents' long-polls hold no connection |
 | valkey (`maxmemory 128mb`, AOF) | 192 MB | 15 MB | |
 | edge | 128 MB | 25–35 MB | |
 | builder | 1.5 GB | 10–120 MB | builds use up to ~1 GB |
-| **core total** | **≈ 4.3 GB** | **≈ 0.6–0.8 GB** | idle CPU: a few % of one core |
+| **core total** | **≈ 4.4 GB** | **≈ 0.6–0.8 GB** | idle CPU: a few % of one core |
 | observability: gateway, loki, tempo, victoriametrics, grafana | 64 + 384 + 384 + 384 + 512 MB | 20 + 75 + 75 + 65 + 320–360 MB (≈ 0.6 GB) | |
 
 The scheduler stays a separate container. Running `schedule:work` inside Horizon would save only its ~45 MB

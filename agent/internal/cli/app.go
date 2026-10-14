@@ -49,6 +49,8 @@ type App struct {
 	Dir string
 	// GitBranch returns the current branch of the repository holding dir (nil: runs git).
 	GitBranch func(dir string) string
+	// Terminal is the local terminal for `falak console` (nil: stdin isn't a terminal).
+	Terminal Terminal
 
 	// resolved global options
 	jsonOut bool
@@ -66,13 +68,18 @@ func (e usageError) Error() string { return e.msg }
 
 func usagef(format string, a ...any) error { return usageError{fmt.Sprintf(format, a...)} }
 
-// exitError carries a specific exit code.
+// exitError carries a specific exit code; with no err, Run exits with it silently (console: the remote shell's code).
 type exitError struct {
 	code int
 	err  error
 }
 
-func (e exitError) Error() string { return e.err.Error() }
+func (e exitError) Error() string {
+	if e.err == nil {
+		return fmt.Sprintf("exit status %d", e.code)
+	}
+	return e.err.Error()
+}
 
 type command struct {
 	name    string
@@ -105,7 +112,8 @@ func (a *App) commands() []*command {
 			{name: "push", args: "<site> [--file PATH]", summary: "upload the .env (stdin or --file)", run: cmdEnvPush},
 		}},
 		{name: "logs", args: "<site> [--follow] [--since 1h] [--limit N] [--level LEVEL]", summary: "show site logs", run: cmdLogs},
-		{name: "ssh", args: "<server> [--user USER] [-- ssh args]", summary: "open an SSH session to a server", run: cmdSSH},
+		{name: "ssh", args: "<server> [--user USER] [-- ssh args]", summary: "open an SSH session to a server (site, container and database shells: falak console)", run: cmdSSH},
+		{name: "console", args: consoleSynopsis, summary: "open a shell where a site runs, in a database container, or on a server (through the terminal relay)", run: cmdConsole},
 		{name: "open", args: "<site> [--panel]", summary: "open a site (or its panel page) in the browser", run: cmdOpen},
 		functionCommands(),
 		{name: "db", summary: "database containers", subs: []*command{
@@ -156,9 +164,12 @@ func (a *App) Run(ctx context.Context, argv []string) int {
 	if errors.Is(err, flag.ErrHelp) {
 		return ExitOK
 	}
-	fmt.Fprintln(a.Stderr, "falak:", err)
 	var ue usageError
 	var ee exitError
+	if errors.As(err, &ee) && ee.err == nil {
+		return ee.code
+	}
+	fmt.Fprintln(a.Stderr, "falak:", err)
 	switch {
 	case errors.As(err, &ue):
 		return ExitUsage

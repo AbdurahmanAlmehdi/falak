@@ -4,7 +4,8 @@
 #
 #   host ──https :8443──► edge (Caddy, internal CA TLS + agent mTLS) ──► control-plane (panel, FrankenPHP worker mode)
 #                                                                      ├► agent-api (/agent/*, /install/*, /api/internal/*)
-#                                                                      └► reverb
+#                                                                      ├► reverb
+#                                                                      └► relay (terminal relay, Go)
 #   srv-app-1, srv-app-2, srv-db-1 (Ubuntu 24.04 + systemd) ── fleet network ──► edge as https://falak.test
 #                                                          └─ observability network ──► gateway:4318 (OTLP)
 #   control-plane, agent-api, horizon, reverb ── backend network ──► postgres, valkey
@@ -60,6 +61,7 @@ x-control-plane: &control-plane
     QUEUE_CONNECTION: redis
     SESSION_DRIVER: redis
     BROADCAST_CONNECTION: reverb
+    FALAK_TERMINAL_RELAY: "1"
     REVERB_APP_ID: ${REVERB_APP_ID}
     REVERB_APP_KEY: ${REVERB_APP_KEY}
     REVERB_APP_SECRET: ${REVERB_APP_SECRET}
@@ -263,6 +265,26 @@ services:
       timeout: 5s
       retries: 20
       start_period: 60s
+      start_interval: 1s
+
+  # Terminal relay (docs/plans/CONSOLE.md); production runs it from the control-plane image (role `relay`).
+  relay:
+    image: falak-sim/relay:dev
+    build:
+      context: ../agent
+      dockerfile: ../sim/relay.Dockerfile
+    logging: *logging
+    restart: unless-stopped
+    init: true
+    environment:
+      APP_KEY: ${APP_KEY}
+      GOMEMLIMIT: 48MiB
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
       start_interval: 1s
 
   edge:

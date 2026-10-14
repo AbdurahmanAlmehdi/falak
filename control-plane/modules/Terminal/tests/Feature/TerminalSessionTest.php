@@ -5,7 +5,6 @@ use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
 use Falak\Servers\Contracts\ServerStatus;
 use Falak\Servers\Events\ServerDeleted;
-use Falak\Terminal\Application\Actions\CloseSession;
 use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Domain\Enums\SessionStatus;
 use Falak\Terminal\Domain\Models\TerminalFrame;
@@ -221,7 +220,7 @@ it('sweeps idle, overlong and never-opened sessions', function () {
     $stuck->forceFill(['created_at' => now()->subMinutes(3), 'last_activity_at' => now()])->save();
     $old->forceFill(['created_at' => now()->subSeconds(3600 + 61), 'last_activity_at' => now()])->save();
 
-    (new SweepTerminalSessions)->handle(app(CloseSession::class));
+    app()->call([new SweepTerminalSessions, 'handle']);
 
     expect($idle->refresh()->close_reason)->toBe('idle')
         ->and($busy->refresh()->status)->toBe(SessionStatus::Open)

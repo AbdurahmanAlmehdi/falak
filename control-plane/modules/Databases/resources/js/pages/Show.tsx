@@ -1,10 +1,12 @@
+import { toast } from '@/components/falak/toast';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import AppLayout from '@/layouts/app-layout';
 import { type BreadcrumbItem } from '@/types';
 import { Head, Link, router } from '@inertiajs/react';
 import { format } from 'date-fns';
-import { useEffect } from 'react';
+import { SquareTerminal } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { BackupsTable } from '../components/backups-table';
 import { ConnectionCard } from '../components/connection-card';
 import { StatusBadge, formatBytes, formatDuration } from '../components/database-ui';
@@ -40,7 +42,7 @@ interface Props {
     storageProviders: StorageOption[];
     restoreTargets: RestoreTarget[];
     options: InstanceOptions;
-    can: { manage: boolean; reveal: boolean; restore: boolean; manageStorage: boolean };
+    can: { manage: boolean; reveal: boolean; restore: boolean; manageStorage: boolean; console: boolean };
 }
 
 const CONVERGING = ['pending', 'running', 'deleting', 'upgrading'];
@@ -77,6 +79,19 @@ export default function Show({
         pitr.restores.some((r) => CONVERGING.includes(r.status)) ||
         pitr.bases.some((b) => CONVERGING.includes(b.status));
 
+    // A shell in the container (Terminal's database console); the session page opens on success.
+    const [openingConsole, setOpeningConsole] = useState(false);
+    const openConsole = () =>
+        router.post(
+            `/databases/instances/${instance.id}/console`,
+            {},
+            {
+                onStart: () => setOpeningConsole(true),
+                onFinish: () => setOpeningConsole(false),
+                onError: (errors) => toast.error('Could not open a console', Object.values(errors)[0]),
+            },
+        );
+
     // Agent results arrive asynchronously: refresh while anything is converging.
     useEffect(() => {
         if (!converging) return;
@@ -103,6 +118,11 @@ export default function Show({
                         </p>
                     </div>
                     <div className="flex gap-2">
+                        {can.console && instance.status === 'active' && (
+                            <Button variant="outline" onClick={openConsole} disabled={openingConsole}>
+                                <SquareTerminal aria-hidden /> Console
+                            </Button>
+                        )}
                         {instance.volume_id && (
                             <Button variant="outline" asChild>
                                 <Link href={`/volumes/${instance.volume_id}`}>Data volume</Link>

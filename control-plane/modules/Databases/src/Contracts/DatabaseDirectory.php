@@ -3,6 +3,7 @@
 namespace Falak\Databases\Contracts;
 
 use Falak\Databases\Contracts\Data\DatabaseData;
+use Falak\Databases\Contracts\Data\DatabaseInstanceData;
 
 /**
  * Read-only database lookups for other modules (e.g. Sites showing a site's databases).
@@ -33,4 +34,14 @@ interface DatabaseDirectory
      * @return list<DatabaseData>
      */
     public function forSite(string $organizationId, string $siteId): array;
+
+    /** A database container by id. */
+    public function instance(string $instanceId): ?DatabaseInstanceData;
+
+    /**
+     * The organization's database containers (retired ones excluded), by name.
+     *
+     * @return list<DatabaseInstanceData>
+     */
+    public function instancesForOrganization(string $organizationId): array;
 }

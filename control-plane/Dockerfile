@@ -7,14 +7,14 @@
 # Build context: the REPOSITORY ROOT (the image bakes agent/CLI/builder binaries, the agent protocol
 # schemas and the Grafana dashboards next to the Laravel app). Ignore rules: Dockerfile.dockerignore.
 #
-# One image, five roles (entrypoint argument): web (the panel: FrankenPHP worker mode; runs migrations when
+# One image, six roles (entrypoint argument): web (the panel: FrankenPHP worker mode; runs migrations when
 # FALAK_MIGRATE=1), agent-api (FrankenPHP for agent/builder long-polls, own thread pool), horizon, reverb,
-# scheduler. Runs as www-data. Proven topology: sim/compose.yml; production: deploy/compose.yml.
+# scheduler, relay (the Go terminal relay). Runs as www-data. Proven topology: sim/compose.yml; production: deploy/compose.yml.
 
 ARG PHP_IMAGE=dunglas/frankenphp:1.12.7-php8.4-trixie
 ARG GO_IMAGE=golang:1.25-trixie
 
-# --- binaries: falak-agent / falak / falak-builder for linux amd64+arm64 (cross-compiled once) -------
+# --- binaries: falak-agent / falak / falak-builder / falak-relay for linux amd64+arm64 (cross-compiled once) ---
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS binaries
 ARG FALAK_VERSION=dev
 WORKDIR /src/agent
@@ -22,8 +22,9 @@ COPY agent/go.mod agent/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY agent/ ./
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    make agent builder bin/falak-linux-amd64 bin/falak-linux-arm64 VERSION="${FALAK_VERSION}" \
- && mkdir -p /out \
+    make agent builder relay bin/falak-linux-amd64 bin/falak-linux-arm64 VERSION="${FALAK_VERSION}" \
+ && mkdir -p /out /out-relay \
+ && cp bin/falak-relay-linux-amd64 bin/falak-relay-linux-arm64 /out-relay/ \
  && for f in falak-agent-linux-amd64 falak-agent-linux-arm64 falak-builder-linux-amd64 falak-builder-linux-arm64 falak-linux-amd64 falak-linux-arm64; do \
       cp "bin/$f" "/out/$f"; (cd /out && sha256sum "$f" > "$f.sha256"); \
     done \
@@ -70,6 +71,9 @@ COPY --from=vendor /app/vendor ./vendor
 COPY control-plane/ ./
 COPY --from=assets /app/public/build ./public/build
 COPY --from=binaries /out/ /opt/falak/bin/
+# The terminal relay runs in this image (entrypoint role `relay`), so it is built for the image's own arch.
+ARG TARGETARCH
+COPY --from=binaries /out-relay/falak-relay-linux-${TARGETARCH} /usr/local/bin/falak-relay
 COPY contracts/ /opt/falak/contracts/
 COPY templates/ /opt/falak/templates/
 COPY observability/grafana/dashboards/ /opt/falak/observability/grafana/dashboards/

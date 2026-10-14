@@ -7,5 +7,6 @@ case "$role" in
   reverb)    exec php -r 'exit(@fsockopen("127.0.0.1", (int) (getenv("REVERB_SERVER_PORT") ?: 8080)) ? 0 : 1);' ;;
   horizon)   php /app/artisan horizon:status 2>/dev/null | grep -qi running ;;
   scheduler) kill -0 1 ;;
+  relay)     exec curl -fsS -o /dev/null --max-time 4 http://127.0.0.1:8080/healthz ;;
   *)         exit 0 ;;
 esac

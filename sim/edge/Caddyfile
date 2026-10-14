@@ -39,6 +39,12 @@
 	}
 	@with_cert not vars {http.request.tls.client.certificate_der_base64} ""
 	@reverb path /app/* /apps/*
+	# Terminal relay (same as deploy/edge/Caddyfile): agents with their client cert, browsers/the CLI with a ticket.
+	@relay_agent {
+		path /agent/v1/relay/*
+		not vars {http.request.tls.client.certificate_der_base64} ""
+	}
+	@relay_client path /terminal/v1/*
 	# Machine traffic (agents, installer, builders; long-polls) -> agent-api, its own FrankenPHP thread pool
 	# (same split as deploy/edge/Caddyfile).
 	@machine_with_cert {
@@ -55,6 +61,16 @@
 
 		handle @reverb {
 			reverse_proxy reverb:8080
+		}
+		handle @relay_agent {
+			reverse_proxy relay:8080 {
+				header_up X-Falak-Client-Cert-Fingerprint {http.request.tls.client.fingerprint}
+			}
+		}
+		handle @relay_client {
+			reverse_proxy relay:8080 {
+				header_up -X-Falak-Client-Cert-Fingerprint
+			}
 		}
 		handle @machine_with_cert {
 			reverse_proxy agent-api:8080 {

@@ -76,6 +76,11 @@ final class FakeSiteDirectory implements SiteDirectory, SiteHeaders
         return $context;
     }
 
+    public function variables(string $siteId, string $serverId): array
+    {
+        return [];
+    }
+
     public function for(string $siteId): array
     {
         $site = $this->sites[$siteId];
