@@ -1,5 +1,5 @@
 import { registerCommands, registerIpActions, registerNavigation, registerServiceTabs, type ServiceTabProps } from '@/lib/registry';
-import { Ban, Network, Shield } from 'lucide-react';
+import { Ban, Gauge, Network, Shield } from 'lucide-react';
 import { createElement, lazy } from 'react';
 import { BlockIpAction } from './components/block-ip-action';
 
@@ -65,6 +65,15 @@ registerCommands({
             href: '/network/blocked',
             permission: 'network.view',
             keywords: ['block', 'ban', 'fail2ban', 'brute force', 'ssh'],
+        },
+        {
+            id: 'network.rate-limits',
+            title: 'Rate limits',
+            group: 'Navigation',
+            icon: Gauge,
+            href: '/network/rate-limits',
+            permission: 'edge.view',
+            keywords: ['rate limit', '429', 'login', 'throttle', 'caddy'],
         },
     ],
 });

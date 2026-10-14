@@ -31,6 +31,15 @@ type Payload struct {
 	// id is kept, anything else replaced by a UUID; passed upstream and echoed in the response (and so in the access
 	// log). Without it the rendered config is exactly what it was before the feature.
 	RequestID bool `json:"request_id,omitempty"`
+	// CaddyBuild is Falak's Caddy build with the rate_limit module, for this server's architecture (feature
+	// edge.rate_limit): only sent with rate limits, installed only when the edge's Caddy lacks the module.
+	CaddyBuild *CaddyBuild `json:"caddy_build,omitempty"`
+}
+
+// CaddyBuild is a Caddy binary to download, checked against its SHA-256.
+type CaddyBuild struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
 }
 
 // WildcardCertificate is one *.<domain> certificate managed by the edge.
@@ -73,6 +82,16 @@ type Site struct {
 	// AccessLog names the site's HTTP access log (the site slug): JSON lines in logs.AccessLogDir/<name>.log,
 	// shipped by the agent as kind=access records of that site. Routes sharing a name share the file.
 	AccessLog string `json:"access_log,omitempty"`
+	// RateLimits limit requests per client IP on paths of the site (feature edge.rate_limit; needs the rate_limit
+	// module, see ratelimit.go). Sites without rules render exactly as before.
+	RateLimits []RateLimit `json:"rate_limits,omitempty"`
+}
+
+// RateLimit allows Events requests per client IP to Path within WindowS seconds; more get 429 with Retry-After.
+type RateLimit struct {
+	Path    string `json:"path"`
+	Events  int    `json:"events"`
+	WindowS int    `json:"window_s"`
 }
 
 var accessLogName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -203,6 +222,9 @@ func Render(p Payload, certDir string) (obj, error) {
 	var loadFiles []any
 	tlsLoggers, plainLoggers := obj{}, obj{}
 	accessLogs := map[string]bool{}
+	if p.CaddyBuild != nil && !p.needsRateLimit() {
+		return nil, fmt.Errorf("caddy_build is only sent with rate limits")
+	}
 	sites := append([]Site(nil), p.Sites...)
 	sort.SliceStable(sites, func(i, j int) bool { return sites[i].ID < sites[j].ID })
 	for _, s := range sites {
@@ -369,6 +391,15 @@ func siteRoutes(s Site, requestID bool) ([]any, error) {
 	}
 	if len(s.AllowIPs) > 0 {
 		sub = append(sub, obj{"match": []any{obj{"not": []any{obj{"client_ip": obj{"ranges": toAny(s.AllowIPs)}}}}}, "handle": []any{forbidden()}})
+	}
+	// Rate limits come after the IP lists (a denied client is not counted) and before authentication (a login form or
+	// basic auth is what they protect).
+	if len(s.RateLimits) > 0 {
+		h, err := rateLimitHandler(s)
+		if err != nil {
+			return nil, err
+		}
+		sub = append(sub, obj{"handle": []any{h}})
 	}
 	if len(s.BasicAuth) > 0 {
 		// Group accounts by path; site-wide accounts ("") come first, then paths in first-seen order.

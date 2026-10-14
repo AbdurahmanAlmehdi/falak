@@ -13,6 +13,7 @@ use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Domain\Models\Header;
 use Falak\Edge\Domain\Models\LoadBalancer;
 use Falak\Edge\Domain\Models\Mount;
+use Falak\Edge\Domain\Models\PathRateLimit;
 use Falak\Edge\Domain\Models\PreviewDomain;
 use Falak\Edge\Domain\Models\Redirect;
 use Falak\Edge\Domain\Models\SecurityRule;
@@ -118,6 +119,11 @@ final class RouteCompiler
 
         usort($entries, fn (array $a, array $b) => strcmp($a['id'], $b['id']));
 
+        // Falak's Caddy build (rate_limit module), only with rate limits: the agent installs it when the edge lacks it.
+        $caddyBuild = collect($entries)->contains(fn (array $entry) => isset($entry['rate_limits']))
+            ? app(EdgeCaddyBuilds::class)->forArch($this->servers->find($serverId)?->arch)
+            : null;
+
         // Behind Cloudflare the connection comes from Cloudflare: trust its ranges for the visitor's IP
         // (CF-Connecting-IP), so logs, IP allow / deny lists and rate limits see the visitor.
         $proxied = $this->zones->isNotEmpty();
@@ -133,6 +139,7 @@ final class RouteCompiler
                 'subject' => '*.'.$this->wildcard->domain,
                 'dns' => ['provider' => 'cloudflare', 'api_token' => $this->wildcard->dnsCredential->api_token],
             ]] : null,
+            'caddy_build' => $caddyBuild,
         ])
             // Organizations that turned on request ID linking: requests without a valid X-Request-Id get one, passed
             // upstream and recorded in the access log (feature edge.request_id, stripped for older agents;
@@ -627,6 +634,17 @@ final class RouteCompiler
 
             if ($allow !== []) {
                 $rules['allow_ips'] = $allow;
+            }
+
+            // Path rate limits (edge.rate_limit): only sites with rules get the field, so every other route renders
+            // byte for byte as before.
+            $limits = PathRateLimit::query()->where('site_id', $siteId)->orderBy('path')->get()
+                ->map(fn (PathRateLimit $limit) => ['path' => $limit->path, 'events' => $limit->events, 'window_s' => $limit->window_s])
+                ->values()
+                ->all();
+
+            if ($limits !== []) {
+                $rules['rate_limits'] = $limits;
             }
         }
 

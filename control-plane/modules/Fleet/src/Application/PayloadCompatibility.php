@@ -81,6 +81,11 @@ final class PayloadCompatibility
         'net.protection' => [
             'net.firewall.apply' => ['counters'],
         ],
+        // Path rate limits at the edge (docs/plans/network/protection.md). Edge refuses rules on servers without it;
+        // stripped all the same (an agent downgraded since).
+        'edge.rate_limit' => [
+            'edge.caddy.apply' => ['sites.*.rate_limits', 'caddy_build'],
+        ],
     ];
 
     /**

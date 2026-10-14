@@ -130,7 +130,7 @@ func Build(d Deps) *Components {
 		},
 	})
 	edgeClient := &edge.Client{Base: cfg.CaddyAdmin, Fallback: "http://127.0.0.1:2019"}
-	edgeMgr := edge.New(edge.Options{Client: edgeClient, FS: d.FS, EtcDir: cfg.EtcDir, Logger: log.With("component", "edge"),
+	edgeMgr := edge.New(edge.Options{Client: edgeClient, FS: d.FS, EtcDir: cfg.EtcDir, Logger: log.With("component", "edge"), Runner: d.Runner, HTTP: d.HTTP,
 		RestartEdge: func(ctx context.Context) error {
 			_, err := runner.Check(ctx, d.Runner, runner.Cmd{Name: "systemctl", Args: []string{"restart", "falak-edge.service"}})
 			return err

@@ -39,7 +39,7 @@ in the list items whose sibling flag is true). When an agent reports a new versi
 modules re-send state they would otherwise deduplicate.
 Current features: `edge.access_log`, `telemetry.log_kind`, `system.upgrade_agent.v2`, `fn.v1`, `fn.v2`, `fn.v3`,
 `compose.v2`, `docker.networks`, `docker.networks.create`, `compose.up.services`, `provision.v2`, `db.instances`,
-`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`, `db.observability`, `net.protection`.
+`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`, `db.observability`, `net.protection`, `edge.rate_limit`.
 Logs (docs/plans/OBSERVABILITY.md phase 2): `logs.container_files` (telemetry.configure `log_sources[]` `container`,
 `compose_service`, `multiline_pattern`, `origin`; container sources are removed whole for older agents,
 `PayloadCompatibility::DROP`), `runtime.fpm.slowlog` (runtime.fpm.pool `slowlog_timeout`).
@@ -168,6 +168,9 @@ organization's servers, private networks and the control plane) and `auto_ban`. 
 `table inet falak` is never touched by it. `net.firewall.apply` `counters` (stripped for older agents) puts a counter on
 every rule. Once a minute the agent sends `net.protection.observed` (sshd failures per source, its auto-bans, rule
 counters, block hits); control planes without the type answer 404 and the agent keeps the metrics only.
+`edge.rate_limit` adds `edge.caddy.apply` `sites[].rate_limits` (`{path, events, window_s}`, only on sites with rules)
+and `caddy_build` (`{url, sha256}`, only with rate limits): the agent installs Falak's Caddy build (caddy-ratelimit)
+when the edge's Caddy lacks `http.handlers.rate_limit`, and refuses rate limits on a FrankenPHP edge.
 
 ## Secrets on servers (v0.10.0)
 **Env files on tmpfs.** `deploy.prepare` writes `env_file` to `/run/falak/env/<site>.env` (directory 0711 root, file

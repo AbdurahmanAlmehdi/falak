@@ -302,6 +302,38 @@
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
             "description": "Site slug: HTTP access log of the route's hosts written as Caddy JSON to /var/log/falak/access/<access_log>.log (rotated at 10 MB), shipped by the agent to Loki as kind=access records of that site. Routes of one site share it"
+          },
+          "rate_limits": {
+            "type": "array",
+            "maxItems": 20,
+            "description": "Feature edge.rate_limit: requests per client IP on paths of the site (the rate_limit module of Falak's Caddy build); more get 429. Absent for sites without rules (their routes render unchanged)",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "events",
+                "window_s"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "pattern": "^/[A-Za-z0-9._~!$&'()+,;=:@%/-]{0,198}\\*?$",
+                  "description": "Request path; a trailing * matches a prefix"
+                },
+                "events": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                },
+                "window_s": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 86400
+                }
+              }
+            }
           }
         }
       }
@@ -358,6 +390,26 @@
               }
             }
           }
+        }
+      }
+    },
+    "caddy_build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "sha256"
+      ],
+      "description": "Feature edge.rate_limit: Falak's Caddy build (Caddy + caddy-ratelimit + caddy-dns/cloudflare) for the server's architecture, only sent with rate limits; installed when the edge's Caddy lacks the rate_limit module",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
         }
       }
     }

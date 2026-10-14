@@ -6,7 +6,7 @@ import { Input } from '@/components/falak/input';
 import { Section } from '@/components/falak/section';
 import InfrastructureLayout from '@/layouts/infrastructure-layout';
 import { Link, router, useForm } from '@inertiajs/react';
-import { Ban, Network, Plus, Scale, Shield } from 'lucide-react';
+import { Ban, Gauge, Network, Plus, Scale, Shield } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
 import { ApplyStatusBadge } from '../components/network-ui';
 import { type FirewallStateSummary, type PrivateAddress } from '../types';
@@ -87,6 +87,9 @@ export default function Index({ servers, networks, loadBalancers, defaults, can 
                 <>
                     <Button icon={<Ban />} onClick={() => router.visit('/network/blocked')}>
                         Blocked IPs
+                    </Button>
+                    <Button icon={<Gauge />} onClick={() => router.visit('/network/rate-limits')}>
+                        Rate limits
                     </Button>
                     {can.manage && (
                         <Button variant="primary" icon={<Plus />} onClick={openCreate}>

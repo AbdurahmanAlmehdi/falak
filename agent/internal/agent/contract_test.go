@@ -524,3 +524,40 @@ func TestFactsValidate(t *testing.T) {
 		t.Fatalf("facts invalid: %v\n%s", err, b)
 	}
 }
+
+// edge.caddy.apply rate limits (edge.rate_limit): the schema and the executor's decoding agree.
+func TestEdgeRateLimitPayloads(t *testing.T) {
+	c := compiler(t)
+	sch, err := c.Compile(idBase + "commands/edge.caddy.apply.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, cleanup := buildTestRegistry(t)
+	defer cleanup()
+	ex, _ := reg.Get("edge.caddy.apply")
+	site := `{"id":"shop","domains":["shop.example.com"],"kind":"static","root":"/srv/shop"`
+	sum := strings.Repeat("a", 64)
+	for _, p := range []string{
+		`{"sites":[` + site + `,"rate_limits":[{"path":"/login","events":10,"window_s":60},{"path":"/api/*","events":600,"window_s":60}]}],"caddy_build":{"url":"https://cp.example.com/install/edge/caddy-linux-amd64","sha256":"` + sum + `"}}`,
+	} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
+		if err := sch.Validate(v); err != nil {
+			t.Errorf("%s: %v", p, err)
+		}
+		if err := ex.(commands.PayloadChecker).CheckPayload([]byte(p)); err != nil {
+			t.Errorf("%s does not decode: %v", p, err)
+		}
+	}
+	for _, p := range []string{
+		`{"sites":[` + site + `,"rate_limits":[{"path":"login","events":10,"window_s":60}]}]}`,
+		`{"sites":[` + site + `,"rate_limits":[{"path":"/{http.request.uri}","events":10,"window_s":60}]}]}`,
+		`{"sites":[` + site + `,"rate_limits":[{"path":"/x","events":0,"window_s":60}]}]}`,
+		`{"sites":[` + site + `}],"caddy_build":{"url":"http://cp.example.com/x","sha256":"` + sum + `"}}`,
+		`{"sites":[` + site + `}],"caddy_build":{"url":"https://cp.example.com/x","sha256":"nope"}}`,
+	} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
+		if sch.Validate(v) == nil {
+			t.Errorf("%s: invalid payload accepted", p)
+		}
+	}
+}

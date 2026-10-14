@@ -9,8 +9,10 @@ use Falak\Edge\Http\Controllers\DomainController;
 use Falak\Edge\Http\Controllers\DomainSettingsController;
 use Falak\Edge\Http\Controllers\LoadBalancerController;
 use Falak\Edge\Http\Controllers\MountController;
+use Falak\Edge\Http\Controllers\PathRateLimitController;
 use Falak\Edge\Http\Controllers\RateLimitController;
 use Falak\Edge\Http\Controllers\RoutingController;
+use Falak\Edge\Infrastructure\EdgeCaddyBuilds;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth', 'org'])->group(function () {
@@ -70,4 +72,14 @@ Route::middleware(['auth', 'org'])->group(function () {
 
     Route::post('edge/dns-credentials', [DnsCredentialController::class, 'store'])->name('edge.dns-credentials.store');
     Route::delete('edge/dns-credentials/{credential}', [DnsCredentialController::class, 'destroy'])->name('edge.dns-credentials.destroy');
+
+    // Path rate limits at the edge (Network → Rate limits, docs/plans/network/protection.md).
+    Route::get('network/rate-limits', [PathRateLimitController::class, 'index'])->name('edge.path-rate-limits.index');
+    Route::post('network/rate-limits', [PathRateLimitController::class, 'store'])->middleware('throttle:30,1')->name('edge.path-rate-limits.store');
+    Route::delete('network/rate-limits/{limit}', [PathRateLimitController::class, 'destroy'])->middleware('throttle:30,1')->name('edge.path-rate-limits.destroy');
 });
+
+// Falak's Caddy build for servers' edges: public like the agent installer (agents download it with its checksum from
+// edge.caddy.apply; it holds nothing secret).
+Route::get('install/edge/caddy-linux-{arch}', [PathRateLimitController::class, 'caddyBuild'])->middleware('throttle:60,1')
+    ->whereIn('arch', EdgeCaddyBuilds::ARCHES)->name('edge.caddy-build');

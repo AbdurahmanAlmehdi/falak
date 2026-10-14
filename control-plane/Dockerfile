@@ -30,6 +30,26 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     done \
  && cp bin/falak-agent-linux-amd64.version bin/falak-agent-linux-arm64.version /out/
 
+# --- edge-caddy: Falak's Caddy for servers' edges (docs/plans/network/protection.md, path rate limits) -----------
+# Stock Caddy (the apt package servers run) plus caddy-ratelimit (http.handlers.rate_limit) and caddy-dns/cloudflare
+# (DNS-01, already required of edges). Served to agents at /install/edge/caddy-linux-<arch> with its checksum; an
+# agent installs it only when a site on the server gets a rate limit. Versions pinned; bump CADDY_VERSION with the edge.
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS edge-caddy
+ARG CADDY_VERSION=v2.11.4
+ARG XCADDY_VERSION=v0.4.7
+ARG CADDY_RATELIMIT_VERSION=v0.1.0
+ARG CADDY_DNS_CLOUDFLARE_VERSION=v0.2.4
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go install "github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}" \
+ && mkdir -p /out && cd /tmp \
+ && for arch in amd64 arm64; do \
+      CGO_ENABLED=0 GOOS=linux GOARCH=$arch xcaddy build "${CADDY_VERSION}" \
+        --with "github.com/mholt/caddy-ratelimit@${CADDY_RATELIMIT_VERSION}" \
+        --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}" \
+        --output "/out/falak-caddy-linux-$arch" \
+      && (cd /out && sha256sum "falak-caddy-linux-$arch" > "falak-caddy-linux-$arch.sha256") || exit 1; \
+    done
+
 # --- base: PHP runtime + extensions -----------------------------------------------------------------
 FROM ${PHP_IMAGE} AS base
 # php.ini (FrankenPHP) and php-cli.ini (CLI SAPI: artisan, Horizon, Reverb, scheduler) differ only in OPcache.
@@ -71,6 +91,7 @@ COPY --from=vendor /app/vendor ./vendor
 COPY control-plane/ ./
 COPY --from=assets /app/public/build ./public/build
 COPY --from=binaries /out/ /opt/falak/bin/
+COPY --from=edge-caddy /out/ /opt/falak/bin/
 # The terminal relay runs in this image (entrypoint role `relay`), so it is built for the image's own arch.
 ARG TARGETARCH
 COPY --from=binaries /out-relay/falak-relay-linux-${TARGETARCH} /usr/local/bin/falak-relay

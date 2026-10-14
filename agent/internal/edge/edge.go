@@ -27,6 +27,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 	"github.com/OthmanHaba/falak/agent/internal/logs"
+	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
 
 // Client is a minimal Caddy admin API client.
@@ -157,6 +158,9 @@ type Options struct {
 	Logger *slog.Logger
 	// RestartEdge restarts falak-edge.service: its environment (DNS provider tokens, EdgeEnv) is only read at start.
 	RestartEdge func(ctx context.Context) error
+	// Runner and HTTP install Falak's Caddy build when a config needs the rate_limit module (ratelimit.go).
+	Runner runner.Runner
+	HTTP   *http.Client
 }
 
 // Manager implements edge.* executors.
@@ -193,6 +197,11 @@ func (m *Manager) syncEnv(ctx context.Context, p Payload, s commands.Stream) err
 	if err := m.o.RestartEdge(ctx); err != nil {
 		return fmt.Errorf("restart falak-edge: %w", err)
 	}
+	return m.waitAdmin(ctx)
+}
+
+// waitAdmin waits up to 30 s for the edge's admin API after a restart.
+func (m *Manager) waitAdmin(ctx context.Context) error {
 	for i := 0; i < 60; i++ {
 		if _, err := m.o.Client.Config(ctx); err == nil {
 			return nil
@@ -232,6 +241,9 @@ func (m *Manager) Apply(ctx context.Context, p Payload, s commands.Stream) (any,
 		return nil, err
 	}
 	res := ApplyResult{ConfigSHA256: hostfs.SHA256(want), Routes: countRoutes(cfg)}
+	if err := m.ensureRateLimit(ctx, p, s); err != nil {
+		return nil, err
+	}
 	if err := m.syncEnv(ctx, p, s); err != nil {
 		return nil, err
 	}

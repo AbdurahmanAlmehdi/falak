@@ -83,9 +83,12 @@ jobs:
           docker run --rm --entrypoint sh falak-ci/falak-control-plane:ci -c '
             set -e
             id -un | grep -qx www-data
-            for f in falak-agent-linux-amd64 falak-agent-linux-arm64 falak-builder-linux-amd64 falak-builder-linux-arm64 falak-linux-amd64 falak-linux-arm64; do
+            for f in falak-agent-linux-amd64 falak-agent-linux-arm64 falak-builder-linux-amd64 falak-builder-linux-arm64 falak-linux-amd64 falak-linux-arm64 falak-caddy-linux-amd64 falak-caddy-linux-arm64; do
               test -x /opt/falak/bin/$f; (cd /opt/falak/bin && sha256sum -c $f.sha256 >/dev/null)
             done
+            # The Falak Caddy build (edge rate limits): the modules the agent requires.
+            /opt/falak/bin/falak-caddy-linux-amd64 list-modules | grep -qx http.handlers.rate_limit
+            /opt/falak/bin/falak-caddy-linux-amd64 list-modules | grep -qx dns.providers.cloudflare
             test -d /opt/falak/contracts/agent-protocol
             php -m | grep -q pdo_pgsql
             php --ini | grep -q "Loaded Configuration File: *.*/php-cli.ini"

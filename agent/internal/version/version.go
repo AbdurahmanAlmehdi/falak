@@ -75,6 +75,9 @@ var Features = []string{
 	// inet falak_protect, auto-ban settings), the net.protection.observed request (sshd auth failures, auto-bans,
 	// counters) and net.firewall.apply counters.
 	"net.protection",
+	// edge.caddy.apply sites[].rate_limits and caddy_build: path rate limits at the edge (the rate_limit module of
+	// Falak's Caddy build, installed on first use).
+	"edge.rate_limit",
 }
 
 var (
