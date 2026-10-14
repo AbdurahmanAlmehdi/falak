@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +34,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/netcfg"
 	"github.com/OthmanHaba/falak/agent/internal/netobs"
 	"github.com/OthmanHaba/falak/agent/internal/nettool"
+	"github.com/OthmanHaba/falak/agent/internal/protect"
 	"github.com/OthmanHaba/falak/agent/internal/provision"
 	"github.com/OthmanHaba/falak/agent/internal/pty"
 	"github.com/OthmanHaba/falak/agent/internal/resources"
@@ -69,6 +71,8 @@ type Deps struct {
 	// its mTLS identity ("" = terminal sessions ignore relay tokens).
 	RelayBase string
 	RelayHTTP *http.Client
+	// ControlPlane resolves the control plane's addresses: never blocked (net.protection.apply, auto-bans).
+	ControlPlane func(ctx context.Context) []netip.Addr
 }
 
 // Components are the long-running subsystems plus the populated registry.
@@ -83,6 +87,8 @@ type Components struct {
 	Functions  *functions.Functions
 	DB         *db.DB
 	Volumes    *volumes.Service
+	// Protection holds the block sets and the auth-log observer (docs/plans/network/protection.md).
+	Protection *protect.Protection
 	// Events queues OOM kills and restarts for the heartbeat.
 	Events *resources.Queue
 	// Network is the network collector (docs/plans/network/connections.md).
@@ -155,6 +161,9 @@ func Build(d Deps) *Components {
 		Out: d.Telemetry.Relay(), Runner: d.Runner, Logger: log.With("component", "network")})
 	network.Register(reg)
 	d.Telemetry.Follow(network)
+	prot := protect.New(protect.Deps{Runner: d.Runner, FS: d.FS, Logger: log.With("component", "protection"), StateDir: cfg.StateDir,
+		ControlPlane: d.ControlPlane})
+	prot.Register(reg)
 	fns := functions.New(functions.Deps{FS: d.FS, Runner: d.Runner, Docker: docker.NewClient(cfg.DockerSock), Gateway: fngateway.NewClient(""),
 		Logger: log.With("component", "functions"), Binary: BinaryPath, Version: version.Version})
 	fns.Register(reg)
@@ -169,7 +178,7 @@ func Build(d Deps) *Components {
 	nettool.New(nettool.Options{Logger: log, Docker: docker.NewClient(cfg.DockerSock), Binary: installedBinary(d.FS)}).Register(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
-		Events: &resources.Queue{}, Network: network}
+		Protection: prot, Events: &resources.Queue{}, Network: network}
 }
 
 // ensureEnrolled enrolls only when there is no identity yet: `falak-agent run` never replaces one because
@@ -255,6 +264,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	comps := Build(Deps{
 		Config: cfg, FS: fs, Runner: r, Insights: client, Requests: client, Telemetry: tel, Logger: log,
 		RelayBase: id.State.Endpoints.API, RelayHTTP: transport.NewHTTP1Client(id.TLSConfig()),
+		ControlPlane: protect.ResolveHosts(id.State.Endpoints.API, id.State.Endpoints.OTLP, cfg.PanelURL),
 		RestartAgent: func() error {
 			// --no-block queues the restart so the upgrade command's finished event is flushed first.
 			_, err := runner.Check(context.Background(), r, runner.Cmd{Name: "systemctl", Args: []string{"--no-block", "restart", "falak-agent.service"}})
@@ -352,6 +362,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	// Connections, listeners, peers, conntrack, WireGuard and probes (docs/plans/network/connections.md).
 	loops.Add(1)
 	go func() { defer loops.Done(); comps.Network.Run(runCtx) }()
+	// Protection (docs/plans/network/protection.md): block sets restored, sshd's auth failures, firewall counters.
+	protection := comps.Protection.NewObserver(client, tel.Relay())
+	loops.Add(1)
+	go func() { defer loops.Done(); protection.Run(runCtx) }()
 	loops.Add(1)
 	go func() {
 		defer loops.Done()

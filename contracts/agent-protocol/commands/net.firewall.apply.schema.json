@@ -27,6 +27,11 @@
       "type": "boolean",
       "default": true
     },
+    "counters": {
+      "type": "boolean",
+      "default": false,
+      "description": "Feature net.protection: an nftables counter on the SSH rule and every rule (read back as falak.net.firewall.*)"
+    },
     "rules": {
       "type": "array",
       "items": {

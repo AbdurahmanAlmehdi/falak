@@ -66,6 +66,29 @@ func TestRenderRuleset(t *testing.T) {
 	}
 }
 
+func TestRenderRulesetCounters(t *testing.T) {
+	plain, _ := RenderRuleset(payload())
+	if strings.Contains(plain, "counter") {
+		t.Fatal("counters without the flag (older control planes: byte-identical ruleset)")
+	}
+	p := payload()
+	p.Counters = true
+	rs, err := RenderRuleset(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []string{
+		`tcp dport 2222 counter accept comment "falak:ssh"`,
+		`tcp dport { 80, 443 } counter accept comment "falak:web public web"`,
+		`ip6 saddr fd00::/8 tcp dport 5432 counter accept comment "falak:pg"`,
+		`ip saddr 198.51.100.0/24 counter drop comment "falak:block"`,
+	} {
+		if !strings.Contains(rs, w) {
+			t.Fatalf("missing %q in\n%s", w, rs)
+		}
+	}
+}
+
 func TestFirewallApply(t *testing.T) {
 	root := t.TempDir()
 	applied := false

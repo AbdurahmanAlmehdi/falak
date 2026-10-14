@@ -1,0 +1,1 @@
+{"blocks": [{"cidr": "203.0.113.7", "expires_at": "2026-10-16T10:00:00Z"}, {"cidr": "198.51.100.0/24", "expires_at": null}, {"cidr": "2001:db8:1::/48"}], "release": ["192.0.2.99"], "never_block": ["192.0.2.10", "10.90.0.0/24", "2001:db8:ffff::1"], "auto_ban": {"enabled": true, "failures": 10, "window_s": 600, "ban_s": 3600}}

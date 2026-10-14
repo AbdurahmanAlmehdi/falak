@@ -71,6 +71,10 @@ var Features = []string{
 	// net.tool (docs/plans/network/tools.md): ping, traceroute, DNS, HTTP and TCP checks from the host or inside a
 	// container's network namespace (the agent re-run as `falak-agent nettool`, under nsenter).
 	"net.tools",
+	// Network protection (docs/plans/network/protection.md): net.protection.apply (block sets with timeouts in table
+	// inet falak_protect, auto-ban settings), the net.protection.observed request (sshd auth failures, auto-bans,
+	// counters) and net.firewall.apply counters.
+	"net.protection",
 }
 
 var (

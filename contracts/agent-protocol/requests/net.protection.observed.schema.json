@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/requests/net.protection.observed.schema.json",
+  "title": "POST /agent/v1/requests/net.protection.observed — once a minute: sshd authentication failures per source, the agent's auto-bans, firewall rule counters and block hits (docs/plans/network/protection.md). Feature net.protection.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "at",
+    "window_s"
+  ],
+  "$defs": {
+    "ip": {
+      "type": "string",
+      "maxLength": 43,
+      "pattern": "^[0-9a-fA-F.:]+(/[0-9]{1,3})?$"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "properties": {
+    "at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "window_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "sources"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "journald",
+            "auth.log"
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ip",
+              "failures"
+            ],
+            "properties": {
+              "ip": {
+                "$ref": "#/$defs/ip"
+              },
+              "failures": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "invalid_users": {
+                "$ref": "#/$defs/count"
+              },
+              "users": {
+                "type": "array",
+                "maxItems": 5,
+                "items": {
+                  "type": "string",
+                  "maxLength": 64
+                }
+              },
+              "last_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      }
+    },
+    "bans": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cidr",
+          "until"
+        ],
+        "properties": {
+          "cidr": {
+            "$ref": "#/$defs/ip"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failures": {
+            "$ref": "#/$defs/count"
+          }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "packets",
+          "bytes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "maxLength": 100
+          },
+          "packets": {
+            "$ref": "#/$defs/count"
+          },
+          "bytes": {
+            "$ref": "#/$defs/count"
+          }
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cidr",
+          "packets",
+          "bytes"
+        ],
+        "properties": {
+          "cidr": {
+            "$ref": "#/$defs/ip"
+          },
+          "packets": {
+            "$ref": "#/$defs/count"
+          },
+          "bytes": {
+            "$ref": "#/$defs/count"
+          }
+        }
+      }
+    },
+    "blocked": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "packets",
+        "bytes"
+      ],
+      "properties": {
+        "packets": {
+          "$ref": "#/$defs/count"
+        },
+        "bytes": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    }
+  }
+}

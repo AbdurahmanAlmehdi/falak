@@ -39,7 +39,7 @@ in the list items whose sibling flag is true). When an agent reports a new versi
 modules re-send state they would otherwise deduplicate.
 Current features: `edge.access_log`, `telemetry.log_kind`, `system.upgrade_agent.v2`, `fn.v1`, `fn.v2`, `fn.v3`,
 `compose.v2`, `docker.networks`, `docker.networks.create`, `compose.up.services`, `provision.v2`, `db.instances`,
-`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`, `db.observability`.
+`terminal.v2`, `telemetry.workloads`, `telemetry.workloads.shared`, `db.observability`, `net.protection`.
 Logs (docs/plans/OBSERVABILITY.md phase 2): `logs.container_files` (telemetry.configure `log_sources[]` `container`,
 `compose_service`, `multiline_pattern`, `origin`; container sources are removed whole for older agents,
 `PayloadCompatibility::DROP`), `runtime.fpm.slowlog` (runtime.fpm.pool `slowlog_timeout`).
@@ -158,6 +158,16 @@ without the type answer 404 and the agent keeps the metrics and logs only. `db.i
 `instance.query_insights` writes `/etc/falak/db/<id>/conf/query-insights.json` (pg_stat_statements / MariaDB
 performance_schema at the next start; a running container restarts for a change only when the update carries `apply_query_insights`, the user's action). A settings change that only moves
 `slow_query_ms` runs `falak-db reload` instead of a restart (SQL engines; an image without it is restarted).
+
+## Network protection (`net.protection`, v0.17.x)
+docs/plans/network/protection.md. `net.protection.apply` (only queued for agents with the feature) carries the server's
+full desired state: active `blocks` (`{cidr, expires_at}`), `release` (auto-bans a user lifted), `never_block` (the
+organization's servers, private networks and the control plane) and `auto_ban`. The agent keeps them in
+`/var/lib/falak/protection.json` and applies them element by element to the sets `falak_block4` / `falak_block6`
+(nftables timeouts) of its own table `inet falak_protect`, dropped at prerouting priority raw (before Docker's DNAT);
+`table inet falak` is never touched by it. `net.firewall.apply` `counters` (stripped for older agents) puts a counter on
+every rule. Once a minute the agent sends `net.protection.observed` (sshd failures per source, its auto-bans, rule
+counters, block hits); control planes without the type answer 404 and the agent keeps the metrics only.
 
 ## Secrets on servers (v0.10.0)
 **Env files on tmpfs.** `deploy.prepare` writes `env_file` to `/run/falak/env/<site>.env` (directory 0711 root, file

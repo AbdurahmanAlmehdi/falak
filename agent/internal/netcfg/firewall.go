@@ -63,6 +63,9 @@ type FirewallPayload struct {
 	SSHPort     int    `json:"ssh_port"`
 	AllowICMP   *bool  `json:"allow_icmp"`
 	Rules       []Rule `json:"rules"`
+	// Counters puts an nftables counter on the SSH rule and every rule (feature net.protection): read back by the
+	// protection observer as falak.net.firewall.* and shown next to each rule.
+	Counters bool `json:"counters,omitempty"`
 }
 
 // FirewallResult is its result.
@@ -114,7 +117,11 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 	if p.AllowICMP == nil || *p.AllowICMP {
 		b.WriteString("\t\tmeta l4proto { icmp, ipv6-icmp } accept\n")
 	}
-	fmt.Fprintf(&b, "\t\ttcp dport %d accept comment \"falak:ssh\"\n", ssh)
+	counter := ""
+	if p.Counters {
+		counter = "counter "
+	}
+	fmt.Fprintf(&b, "\t\ttcp dport %d %saccept comment \"falak:ssh\"\n", ssh, counter)
 	seen := map[string]bool{}
 	for _, r := range p.Rules {
 		if !idRe.MatchString(r.ID) {
@@ -124,7 +131,7 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 			return "", perr("duplicate rule id %q", r.ID)
 		}
 		seen[r.ID] = true
-		lines, err := renderRule(r)
+		lines, err := renderRule(r, p.Counters)
 		if err != nil {
 			return "", err
 		}
@@ -136,7 +143,7 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 	return b.String(), nil
 }
 
-func renderRule(r Rule) ([]string, error) {
+func renderRule(r Rule, counters bool) ([]string, error) {
 	action := r.Action
 	if action == "" {
 		action = "accept"
@@ -213,6 +220,9 @@ func renderRule(r Rule) ([]string, error) {
 	}
 	if len(comment) > 120 {
 		comment = comment[:120]
+	}
+	if counters {
+		action = "counter " + action
 	}
 	tail := strings.TrimSpace(l4+" "+action) + " comment \"" + comment + "\""
 	var out []string
