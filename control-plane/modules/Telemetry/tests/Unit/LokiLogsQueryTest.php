@@ -102,13 +102,20 @@ it('selects a site log kind and builds access log queries by slug', function () 
 it('filters a site\'s records by where they come from, with structured metadata only', function () {
     $base = '{falak_org_id="ORG", falak_site_id="SITE", falak_log_kind!="access"}';
     expect(LogQueryBuilder::build('org', ['site_id' => 'site', 'kind' => 'app', 'origin' => 'output']))->toBe($base.' | log_iostream=~"stdout|stderr"')
-        ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'kind' => 'app', 'origin' => 'file']))->toBe($base.' | log_file_path!="" | falak_log_origin=~"file|"')
+        ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'kind' => 'app', 'origin' => 'file']))->toBe($base.' | log_file_path!="" | falak_log_origin!~"container_file|php_fpm|php_fpm_slow"')
         ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'kind' => 'app', 'origin' => 'container_file', 'compose_service' => 'app']))
         ->toBe($base.' | falak_compose_service="app" | falak_log_origin="container_file"')
         ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'kind' => 'app', 'origin' => 'php_fpm_slow', 'level' => 'warn']))
         ->toStartWith($base.' | falak_log_origin="php_fpm_slow" | severity_text')
         ->and(fn () => LogQueryBuilder::build('org', ['origin' => 'journal']))->toThrow(InvalidArgumentException::class)
         // Without a kind, an origin still leaves the edge's access records out (they are log files too).
-        ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'origin' => 'file']))->toBe($base.' | log_file_path!="" | falak_log_origin=~"file|"')
+        ->and(LogQueryBuilder::build('org', ['site_id' => 'site', 'origin' => 'file']))->toBe($base.' | log_file_path!="" | falak_log_origin!~"container_file|php_fpm|php_fpm_slow"')
         ->and(fn () => LogQueryBuilder::build('org', ['kind' => 'access', 'origin' => 'file']))->toThrow(InvalidArgumentException::class);
+});
+
+it('keeps every falak.log.origin value out of the app files filter', function () {
+    // "file" is an exclusion (Loki never matches a missing field against a regex): a new origin must be listed in it.
+    $others = array_diff(array_keys(LogQueryBuilder::ORIGINS), ['output', 'file']);
+
+    expect(LogQueryBuilder::ORIGINS['file'])->toBe(' | log_file_path!="" | falak_log_origin!~"'.implode('|', $others).'"');
 });

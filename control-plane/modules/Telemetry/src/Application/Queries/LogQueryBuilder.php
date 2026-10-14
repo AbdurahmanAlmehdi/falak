@@ -14,12 +14,14 @@ final class LogQueryBuilder
     /**
      * Where a site's records come from (the Logs tab's source filter, docs/plans/OBSERVABILITY.md phase 2), as
      * structured metadata filters: no Loki index label is added, so stream cardinality does not change. Output is what
-     * containers, supervised programs and cron write to stdout / stderr; files are the host log files (records of agents
-     * before falak.log.origin have none, hence the empty alternative); the others are falak.log.origin values.
+     * containers, supervised programs and cron write to stdout / stderr; files are the host log files: any record with a
+     * file path and none of the other origins (records of agents before falak.log.origin have none, and Loki never
+     * matches a missing field against a regex like "file|", so the filter excludes instead); the others are
+     * falak.log.origin values.
      */
     public const ORIGINS = [
         'output' => ' | log_iostream=~"stdout|stderr"',
-        'file' => ' | log_file_path!="" | falak_log_origin=~"file|"',
+        'file' => ' | log_file_path!="" | falak_log_origin!~"container_file|php_fpm|php_fpm_slow"',
         'container_file' => ' | falak_log_origin="container_file"',
         'php_fpm' => ' | falak_log_origin="php_fpm"',
         'php_fpm_slow' => ' | falak_log_origin="php_fpm_slow"',
