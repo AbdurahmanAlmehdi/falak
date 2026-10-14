@@ -86,7 +86,10 @@ final class LogController extends Controller
                 'regex' => $request->boolean('regex'),
             ]);
         } catch (InvalidArgumentException $e) {
-            throw ValidationException::withMessages(['search' => $e->getMessage()]);
+            // The builder refuses a bad search pattern, or an origin with kind=access (access records have none).
+            $field = ! empty($filters['origin']) && ($filters['kind'] ?? null) === 'access' ? 'origin' : 'search';
+
+            throw ValidationException::withMessages([$field => $e->getMessage()]);
         }
 
         $limit = (int) ($filters['limit'] ?? 200);

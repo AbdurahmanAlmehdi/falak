@@ -2,7 +2,7 @@ import { Button, Callout, Dialog, Field, IconButton, Input, Select, SkeletonRows
 import { useJson } from '@/hooks/use-json';
 import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { Plus, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cleanSources, emptySource, rowErrors, type LogSource } from '../log-sources';
 
 /** GET /sites/{site}/log-sources (Falak\Sites\Http\Controllers\SiteLogSourcesController). */
@@ -31,17 +31,29 @@ export function LogSourcesDialog({ siteId, open, onOpenChange }: { siteId: strin
     const [slowlog, setSlowlog] = useState('');
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [saving, setSaving] = useState(false);
+    // Edits made while a refetch is in flight survive it: the form only follows the server until the user changes it.
+    const dirty = useRef(false);
 
     useEffect(() => {
-        if (!data || !open) return;
+        if (!open) dirty.current = false;
+    }, [open]);
+
+    useEffect(() => {
+        if (!data || !open || dirty.current) return;
         setSources(data.sources);
         setSlowlog(data.slowlog_timeout === null ? '' : String(data.slowlog_timeout));
         setErrors({});
     }, [data, open]);
 
     const readOnly = !data?.can.update;
+    const edit =
+        <T,>(set: (value: T) => void) =>
+        (value: T) => {
+            dirty.current = true;
+            set(value);
+        };
     const update = (index: number, patch: Partial<LogSource>) =>
-        setSources((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+        edit(setSources)((rows: LogSource[]) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
 
     const save = async () => {
         if (!data) return;
@@ -117,7 +129,7 @@ export function LogSourcesDialog({ siteId, open, onOpenChange }: { siteId: strin
                                                         className="mt-6"
                                                         label="Remove source"
                                                         icon={<Trash2 className="size-4" />}
-                                                        onClick={() => setSources((rows) => rows.filter((_, i) => i !== index))}
+                                                        onClick={() => edit(setSources)((rows: LogSource[]) => rows.filter((_, i) => i !== index))}
                                                     />
                                                 )}
                                             </div>
@@ -190,7 +202,11 @@ export function LogSourcesDialog({ siteId, open, onOpenChange }: { siteId: strin
                             </ul>
                             {!readOnly && sources.length < data.limits.sources && (
                                 <div>
-                                    <Button size="sm" variant="ghost" onClick={() => setSources((rows) => [...rows, emptySource()])}>
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => edit(setSources)((rows: LogSource[]) => [...rows, emptySource()])}
+                                    >
                                         <Plus className="size-4" /> Add a file
                                     </Button>
                                 </div>
@@ -210,7 +226,7 @@ export function LogSourcesDialog({ siteId, open, onOpenChange }: { siteId: strin
                                 className="w-32"
                                 value={slowlog}
                                 disabled={readOnly}
-                                onChange={(event) => setSlowlog(event.target.value)}
+                                onChange={(event) => edit(setSlowlog)(event.target.value)}
                             />
                         </Field>
                     )}

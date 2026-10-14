@@ -107,6 +107,8 @@ it('rejects raw LogQL, bad filters and invalid regexes', function () {
     $this->getJson('/telemetry/logs/data?server_id=not-a-ulid')->assertUnprocessable()->assertJsonValidationErrors('server_id');
     $this->getJson('/telemetry/logs/data?level=verbose')->assertUnprocessable();
     $this->getJson('/telemetry/logs/data?search=(oops&regex=1')->assertUnprocessable()->assertJsonValidationErrors('search');
+    // Access records have no origin: the conflict is reported on origin, not on the search box.
+    $this->getJson('/telemetry/logs/data?kind=access&origin=container_file')->assertUnprocessable()->assertJsonValidationErrors('origin')->assertJsonMissingValidationErrors('search');
     $this->getJson('/telemetry/logs/data?from=2026-01-01&to=2025-01-01')->assertUnprocessable();
     $this->getJson('/telemetry/logs/data?query={falak_org_id=~".%2B"}')->assertOk()->assertJsonPath('query', '{falak_org_id="'.strtoupper($this->organization->id).'"}');
 
