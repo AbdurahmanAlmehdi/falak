@@ -152,7 +152,7 @@ func ParseAccessLine(line []byte) obs.LogRecord {
 		}
 	}
 	rec.Attrs["url.route"] = NormalizeRoute(path)
-	// The edge's response header first (what the app saw: an incoming id replaced when malformed), then the request's.
+	// The response's id first (the app's own when it sets one, else the one the edge passed to it), then the request's.
 	for _, id := range []string{header(e.RespHeaders, RequestIDHeader), header(e.Request.Headers, RequestIDHeader)} {
 		if requestIDRE.MatchString(id) {
 			rec.Attrs["http.request.id"] = id
@@ -163,7 +163,7 @@ func ParseAccessLine(line []byte) obs.LogRecord {
 		// The trace the client started (its span is the request's parent, not a span of this record: no span id).
 		rec.TraceID, _ = hex.DecodeString(m[1])
 	}
-	if category, rule := ClassifyThreat(e.Request.Method, e.Request.URI); category != "" {
+	if category, rule := ClassifyThreat(e.Request.Method, e.Request.URI, e.Status); category != "" {
 		rec.Attrs["falak.threat.category"] = category
 		rec.Attrs["falak.threat.rule"] = rule
 	}

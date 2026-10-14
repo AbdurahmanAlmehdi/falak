@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/OthmanHaba/falak/agent/internal/logs"
@@ -67,6 +69,26 @@ func TestRenderWithoutRequestIDIsUnchanged(t *testing.T) {
 	}
 }
 
+// Caddy matches vars_regexp with Go's regexp against the joined header values: two ids, an overlong or a malformed one
+// all fail and are replaced.
+func TestRequestIDPatternRejectsJoinedAndLongValues(t *testing.T) {
+	re := regexp.MustCompile(logs.RequestIDPattern)
+	for value, want := range map[string]bool{
+		"01JABCDEF-edge-uuid-0001":             true,
+		"abcdefgh,ijklmnop":                    false, // two X-Request-Id headers, joined
+		"abcdefgh, ijklmnop":                   false,
+		strings.Repeat("a", 128):               true,
+		strings.Repeat("a", 129):               false,
+		"short":                                false,
+		"bad id with spaces":                   false,
+		"<script>alert(1)</script>-0000000000": false,
+	} {
+		if got := re.MatchString(value); got != want {
+			t.Errorf("%q: match = %v, want %v", value, got, want)
+		}
+	}
+}
+
 // With request_id every site's subroute starts with the two X-Request-Id routes; nothing else changes.
 func TestRenderRequestIDStampsEverySite(t *testing.T) {
 	p := richPayload()
@@ -88,17 +110,25 @@ func TestRenderRequestIDStampsEverySite(t *testing.T) {
 			handle := route["handle"].([]any)[0].(map[string]any)
 			sub := handle["routes"].([]any)
 			first, second := sub[0].(map[string]any), sub[1].(map[string]any)
+			// The joined header value (two headers: "a,b") must match, so a second id never slips through.
+			valid := map[string]any{"vars_regexp": map[string]any{"{http.request.header.X-Request-Id}": map[string]any{"pattern": logs.RequestIDPattern}}}
+			// The app's own response id is never overwritten.
+			absent := map[string]any{"headers": map[string]any{"X-Request-Id": nil}}
 			wantFirst := map[string]any{
-				"match": []any{map[string]any{"not": []any{map[string]any{"header_regexp": map[string]any{"X-Request-Id": map[string]any{"pattern": logs.RequestIDPattern}}}}}},
+				"match": []any{map[string]any{"not": []any{valid}}},
 				"handle": []any{map[string]any{"handler": "headers",
 					"request":  map[string]any{"set": map[string]any{"X-Request-Id": []any{"{http.request.uuid}"}}},
-					"response": map[string]any{"set": map[string]any{"X-Request-Id": []any{"{http.request.uuid}"}}, "deferred": true}}},
+					"response": map[string]any{"set": map[string]any{"X-Request-Id": []any{"{http.request.uuid}"}}, "require": absent, "deferred": true}}},
 			}
 			if !reflect.DeepEqual(first, wantFirst) {
 				t.Fatalf("first route of %v = %#v", route["@id"], first)
 			}
-			if got := second["handle"].([]any)[0].(map[string]any)["response"]; !reflect.DeepEqual(got, map[string]any{
-				"set": map[string]any{"X-Request-Id": []any{"{http.request.header.X-Request-Id}"}}, "deferred": true}) {
+			wantSecond := map[string]any{
+				"match": []any{valid},
+				"handle": []any{map[string]any{"handler": "headers",
+					"response": map[string]any{"set": map[string]any{"X-Request-Id": []any{"{http.request.header.X-Request-Id}"}}, "require": absent, "deferred": true}}},
+			}
+			if !reflect.DeepEqual(second, wantSecond) {
 				t.Fatalf("second route of %v = %#v", route["@id"], second)
 			}
 			handle["routes"] = sub[2:]

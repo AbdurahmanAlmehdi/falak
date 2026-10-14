@@ -583,17 +583,24 @@ func acmeIssuer(p Payload) obj {
 	return iss
 }
 
-// requestIDRoutes stamp X-Request-Id: a request without a well-formed one gets {http.request.uuid} (generated once per
-// request), upstream and in the response; a well-formed incoming id is echoed in the response. The response header is
-// deferred so it replaces whatever the app set, and Caddy's access log (resp_headers) records the id the app saw.
+// RequestIDPlaceholder is the request's X-Request-Id as Caddy sees it: several headers are joined with ",", which
+// RequestIDPattern never matches, so a request carrying two ids (one chosen by the client, one by a proxy) gets a new
+// one instead of the first.
+const RequestIDPlaceholder = "{http.request.header." + logs.RequestIDHeader + "}"
+
+// requestIDRoutes stamp X-Request-Id: a request without exactly one well-formed id (RequestIDPattern, at most 128
+// characters) gets {http.request.uuid} (generated once per request), replacing whatever it carried, upstream; a
+// well-formed id is passed on untouched. The response gets the request's id only when the app answered without one
+// (`require`: an id the app set is never overwritten); Caddy's access log (resp_headers) then records it.
 func requestIDRoutes() []any {
-	valid := obj{"header_regexp": obj{logs.RequestIDHeader: obj{"pattern": logs.RequestIDPattern}}}
+	valid := obj{"vars_regexp": obj{RequestIDPlaceholder: obj{"pattern": logs.RequestIDPattern}}}
+	absent := obj{"headers": obj{logs.RequestIDHeader: nil}}
 	return []any{
 		obj{"match": []any{obj{"not": []any{valid}}}, "handle": []any{obj{"handler": "headers",
 			"request":  obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.uuid}"}}},
-			"response": obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.uuid}"}}, "deferred": true}}}},
+			"response": obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.uuid}"}}, "require": absent, "deferred": true}}}},
 		obj{"match": []any{valid}, "handle": []any{obj{"handler": "headers",
-			"response": obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.header." + logs.RequestIDHeader + "}"}}, "deferred": true}}}},
+			"response": obj{"set": obj{logs.RequestIDHeader: []any{RequestIDPlaceholder}}, "require": absent, "deferred": true}}}},
 	}
 }
 

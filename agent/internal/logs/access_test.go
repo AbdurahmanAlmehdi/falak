@@ -166,9 +166,33 @@ func TestClassifyThreat(t *testing.T) {
 		{"GET", "/docs/onload-events", "", ""},
 	}
 	for _, c := range cases {
-		category, rule := ClassifyThreat(c.method, c.uri)
-		if category != c.category || rule != c.rule {
-			t.Errorf("ClassifyThreat(%s %s) = %q/%q, want %q/%q", c.method, c.uri, category, rule, c.category, c.rule)
+		for _, status := range []int{401, 403, 404, 405} {
+			category, rule := ClassifyThreat(c.method, c.uri, status)
+			if category != c.category || rule != c.rule {
+				t.Errorf("ClassifyThreat(%s %s %d) = %q/%q, want %q/%q", c.method, c.uri, status, category, rule, c.category, c.rule)
+			}
+		}
+	}
+
+	// Answered (2xx / 3xx): the site's own WordPress admin, a real /config.json, WebDAV. Injection markers in the query
+	// count whatever the answer.
+	answered := []struct {
+		method, uri string
+		status      int
+		category    string
+	}{
+		{"GET", "/wp-admin/", 200, ""},
+		{"POST", "/wp-login.php", 302, ""},
+		{"GET", "/config.json", 200, ""},
+		{"PROPFIND", "/dav/", 207, ""},
+		{"GET", "/.env", 301, ""},
+		{"GET", "/static/../../etc/passwd", 200, ""},
+		{"GET", "/search?q=1%27%20UNION%20SELECT%20password%20FROM%20users", 200, "injection"},
+		{"GET", "/wp-admin/?q=%3Cscript%3E", 200, "injection"},
+	}
+	for _, c := range answered {
+		if category, _ := ClassifyThreat(c.method, c.uri, c.status); category != c.category {
+			t.Errorf("ClassifyThreat(%s %s %d) = %q, want %q", c.method, c.uri, c.status, category, c.category)
 		}
 	}
 }

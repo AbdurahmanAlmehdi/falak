@@ -1,6 +1,7 @@
 package httpstats
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,32 @@ func TestAggregatorCountsPerSite(t *testing.T) {
 	now = now.Add(IdleAfter + time.Minute)
 	if rms := a.Collect(); len(rms) != 0 {
 		t.Fatalf("idle sites still reported: %d", len(rms))
+	}
+}
+
+// The metrics as the control plane queries them (modules/Telemetry/tests/Unit/HttpQueriesTest.php pins the same list
+// and derives their Prometheus names): name, unit and type must not change without the queries.
+func TestAggregatorMetricNames(t *testing.T) {
+	a := New(nil)
+	a.ObserveAccess(access("shop", `{"msg":"handled request","request":{"proto":"HTTP/1.1","method":"GET","uri":"/.env","headers":{}},"size":1,"duration":0.001,"status":404}`))
+	var got []string
+	for _, m := range a.Collect()[0].ScopeMetrics[0].Metrics {
+		kind := "counter"
+		if m.GetHistogram() != nil {
+			kind = "histogram"
+		}
+		got = append(got, m.Name+" "+m.Unit+" "+kind)
+	}
+	want := []string{
+		"falak.net.http.requests {request} counter",
+		"falak.net.http.io By counter",
+		"falak.net.http.server.duration ms histogram",
+		"falak.net.http.protocol {request} counter",
+		"falak.net.http.tls {request} counter",
+		"falak.net.http.threats {request} counter",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("metrics:\n%s", strings.Join(got, "\n"))
 	}
 }
 

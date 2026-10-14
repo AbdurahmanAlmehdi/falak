@@ -43,9 +43,30 @@ var (
 var usualMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "OPTIONS": true}
 
 // ClassifyThreat reports the probe or attack pattern a request matches ("" when none): the category and the rule.
-// uri is the request URI as Caddy logged it (raw: path and query, percent-encoded as the client sent them).
-func ClassifyThreat(method, uri string) (category, rule string) {
+// uri is the request URI as Caddy logged it (raw: path and query, percent-encoded as the client sent them), status the
+// response status. Probes, traversal and unusual methods count only when the site refused or did not have what was
+// asked (status >= 400): a site's own /wp-admin, /config.json or WebDAV PROPFIND answers 2xx / 3xx and is no attack.
+// Injection markers in the query string count whatever the answer (a 200 to a SQL injection is worse, not better).
+func ClassifyThreat(method, uri string, status int) (category, rule string) {
 	rawPath, rawQuery, _ := strings.Cut(uri, "?")
+	q := rawQuery
+	// Decode twice: scanners double-encode to get past naive filters.
+	for range 2 {
+		if d, err := url.QueryUnescape(q); err == nil {
+			q = d
+		}
+	}
+	if q != "" {
+		if sqliRE.MatchString(q) {
+			return ThreatInjection, "sqli"
+		}
+		if xssRE.MatchString(q) {
+			return ThreatInjection, "xss"
+		}
+	}
+	if status < 400 {
+		return "", ""
+	}
 	path := rawPath
 	if d, err := url.PathUnescape(rawPath); err == nil {
 		path = d
@@ -56,26 +77,9 @@ func ClassifyThreat(method, uri string) (category, rule string) {
 			return ThreatProbe, p.rule
 		}
 	}
-	if traversalRaw.MatchString(rawPath) || traversalRaw.MatchString(path) || traversalRaw.MatchString(rawQuery) {
+	if traversalRaw.MatchString(rawPath) || traversalRaw.MatchString(path) || traversalRaw.MatchString(rawQuery) ||
+		strings.Contains(q, "../") || strings.Contains(q, "/etc/passwd") {
 		return ThreatTraversal, "traversal"
-	}
-	if rawQuery != "" {
-		q := rawQuery
-		// Decode twice: scanners double-encode to get past naive filters.
-		for range 2 {
-			if d, err := url.QueryUnescape(q); err == nil {
-				q = d
-			}
-		}
-		if strings.Contains(q, "../") || strings.Contains(q, "/etc/passwd") {
-			return ThreatTraversal, "traversal"
-		}
-		if sqliRE.MatchString(q) {
-			return ThreatInjection, "sqli"
-		}
-		if xssRE.MatchString(q) {
-			return ThreatInjection, "xss"
-		}
 	}
 	if method != "" && !usualMethods[strings.ToUpper(method)] {
 		return ThreatMethod, "method"
