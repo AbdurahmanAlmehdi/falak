@@ -11,3 +11,10 @@
 Oct 15 10:00:11 web-1 sshd[1208]: Failed keyboard-interactive/pam for oracle from ::ffff:198.51.100.9 port 2222 ssh2
 Oct 15 10:00:12 web-1 sshd[1209]: Disconnected from authenticating user git 198.51.100.9 port 2223 [preauth]
 Oct 15 10:00:13 web-1 sudo: Failed password for root from 203.0.113.99 port 1 ssh2
+2026-10-15T10:00:14.000000+00:00 web-1 sshd-session[1210]: Invalid user x from 192.0.2.66 port 1 from 203.0.113.80 port 4242
+2026-10-15T10:00:15.000000+00:00 web-1 sshd[1211]: Failed password for y from 192.0.2.66 port 1 ssh2 from 203.0.113.81 port 22 ssh2
+2026-10-15T10:00:16.000000+00:00 web-1 sshd[1212]: error: maximum authentication attempts exceeded for invalid user z from 192.0.2.66 port 1 ssh2 from 203.0.113.82 port 5 ssh2 [preauth]
+2026-10-15T10:00:17.000000+00:00 web-1 sshd[1213]: Accepted publickey for w from 192.0.2.66 port 1 ssh2 from 203.0.113.83 port 7 ssh2: ED25519 SHA256:abc
+2026-10-15T10:00:18.000000+00:00 web-1 su[77]: note sshd[1]: Invalid user q from 192.0.2.66 port 1
+2026-10-15T10:00:19.000000+00:00 web-1 sshd[1214]: Invalid user v from 192.0.2.66 port 1 trailing
+2026-10-15T10:00:20.000000+00:00 web-1 sshd[1215]: Connection closed by authenticating user u from 192.0.2.66 port 1 203.0.113.84 port 9 [preauth]

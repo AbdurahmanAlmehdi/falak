@@ -5,6 +5,7 @@ namespace Falak\Network;
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
 use Falak\Fleet\Contracts\AgentRequests;
+use Falak\Fleet\Events\AgentCameOnline;
 use Falak\Fleet\Events\AgentVersionChanged;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
@@ -12,10 +13,12 @@ use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Network\Application\Actions\RecordNetworkObservation;
+use Falak\Network\Application\Jobs\ConvergeProtection;
 use Falak\Network\Application\Listeners\ForgetDeletedServer;
 use Falak\Network\Application\Listeners\HandleCommandOutcome;
 use Falak\Network\Application\Listeners\ReconfigureConnections;
 use Falak\Network\Application\Listeners\HandleProtectionOutcome;
+use Falak\Network\Application\Listeners\ReconvergeProtection;
 use Falak\Network\Application\Listeners\SeedFirewallOnProvisioning;
 use Falak\Network\Contracts\Firewalls;
 use Falak\Network\Contracts\PrivateNetwork as PrivateNetworkContract;
@@ -29,12 +32,14 @@ use Falak\Network\Events\FirewallApplied;
 use Falak\Network\Events\FirewallApplyFailed;
 use Falak\Network\Events\PrivateNetworkChanged;
 use Falak\Network\Infrastructure\AgentRequests\NetworkObserved;
+use Falak\Network\Events\IpBlockSuspended;
 use Falak\Network\Infrastructure\AgentRequests\ProtectionObserved;
 use Falak\Network\Infrastructure\EloquentPrivateNetwork;
 use Falak\Network\Infrastructure\NoWebOriginPolicy;
 use Falak\Network\Infrastructure\QueuedFirewalls;
 use Falak\Servers\Events\ServerDeleted;
 use Falak\Servers\Events\ServerProvisioned;
+use Falak\Servers\Events\ServerUpdated;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
@@ -79,6 +84,7 @@ class NetworkServiceProvider extends ModuleServiceProvider
 
         // The agent's network collector, once a minute per server.
         $this->app->make(AgentRequests::class)->register('net.observed', NetworkObserved::class);
+        $types->register(IpBlockSuspended::ALERT_TYPE, 'Block lifted: it covers a protected address', 'Network', Severity::Warning);
 
         Event::listen(CommandFinished::class, [HandleCommandOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleCommandOutcome::class, 'handleFailed']);
@@ -92,9 +98,14 @@ class NetworkServiceProvider extends ModuleServiceProvider
         Event::listen(CommandFinished::class, [HandleProtectionOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleProtectionOutcome::class, 'handleFailed']);
         Event::listen(AgentVersionChanged::class, [HandleProtectionOutcome::class, 'handleUpgrade']);
+        Event::listen(ServerProvisioned::class, [ReconvergeProtection::class, 'provisioned']);
+        Event::listen(ServerUpdated::class, [ReconvergeProtection::class, 'updated']);
+        Event::listen(PrivateNetworkChanged::class, [ReconvergeProtection::class, 'network']);
+        Event::listen(AgentCameOnline::class, [ReconvergeProtection::class, 'online']);
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->call(fn () => IpBlock::query()->where('expires_at', '<', now()->subDays((int) config('network.protection.retention_days', 7)))->delete())
                 ->dailyAt('03:40')->name('network:prune-blocks')->withoutOverlapping();
+            $schedule->job(new ConvergeProtection)->everyTenMinutes()->name('network:converge-protection')->withoutOverlapping();
         });
     }
 }

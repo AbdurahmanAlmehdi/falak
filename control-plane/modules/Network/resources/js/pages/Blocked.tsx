@@ -20,6 +20,7 @@ interface BlockRow {
     server: { id: string; name: string } | null;
     reason: string | null;
     source: 'manual' | 'auto';
+    suspended_reason: string | null;
     expires_at: string | null;
     created_at: string;
     packets: number;
@@ -165,6 +166,9 @@ function AutoBanDialog({ server, onClose }: { server: ServerRow; onClose: () => 
                     <input type="checkbox" checked={form.data.enabled} onChange={(event) => form.setData('enabled', event.target.checked)} />
                     Ban brute-force sources automatically
                 </label>
+                <p className="text-fg-muted text-xs">
+                    Turning it off stops new bans only: existing bans stay until they expire (unblock them in the list to lift them now).
+                </p>
                 <div className="grid grid-cols-2 gap-3">
                     <Field label="Failed logins" error={form.errors.failures}>
                         <Input
@@ -256,6 +260,11 @@ export default function Blocked({ blocks, servers, yourIp, can }: Props) {
                         cell: (block) => (
                             <span className="flex items-center gap-2">
                                 {block.source === 'auto' && <Tag tone="warning">auto-ban</Tag>}
+                                {block.suspended_reason && (
+                                    <Tag tone="danger" title={block.suspended_reason}>
+                                        lifted: protected address
+                                    </Tag>
+                                )}
                                 <span className="text-fg-muted text-xs">{block.reason ?? '—'}</span>
                             </span>
                         ),

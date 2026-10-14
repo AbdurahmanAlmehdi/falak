@@ -35,30 +35,68 @@ func TestParseAuthLog(t *testing.T) {
 	for _, s := range tr.report() {
 		got[s.IP] = s
 	}
-	// 203.0.113.7: invalid user + root + 3 repeated (the "Failed password for invalid user" line is not counted twice).
-	if s := got["203.0.113.7"]; s.Failures != 5 || s.InvalidUsers != 1 || strings.Join(s.Users, ",") != "admin,root" {
+	// 203.0.113.7: two connections (1201: invalid user, 1202: root, its repeats are the same connection).
+	if s := got["203.0.113.7"]; s.Failures != 2 || s.InvalidUsers != 1 || strings.Join(s.Users, ",") != "admin,root" {
 		t.Fatalf("%+v", s)
 	}
-	if s := got["2001:db8:dead::7"]; s.Failures != 2 || strings.Join(s.Users, ",") != "root,ubuntu" {
+	// IPv4-mapped IPv6 unmapped; classic syslog timestamps; the authenticating-user close is not a failure.
+	if s := got["198.51.100.9"]; s.Failures != 1 || s.LastAt.Hour() != 10 || s.LastAt.Second() != 11 {
 		t.Fatalf("%+v", s)
 	}
-	// IPv4-mapped IPv6 unmapped; classic syslog timestamps.
-	if s := got["198.51.100.9"]; s.Failures != 2 || s.LastAt.Hour() != 10 || s.LastAt.Second() != 12 {
-		t.Fatalf("%+v", s)
-	}
-	for _, ip := range []string{"198.51.100.4", "192.0.2.50", "203.0.113.99"} {
-		if _, ok := got[ip]; ok {
-			t.Fatalf("%s counted", ip)
+	// Framing user names: the address is the line's last one.
+	for _, ip := range []string{"203.0.113.80", "203.0.113.81", "203.0.113.82"} {
+		if got[ip].Failures != 1 {
+			t.Fatalf("%s: %+v", ip, got)
 		}
 	}
-	if !tr.isTrusted(netip.MustParseAddr("192.0.2.50"), now) || tr.total != 9 {
-		t.Fatal("trusted / total", tr.total)
+	if got["203.0.113.80"].Users[0] != "x from 192.0.2.66 port 1" {
+		t.Fatalf("%+v", got["203.0.113.80"])
 	}
-	for _, bad := range []string{"Failed password for root from not-an-ip port 1 ssh2", "message repeated 0 times: [ Invalid user a from 1.2.3.4 ]", "Invalid user x from 1.2.3.4%eth0"} {
-		if ev, ok := ParseAuthMessage(bad); ok && ev.Addr.Zone() != "" {
-			t.Fatalf("parsed %q", bad)
-		} else if ok && strings.Contains(bad, "not-an-ip") {
-			t.Fatalf("parsed %q", bad)
+	// Not counted: max-auth / close of an existing or authenticating user, other programs, PAM, disconnects.
+	for _, ip := range []string{"2001:db8:dead::/64", "198.51.100.4", "192.0.2.50", "203.0.113.99", "192.0.2.66", "203.0.113.84"} {
+		if _, ok := got[ip]; ok {
+			t.Fatalf("%s counted: %+v", ip, got[ip])
+		}
+	}
+	if !tr.isTrusted(sourcePrefix(netip.MustParseAddr("192.0.2.50")), now) || !tr.isTrusted(sourcePrefix(netip.MustParseAddr("203.0.113.83")), now) {
+		t.Fatal("not trusted")
+	}
+	if tr.isTrusted(sourcePrefix(netip.MustParseAddr("192.0.2.66")), now) || tr.total != 6 {
+		t.Fatal("framed trust / total", tr.total)
+	}
+}
+
+// A user name is attacker-controlled: whatever it says, the address is the line's real (last) one.
+func TestAuthPatternsResistFraming(t *testing.T) {
+	victim, attacker := "192.0.2.66", "203.0.113.9"
+	frame := "x from " + victim + " port 1"
+	for _, c := range []struct {
+		msg  string
+		kind AuthKind
+	}{
+		{"Invalid user " + frame + " from " + attacker + " port 22", AuthFailure},
+		{"Failed password for " + frame + " ssh2 from " + attacker + " port 22 ssh2", AuthFailure},
+		{"Failed keyboard-interactive/pam for " + frame + " from " + attacker + " port 22 ssh2", AuthFailure},
+		{"error: maximum authentication attempts exceeded for invalid user " + frame + " ssh2 from " + attacker + " port 22 ssh2 [preauth]", AuthFailure},
+		{"Accepted password for " + frame + " ssh2 from " + attacker + " port 22 ssh2", AuthAccepted},
+		{"message repeated 2 times: [ Invalid user " + frame + " from " + attacker + " port 22]", AuthFailure},
+	} {
+		ev, ok := ParseAuthMessage(c.msg)
+		if !ok || ev.Kind != c.kind || ev.Addr.String() != attacker {
+			t.Errorf("%q: %v %+v", c.msg, ok, ev)
+		}
+	}
+	for _, bad := range []string{
+		"Invalid user x from " + victim + " port 1 x", // not anchored at the end
+		"Failed password for root from " + victim + " port 1",
+		"error: maximum authentication attempts exceeded for root from " + victim + " port 1 ssh2 [preauth]",
+		"Connection closed by authenticating user root " + victim + " port 1 [preauth]",
+		"Failed password for root from not-an-ip port 1 ssh2",
+		"message repeated 0 times: [ Invalid user a from 1.2.3.4 port 1]",
+		"Invalid user x from fe80::1%eth0 port 1",
+	} {
+		if ev, ok := ParseAuthMessage(bad); ok {
+			t.Errorf("parsed %q: %+v", bad, ev)
 		}
 	}
 }
@@ -66,14 +104,75 @@ func TestParseAuthLog(t *testing.T) {
 func TestParseJournal(t *testing.T) {
 	raw, _ := os.ReadFile("testdata/journal.json")
 	evs, cursor := ParseJournal(raw, time.Now())
-	if cursor != "s=a;i=5" || len(evs) != 3 {
+	if cursor != "s=a;i=6" || len(evs) != 4 {
 		t.Fatalf("%q %+v", cursor, evs)
 	}
-	if evs[0].Addr.String() != "2001:db8::bad" || !evs[0].Invalid || evs[0].At.Unix() != 1760522400 {
+	if evs[0].Addr.String() != "2001:db8::bad" || !evs[0].Invalid || evs[0].At.Unix() != 1760522400 || evs[0].PID != 901 {
 		t.Fatalf("%+v", evs[0])
 	}
 	if evs[2].Addr.String() != "203.0.113.8" || !evs[2].Invalid {
 		t.Fatalf("byte-array MESSAGE: %+v", evs[2])
+	}
+	// Per connection: 902 twice is one failure; IPv6 counted per /64.
+	tr := newTracker()
+	tr.add(evs, time.Hour)
+	got := map[string]int{}
+	for _, s := range tr.report() {
+		got[s.IP] = s.Failures
+	}
+	if got["203.0.113.7"] != 1 || got["2001:db8::/64"] != 1 || got["203.0.113.8"] != 1 {
+		t.Fatal(got)
+	}
+}
+
+func TestJournalWithoutStorageFallsBackToAuthLog(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "var/log/auth.log")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, nil, 0o640)
+	f := (&runnertest.Fake{}).On("journalctl", runner.Result{Stderr: []byte("No journal files were found.\n")})
+	r := &authReader{runner: f, fs: hostfs.FS{Root: root}, now: time.Now}
+	if _, src := r.Read(context.Background()); src != SourceAuthLog || !r.noJournal {
+		t.Fatal(src)
+	}
+	os.WriteFile(path, []byte("Oct 15 09:00:01 h sshd[7]: Invalid user a from 203.0.113.2 port 1\n"), 0o640)
+	if evs, src := r.Read(context.Background()); src != SourceAuthLog || len(evs) != 1 || evs[0].PID != 7 {
+		t.Fatal(evs, src)
+	}
+}
+
+func TestTrackerBucketsAndIPv6Aggregation(t *testing.T) {
+	tr := newTracker()
+	w := 10 * time.Minute
+	var evs []AuthEvent
+	// 500 failures from one host and 3 more from other addresses of the same /64, without PIDs.
+	for i := range 500 {
+		evs = append(evs, AuthEvent{Kind: AuthFailure, Addr: netip.MustParseAddr("2001:db8:1:2::1"), At: now0.Add(time.Duration(i) * time.Second)})
+	}
+	for _, a := range []string{"2001:db8:1:2::ff", "2001:db8:1:2:abcd::1", "2001:db8:1:3::1"} {
+		evs = append(evs, AuthEvent{Kind: AuthFailure, Addr: netip.MustParseAddr(a), At: now0.Add(500 * time.Second)})
+	}
+	tr.add(evs, w)
+	src := netip.MustParsePrefix("2001:db8:1:2::/64")
+	if len(tr.hits[src]) > bucketsPerWin+2 {
+		t.Fatalf("%d buckets", len(tr.hits[src]))
+	}
+	now := now0.Add(500 * time.Second)
+	if c := tr.count(src, now, w); c != 502 {
+		t.Fatal(c)
+	}
+	if over := tr.over(100, now, w); len(over) != 1 || over[0] != src {
+		t.Fatal(over)
+	}
+	// Ten minutes later the old buckets are gone.
+	later := now.Add(9 * time.Minute)
+	tr.prune(later, w)
+	if c := tr.count(src, later, w); c >= 502 || c == 0 {
+		t.Fatal(c)
+	}
+	tr.prune(later.Add(time.Hour), w)
+	if len(tr.hits) != 0 {
+		t.Fatal(tr.hits)
 	}
 }
 
@@ -154,7 +253,7 @@ func journalLines(lines ...string) []byte {
 
 func TestObserverAutoBan(t *testing.T) {
 	n := newFakeNft()
-	n.fwRules = `{"nftables":[{"rule":{"chain":"input","comment":"falak:ssh","expr":[{"counter":{"packets":7,"bytes":420}}]}},{"rule":{"chain":"input","comment":"falak:01jweb HTTP","expr":[{"counter":{"packets":9,"bytes":900}}]}}]}`
+	n.fwRules = `{"nftables":[{"rule":{"chain":"input","comment":"falak:ssh","expr":[{"counter":{"packets":7,"bytes":420}}]}},{"rule":{"chain":"input","comment":"falak:01jweb HTTP","expr":[{"counter":{"packets":9,"bytes":900}}]}},{"rule":{"chain":"input","comment":"falak:` + strings.Repeat("a", 101) + `","expr":[{"counter":{"packets":1,"bytes":1}}]}}]}`
 	root := t.TempDir()
 	base := n.runner(root)
 	var journal []byte
@@ -206,11 +305,21 @@ func TestObserverAutoBan(t *testing.T) {
 	}
 	// 203.0.113.7 still has 12 failures in the window (the threshold is crossed once it is on); the guarded, private,
 	// covered and trusted ones are not banned.
-	if strings.Join(banned, " ") != "203.0.113.7 203.0.113.9 2001:db8:bad::1" {
+	if strings.Join(banned, " ") != "203.0.113.7 203.0.113.9 2001:db8:bad::/64" {
 		t.Fatalf("banned %v", banned)
 	}
-	if got := strings.Join(n.has(), " "); got != "198.51.100.0/24@-1 2001:db8:bad::1/128@3600 203.0.113.7/32@3600 203.0.113.9/32@3600" {
+	if got := strings.Join(n.has(), " "); got != "198.51.100.0/24@-1 2001:db8:bad::/64@3600 203.0.113.7/32@3600 203.0.113.9/32@3600" {
 		t.Fatal(got)
+	}
+	// The trusted address survives a restart (the state file keeps it).
+	p2 := New(Deps{Runner: f, FS: hostfs.FS{Root: root}, StateDir: "/var/lib/falak", Now: func() time.Time { return clock }})
+	if !p2.auth.isTrusted(netip.MustParsePrefix("192.0.2.77/32"), clock) {
+		t.Fatal("trusted address lost across a restart")
+	}
+	// A report that did not arrive loses nothing: the next one carries every active ban again.
+	clock = clock.Add(time.Second)
+	if r2 := o.Pass(context.Background()); len(r2.Bans) != 3 || r2.Auth != nil {
+		t.Fatalf("%+v", r2)
 	}
 	if len(r.Rules) != 2 || r.Rules[0].ID != "01jweb" || r.Rules[1] != (RuleCounter{ID: "ssh", Packets: 7, Bytes: 420}) || r.Blocked == nil || r.Blocked.Packets != 45 {
 		t.Fatalf("%+v %+v", r.Rules, r.Blocked)
@@ -224,7 +333,7 @@ func TestObserverAutoBan(t *testing.T) {
 			t.Fatalf("%s: %v", b, err)
 		}
 	}
-	if len(cp.got) != 2 {
+	if len(cp.got) != 3 {
 		t.Fatal(len(cp.got))
 	}
 	// Metrics: rule ids and families only, never addresses.
@@ -248,7 +357,7 @@ func TestObserverAutoBan(t *testing.T) {
 
 	// A user lifts a ban: the control plane releases it, the agent forgets it.
 	if _, err := p.Apply(context.Background(), ApplyPayload{Blocks: []Block{{CIDR: "198.51.100.0/24"}, {CIDR: "203.0.113.9", ExpiresAt: ptime(clock.Add(time.Hour))}},
-		Release: []string{"203.0.113.7", "2001:db8:bad::1"}, NeverBlock: []string{"203.0.113.50"}, AutoBan: &AutoBan{Enabled: true, Failures: 3, WindowS: 600, BanS: 3600}}, st); err != nil {
+		Release: []string{"203.0.113.7", "2001:db8:bad::/64"}, NeverBlock: []string{"203.0.113.50"}, AutoBan: &AutoBan{Enabled: true, Failures: 3, WindowS: 600, BanS: 3600}}, st); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Join(n.has(), " "); got != "198.51.100.0/24@-1 203.0.113.9/32@3600" {
@@ -260,9 +369,12 @@ func TestObserverAutoBan(t *testing.T) {
 	n.table, n.elems = false, map[string]int64{}
 	n.mu.Unlock()
 	clock = clock.Add(time.Minute)
-	o.Pass(context.Background())
+	r = o.Pass(context.Background())
 	if got := strings.Join(n.has(), " "); got != "198.51.100.0/24@-1 203.0.113.9/32@3540" {
 		t.Fatal(got)
+	}
+	if len(r.Bans) != 1 || r.Bans[0].CIDR != "203.0.113.9" {
+		t.Fatalf("%+v", r.Bans)
 	}
 }
 
@@ -279,10 +391,10 @@ func TestAutoBanRateLimit(t *testing.T) {
 	}
 	p.mu.Lock()
 	p.auth.add(evs, 10*time.Minute)
-	bans := p.autoBanLocked(context.Background(), now0)
+	bans := p.autoBanLocked(context.Background(), now0, 10*time.Minute)
 	p.mu.Unlock()
-	if len(bans) != maxBansPerPass || len(n.has()) != maxBansPerPass {
-		t.Fatal(len(bans))
+	if bans != maxBansPerPass || len(n.has()) != maxBansPerPass {
+		t.Fatal(bans)
 	}
 }
 

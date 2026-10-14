@@ -5,18 +5,21 @@ namespace Falak\Network\Application\Actions;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Network\Application\ApplyProtection;
 use Falak\Network\Application\ProtectionGuards;
+use Falak\Network\Application\ProtectionRateLimit;
 use Falak\Network\Domain\Models\IpBlock;
+use Falak\Network\Domain\Models\ProtectionState;
 use Falak\Network\Domain\Support\Cidr;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 /**
  * Blocks an address or CIDR on some servers or on every server of the organization (docs/plans/network/protection.md),
- * after the guards: never the requester, the control plane, the organization's servers or networks, reserved ranges;
- * private ranges and broad prefixes only when confirmed. An exact duplicate updates the existing block; a prefix that
- * overlaps another active block in the same reach is refused (nftables interval sets cannot hold both).
+ * after the guards: never the requester, the control plane, the organization's servers, networks or members' recent
+ * addresses, reserved ranges; private ranges, broad prefixes and peers the server connects to (outbound) only when
+ * confirmed. An exact duplicate updates the existing block; a prefix that overlaps another manual block in the same
+ * reach is refused (nftables interval sets cannot hold both); auto-bans it covers are lifted in its favour.
  */
 final class BlockAddress
 {
@@ -30,6 +33,7 @@ final class BlockAddress
 
     /**
      * @param  ?list<string>  $serverIds  null = every server of the organization
+     * @param  array<string, mixed>  $meta
      * @return list<IpBlock>
      *
      * @throws ValidationException
@@ -44,6 +48,7 @@ final class BlockAddress
         ?string $requesterIp,
         ?string $actorId,
         array $meta = [],
+        bool $outbound = false,
     ): array {
         try {
             $cidr = Cidr::parse($address);
@@ -59,15 +64,8 @@ final class BlockAddress
             throw ValidationException::withMessages(['address' => $refusal]);
         }
 
-        if (! $confirm && ($why = $this->guards->confirmation($cidr)) !== null) {
+        if (! $confirm && ($why = $this->guards->confirmation($cidr, $outbound)) !== null) {
             throw ValidationException::withMessages(['confirm' => "{$why} Confirm to block it anyway."]);
-        }
-
-        $key = 'network.protect:'.($actorId ?? $organizationId);
-        $perMinute = (int) config('network.protection.changes_per_minute', 30);
-
-        if (RateLimiter::tooManyAttempts($key, $perMinute)) {
-            throw ValidationException::withMessages(['address' => 'Too many block changes; try again in a minute.']);
         }
 
         $targets = $serverIds === null ? [null] : array_values(array_unique($serverIds));
@@ -77,23 +75,29 @@ final class BlockAddress
             throw ValidationException::withMessages(['address' => "The organization has {$max} active blocks already."]);
         }
 
+        foreach ($targets as $serverId) {
+            $this->refuseOverlaps($organizationId, $serverId, $cidr);
+        }
+
+        ProtectionRateLimit::hit($actorId, $organizationId);
+
         $seconds = self::DURATIONS[$duration];
         $expires = $seconds === null ? null : now()->addSeconds($seconds);
         $reason = $reason !== null ? mb_substr(trim($reason), 0, 500) : null;
         $out = [];
 
         foreach ($targets as $serverId) {
-            $this->refuseOverlaps($organizationId, $serverId, $cidr);
+            $lifted = $this->liftAutoBans($organizationId, $serverId, $cidr);
             $existing = IpBlock::query()->active()->where('organization_id', $organizationId)->where('cidr', (string) $cidr)
-                ->where('server_id', $serverId)->first();
+                ->where('server_id', $serverId)->where('source', IpBlock::MANUAL)->first();
 
             $block = $existing ?? new IpBlock(['organization_id' => $organizationId, 'server_id' => $serverId, 'cidr' => (string) $cidr, 'family' => $cidr->family()]);
             $block->forceFill(['reason' => $reason ?: $block->reason, 'source' => IpBlock::MANUAL, 'expires_at' => $expires, 'created_by' => $actorId,
                 'meta' => [...(array) $block->meta, ...$meta]])->save();
-            RateLimiter::hit($key, 60);
 
             $this->audit->record('network.ip_blocked', 'ip_block', $block->id, [
-                'cidr' => (string) $cidr, 'server_id' => $serverId, 'duration' => $duration, 'reason' => $reason, 'confirmed' => $confirm, 'updated' => $existing !== null,
+                'cidr' => (string) $cidr, 'server_id' => $serverId, 'duration' => $duration, 'reason' => $reason, 'confirmed' => $confirm, 'outbound' => $outbound,
+                'updated' => $existing !== null, 'auto_bans_lifted' => $lifted,
             ], $organizationId, $actorId);
 
             $this->apply->forBlock($organizationId, $serverId);
@@ -103,9 +107,41 @@ final class BlockAddress
         return $out;
     }
 
+    /**
+     * A manual block wins over the agent's auto-bans it overlaps in its reach: they are deleted and released on their
+     * server (the agent would keep them, and the interval set cannot hold both).
+     *
+     * @return list<string> the lifted auto-bans' prefixes
+     */
+    private function liftAutoBans(string $organizationId, ?string $serverId, Cidr $cidr): array
+    {
+        $bans = IpBlock::query()->current()->where('organization_id', $organizationId)->where('source', IpBlock::AUTO)->where('family', $cidr->family())
+            ->when($serverId !== null, fn (Builder $q) => $q->where('server_id', $serverId))->get()
+            ->filter(fn (IpBlock $ban) => ($b = Cidr::tryParse($ban->cidr)) !== null && $b->overlaps($cidr));
+
+        foreach ($bans as $ban) {
+            DB::transaction(function () use ($ban) {
+                if ($ban->server_id !== null) {
+                    $state = ProtectionState::query()->whereKey($ban->server_id)->lockForUpdate()->first()
+                        ?? new ProtectionState(['server_id' => $ban->server_id, 'organization_id' => $ban->organization_id]);
+                    $state->released = array_values(array_unique([...(array) $state->released, $ban->cidr]));
+                    $state->save();
+                }
+
+                $ban->delete();
+            });
+
+            if ($serverId === null && $ban->server_id !== null) {
+                ($this->apply)($ban->server_id);
+            }
+        }
+
+        return $bans->pluck('cidr')->values()->all();
+    }
+
     private function refuseOverlaps(string $organizationId, ?string $serverId, Cidr $cidr): void
     {
-        $others = IpBlock::query()->active()->where('organization_id', $organizationId)
+        $others = IpBlock::query()->active()->where('organization_id', $organizationId)->where('source', IpBlock::MANUAL)
             ->when($serverId !== null, fn (Builder $q) => $q->where(fn (Builder $q) => $q->whereNull('server_id')->orWhere('server_id', $serverId)))
             ->where('family', $cidr->family())
             ->get();

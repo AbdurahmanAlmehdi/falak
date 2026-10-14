@@ -44,7 +44,7 @@ final class ProtectionController extends Controller
         $this->access->authorize($request->user(), $organizationId, 'network.view');
 
         $servers = collect($this->servers->forOrganization($organizationId))->keyBy('id');
-        $blocks = IpBlock::query()->active()->where('organization_id', $organizationId)->orderByDesc('created_at')->limit(2000)->get();
+        $blocks = IpBlock::query()->current()->where('organization_id', $organizationId)->orderByDesc('created_at')->limit(2000)->get();
         $hits = DB::table('network_ip_block_hits')->whereIn('block_id', $blocks->pluck('id'))
             ->selectRaw('block_id, sum(packets) as packets, sum(bytes) as bytes, max(last_hit_at) as last_hit_at')->groupBy('block_id')->get()->keyBy('block_id');
         $states = ProtectionState::query()->where('organization_id', $organizationId)->get()->keyBy('server_id');
@@ -57,6 +57,7 @@ final class ProtectionController extends Controller
                 'reason' => $block->reason,
                 'source' => $block->source,
                 'expires_at' => $block->expires_at?->toIso8601String(),
+                'suspended_reason' => $block->suspended_reason,
                 'created_at' => $block->created_at->toIso8601String(),
                 'packets' => isset($hits[$block->id]) ? (int) $hits[$block->id]->packets : 0,
                 'bytes' => isset($hits[$block->id]) ? (int) $hits[$block->id]->bytes : 0,
@@ -96,16 +97,18 @@ final class ProtectionController extends Controller
             'duration' => ['required', Rule::in(array_keys(BlockAddress::DURATIONS))],
             'reason' => ['nullable', 'string', 'max:500'],
             'confirm' => ['boolean'],
+            // The row is a peer the server connects to (stream A's "talks to"): blocking it needs confirming.
+            'outbound' => ['boolean'],
         ]);
 
         $serverIds = match ($data['scope']) {
             'organization' => null,
-            'server' => [$this->server($request->user(), strtolower((string) $data['server_id']), self::PERMISSION)->id],
+            'server' => [$this->orgServer($request, strtolower((string) $data['server_id']), $organizationId)->id],
             'site' => $this->siteServers($sites, strtolower((string) $data['site_id']), $organizationId),
         };
 
         $blocks = $block($organizationId, $serverIds, (string) $data['address'], (string) $data['duration'], $data['reason'] ?? null, (bool) ($data['confirm'] ?? false),
-            $request->ip(), (string) $request->user()?->getAuthIdentifier(), array_filter(['site_id' => $data['site_id'] ?? null]));
+            $request->ip(), (string) $request->user()?->getAuthIdentifier(), array_filter(['site_id' => $data['site_id'] ?? null]), (bool) ($data['outbound'] ?? false));
 
         return $request->wantsJson() && ! $request->header('X-Inertia')
             ? response()->json(['blocks' => array_map(fn (IpBlock $b) => ['id' => $b->id, 'cidr' => $b->cidr, 'server_id' => $b->server_id], $blocks)], 201)
@@ -126,7 +129,7 @@ final class ProtectionController extends Controller
 
     public function settings(Request $request, string $server, ApplyProtection $apply, AuditLog $audit): RedirectResponse
     {
-        $data = $this->server($request->user(), $server, self::PERMISSION);
+        $data = $this->orgServer($request, $server, $this->organization->requireId());
 
         $validated = $request->validate([
             'enabled' => ['required', 'boolean'],
@@ -146,6 +149,18 @@ final class ProtectionController extends Controller
         $apply($data->id);
 
         return back();
+    }
+
+    /**
+     * A server of the current organization the user may protect: 404 for any other (one of another organization the
+     * user also belongs to included), 403 without network.protect.
+     */
+    private function orgServer(Request $request, string $serverId, string $organizationId): ServerData
+    {
+        $server = $this->server($request->user(), $serverId, self::PERMISSION);
+        abort_if($server->organizationId !== $organizationId, 404);
+
+        return $server;
     }
 
     /**

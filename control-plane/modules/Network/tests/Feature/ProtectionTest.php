@@ -217,7 +217,8 @@ it('records the agent report: rule counters, block hits, brute-force Issue; refu
 });
 
 it('saves the auto-ban settings (off by default) and sends them', function () {
-    expect(ProtectionState::query()->count())->toBe(0);
+    expect(ProtectionState::query()->where('auto_ban', true)->count())->toBe(0);
+    $this->agents->assertNothingDispatched('net.protection.apply');
 
     $this->put("/network/servers/{$this->server->id}/protection", ['enabled' => true, 'failures' => 5, 'window_s' => 300, 'ban_s' => 86400])->assertSessionHasNoErrors();
 

@@ -36,19 +36,26 @@ type AuthEvent struct {
 	Invalid bool // the user does not exist
 	Count   int  // "message repeated N times"
 	At      time.Time
+	// PID is sshd's process for the connection (0 = unknown): a connection counts as one failure however many
+	// attempts it makes.
+	PID int
 }
 
+// Every pattern is anchored at both ends and the user name is greedy, so the address is the LAST "from <ip> port <n>"
+// of the line. The user name is the attacker's text ("x from 203.0.113.50 port 1"): a lazy or unanchored match would
+// take the address from it and ban whoever it names.
 var (
 	reRepeated = regexp.MustCompile(`^message repeated (\d+) times: \[\s*(.*?)\s*\]$`)
-	reFailed   = regexp.MustCompile(`^Failed (?:password|keyboard-interactive/pam|none) for (invalid user )?(.*?) from (\S+) port \d+`)
-	reInvalid  = regexp.MustCompile(`^Invalid user (.*?) from (\S+)(?: port \d+)?\s*$`)
-	reMaxAuth  = regexp.MustCompile(`^error: maximum authentication attempts exceeded for (invalid user )?(.*?) from (\S+) port \d+`)
-	reClosed   = regexp.MustCompile(`^(?:Connection closed by|Disconnected from) authenticating user (.*?) (\S+) port \d+ \[preauth\]`)
-	reAccepted = regexp.MustCompile(`^Accepted \S+ for (.*?) from (\S+) port \d+`)
+	reFailed   = regexp.MustCompile(`^Failed (?:password|keyboard-interactive/pam|none) for (invalid user )?(.*) from (\S+) port \d+ ssh2$`)
+	reInvalid  = regexp.MustCompile(`^Invalid user (.*) from (\S+) port \d+$`)
+	reMaxAuth  = regexp.MustCompile(`^error: maximum authentication attempts exceeded for (invalid user )?(.*) from (\S+) port \d+ ssh2(?: \[preauth\])?$`)
+	reAccepted = regexp.MustCompile(`^Accepted (?:publickey|password|keyboard-interactive/pam|gssapi-with-mic|hostbased) for (.*) from (\S+) port \d+ ssh2(?:: [A-Za-z0-9-]+ (?:SHA256|MD5):[A-Za-z0-9+/=:]+)?$`)
 )
 
 // ParseAuthMessage reads one sshd message (without the syslog prefix). ok=false when it says nothing about an
-// attempt. "Failed password for invalid user" is not counted: the "Invalid user" line of the same connection was.
+// attempt. Counted: "Invalid user", "Failed … for <existing user>" and "maximum authentication attempts exceeded for
+// invalid user". Not counted: "Failed password for invalid user" (its "Invalid user" line was), max-auth for an
+// existing user (its "Failed" lines were) and closes of authenticating users (nothing failed).
 func ParseAuthMessage(msg string) (AuthEvent, bool) {
 	msg = strings.TrimSpace(msg)
 	count := 1
@@ -61,33 +68,28 @@ func ParseAuthMessage(msg string) (AuthEvent, bool) {
 	}
 	ev := AuthEvent{Count: count}
 	var user, addr string
-	switch {
-	case reAccepted.MatchString(msg):
-		m := reAccepted.FindStringSubmatch(msg)
+	if m := reAccepted.FindStringSubmatch(msg); m != nil {
 		ev.Kind, user, addr = AuthAccepted, m[1], m[2]
-	case reInvalid.MatchString(msg):
-		m := reInvalid.FindStringSubmatch(msg)
+	} else if m := reInvalid.FindStringSubmatch(msg); m != nil {
 		ev.Kind, ev.Invalid, user, addr = AuthFailure, true, m[1], m[2]
-	case reFailed.MatchString(msg):
-		m := reFailed.FindStringSubmatch(msg)
+	} else if m := reFailed.FindStringSubmatch(msg); m != nil {
 		if m[1] != "" {
 			return AuthEvent{}, false
 		}
 		ev.Kind, user, addr = AuthFailure, m[2], m[3]
-	case reMaxAuth.MatchString(msg):
-		m := reMaxAuth.FindStringSubmatch(msg)
-		ev.Kind, ev.Invalid, user, addr = AuthFailure, m[1] != "", m[2], m[3]
-	case reClosed.MatchString(msg):
-		m := reClosed.FindStringSubmatch(msg)
-		ev.Kind, user, addr = AuthFailure, m[1], m[2]
-	default:
+	} else if m := reMaxAuth.FindStringSubmatch(msg); m != nil {
+		if m[1] == "" {
+			return AuthEvent{}, false
+		}
+		ev.Kind, ev.Invalid, user, addr = AuthFailure, true, m[2], m[3]
+	} else {
 		return AuthEvent{}, false
 	}
 	a, err := netip.ParseAddr(addr)
-	if err != nil {
+	if err != nil || a.Zone() != "" {
 		return AuthEvent{}, false
 	}
-	ev.Addr = a.Unmap().WithZone("")
+	ev.Addr = a.Unmap()
 	ev.User = sanitizeUser(user)
 	return ev, true
 }
@@ -106,23 +108,58 @@ func sanitizeUser(u string) string {
 	return u
 }
 
-// sshdIdent matches the program of a syslog line: sshd, sshd-session (OpenSSH ≥ 9.8), sshd-auth.
-var sshdIdent = regexp.MustCompile(`\s(sshd(?:-session|-auth)?)(?:\[\d+\])?:\s`)
+// sshdProgram is the program field of a syslog line: sshd, sshd-session (OpenSSH ≥ 9.8) or sshd-auth, with its PID.
+var sshdProgram = regexp.MustCompile(`^(?:sshd|sshd-session|sshd-auth)(?:\[(\d+)\])?:$`)
 
 // ParseAuthLogLine reads one /var/log/auth.log line: RFC 3339 ("2026-10-15T10:00:00.123456+00:00 host sshd[1]: …",
-// rsyslog on Ubuntu ≥ 23.10) or classic syslog ("Oct 15 10:00:00 host sshd[1]: …"). Lines from other programs are
-// ignored. The timestamp falls back to now.
+// rsyslog on Ubuntu ≥ 23.10) or classic syslog ("Oct 15 10:00:00 host sshd[1]: …"). Only the program field decides
+// whether the line is sshd's: another program's message that mentions "sshd[1]:" is not. The timestamp falls back to
+// now.
 func ParseAuthLogLine(line string, now time.Time) (AuthEvent, bool) {
-	loc := sshdIdent.FindStringSubmatchIndex(line)
-	if loc == nil {
+	tokens, starts := fieldsAt(line, 6)
+	if len(tokens) < 4 {
 		return AuthEvent{}, false
 	}
-	ev, ok := ParseAuthMessage(line[loc[1]:])
+	prog := 2 // RFC 3339: time host program
+	if _, err := time.Parse(time.RFC3339Nano, tokens[0]); err != nil {
+		prog = 4 // classic: Mon DD HH:MM:SS host program
+	}
+	if len(tokens) <= prog+1 {
+		return AuthEvent{}, false
+	}
+	m := sshdProgram.FindStringSubmatch(tokens[prog])
+	if m == nil {
+		return AuthEvent{}, false
+	}
+	ev, ok := ParseAuthMessage(line[starts[prog+1]:])
 	if !ok {
 		return ev, false
 	}
-	ev.At = parseSyslogTime(line[:loc[0]], now)
+	ev.PID, _ = strconv.Atoi(m[1])
+	ev.At = parseSyslogTime(line[:starts[prog]], now)
 	return ev, true
+}
+
+// fieldsAt splits the first n space-separated fields of s, with their start offsets.
+func fieldsAt(s string, n int) ([]string, []int) {
+	var tokens []string
+	var starts []int
+	i := 0
+	for len(tokens) < n && i < len(s) {
+		for i < len(s) && s[i] == ' ' {
+			i++
+		}
+		if i >= len(s) {
+			break
+		}
+		j := i
+		for j < len(s) && s[j] != ' ' {
+			j++
+		}
+		tokens, starts = append(tokens, s[i:j]), append(starts, i)
+		i = j
+	}
+	return tokens, starts
 }
 
 func parseSyslogTime(prefix string, now time.Time) time.Time {
@@ -149,6 +186,7 @@ type journalEntry struct {
 	Message  json.RawMessage `json:"MESSAGE"`
 	Cursor   string          `json:"__CURSOR"`
 	Realtime string          `json:"__REALTIME_TIMESTAMP"`
+	PID      string          `json:"_PID"`
 }
 
 // ParseJournal reads `journalctl -o json` output: the events and the last cursor.
@@ -169,8 +207,7 @@ func ParseJournal(out []byte, now time.Time) ([]AuthEvent, string) {
 		if e.Cursor != "" {
 			cursor = e.Cursor
 		}
-		msg := journalMessage(e.Message)
-		ev, ok := ParseAuthMessage(msg)
+		ev, ok := ParseAuthMessage(journalMessage(e.Message))
 		if !ok {
 			continue
 		}
@@ -178,6 +215,7 @@ func ParseJournal(out []byte, now time.Time) ([]AuthEvent, string) {
 		if us, err := strconv.ParseInt(e.Realtime, 10, 64); err == nil && us > 0 {
 			ev.At = time.UnixMicro(us)
 		}
+		ev.PID, _ = strconv.Atoi(e.PID)
 		events = append(events, ev)
 	}
 	return events, cursor
@@ -246,6 +284,11 @@ func (r *authReader) readJournal(ctx context.Context) ([]AuthEvent, bool) {
 		if ctx.Err() == nil {
 			r.noJournal = true
 		}
+		return nil, false
+	}
+	// journald without storage (Storage=none, a container): sshd only reaches rsyslog's auth.log.
+	if bytes.Contains(res.Stderr, []byte("No journal files were found")) || bytes.Contains(res.Stderr, []byte("No journal files were opened")) {
+		r.noJournal = true
 		return nil, false
 	}
 	if res.ExitCode != 0 {

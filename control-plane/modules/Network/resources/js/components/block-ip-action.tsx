@@ -5,18 +5,18 @@ import { Input } from '@/components/falak/input';
 import { Select } from '@/components/falak/select';
 import { toast } from '@/components/falak/toast';
 import { errorMessage, HttpError } from '@/lib/http';
-import { type IpActionProps } from '@/lib/registry';
 import { Ban } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
-import { blockAddress, DURATIONS, scopesFor, type BlockDuration, type BlockScope } from '../protection';
+import { blockAddress, DURATIONS, isOutbound, scopesFor, type BlockDuration, type BlockIpProps, type BlockScope } from '../protection';
 
 /**
  * "Block IP" on the client rows of the network views (slot `network.ip-actions`, docs/plans/network/protection.md).
  * The guards are the server's: a refusal (your own address, a server, the control plane) is shown in the dialog, and a
  * private range or broad prefix asks for confirmation.
  */
-export function BlockIpAction({ ip, serverId, siteId }: IpActionProps) {
+export function BlockIpAction({ ip, serverId, siteId, source, context, direction }: BlockIpProps) {
     const scopes = scopesFor({ serverId, siteId });
+    const outbound = isOutbound({ source, context, direction });
     const [open, setOpen] = useState(false);
     const [scope, setScope] = useState<BlockScope>(scopes[0].value);
     const [duration, setDuration] = useState<BlockDuration>('24h');
@@ -42,8 +42,9 @@ export function BlockIpAction({ ip, serverId, siteId }: IpActionProps) {
             await blockAddress({
                 address: ip,
                 scope,
-                server_id: scope === 'server' ? serverId : undefined,
-                site_id: scope === 'site' ? siteId : undefined,
+                server_id: scope === 'server' ? (serverId ?? undefined) : undefined,
+                site_id: scope === 'site' ? (siteId ?? undefined) : undefined,
+                outbound: outbound || undefined,
                 duration,
                 reason: reason.trim() || undefined,
                 confirm: confirmed,
@@ -75,6 +76,11 @@ export function BlockIpAction({ ip, serverId, siteId }: IpActionProps) {
             size="sm"
         >
             <form onSubmit={submit} className="grid gap-4">
+                {outbound && (
+                    <p role="note" className="border-warning/40 bg-warning-soft text-warning rounded-md border px-3 py-2 text-sm">
+                        Your server connects to this address (it is a peer, not a client). Blocking it also cuts those connections.
+                    </p>
+                )}
                 <Field label="Where">
                     <Select<BlockScope> value={scope} onValueChange={setScope} options={scopes} />
                 </Field>

@@ -20,6 +20,8 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $expires_at null = permanent
  * @property ?string $created_by
  * @property ?array<string, mixed> $meta
+ * @property ?string $suspended_reason why it is no longer applied (it covers a protected address now)
+ * @property ?Carbon $suspended_at
  * @property Carbon $created_at
  */
 class IpBlock extends Model
@@ -40,7 +42,7 @@ class IpBlock extends Model
      */
     protected function casts(): array
     {
-        return ['expires_at' => 'datetime', 'meta' => 'array'];
+        return ['expires_at' => 'datetime', 'meta' => 'array', 'suspended_at' => 'datetime'];
     }
 
     /**
@@ -48,6 +50,17 @@ class IpBlock extends Model
      * @return Builder<IpBlock>
      */
     public function scopeActive(Builder $query): Builder
+    {
+        return $query->current()->whereNull('suspended_at');
+    }
+
+    /**
+     * Not expired, suspended ones included (the list shows them).
+     *
+     * @param  Builder<IpBlock>  $query
+     * @return Builder<IpBlock>
+     */
+    public function scopeCurrent(Builder $query): Builder
     {
         return $query->where(fn (Builder $q) => $q->whereNull('expires_at')->orWhere('expires_at', '>', now()));
     }

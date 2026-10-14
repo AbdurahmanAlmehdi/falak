@@ -23,6 +23,10 @@ return new class extends Migration
             $table->timestamp('expires_at')->nullable()->index();
             $table->ulid('created_by')->nullable();
             $table->json('meta')->nullable();
+            // Set when the prefix became protected after it was blocked (a new server, a member's address): no longer
+            // applied, kept for the record.
+            $table->string('suspended_reason', 500)->nullable();
+            $table->timestamp('suspended_at')->nullable();
             $table->timestamps();
             $table->index(['organization_id', 'cidr']);
         });

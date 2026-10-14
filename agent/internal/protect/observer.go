@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"regexp"
 	"sort"
 	"time"
 
@@ -23,6 +24,7 @@ const ObserveEvery = time.Minute
 const (
 	maxRuleCounters  = 500
 	maxBlockCounters = 1000
+	maxReportBans    = 100
 )
 
 // Requester sends agent requests (net.protection.observed).
@@ -117,22 +119,30 @@ func (o *Observer) Pass(ctx context.Context) Report {
 	}
 	p.auth.add(evs, window)
 	p.auth.prune(now, window)
-	var bans []Ban
+	newBans := 0
 	if p.st.Configured && p.st.AutoBan.Enabled {
-		bans = p.autoBanLocked(ctx, now)
+		newBans = p.autoBanLocked(ctx, now, window)
 	}
+	if p.auth.trustChanged && p.st.Configured {
+		if err := p.saveLocked(); err != nil {
+			o.log.Warn("saving protection state", "err", err)
+		}
+	}
+	// Every report carries all active auto-bans, not only this minute's: a report that failed to arrive never loses
+	// one (the control plane upserts them).
+	bans := p.activeBansLocked(now)
 	sources := p.auth.report()
 	total := p.auth.total
 	var prot Listing
-	protOK := false
+	protOK, missing := false, false
 	if p.st.Configured {
-		if prot, protOK = p.list(ctx); !protOK {
+		if prot, protOK, missing = p.list(ctx); !protOK && missing {
 			// Flushed behind our back (nftables.service restarted with `flush ruleset`, a reboot without the agent):
 			// put it back.
 			if _, err := p.syncLocked(ctx, io.Discard); err != nil {
 				o.log.Warn("restoring the block sets failed", "err", err)
 			}
-			prot, protOK = p.list(ctx)
+			prot, protOK, _ = p.list(ctx)
 		}
 	}
 	p.mu.Unlock()
@@ -146,7 +156,9 @@ func (o *Observer) Pass(ctx context.Context) Report {
 		fw, _ = ParseListing(res.Stdout)
 	}
 	for id, c := range fw.Rules {
-		r.Rules = append(r.Rules, RuleCounter{ID: id, Packets: c.Packets, Bytes: c.Bytes})
+		if ruleIDRe.MatchString(id) {
+			r.Rules = append(r.Rules, RuleCounter{ID: id, Packets: c.Packets, Bytes: c.Bytes})
+		}
 	}
 	sort.Slice(r.Rules, func(i, j int) bool { return r.Rules[i].ID < r.Rules[j].ID })
 	if len(r.Rules) > maxRuleCounters {
@@ -177,8 +189,8 @@ func (o *Observer) Pass(ctx context.Context) Report {
 		}
 	}
 	o.emit(now, fw, prot, protOK, total)
-	if len(bans) > 0 {
-		o.log.Info("auto-banned", "count", len(bans))
+	if newBans > 0 {
+		o.log.Info("auto-banned", "count", newBans)
 	}
 	if r.Auth != nil || len(r.Bans) > 0 || len(r.Rules) > 0 || len(r.Blocks) > 0 {
 		o.send(ctx, r)
@@ -205,16 +217,37 @@ func (o *Observer) send(ctx context.Context, r Report) {
 	o.log.Warn("net.protection.observed failed", "err", err)
 }
 
-// autoBanLocked bans the sources over the threshold: never a trusted (logged-in) address, a private one, a guarded
-// one or one a block already covers; at most maxBansPerPass a pass.
-func (p *Protection) autoBanLocked(ctx context.Context, now time.Time) []Ban {
+// ruleIDRe bounds the rule ids a report carries (the schema's pattern and length).
+var ruleIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+
+// activeBansLocked are the agent's unexpired auto-bans, the latest maxReportBans.
+func (p *Protection) activeBansLocked(now time.Time) []Ban {
+	var out []Ban
+	for _, b := range p.st.Bans {
+		if b.Until == nil || !b.Until.After(now) {
+			continue
+		}
+		if pr, err := netip.ParsePrefix(b.CIDR); err == nil {
+			out = append(out, Ban{CIDR: Canonical(pr), Until: b.Until.UTC(), Failures: b.Failures})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Until.After(out[j].Until) })
+	if len(out) > maxReportBans {
+		out = out[:maxReportBans]
+	}
+	return out
+}
+
+// autoBanLocked bans the sources (IPv4 addresses, IPv6 /64s) over the threshold: never a trusted (logged-in) one, a
+// private one, a guarded one or one a block already covers; at most maxBansPerPass a pass. Returns how many it banned.
+func (p *Protection) autoBanLocked(ctx context.Context, now time.Time, window time.Duration) int {
 	ab := p.st.AutoBan
 	if ab.Failures < 2 || ab.BanS < 60 {
-		return nil
+		return 0
 	}
-	over := p.auth.over(ab.Failures)
+	over := p.auth.over(ab.Failures, now, window)
 	if len(over) == 0 {
-		return nil
+		return 0
 	}
 	guards := p.guardsLocked(ctx)
 	var covering []netip.Prefix
@@ -223,35 +256,33 @@ func (p *Protection) autoBanLocked(ctx context.Context, now time.Time) []Ban {
 			covering = append(covering, pr)
 		}
 	}
-	var bans []Ban
-	for _, a := range over {
-		if len(bans) >= maxBansPerPass {
+	banned := 0
+	for _, src := range over {
+		if banned >= maxBansPerPass {
 			break
 		}
-		pr := netip.PrefixFrom(a, a.BitLen())
-		if p.auth.isTrusted(a, now) || IsPrivate(a) || refusal(pr, guards) != "" {
+		if p.auth.isTrusted(src, now) || IsPrivate(src.Addr()) || refusal(src, guards) != "" {
 			continue
 		}
-		if _, ok := overlapsAny(pr, covering); ok {
-			delete(p.auth.hits, a)
+		if _, ok := overlapsAny(src, covering); ok {
+			delete(p.auth.hits, src)
 			continue
 		}
-		if p.elements(ctx, "add", []elementSpec{{prefix: pr, timeoutS: int64(ab.BanS)}}, nil) == 0 {
+		if p.elements(ctx, "add", []elementSpec{{prefix: src, timeoutS: int64(ab.BanS)}}, nil) == 0 {
 			continue
 		}
 		until := now.Add(time.Duration(ab.BanS) * time.Second).UTC()
-		n := len(p.auth.hits[a])
-		p.st.Bans = append(p.st.Bans, entry{CIDR: key(pr), Until: &until, Failures: n})
-		covering = append(covering, pr)
-		delete(p.auth.hits, a)
-		bans = append(bans, Ban{CIDR: Canonical(pr), Until: until, Failures: n})
+		p.st.Bans = append(p.st.Bans, entry{CIDR: key(src), Until: &until, Failures: p.auth.count(src, now, window)})
+		covering = append(covering, src)
+		delete(p.auth.hits, src)
+		banned++
 	}
-	if len(bans) > 0 {
+	if banned > 0 {
 		if err := p.saveLocked(); err != nil {
 			p.d.Logger.Warn("saving protection state", "err", err)
 		}
 	}
-	return bans
+	return banned
 }
 
 func (o *Observer) emit(now time.Time, fw, prot Listing, protOK bool, authTotal uint64) {

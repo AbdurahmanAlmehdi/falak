@@ -2,6 +2,7 @@
 
 namespace Falak\Identity\Contracts;
 
+use DateTimeInterface;
 use Falak\Identity\Contracts\Data\OrganizationData;
 use Falak\Identity\Contracts\Data\UserData;
 
@@ -25,4 +26,12 @@ interface OrganizationDirectory
      * @return list<UserData>
      */
     public function members(string $organizationId): array;
+
+    /**
+     * IP addresses the organization's members used the panel from since $since (their sessions and audited actions),
+     * most recent first: Network never blocks them (docs/plans/network/protection.md).
+     *
+     * @return list<string>
+     */
+    public function recentMemberAddresses(string $organizationId, DateTimeInterface $since, int $limit = 500): array;
 }

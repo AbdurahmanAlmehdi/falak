@@ -64,37 +64,52 @@ final class ProtectionObserved implements AgentRequestHandler
     }
 
     /**
+     * Every report carries all of the agent's active auto-bans: they are upserted (audited when new), so a report that
+     * never arrived loses nothing. Bans a user lifted (released, waiting for the agent) are not recreated.
+     *
      * @param  array<int, mixed>  $bans
      */
     private function bans(string $serverId, string $organizationId, array $bans): void
     {
         $release = false;
+        $state = ProtectionState::query()->find($serverId);
+        $released = array_flip((array) $state?->released);
+        $existing = IpBlock::query()->current()->where('organization_id', $organizationId)->where('server_id', $serverId)->where('source', IpBlock::AUTO)
+            ->get()->keyBy('cidr');
 
         foreach (array_slice($bans, 0, 100) as $ban) {
             $cidr = Cidr::tryParse((string) ($ban['cidr'] ?? ''));
             $until = CarbonImmutable::parse((string) $ban['until']);
 
-            if ($cidr === null || $until->isPast() || $until->gt(now()->addDays(31))) {
+            if ($cidr === null || $until->isPast() || $until->gt(now()->addDays(31)) || isset($released[(string) $cidr])) {
                 continue;
             }
 
             // The agent guards its bans too; one the control plane would refuse (a server added since) is released.
             if ($this->guards->refusal($cidr, $organizationId, null) !== null || $this->guards->confirmation($cidr) !== null) {
-                $state = ProtectionState::query()->find($serverId);
-                $state?->forceFill(['released' => array_values(array_unique([...(array) $state->released, (string) $cidr]))])->save();
+                $state ??= new ProtectionState(['server_id' => $serverId, 'organization_id' => $organizationId]);
+                $state->forceFill(['released' => array_values(array_unique([...(array) $state->released, (string) $cidr]))])->save();
+                $released[(string) $cidr] = true;
                 $release = true;
 
                 continue;
             }
 
-            $block = IpBlock::query()->where('organization_id', $organizationId)->where('server_id', $serverId)->where('cidr', (string) $cidr)
-                ->where('source', IpBlock::AUTO)->first() ?? new IpBlock([
-                    'organization_id' => $organizationId, 'server_id' => $serverId, 'cidr' => (string) $cidr, 'family' => $cidr->family(), 'source' => IpBlock::AUTO,
-                ]);
-            $block->forceFill(['expires_at' => $until, 'reason' => 'SSH brute force: '.(int) ($ban['failures'] ?? 0).' failed logins', 'meta' => ['failures' => (int) ($ban['failures'] ?? 0)]])->save();
+            $block = $existing[(string) $cidr] ?? null;
+            $failures = (int) ($ban['failures'] ?? 0);
 
-            $this->audit->record('network.ip_auto_banned', 'ip_block', $block->id, ['cidr' => (string) $cidr, 'server_id' => $serverId, 'until' => $until->toIso8601String()],
-                $organizationId);
+            if ($block !== null && $block->suspended_at === null && $block->expires_at !== null && abs($block->expires_at->diffInSeconds($until)) < 60) {
+                continue;
+            }
+
+            $new = $block === null;
+            $block ??= new IpBlock(['organization_id' => $organizationId, 'server_id' => $serverId, 'cidr' => (string) $cidr, 'family' => $cidr->family(), 'source' => IpBlock::AUTO]);
+            $block->forceFill(['expires_at' => $until, 'reason' => "SSH brute force: {$failures} failed logins", 'meta' => ['failures' => $failures]])->save();
+
+            if ($new) {
+                $this->audit->record('network.ip_auto_banned', 'ip_block', $block->id, ['cidr' => (string) $cidr, 'server_id' => $serverId, 'until' => $until->toIso8601String()],
+                    $organizationId);
+            }
         }
 
         if ($release) {
@@ -103,6 +118,8 @@ final class ProtectionObserved implements AgentRequestHandler
     }
 
     /**
+     * Hits per block, in one read and one upsert.
+     *
      * @param  array<int, mixed>  $blocks
      */
     private function hits(string $serverId, string $organizationId, array $blocks, CarbonImmutable $at): void
@@ -119,16 +136,20 @@ final class ProtectionObserved implements AgentRequestHandler
             return;
         }
 
-        $rows = IpBlock::query()->active()->forServer($organizationId, $serverId)->whereIn('cidr', array_keys($counters))->get();
+        $rows = IpBlock::query()->active()->forServer($organizationId, $serverId)->whereIn('cidr', array_keys($counters))->get(['id', 'cidr']);
+        $current = DB::table('network_ip_block_hits')->where('server_id', $serverId)->whereIn('block_id', $rows->pluck('id'))->get()->keyBy('block_id');
+        $upserts = [];
 
         foreach ($rows as $block) {
             [$packets, $bytes] = $counters[$block->cidr];
-            $current = DB::table('network_ip_block_hits')->where('block_id', $block->id)->where('server_id', $serverId)->first();
-            $changed = $current === null || (int) $current->packets !== $packets;
+            $prev = $current[$block->id] ?? null;
+            $changed = $prev === null || (int) $prev->packets !== $packets;
+            $upserts[] = ['block_id' => $block->id, 'server_id' => $serverId, 'packets' => $packets, 'bytes' => $bytes,
+                'last_hit_at' => $changed ? $at : $prev->last_hit_at];
+        }
 
-            DB::table('network_ip_block_hits')->updateOrInsert(['block_id' => $block->id, 'server_id' => $serverId], [
-                'packets' => $packets, 'bytes' => $bytes, 'last_hit_at' => $changed ? $at : $current->last_hit_at,
-            ]);
+        if ($upserts !== []) {
+            DB::table('network_ip_block_hits')->upsert($upserts, ['block_id', 'server_id'], ['packets', 'bytes', 'last_hit_at']);
         }
     }
 

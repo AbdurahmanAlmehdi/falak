@@ -59,6 +59,31 @@ final readonly class Cidr
         }
     }
 
+    /**
+     * A single address as seen elsewhere (a request's client, a session, a server record): IPv4-mapped IPv6
+     * ("::ffff:203.0.113.7", dual-stack sockets) becomes the IPv4 address it is. null when it is not an address.
+     */
+    public static function fromAddress(?string $address): ?self
+    {
+        $address = trim((string) $address);
+
+        if ($address === '' || str_contains($address, '/') || filter_var($address, FILTER_VALIDATE_IP) === false) {
+            return null;
+        }
+
+        $bytes = @inet_pton($address);
+
+        if ($bytes === false) {
+            return null;
+        }
+
+        if (strlen($bytes) === 16 && str_starts_with($bytes, str_repeat("\0", 10)."\xff\xff")) {
+            $bytes = substr($bytes, 12);
+        }
+
+        return new self($bytes, strlen($bytes) * 8);
+    }
+
     public function isV4(): bool
     {
         return strlen($this->bytes) === 4;

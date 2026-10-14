@@ -3,7 +3,7 @@ import { ipActionsFor } from '@/lib/registry';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BlockIpAction } from './components/block-ip-action';
-import { formatCount, scopesFor } from './protection';
+import { formatCount, isOutbound, scopesFor } from './protection';
 import './register';
 
 function reply(status: number, body: unknown) {
@@ -16,6 +16,15 @@ afterEach(() => {
 });
 
 describe('protection helpers', () => {
+    it('tells peers the server connects to from clients, for either slot shape', () => {
+        expect(isOutbound({ context: 'talks_to' })).toBe(true);
+        expect(isOutbound({ context: 'clients' })).toBe(false);
+        expect(isOutbound({ source: 'connections.talks_to' })).toBe(true);
+        expect(isOutbound({ source: 'http.clients' })).toBe(false);
+        expect(isOutbound({ direction: 'outbound' })).toBe(true);
+        expect(isOutbound({})).toBe(false);
+    });
+
     it('offers the scopes the row knows about', () => {
         expect(scopesFor({}).map((s) => s.value)).toEqual(['organization']);
         expect(scopesFor({ serverId: 's', siteId: 'x' }).map((s) => s.value)).toEqual(['server', 'site', 'organization']);
@@ -86,5 +95,24 @@ describe('network.ip-actions: Block IP', () => {
         fireEvent.click((await screen.findAllByRole('button', { name: 'Block' })).at(-1)!);
 
         expect((await screen.findByRole('alert')).textContent).toContain('lock yourself out');
+    });
+
+    it('warns about an outbound peer and sends the flag (stream A rows: nullable server, context)', async () => {
+        const fetch = vi.fn().mockReturnValue(reply(201, { blocks: [] }));
+        vi.stubGlobal('fetch', fetch);
+
+        render(<BlockIpAction ip="198.51.100.9" serverId={null} context="talks_to" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Block 198.51.100.9' }));
+        expect((await screen.findByRole('note')).textContent).toContain('Your server connects to this address');
+        fireEvent.click(screen.getAllByRole('button', { name: 'Block' }).at(-1)!);
+        await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+        expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({
+            address: '198.51.100.9',
+            scope: 'organization',
+            duration: '24h',
+            confirm: false,
+            outbound: true,
+        });
     });
 });

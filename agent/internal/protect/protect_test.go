@@ -498,7 +498,57 @@ func TestApplyRebuildsIncompleteTable(t *testing.T) {
 	if _, err := p.Apply(context.Background(), ApplyPayload{Blocks: []Block{{CIDR: "203.0.113.7"}}}, st); err != nil {
 		t.Fatal(err)
 	}
-	if !fr.Ran("nft delete table inet falak_protect") || n.createCalls != 1 || len(n.has()) != 1 {
+	// Completed in place (the definition only adds the missing chain): never deleted, elements and counters kept.
+	if fr.Ran("nft delete table") || n.createCalls != 1 || len(n.has()) != 1 {
 		t.Fatal(fr.Lines())
+	}
+}
+
+func TestApplyNeverTouchesATableItCannotRead(t *testing.T) {
+	for name, res := range map[string]runner.Result{
+		"chain without sets": {Stdout: []byte(`{"nftables":[{"chain":{"name":"prerouting"}}]}`)},
+		"listing refused":    {ExitCode: 1, Stderr: []byte("Error: Operation not permitted")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fr := (&runnertest.Fake{}).On("nft -j list table inet falak_protect", res)
+			p := New(Deps{Runner: fr, FS: hostfs.FS{Root: t.TempDir()}, StateDir: "/var/lib/falak", LocalAddrs: func() []netip.Addr { return nil }})
+			if _, err := p.Apply(context.Background(), ApplyPayload{Blocks: []Block{{CIDR: "203.0.113.7"}}}, st); err == nil {
+				t.Fatal("no error")
+			}
+			if fr.Ran("nft -f") || fr.Ran("nft delete") || fr.Ran("nft add") {
+				t.Fatal(fr.Lines())
+			}
+		})
+	}
+}
+
+func TestUpstreamsAreGuarded(t *testing.T) {
+	root := t.TempDir()
+	for f, body := range map[string]string{
+		"etc/resolv.conf":                 "# stub\nnameserver 127.0.0.53\noptions edns0\n",
+		"run/systemd/resolve/resolv.conf": "nameserver 203.0.113.53\nnameserver 2001:db8:53::1\n",
+		"proc/net/route":                  "Iface\tDestination\tGateway \tFlags\nens3\t00000000\t017100CB\t0003\nens3\t007100CB\t00000000\t0001\n",
+		"proc/net/ipv6_route":             "00000000000000000000000000000000 00 00000000000000000000000000000000 00 20010db8000000000000000000000001 00000400 00000001 00000000 00000003 ens3\n",
+	} {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(root, f), []byte(body), 0o644)
+	}
+	got := UpstreamAddrs(hostfs.FS{Root: root})
+	var ss []string
+	for _, a := range got {
+		ss = append(ss, a.String())
+	}
+	if strings.Join(ss, " ") != "127.0.0.53 203.0.113.53 2001:db8:53::1 203.0.113.1 2001:db8::1" {
+		t.Fatal(ss)
+	}
+	n := newFakeNft()
+	f := n.runner(root)
+	p := New(Deps{Runner: f, FS: hostfs.FS{Root: root}, StateDir: "/var/lib/falak", LocalAddrs: func() []netip.Addr { return nil }})
+	r, err := p.Apply(context.Background(), ApplyPayload{Blocks: []Block{{CIDR: "203.0.113.0/24"}, {CIDR: "2001:db8::/48"}, {CIDR: "198.51.100.9"}}}, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := r.(ApplyResult); len(res.Failed) != 2 || strings.Join(n.has(), " ") != "198.51.100.9/32@-1" {
+		t.Fatalf("%+v %v", res, n.has())
 	}
 }

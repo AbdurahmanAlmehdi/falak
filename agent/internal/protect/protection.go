@@ -41,6 +41,9 @@ type Deps struct {
 	ControlPlane func(ctx context.Context) []netip.Addr
 	// LocalAddrs are the host's own addresses; nil = the interfaces' addresses.
 	LocalAddrs func() []netip.Addr
+	// Upstreams are addresses the host depends on: its DNS servers and default gateways; nil = read from the host
+	// (resolv.conf, systemd-resolved's upstream list, /proc/net/route and ipv6_route).
+	Upstreams func() []netip.Addr
 }
 
 // Block is one blocked prefix of net.protection.apply.
@@ -96,6 +99,8 @@ type state struct {
 	AutoBan    AutoBan  `json:"auto_ban"`
 	// NoSetCounters: this host refused per-element counters.
 	NoSetCounters bool `json:"no_set_counters,omitempty"`
+	// Trusted are addresses that logged in over SSH recently (never auto-banned), kept across restarts and upgrades.
+	Trusted map[string]time.Time `json:"trusted,omitempty"`
 }
 
 // Protection holds the executor and the observer's state.
@@ -120,6 +125,10 @@ func New(d Deps) *Protection {
 	if d.LocalAddrs == nil {
 		d.LocalAddrs = interfaceAddrs
 	}
+	if d.Upstreams == nil {
+		fs := d.FS
+		d.Upstreams = func() []netip.Addr { return UpstreamAddrs(fs) }
+	}
 	p := &Protection{d: d, auth: newTracker()}
 	if raw, err := d.FS.ReadFile(p.statePath()); err == nil {
 		if err := json.Unmarshal(raw, &p.st); err != nil {
@@ -127,6 +136,7 @@ func New(d Deps) *Protection {
 			p.st = state{}
 		}
 	}
+	p.auth.restoreTrusted(p.st.Trusted)
 	return p
 }
 
@@ -138,6 +148,8 @@ func (p *Protection) Register(reg *commands.Registry) {
 func (p *Protection) statePath() string { return path.Join(p.d.StateDir, stateFile) }
 
 func (p *Protection) saveLocked() error {
+	p.st.Trusted = p.auth.trustedSnapshot()
+	p.auth.trustChanged = false
 	b, err := json.MarshalIndent(p.st, "", "  ")
 	if err != nil {
 		return err
@@ -245,28 +257,40 @@ func (p *Protection) nft(ctx context.Context, args ...string) (runner.Result, er
 	return res, err
 }
 
-// list reads the protection table; ok=false when it does not exist (or is not ours to read).
-func (p *Protection) list(ctx context.Context) (Listing, bool) {
-	res, err := p.nft(ctx, "-j", "list", "table", "inet", Table)
+// list reads the protection table; ok=false when it is missing or incomplete (missing tells which).
+func (p *Protection) list(ctx context.Context) (l Listing, ok, missing bool) {
+	res, err := p.d.Runner.Run(ctx, runner.Cmd{Name: "nft", Args: []string{"-j", "list", "table", "inet", Table}})
 	if err != nil {
-		return Listing{}, false
+		return Listing{}, false, false
 	}
-	l, err := ParseListing(res.Stdout)
+	if res.ExitCode != 0 {
+		// "No such file or directory": the table is not there. Anything else (no permission, nft broken) is not a
+		// reason to create anything.
+		return Listing{}, false, strings.Contains(string(res.Stderr), "No such file or directory")
+	}
+	l, err = ParseListing(res.Stdout)
 	if err != nil {
-		return Listing{}, false
+		return Listing{}, false, false
 	}
 	_, has4 := l.Sets[Set4]
 	_, has6 := l.Sets[Set6]
-	return l, has4 && has6 && l.HasChain
+	return l, has4 && has6 && l.HasChain, false
 }
 
-// ensureTableLocked creates the table when it is missing (or incomplete: rebuilt). Returns the live listing.
+// ensureTableLocked creates the table when it is truly missing and returns the live listing. A table that exists but
+// is incomplete is completed without deleting anything (its elements and counters stay): the definition only adds
+// what is missing, and a table that has its chain but lacks a set is left alone (an error, someone edited it).
 func (p *Protection) ensureTableLocked(ctx context.Context, out io.Writer) (Listing, error) {
-	if l, ok := p.list(ctx); ok {
+	l, ok, missing := p.list(ctx)
+	if ok {
 		return l, nil
 	}
-	// An incomplete table (an older layout, a hand edit): rebuilt from scratch.
-	_, _ = p.d.Runner.Run(ctx, runner.Cmd{Name: "nft", Args: []string{"delete", "table", "inet", Table}})
+	if !missing && l.HasChain {
+		return Listing{}, fmt.Errorf("table inet %s exists but is incomplete; not touching it (delete it to let Falak recreate it)", Table)
+	}
+	if !missing && l.Sets == nil {
+		return Listing{}, fmt.Errorf("table inet %s could not be listed", Table)
+	}
 	create := func(counters bool) error {
 		if _, err := p.d.FS.WriteFile(DefPath, []byte(TableDefinition(counters)), 0o600); err != nil {
 			return err
@@ -287,15 +311,15 @@ func (p *Protection) ensureTableLocked(ctx context.Context, out io.Writer) (List
 		return Listing{}, fmt.Errorf("creating table inet %s: %w", Table, err)
 	}
 	fmt.Fprintf(out, "created table inet %s\n", Table)
-	l, ok := p.list(ctx)
+	l, ok, _ = p.list(ctx)
 	if !ok {
 		return Listing{}, fmt.Errorf("table inet %s is missing after creating it", Table)
 	}
 	return l, nil
 }
 
-// guards are the prefixes nothing may overlap: the never_block list, the host's own addresses and the control
-// plane's. Resolved control-plane addresses are cached for 10 minutes.
+// guards are the prefixes nothing may overlap: the never_block list, the host's own addresses, its DNS servers and
+// gateways, and the control plane's. Resolved control-plane addresses are cached for 10 minutes.
 func (p *Protection) guardsLocked(ctx context.Context) []netip.Prefix {
 	var g []netip.Prefix
 	for _, s := range p.st.NeverBlock {
@@ -303,7 +327,7 @@ func (p *Protection) guardsLocked(ctx context.Context) []netip.Prefix {
 			g = append(g, pr)
 		}
 	}
-	for _, a := range p.d.LocalAddrs() {
+	for _, a := range append(p.d.LocalAddrs(), p.d.Upstreams()...) {
 		g = append(g, netip.PrefixFrom(a.Unmap().WithZone(""), a.Unmap().BitLen()))
 	}
 	if p.d.ControlPlane != nil && (p.cpAt.IsZero() || p.d.Now().Sub(p.cpAt) > 10*time.Minute) {

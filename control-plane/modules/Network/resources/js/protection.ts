@@ -22,6 +22,27 @@ export interface BlockRequest {
     duration: BlockDuration;
     reason?: string;
     confirm?: boolean;
+    /** The row is a peer the server connects to: the server asks for confirmation. */
+    outbound?: boolean;
+}
+
+/**
+ * What a `network.ip-actions` row passes. Stream B (HTTP) sends `source` ("http.clients", "http.threats"), stream A
+ * (connections) sends `context` ("talks_to" for peers the workload connects to, "clients") and a nullable serverId;
+ * `direction` is the explicit form. Everything but `ip` is optional, so either slot shape renders this action.
+ */
+export interface BlockIpProps {
+    ip: string;
+    serverId?: string | null;
+    siteId?: string | null;
+    source?: string;
+    context?: string;
+    direction?: 'inbound' | 'outbound';
+}
+
+/** Whether the row's address is a peer the server connects to (outbound), not a client. */
+export function isOutbound(props: Pick<BlockIpProps, 'source' | 'context' | 'direction'>): boolean {
+    return props.direction === 'outbound' || props.context === 'talks_to' || /(^|\.)(talks_to|peers?|outbound)$/.test(props.source ?? '');
 }
 
 export function blockAddress(request: BlockRequest): Promise<{ blocks: { id: string; cidr: string; server_id: string | null }[] }> {
@@ -29,7 +50,7 @@ export function blockAddress(request: BlockRequest): Promise<{ blocks: { id: str
 }
 
 /** The scopes a row can offer: the server and the site it was seen on, and every server. */
-export function scopesFor(props: { serverId?: string; siteId?: string }): { value: BlockScope; label: string }[] {
+export function scopesFor(props: { serverId?: string | null; siteId?: string | null }): { value: BlockScope; label: string }[] {
     return [
         ...(props.serverId ? [{ value: 'server' as const, label: 'This server' }] : []),
         ...(props.siteId ? [{ value: 'site' as const, label: "The site's servers" }] : []),
