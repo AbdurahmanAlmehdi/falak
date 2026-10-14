@@ -46,7 +46,7 @@ final class IssueTimeline
             return array_values($buckets);
         }
 
-        if ($issue->kind === IssueKind::Performance && $issue->site_id && isset($issue->meta['name'])) {
+        if ($issue->kind === IssueKind::Performance && $issue->site_id && $issue->event_type !== null && isset($issue->meta['name'])) {
             $rows = DB::table('insights_aggregates')
                 ->where('organization_id', $issue->organization_id)
                 ->where('site_id', $issue->site_id)

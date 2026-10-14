@@ -24,6 +24,8 @@ final readonly class AccessLogEntry
         public ?string $serverId,
         public ?string $deploymentId,
         public ?string $releaseId,
+        public ?string $requestId = null,
+        public ?string $traceId = null,
     ) {}
 
     /**
@@ -50,6 +52,8 @@ final readonly class AccessLogEntry
             serverId: isset($m['falak_server_id']) ? strtolower((string) $m['falak_server_id']) : null,
             deploymentId: isset($m['falak_deployment_id']) ? strtolower((string) $m['falak_deployment_id']) : null,
             releaseId: isset($m['falak_release_id']) ? strtolower((string) $m['falak_release_id']) : null,
+            requestId: $str('http_request_id'),
+            traceId: $line->traceId(),
         );
     }
 
@@ -79,6 +83,8 @@ final readonly class AccessLogEntry
             'server_id' => $this->serverId,
             'deployment_id' => $this->deploymentId,
             'release_id' => $this->releaseId,
+            'request_id' => $this->requestId,
+            'trace_id' => $this->traceId,
         ];
     }
 }

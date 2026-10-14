@@ -1,11 +1,20 @@
-import { registerCommands, registerNavigation, registerServiceTabs, registerSettingsNav, type ServiceTabProps } from '@/lib/registry';
+import {
+    registerCommands,
+    registerNavigation,
+    registerServerSections,
+    registerServiceTabs,
+    registerSettingsNav,
+    type ServiceTabProps,
+} from '@/lib/registry';
 import { Activity, Radar, ScrollText } from 'lucide-react';
 import { createElement, lazy } from 'react';
 
 const SiteMetrics = lazy(() => import('./panels/SiteMetrics'));
 const SiteLogs = lazy(() => import('./panels/SiteLogs'));
+const SiteHttp = lazy(() => import('./panels/SiteHttp'));
+const ServerEdgeTraffic = lazy(() => import('./components/server-edge-traffic'));
 
-// Canvas service panel (docs/UI_DESIGN.md §5.1): Metrics 300, Logs 400.
+// Canvas service panel (docs/UI_DESIGN.md §5.1): Metrics 300, HTTP 350, Logs 400.
 registerServiceTabs(
     {
         id: 'metrics',
@@ -14,6 +23,15 @@ registerServiceTabs(
         order: 300,
         permission: 'telemetry.view',
         component: ({ ctx }: ServiceTabProps) => createElement(SiteMetrics, { siteId: ctx.service.ref_id }),
+    },
+    {
+        // The edge's traffic of the site (docs/plans/network/http.md).
+        id: 'http',
+        kinds: ['site'],
+        title: 'HTTP',
+        order: 350,
+        permission: 'telemetry.view',
+        component: ({ ctx }: ServiceTabProps) => createElement(SiteHttp, { siteId: ctx.service.ref_id, can: ctx.can }),
     },
     {
         id: 'logs',
@@ -29,6 +47,9 @@ registerServiceTabs(
             }),
     },
 );
+
+// Server page: what its edge serves.
+registerServerSections({ id: 'telemetry.edge-traffic', order: 200, permission: 'telemetry.view', component: ServerEdgeTraffic });
 
 registerNavigation(
     { id: 'telemetry.logs', title: 'Logs', url: '/observability/logs', icon: ScrollText, order: 400, permission: 'telemetry.view' },

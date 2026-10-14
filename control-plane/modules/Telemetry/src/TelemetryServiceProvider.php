@@ -2,6 +2,8 @@
 
 namespace Falak\Telemetry;
 
+use Falak\Alerting\Contracts\AlertTypes;
+use Falak\Alerting\Contracts\Severity;
 use Falak\Deployments\Events\ReleaseActivated;
 use Falak\Fleet\Events\AgentEnrolled;
 use Falak\Fleet\Events\AgentVersionChanged;
@@ -16,7 +18,10 @@ use Falak\Sites\Events\SiteDeleted;
 use Falak\Sites\Events\SiteTargetsChanged;
 use Falak\Sites\Events\SiteUpdated;
 use Falak\Telemetry\Application\Console\ProvisionGrafanaCommand;
+use Falak\Telemetry\Application\Http\EvaluateHttpTraffic;
+use Falak\Telemetry\Application\Jobs\AnalyzeHttpTraffic;
 use Falak\Telemetry\Application\Jobs\DispatchPendingTelemetry;
+use Falak\Telemetry\Application\Jobs\RefreshGeoDatabases;
 use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnEnrollment;
 use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnProvisioned;
 use Falak\Telemetry\Application\Listeners\ForgetOrganizationTelemetry;
@@ -37,6 +42,7 @@ use Falak\Telemetry\Contracts\TelemetryLinks;
 use Falak\Telemetry\Contracts\TracesQuery;
 use Falak\Telemetry\Infrastructure\AgentTelemetryConfigurator;
 use Falak\Telemetry\Infrastructure\DefaultTelemetryLinks;
+use Falak\Telemetry\Infrastructure\Geo\GeoDatabases;
 use Falak\Telemetry\Infrastructure\Grafana\GrafanaAnnotations;
 use Falak\Telemetry\Infrastructure\Grafana\GrafanaClient;
 use Falak\Telemetry\Infrastructure\LokiAccessLogCounts;
@@ -80,6 +86,7 @@ class TelemetryServiceProvider extends ModuleServiceProvider
 
         // Sites registers before Telemetry and binds its own ServerSites; only fill the gap.
         $this->app->singletonIf(ServerSites::class, NullServerSites::class);
+        $this->app->singleton(GeoDatabases::class);
     }
 
     protected function bootModule(): void
@@ -87,6 +94,13 @@ class TelemetryServiceProvider extends ModuleServiceProvider
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register('telemetry.view', [Role::Admin, Role::Developer, Role::Viewer], 'View server metrics, logs and traces', 'telemetry');
         $registry->register('telemetry.manage', [Role::Admin], 'Configure telemetry endpoints and provision Grafana', 'telemetry');
+
+        // HTTP analytics (docs/plans/network/http.md), the default rule pack's "HTTP" area.
+        $types = $this->app->make(AlertTypes::class);
+        $types->register(EvaluateHttpTraffic::ALERT_ERRORS, 'Spike of 5xx responses on a site', 'HTTP', Severity::Warning, 'Review logs');
+        $types->register(EvaluateHttpTraffic::ALERT_SLOW, 'Slow endpoint (p95 above the site\'s threshold)', 'HTTP', Severity::Warning, 'Review the issue');
+        $types->register(EvaluateHttpTraffic::ALERT_BANDWIDTH, 'Monthly bandwidth threshold reached', 'HTTP', Severity::Warning, 'Review traffic');
+        $types->register(EvaluateHttpTraffic::ALERT_SCANNER, 'Surge of scanner and attack requests', 'HTTP', Severity::Warning, 'Review threats');
 
         Event::listen(AgentEnrolled::class, ConfigureTelemetryOnEnrollment::class);
         Event::listen(AgentVersionChanged::class, ReconfigureAfterAgentUpgrade::class);
@@ -99,6 +113,9 @@ class TelemetryServiceProvider extends ModuleServiceProvider
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->job(new DispatchPendingTelemetry)->everyMinute()->name('telemetry:pending-configure')->withoutOverlapping();
+            $schedule->job(new AnalyzeHttpTraffic('evaluate'))->everyFiveMinutes()->name('telemetry:http-evaluate')->withoutOverlapping();
+            $schedule->job(new AnalyzeHttpTraffic('bandwidth'))->everyTenMinutes()->name('telemetry:http-bandwidth')->withoutOverlapping();
+            $schedule->job(new RefreshGeoDatabases)->dailyAt('04:17')->name('telemetry:geoip')->withoutOverlapping();
         });
 
         if ($this->app->runningInConsole()) {

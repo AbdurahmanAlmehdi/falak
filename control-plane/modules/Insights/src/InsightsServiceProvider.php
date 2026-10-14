@@ -15,6 +15,8 @@ use Falak\Insights\Application\Listeners\IngestReceivedInsights;
 use Falak\Insights\Contracts\DatabaseIssues;
 use Falak\Insights\Contracts\IssueDirectory;
 use Falak\Insights\Contracts\SecurityIssues;
+use Falak\Insights\Contracts\PerformanceFindings;
+use Falak\Insights\Contracts\SecurityFindings;
 use Falak\Insights\Contracts\SiteNameResolver;
 use Falak\Insights\Domain\Models\HeartbeatMonitor;
 use Falak\Insights\Domain\Models\Issue;
@@ -24,6 +26,7 @@ use Falak\Insights\Infrastructure\EloquentIssueDirectory;
 use Falak\Insights\Infrastructure\IdSiteNameResolver;
 use Falak\Insights\Infrastructure\TrackedDatabaseIssues;
 use Falak\Insights\Infrastructure\TrackedSecurityIssues;
+use Falak\Insights\Infrastructure\TrackedTrafficFindings;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Processes\Events\SchedulesApplied;
 use Illuminate\Console\Scheduling\Schedule;
@@ -41,6 +44,8 @@ class InsightsServiceProvider extends ModuleServiceProvider
         IssueDirectory::class => EloquentIssueDirectory::class,
         DatabaseIssues::class => TrackedDatabaseIssues::class,
         SecurityIssues::class => TrackedSecurityIssues::class,
+        PerformanceFindings::class => TrackedTrafficFindings::class,
+        SecurityFindings::class => TrackedTrafficFindings::class,
     ];
 
     public function register(): void

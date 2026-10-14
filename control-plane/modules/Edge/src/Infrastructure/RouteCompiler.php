@@ -132,7 +132,11 @@ final class RouteCompiler
                 'subject' => '*.'.$this->wildcard->domain,
                 'dns' => ['provider' => 'cloudflare', 'api_token' => $this->wildcard->dnsCredential->api_token],
             ]] : null,
-        ]) + ['sites' => $entries];
+        ])
+            // Every request gets an X-Request-Id, passed upstream and recorded in the access log (feature edge.request_id;
+            // stripped for older agents, docs/plans/network/http.md).
+            + (config('edge.request_id', true) ? ['request_id' => true] : [])
+            + ['sites' => $entries];
     }
 
     /**

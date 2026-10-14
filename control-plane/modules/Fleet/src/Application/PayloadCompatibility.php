@@ -72,6 +72,10 @@ final class PayloadCompatibility
             // apply_query_insights: only EnableQueryInsights sends it, the one update that may restart for it.
             'db.instance.update' => ['instance.query_insights', 'apply_query_insights'],
         ],
+        // X-Request-Id stamped by the edge (docs/plans/network/http.md); older agents render the config they always did.
+        'edge.request_id' => [
+            'edge.caddy.apply' => ['request_id'],
+        ],
     ];
 
     /**

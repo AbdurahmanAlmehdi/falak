@@ -315,11 +315,21 @@ export default function Issue({ issue, occurrences, timeline, monitor, activity,
                                 <KeyValue
                                     columns={2}
                                     items={[
-                                        { label: 'Name', value: String(issue.meta.name), mono: true },
-                                        { label: 'Metric', value: String(issue.meta.metric ?? '—') },
+                                        {
+                                            label: issue.meta.source === 'edge' ? 'Route' : 'Name',
+                                            value: String(issue.meta.route ?? issue.meta.name),
+                                            mono: true,
+                                        },
+                                        {
+                                            label: 'Metric',
+                                            value: String(issue.meta.metric ?? (issue.meta.source === 'edge' ? 'p95 (edge access log)' : '—')),
+                                        },
                                         {
                                             label: 'Last breach',
-                                            value: `${formatMs(Number(issue.meta.value_ms))} over ${String(issue.meta.window_minutes)} min`,
+                                            value:
+                                                issue.meta.source === 'edge'
+                                                    ? `${formatMs(Number(issue.meta.p95_ms))} over 60 min`
+                                                    : `${formatMs(Number(issue.meta.value_ms))} over ${String(issue.meta.window_minutes)} min`,
                                         },
                                         {
                                             label: 'Limit',
@@ -570,16 +580,17 @@ export default function Issue({ issue, occurrences, timeline, monitor, activity,
                             </div>
                         </Block>
                     )}
-                    {issue.meta && (issue.kind === 'heartbeat' || issue.kind === 'database' || issue.kind === 'security') && (
-                        <Block title="Context">
-                            <div className="p-3">
-                                <CodeBlock
-                                    code={JSON.stringify(issue.kind === 'database' ? { ...issue.meta, ...issue.sample } : issue.meta, null, 2)}
-                                    maxHeight={issue.kind === 'database' ? 400 : 200}
-                                />
-                            </div>
-                        </Block>
-                    )}
+                    {issue.meta &&
+                        (issue.kind === 'heartbeat' || issue.kind === 'database' || issue.kind === 'security' || issue.meta.source === 'edge') && (
+                            <Block title="Context">
+                                <div className="p-3">
+                                    <CodeBlock
+                                        code={JSON.stringify(issue.kind === 'heartbeat' ? issue.meta : { ...issue.meta, ...issue.sample }, null, 2)}
+                                        maxHeight={issue.kind === 'heartbeat' ? 200 : 400}
+                                    />
+                                </div>
+                            </Block>
+                        )}
                 </aside>
             </div>
         </ObservabilityLayout>

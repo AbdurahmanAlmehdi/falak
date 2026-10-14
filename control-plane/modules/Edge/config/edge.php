@@ -47,4 +47,7 @@ return [
 
     'apply_timeout_seconds' => 120,
     'cert_install_timeout_seconds' => 60,
+
+    // The edge stamps X-Request-Id on every request (agents with edge.request_id), docs/plans/network/http.md.
+    'request_id' => (bool) env('FALAK_EDGE_REQUEST_ID', true),
 ];

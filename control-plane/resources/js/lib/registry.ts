@@ -522,6 +522,37 @@ export function serverSectionsFor(ctx: Pick<ShellContext, 'can'>): ServerSection
     return [...serverSections.values()].filter((section) => !section.permission || ctx.can(section.permission)).sort((a, b) => a.order - b.order);
 }
 
+/** What an action on a client IP row knows (slot `network.ip-actions`, docs/plans/network/http.md). */
+export interface IpActionProps {
+    ip: string;
+    siteId?: string;
+    serverId?: string;
+    /** Where the row is shown, e.g. `http.threats`, `http.clients`. */
+    source: string;
+}
+
+/**
+ * An action rendered on the client IP rows of the network views (HTTP Threats and Clients tables, connections), e.g.
+ * Protection's "Block IP". The views only render the slot; the modules that act register here.
+ */
+export interface IpAction {
+    id: string;
+    /** Lower comes first. */
+    order: number;
+    permission?: string;
+    component: ComponentType<IpActionProps>;
+}
+
+const ipActions = new Map<string, IpAction>();
+
+export function registerIpActions(...actions: IpAction[]): void {
+    actions.forEach((action) => ipActions.set(action.id, action));
+}
+
+export function ipActionsFor(ctx: Pick<ShellContext, 'can'>): IpAction[] {
+    return [...ipActions.values()].filter((action) => !action.permission || ctx.can(action.permission)).sort((a, b) => a.order - b.order);
+}
+
 export function navigationFor(ctx: ShellContext): ModuleNavItem[] {
     return [...navItems.values()].filter((item) => !item.permission || ctx.can(item.permission)).sort((a, b) => a.order - b.order);
 }
