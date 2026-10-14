@@ -36,7 +36,7 @@ var Catalogue = []string{
 	"cron.apply",
 	"db.instance.create", "db.instance.update", "db.instance.restart", "db.instance.stop", "db.instance.delete", "db.instance.password", "db.instance.secrets", "db.instance.upgrade",
 	"db.create", "db.drop", "db.user.apply", "db.backup", "db.restore", "db.drill", "db.pitr.base", "db.pitr.restore", "db.pitr.promote",
-	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply",
+	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply", "net.connections.configure",
 	"fn.release.apply", "fn.release.remove", "fn.run", "fn.status",
 	"docker.pull", "docker.run", "docker.stop", "docker.compose.up", "docker.compose.down", "docker.compose.pull", "docker.compose.ps", "docker.compose.restart", "docker.prune", "docker.update",
 	"telemetry.configure",

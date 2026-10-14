@@ -31,6 +31,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 	"github.com/OthmanHaba/falak/agent/internal/metrics"
 	"github.com/OthmanHaba/falak/agent/internal/netcfg"
+	"github.com/OthmanHaba/falak/agent/internal/netobs"
 	"github.com/OthmanHaba/falak/agent/internal/provision"
 	"github.com/OthmanHaba/falak/agent/internal/pty"
 	"github.com/OthmanHaba/falak/agent/internal/resources"
@@ -58,7 +59,9 @@ type Deps struct {
 	HTTP      *http.Client // outbound downloads (artifacts, runtimes, upgrades)
 	Insights  InsightsPoster
 	Telemetry *telemetry.Service
-	Logger    *slog.Logger
+	// Requests is the control plane's request channel (net.observed); nil = no reports.
+	Requests netobs.Requester
+	Logger   *slog.Logger
 	// RestartAgent restarts the service after system.upgrade_agent.
 	RestartAgent func() error
 	// RelayBase and RelayHTTP reach the terminal relay: the API base the agent long-polls and an HTTP/1.1 client with
@@ -81,6 +84,8 @@ type Components struct {
 	Volumes    *volumes.Service
 	// Events queues OOM kills and restarts for the heartbeat.
 	Events *resources.Queue
+	// Network is the network collector (docs/plans/network/connections.md).
+	Network *netobs.Collector
 }
 
 // Build constructs every executor and registers the full v1 catalogue.
@@ -145,6 +150,10 @@ func Build(d Deps) *Components {
 		VolumesRoot: filepath.Join(cfg.StateDir, "volumes"), SecretsDir: filepath.Join(cfg.RunDir, "secrets"), EtcDir: cfg.EtcDir})
 	dbs.Register(reg)
 	netcfg.New(netcfg.Deps{Runner: d.Runner, FS: d.FS, Logger: log, HTTP: d.HTTP}).Register(reg)
+	network := netobs.New(netobs.Options{FS: d.FS, EtcDir: cfg.EtcDir, Workloads: d.Telemetry.Workloads(), CP: d.Requests,
+		Out: d.Telemetry.Relay(), Runner: d.Runner, Logger: log.With("component", "network")})
+	network.Register(reg)
+	d.Telemetry.Follow(network)
 	fns := functions.New(functions.Deps{FS: d.FS, Runner: d.Runner, Docker: docker.NewClient(cfg.DockerSock), Gateway: fngateway.NewClient(""),
 		Logger: log.With("component", "functions"), Binary: BinaryPath, Version: version.Version})
 	fns.Register(reg)
@@ -157,7 +166,7 @@ func Build(d Deps) *Components {
 	terms.Register(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
-		Events: &resources.Queue{}}
+		Events: &resources.Queue{}, Network: network}
 }
 
 // ensureEnrolled enrolls only when there is no identity yet: `falak-agent run` never replaces one because
@@ -241,7 +250,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	comps := Build(Deps{
-		Config: cfg, FS: fs, Runner: r, Insights: client, Telemetry: tel, Logger: log,
+		Config: cfg, FS: fs, Runner: r, Insights: client, Requests: client, Telemetry: tel, Logger: log,
 		RelayBase: id.State.Endpoints.API, RelayHTTP: transport.NewHTTP1Client(id.TLSConfig()),
 		RestartAgent: func() error {
 			// --no-block queues the restart so the upgrade command's finished event is flushed first.
@@ -337,6 +346,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	observer := comps.DB.NewObserver(client, tel.Sink(), tel.Relay())
 	loops.Add(1)
 	go func() { defer loops.Done(); observer.Run(runCtx) }()
+	// Connections, listeners, peers, conntrack, WireGuard and probes (docs/plans/network/connections.md).
+	loops.Add(1)
+	go func() { defer loops.Done(); comps.Network.Run(runCtx) }()
 	loops.Add(1)
 	go func() {
 		defer loops.Done()

@@ -43,6 +43,9 @@ Current features: `edge.access_log`, `telemetry.log_kind`, `system.upgrade_agent
 Logs (docs/plans/OBSERVABILITY.md phase 2): `logs.container_files` (telemetry.configure `log_sources[]` `container`,
 `compose_service`, `multiline_pattern`, `origin`; container sources are removed whole for older agents,
 `PayloadCompatibility::DROP`), `runtime.fpm.slowlog` (runtime.fpm.pool `slowlog_timeout`).
+Network (docs/plans/network/): `net.connections` gates the whole command `net.connections.configure` (latency probes,
+peer names, WireGuard peer names) and the agent's `net.observed` request (connections, listeners, peers, conntrack,
+WireGuard, probes; `requests/net.observed.schema.json`).
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`

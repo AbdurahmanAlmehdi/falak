@@ -170,6 +170,17 @@ func TestWorkloadContainers(t *testing.T) {
 	if len(rms) != 3 {
 		t.Fatalf("resources: blog, db, shop; got %d", len(rms))
 	}
+	// The network collector reuses the pass: containers with their init pid and labels, no Engine call of its own.
+	snap := map[string]NetContainer{}
+	for _, ct := range c.NetSnapshot().Containers {
+		snap[ct.ID] = ct
+	}
+	if a := snap[idSystemd]; a.Pid != 100 || a.Site != "shop" || a.Service != "app" || a.Name != "shop-app-1" {
+		t.Fatalf("app %+v", a)
+	}
+	if d := snap[idDB]; d.DBInstance != dbInstance || d.Pid != 400 || len(snap) != 4 {
+		t.Fatalf("db %+v (%d)", d, len(snap))
+	}
 
 	t.Run("systemd driver", func(t *testing.T) {
 		shop := resourceBy(rms, "service.name", "shop")

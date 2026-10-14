@@ -71,6 +71,34 @@ type WorkloadCollector struct {
 	uids    map[string]int            // /etc/passwd as last read (kept when a read fails)
 	// rootResolved is SitesRoot (as rootOf, cleaned) with its symlinks resolved; "" until that succeeds.
 	rootOf, rootResolved string
+	// net is what the last pass found, for the network collector (NetSnapshot).
+	net NetSnapshot
+}
+
+// NetContainer is a site or database container as the workload collector's last pass found it.
+type NetContainer struct {
+	ID, Name   string
+	Site       string // falak.site label ("" for a database)
+	DBInstance string // falak.db.instance label
+	Service    string // compose service (falak.service, else com.docker.compose.service)
+	Pid        int    // init process: its /proc/<pid>/net is the container's network namespace
+	PidStart   uint64
+	IPs        []string // the container's addresses on its networks (from the inspect)
+}
+
+// NetSnapshot is what the network collector (docs/plans/network/connections.md) reuses from the last pass instead of
+// listing and inspecting containers itself: the running site and database containers, and the host processes
+// attributed to native sites (pid => slug: a site's slice, its isolated user, or its processes of a shared user).
+type NetSnapshot struct {
+	Containers []NetContainer
+	Native     map[int]string
+}
+
+// NetSnapshot returns the last pass's containers and native site processes (empty before the first pass).
+func (c *WorkloadCollector) NetSnapshot() NetSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.net
 }
 
 // containerInfo is what the collector learns of a container once (one inspect): where its cgroup lives, its init pid
@@ -79,6 +107,7 @@ type containerInfo struct {
 	dir      string // cgroup v2 directory; "" = none found: Docker stats (cgroup v1)
 	pid      int
 	pidStart uint64 // the init process's start time (/proc/<pid>/stat), 0 = unknown: tells a reused pid apart
+	ips      []string
 	// Limits from HostConfig, used when there is no cgroup directory to read them from.
 	cpuLimit            float64
 	memLimit, pidsLimit int64
@@ -228,10 +257,14 @@ func (c *WorkloadCollector) Collect(ctx context.Context) []*metricspb.ResourceMe
 	sites := c.sites
 	c.mu.Unlock()
 	all := owners{}
+	snap := NetSnapshot{Native: map[int]string{}}
 	own, shared := nativeUsers(sites)
-	withContainers := c.collectContainers(ctx, all)
-	withSlice := c.collectSlices(sites, own, shared, withContainers, all)
-	c.collectUsers(own, shared, withContainers, withSlice, all)
+	withContainers := c.collectContainers(ctx, all, &snap)
+	withSlice := c.collectSlices(sites, own, shared, withContainers, all, &snap)
+	c.collectUsers(own, shared, withContainers, withSlice, all, &snap)
+	c.mu.Lock()
+	c.net = snap
+	c.mu.Unlock()
 	return c.encode(all)
 }
 
@@ -291,7 +324,7 @@ func userKey(uid int) string     { return "user/" + strconv.Itoa(uid) }
 func siteKey(slug string) string { return "site/" + slug }
 
 // collectContainers samples site and database containers; returns the slugs that have containers.
-func (c *WorkloadCollector) collectContainers(ctx context.Context, out owners) map[string]bool {
+func (c *WorkloadCollector) collectContainers(ctx context.Context, out owners, snap *NetSnapshot) map[string]bool {
 	slugs := map[string]bool{}
 	if c.engine == nil {
 		return slugs
@@ -334,6 +367,12 @@ func (c *WorkloadCollector) collectContainers(ctx context.Context, out owners) m
 		if service == "" {
 			service = ct.Labels[docker.LabelComposeService]
 		}
+		c.mu.Lock()
+		if cur := c.cts[ct.ID]; cur != nil && cur.pid > 0 {
+			snap.Containers = append(snap.Containers, NetContainer{ID: ct.ID, Name: name, Site: site, DBInstance: inst, Service: service,
+				Pid: cur.pid, PidStart: cur.pidStart, IPs: cur.ips})
+		}
+		c.mu.Unlock()
 		if service != "" {
 			attrs = append(attrs, str("falak.compose.service", service))
 		}
@@ -366,6 +405,12 @@ func (c *WorkloadCollector) inspect(ctx context.Context, id string) *containerIn
 	info := &containerInfo{dir: c.cgroupDir(id, ct.HostConfig.CgroupParent), pid: ct.State.Pid, memLimit: ct.HostConfig.Memory,
 		cpuLimit: float64(ct.HostConfig.NanoCpus) / 1e9}
 	info.pidStart, _ = c.procStart(info.pid)
+	for _, n := range ct.NetworkSettings.Networks {
+		if n.IPAddress != "" {
+			info.ips = append(info.ips, n.IPAddress)
+		}
+	}
+	sort.Strings(info.ips)
 	if p := ct.HostConfig.PidsLimit; p != nil && *p > 0 {
 		info.pidsLimit = *p
 	}
@@ -496,7 +541,7 @@ func (c *WorkloadCollector) sampleDockerStats(ctx context.Context, id string, in
 // site is not (or no longer) configured is skipped: it has no slug to report under. An empty site slice (no process:
 // the slice exists but the site's processes still run outside it, e.g. until its PHP-FPM master restarts) is skipped
 // too when the site can be measured by its unix user's processes instead.
-func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]string, shared map[string][]string, withContainers map[string]bool, out owners) map[string]bool {
+func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]string, shared map[string][]string, withContainers map[string]bool, out owners, snap *NetSnapshot) map[string]bool {
 	withSlice := map[string]bool{}
 	entries, err := os.ReadDir(c.fs.P(cgroup.CgroupRoot))
 	if err != nil {
@@ -546,6 +591,11 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]stri
 				continue
 			}
 			withSlice[slug] = true
+			if !withContainers[slug] {
+				for _, pid := range readCgroupProcs(c.fs, path.Join(cgroup.CgroupRoot, e.Name())) {
+					snap.Native[pid] = slug
+				}
+			}
 			if withContainers[slug] {
 				// The site's containers are measured already; a slice holding them (a custom cgroup parent) would count
 				// them twice. Only its limits are reported.
@@ -563,7 +613,7 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]stri
 // "processes": its PHP-FPM pool, else its working directory, see readOrigin). Processes running in a container are
 // never counted, whatever their uid. One /proc pass for all of them, skipped entirely when there is none. No network
 // (not attributable per process without eBPF) and no limits (an unlimited site has none).
-func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[string][]string, withContainers, withSlice map[string]bool, out owners) {
+func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[string][]string, withContainers, withSlice map[string]bool, out owners, snap *NetSnapshot) {
 	measured := func(slug string) bool { return !withContainers[slug] && !withSlice[slug] }
 	type want struct{ slug, user string }
 	var wantOwn, wantShared []want
@@ -628,31 +678,12 @@ func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[strin
 	c.mu.Lock()
 	roots := c.sitesRoots()
 	seen := map[int]bool{}
+	keyOf := map[int]string{}
 	owner := func(uid, pid int, start uint64) string {
 		seen[pid] = true
-		o, ok := c.origins[pid]
-		if !ok || o.start != start {
-			if o = readOrigin(c.fs, roots, pid, start); o.retry {
-				delete(c.origins, pid)
-			} else {
-				c.origins[pid] = o
-			}
-		}
-		if o.container {
-			return ""
-		}
-		slugs := sharing[uid]
-		if slugs == nil {
-			return userKey(uid)
-		}
-		slug := o.dir
-		if o.pool != "" {
-			slug = pools[o.pool]
-		}
-		if !slugs[slug] {
-			return ""
-		}
-		return siteKey(slug)
+		key := c.ownerKey(uid, pid, start, roots, sharing, pools)
+		keyOf[pid] = key
+		return key
 	}
 	totals := scanProcs(c.fs, uids, owner, wanted, c.users)
 	for pid := range c.origins {
@@ -661,6 +692,21 @@ func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[strin
 		}
 	}
 	c.mu.Unlock()
+	// The processes each measured site owns, for the network collector (sockets by inode).
+	slugOf := map[string]string{}
+	for _, w := range wantOwn {
+		if uid, ok := uidOf(w.user); ok {
+			slugOf[userKey(uid)] = w.slug
+		}
+	}
+	for _, w := range wantShared {
+		slugOf[siteKey(w.slug)] = w.slug
+	}
+	for pid, key := range keyOf {
+		if slug := slugOf[key]; slug != "" && wanted[key] {
+			snap.Native[pid] = slug
+		}
+	}
 	emit := func(w want, key, kind, name string) {
 		if !wanted[key] {
 			return
@@ -769,4 +815,48 @@ func (c *WorkloadCollector) encode(all owners) []*metricspb.ResourceMetrics {
 		})
 	}
 	return out
+}
+
+// ownerKey is the per-user pass's counter key of a process (see collectUsers; "" = counted for no site): the uid's own
+// key for an isolated site's user, else the site its PHP-FPM pool or working directory names. The origin is cached per
+// pid and start time. Called with c.mu held.
+func (c *WorkloadCollector) ownerKey(uid, pid int, start uint64, roots []string, sharing map[int]map[string]bool, pools map[string]string) string {
+	o, ok := c.origins[pid]
+	if !ok || o.start != start {
+		if o = readOrigin(c.fs, roots, pid, start); o.retry {
+			delete(c.origins, pid)
+		} else {
+			c.origins[pid] = o
+		}
+	}
+	if o.container {
+		return ""
+	}
+	slugs := sharing[uid]
+	if slugs == nil {
+		return userKey(uid)
+	}
+	slug := o.dir
+	if o.pool != "" {
+		slug = pools[o.pool]
+	}
+	if !slugs[slug] {
+		return ""
+	}
+	return siteKey(slug)
+}
+
+// readCgroupProcs lists the pids of a cgroup directory (cgroup.procs; nil when unreadable).
+func readCgroupProcs(fs hostfs.FS, dir string) []int {
+	b, err := fs.ReadFile(path.Join(dir, "cgroup.procs"))
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(b)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }

@@ -144,6 +144,10 @@ func TestWorkloadUsers(t *testing.T) {
 	if len(rms) != 2 || resourceBy(rms, "service.name", "dock") != nil {
 		t.Fatalf("blog and api only, got %d", len(rms))
 	}
+	// The network collector gets the processes each measured site owns.
+	if n := c.NetSnapshot().Native; n[10] != "blog" || n[11] != "blog" || n[20] != "api" || n[1] != "" || n[30] != "" {
+		t.Fatalf("native %v", n)
+	}
 	blog := resourceBy(rms, "service.name", "blog")
 	// The counters start at zero: what the processes already running used before (150 + 250 ticks, 12288 bytes
 	// written) happened before the agent looked, and must not show as one interval's.

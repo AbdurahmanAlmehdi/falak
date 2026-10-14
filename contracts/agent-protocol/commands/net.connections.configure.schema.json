@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/net.connections.configure.schema.json",
+  "title": "net.connections.configure \u2014 the network collector's targets and names (docs/plans/network/connections.md): latency probes, names of the addresses it sees, WireGuard peer names. Persisted in /etc/falak/net.json; feature net.connections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "probes",
+    "names",
+    "wireguard"
+  ],
+  "properties": {
+    "probes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "kind",
+          "host",
+          "port"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^(server|db|site):[A-Za-z0-9._/-]{1,150}$"
+          },
+          "kind": {
+            "enum": [
+              "server",
+              "database"
+            ]
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[A-Za-z0-9:.-]+$"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        }
+      }
+    },
+    "names": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "port",
+          "name"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 45,
+            "pattern": "^[0-9A-Fa-f:.]+$"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 65535,
+            "description": "0 = any port"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^(server|db|site):[A-Za-z0-9._/-]{1,150}$"
+          }
+        }
+      }
+    },
+    "wireguard": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "public_key",
+          "name"
+        ],
+        "properties": {
+          "public_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9+/]{42,43}=$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^(server|db|site):[A-Za-z0-9._/-]{1,150}$"
+          }
+        }
+      }
+    },
+    "long_lived_after_s": {
+      "type": "integer",
+      "minimum": 15,
+      "maximum": 3600,
+      "description": "an inbound connection seen this long counts as long-lived (default 60)"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changed"
+      ],
+      "properties": {
+        "changed": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

@@ -107,6 +107,7 @@ type Service struct {
 	tailer    *logs.Tailer
 	docker    *logs.Docker
 	workloads *metrics.WorkloadCollector
+	followers []MetricsFollower
 
 	mu        sync.Mutex
 	cur       Payload
@@ -236,6 +237,36 @@ func (s *Service) Sink() obs.Sink { return s.relay }
 
 // Relay exposes the relay (stats / tests).
 func (s *Service) Relay() *otlp.Relay { return s.relay }
+
+// Workloads exposes the workload collector (its last pass feeds the network collector).
+func (s *Service) Workloads() *metrics.WorkloadCollector { return s.workloads }
+
+// MetricsFollower is a collector that follows the metrics settings (enabled, interval) of telemetry.configure.
+type MetricsFollower interface {
+	Configure(enabled bool, interval time.Duration)
+}
+
+// Follow makes f follow the metrics settings, starting with the current ones.
+func (s *Service) Follow(f MetricsFollower) {
+	s.mu.Lock()
+	s.followers = append(s.followers, f)
+	p := s.cur
+	s.mu.Unlock()
+	enabled, interval := metricsSettings(p)
+	f.Configure(enabled, interval)
+}
+
+func metricsSettings(p Payload) (bool, time.Duration) {
+	interval := 15 * time.Second
+	enabled := true
+	if p.Metrics != nil {
+		enabled = boolOr(p.Metrics.Enabled, true)
+		if p.Metrics.IntervalS > 0 {
+			interval = time.Duration(p.Metrics.IntervalS) * time.Second
+		}
+	}
+	return enabled, interval
+}
 
 // Summary returns the heartbeat metrics summary.
 func (s *Service) Summary() metrics.Summary { return s.sampler.Summary() }
@@ -412,15 +443,14 @@ func (s *Service) apply(p Payload) {
 	}
 	s.relay.Configure(cfg)
 
-	interval := 15 * time.Second
-	enabled := true
-	if p.Metrics != nil {
-		enabled = boolOr(p.Metrics.Enabled, true)
-		if p.Metrics.IntervalS > 0 {
-			interval = time.Duration(p.Metrics.IntervalS) * time.Second
-		}
-	}
+	enabled, interval := metricsSettings(p)
 	s.collector.Configure(enabled, interval)
+	s.mu.Lock()
+	followers := append([]MetricsFollower(nil), s.followers...)
+	s.mu.Unlock()
+	for _, f := range followers {
+		f.Configure(enabled, interval)
+	}
 	s.workloads.SetSites(p.Sites)
 	s.workloads.Configure(enabled, interval)
 	// The edge's per-site access logs are always shipped (edge.caddy.apply writes them; the file name is the slug).

@@ -62,6 +62,9 @@ var Features = []string{
 	// Database observability (docs/plans/OBSERVABILITY.md phase 3): db.instance.create|update instance.query_insights,
 	// and the db.observed request (engine metrics, slow queries, top statements).
 	"db.observability",
+	// Network connections (docs/plans/network/connections.md): the net.connections.configure command (probes, peer
+	// names), falak.net.* metrics and the net.observed request.
+	"net.connections",
 }
 
 var (
