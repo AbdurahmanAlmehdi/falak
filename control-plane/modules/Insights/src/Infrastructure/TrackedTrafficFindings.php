@@ -71,9 +71,13 @@ final class TrackedTrafficFindings implements PerformanceFindings, SecurityFindi
         return [$issue->toData(), in_array($transition, [IssueTracker::OPENED, IssueTracker::REGRESSED], true)];
     }
 
-    public function recoverSlowEndpoints(string $organizationId, string $siteId, array $stillSlow): array
+    public function recoverSlowEndpoints(string $organizationId, string $siteId, array $recovered): array
     {
-        $keep = array_map(fn (string $route) => self::slowFingerprint($siteId, $route), $stillSlow);
+        if ($recovered === []) {
+            return [];
+        }
+
+        $fingerprints = array_map(fn (string $route) => self::slowFingerprint($siteId, $route), $recovered);
         $resolved = [];
 
         $open = Issue::query()
@@ -82,7 +86,7 @@ final class TrackedTrafficFindings implements PerformanceFindings, SecurityFindi
             ->where('site_id', strtolower($siteId))
             ->where('status', IssueStatus::Open)
             ->where('meta->source', self::SOURCE_EDGE)
-            ->whereNotIn('fingerprint', $keep)
+            ->whereIn('fingerprint', $fingerprints)
             ->get();
 
         foreach ($open as $issue) {
@@ -128,6 +132,24 @@ final class TrackedTrafficFindings implements PerformanceFindings, SecurityFindi
         );
 
         return $issue->toData();
+    }
+
+    /**
+     * Client IPs are personal data: an HTTP scanner Issue keeps those of its latest window only (each occurrence replaces
+     * the sample), and none once it has not been seen for the Insights retention (insights.retention_days, 30).
+     *
+     * @return int issues whose sample was cleared
+     */
+    public function pruneClientSamples(?int $retentionDays = null): int
+    {
+        $days = max(1, $retentionDays ?? (int) config('insights.retention_days', 30));
+
+        return Issue::query()
+            ->where('kind', IssueKind::Security)
+            ->where('meta->source', self::SOURCE_HTTP)
+            ->whereNotNull('sample')
+            ->where('last_seen_at', '<', now()->subDays($days))
+            ->update(['sample' => null]);
     }
 
     public function openScanners(string $organizationId, string $siteId, int $limit = 50): array

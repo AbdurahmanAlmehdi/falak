@@ -20,6 +20,7 @@ use Falak\Edge\Application\Listeners\ForgetDeletedServer;
 use Falak\Edge\Application\Listeners\HandleEdgeCommandOutcome;
 use Falak\Edge\Application\Listeners\ReactToSiteChanges;
 use Falak\Edge\Application\Listeners\ReapplyAfterAgentUpgrade;
+use Falak\Edge\Application\Listeners\ReapplyOnRequestIdLinking;
 use Falak\Edge\Application\PathMounts;
 use Falak\Edge\Contracts\DnsCheck;
 use Falak\Edge\Contracts\DomainRecords;
@@ -63,6 +64,7 @@ use Falak\Sites\Events\SiteCreated;
 use Falak\Sites\Events\SiteDeleted;
 use Falak\Sites\Events\SiteTargetsChanged;
 use Falak\Sites\Events\SiteUpdated;
+use Falak\Telemetry\Events\RequestIdLinkingChanged;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Support\Facades\Event;
@@ -147,6 +149,7 @@ class EdgeServiceProvider extends ModuleServiceProvider
         Event::listen(ComposeServicesUnpublished::class, [ReactToSiteChanges::class, 'unpublished']);
         Event::listen(OctaneRoutingChanged::class, [ReactToSiteChanges::class, 'octaneRoutingChanged']);
         Event::listen(ServerDeleted::class, ForgetDeletedServer::class);
+        Event::listen(RequestIdLinkingChanged::class, ReapplyOnRequestIdLinking::class);
         // Cloudflare DNS follows the domains (records Falak created only).
         Event::listen(DomainAdded::class, fn (DomainAdded $event) => SyncCloudflareDns::domain($event->domainId));
         Event::listen(DomainRemoved::class, fn (DomainRemoved $event) => SyncCloudflareDns::forget($event->domainId));

@@ -59,6 +59,11 @@ return [
         'slow_ms' => (int) env('FALAK_HTTP_SLOW_MS', 1000),
         'slow_min_requests' => 20,
         'max_slow_routes' => 25,
+        // A slow route's Issue resolves once its p95 is under this share of the threshold (with its minimum of
+        // requests): between the two it keeps its state, and a quiet route always does.
+        'recover_ratio' => 0.8,
+        // Series per slow-endpoint query (Loki refuses answers over its max_query_series, 5000 by default).
+        'max_slow_series' => 1000,
         // Errors spike: in a 5-minute window, at least errors_min 5xx and errors_ratio of the requests (held 2 windows).
         'errors_min' => 20,
         'errors_ratio' => 0.10,
@@ -82,6 +87,8 @@ return [
         'asn_url' => env('FALAK_GEOIP_ASN_URL', 'https://download.db-ip.com/free/dbip-asn-lite-{Y}-{m}.mmdb.gz'),
         // A file older than this is downloaded again (DB-IP publishes once a month).
         'max_age_days' => 32,
+        // Largest download and database accepted (the Lite files are 5–40 MB).
+        'max_bytes' => 200 * 1024 * 1024,
         'timeout' => 300,
     ],
 

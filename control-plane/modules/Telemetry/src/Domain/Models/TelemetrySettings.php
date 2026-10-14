@@ -15,6 +15,7 @@ use Illuminate\Support\Carbon;
  * @property ?string $environment
  * @property ?float $traces_ratio
  * @property ?int $metrics_interval_s
+ * @property bool $request_id_linking
  * @property Carbon $updated_at
  */
 class TelemetrySettings extends Model
@@ -42,6 +43,7 @@ class TelemetrySettings extends Model
             'otlp_token' => Sealed::class,
             'traces_ratio' => 'float',
             'metrics_interval_s' => 'integer',
+            'request_id_linking' => 'boolean',
         ];
     }
 

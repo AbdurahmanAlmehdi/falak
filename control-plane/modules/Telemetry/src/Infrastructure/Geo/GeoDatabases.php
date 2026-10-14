@@ -122,10 +122,26 @@ final class GeoDatabases
         }
 
         $errors = [];
+        // DB-IP's Lite files are 5–40 MB: a larger download or database is not one of them.
+        $max = (int) config('telemetry.geoip.max_bytes', 200 * 1024 * 1024);
 
         foreach ([now(), now()->subMonthNoOverflow()] as $month) {
             $url = strtr($template, ['{Y}' => $month->format('Y'), '{m}' => $month->format('m')]);
-            $response = Http::timeout((int) config('telemetry.geoip.timeout', 300))->get($url);
+
+            try {
+                $response = Http::timeout((int) config('telemetry.geoip.timeout', 300))
+                    // Stop reading past the cap instead of buffering an endless body.
+                    ->withOptions(['progress' => function (int $total, int $downloaded) use ($max) {
+                        if ($total > $max || $downloaded > $max) {
+                            throw new RuntimeException('larger than '.intdiv($max, 1024 * 1024).' MB');
+                        }
+                    }])
+                    ->get($url);
+            } catch (Throwable $e) {
+                $errors[] = "{$url}: {$e->getMessage()}";
+
+                continue;
+            }
 
             if (! $response->successful()) {
                 $errors[] = "{$url}: HTTP {$response->status()}";
@@ -134,10 +150,10 @@ final class GeoDatabases
             }
 
             $body = $response->body();
-            $data = str_ends_with(parse_url($url, PHP_URL_PATH) ?: '', '.gz') ? @gzdecode($body) : $body;
+            $data = strlen($body) > $max ? false : (str_ends_with(parse_url($url, PHP_URL_PATH) ?: '', '.gz') ? @gzdecode($body, $max) : $body);
 
             if (! is_string($data) || $data === '') {
-                $errors[] = "{$url}: not a gzip file";
+                $errors[] = "{$url}: not a gzip file, or larger than ".intdiv($max, 1024 * 1024).' MB';
 
                 continue;
             }
@@ -146,7 +162,12 @@ final class GeoDatabases
             file_put_contents($tmp, $data);
 
             try {
-                new MaxMindReader($tmp);
+                // A MaxMind DB of the expected kind (DBIP-Country-Lite, DBIP-ASN-Lite), not any file that parses.
+                $type = (string) ((new MaxMindReader($tmp))->metadata()['database_type'] ?? '');
+
+                if (stripos($type, $name) === false) {
+                    throw new RuntimeException("a \"{$type}\" database, not a {$name} one");
+                }
             } catch (Throwable $e) {
                 @unlink($tmp);
                 $errors[] = "{$url}: {$e->getMessage()}";

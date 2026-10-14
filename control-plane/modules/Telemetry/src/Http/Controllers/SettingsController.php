@@ -39,6 +39,7 @@ final class SettingsController extends Controller
                 'environment' => $settings->environment,
                 'traces_ratio' => $settings->traces_ratio,
                 'metrics_interval_s' => $settings->metrics_interval_s,
+                'request_id_linking' => (bool) $settings->request_id_linking,
             ],
             'defaults' => [
                 'otlp_endpoint' => (string) config('telemetry.otlp.endpoint'),
@@ -77,6 +78,7 @@ final class SettingsController extends Controller
             'environment' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_.-]+$/'],
             'traces_ratio' => ['nullable', 'numeric', 'min:0', 'max:1'],
             'metrics_interval_s' => ['nullable', 'integer', 'min:5', 'max:3600'],
+            'request_id_linking' => ['sometimes', 'boolean'],
         ]);
 
         $count = $update($organizationId, $data);

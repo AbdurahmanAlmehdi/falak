@@ -24,6 +24,7 @@ use Falak\Telemetry\Application\Jobs\DispatchPendingTelemetry;
 use Falak\Telemetry\Application\Jobs\RefreshGeoDatabases;
 use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnEnrollment;
 use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnProvisioned;
+use Falak\Telemetry\Application\Listeners\ForgetDeletedSiteTraffic;
 use Falak\Telemetry\Application\Listeners\ForgetOrganizationTelemetry;
 use Falak\Telemetry\Application\Listeners\ProvisionGrafanaForOrganization;
 use Falak\Telemetry\Application\Listeners\ReconfigureAfterAgentUpgrade;
@@ -36,6 +37,7 @@ use Falak\Telemetry\Contracts\Annotations;
 use Falak\Telemetry\Contracts\LogMetrics;
 use Falak\Telemetry\Contracts\LogsQuery;
 use Falak\Telemetry\Contracts\MetricsBackend;
+use Falak\Telemetry\Contracts\RequestIdLinking;
 use Falak\Telemetry\Contracts\ServerSites;
 use Falak\Telemetry\Contracts\TelemetryConfigurator;
 use Falak\Telemetry\Contracts\TelemetryLinks;
@@ -52,6 +54,7 @@ use Falak\Telemetry\Infrastructure\LokiLogsQuery;
 use Falak\Telemetry\Infrastructure\Metrics\MimirBackend;
 use Falak\Telemetry\Infrastructure\Metrics\VictoriaMetricsBackend;
 use Falak\Telemetry\Infrastructure\NullServerSites;
+use Falak\Telemetry\Infrastructure\SettingsRequestIdLinking;
 use Falak\Telemetry\Infrastructure\TempoTracesQuery;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Event;
@@ -65,6 +68,7 @@ class TelemetryServiceProvider extends ModuleServiceProvider
      */
     public array $singletons = [
         TelemetryLinks::class => DefaultTelemetryLinks::class,
+        RequestIdLinking::class => SettingsRequestIdLinking::class,
     ];
 
     public function register(): void
@@ -110,6 +114,7 @@ class TelemetryServiceProvider extends ModuleServiceProvider
         Event::listen(OrganizationDeleted::class, ForgetOrganizationTelemetry::class);
         Event::listen([SiteCreated::class, SiteTargetsChanged::class, SiteDeleted::class], ReconfigureOnSiteChanges::class);
         Event::listen(SiteUpdated::class, ReconfigureOnLogSourceChanges::class);
+        Event::listen(SiteDeleted::class, ForgetDeletedSiteTraffic::class);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->job(new DispatchPendingTelemetry)->everyMinute()->name('telemetry:pending-configure')->withoutOverlapping();

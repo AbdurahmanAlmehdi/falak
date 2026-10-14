@@ -62,48 +62,65 @@ final class RecordBandwidth
     }
 
     /**
-     * Bytes and requests per slug in the hour ending at $end.
+     * Bytes and requests per slug in the hour ending at $end, summed over the site's edges. Each edge (site × server)
+     * counts from the agent's counters when it sends them, else from its access log: a site whose servers run old and
+     * new agents side by side is counted whole, never twice.
      *
      * @return array<string, array{bytes_out: int, bytes_in: int, requests: int}>
      */
     private function hour(string $org, CarbonImmutable $end): array
     {
-        $rows = [];
+        $empty = ['bytes_out' => 0, 'bytes_in' => 0, 'requests' => 0];
+        /** @var array<string, array<string, array{bytes_out: int, bytes_in: int, requests: int}>> $edges slug => server => row */
+        $edges = [];
 
         try {
             $q = HttpQueries::bandwidthHour($org);
 
             foreach ($this->metrics->query($q['bytes'], $end) as $s) {
-                $slug = $s->labels['service_name'] ?? '';
-                $rows[$slug] ??= ['bytes_out' => 0, 'bytes_in' => 0, 'requests' => 0];
-                $rows[$slug][($s->labels['network_io_direction'] ?? '') === 'receive' ? 'bytes_in' : 'bytes_out'] += (int) round((float) $s->last());
+                $row = &$edges[$s->labels['service_name'] ?? ''][strtolower($s->labels['falak_server_id'] ?? '')];
+                $row ??= $empty;
+                $row[($s->labels['network_io_direction'] ?? '') === 'receive' ? 'bytes_in' : 'bytes_out'] += (int) round((float) $s->last());
+                unset($row);
             }
 
             foreach ($this->metrics->query($q['requests'], $end) as $s) {
-                $slug = $s->labels['service_name'] ?? '';
-                $rows[$slug] ??= ['bytes_out' => 0, 'bytes_in' => 0, 'requests' => 0];
-                $rows[$slug]['requests'] = (int) round((float) $s->last());
+                $row = &$edges[$s->labels['service_name'] ?? ''][strtolower($s->labels['falak_server_id'] ?? '')];
+                $row ??= $empty;
+                $row['requests'] = (int) round((float) $s->last());
+                unset($row);
             }
         } catch (TelemetryUnavailable|TelemetryQueryFailed) {
             // No metrics backend: the access log alone.
         }
 
-        if ((string) config('telemetry.loki.url') === '') {
-            return $rows;
-        }
+        if ((string) config('telemetry.loki.url') !== '') {
+            $q = HttpQueries::bandwidthHourFromLogs(HttpQueries::organizationAccess($org, LokiAccessLogCounts::PROBE_AGENT));
+            $fromLogs = [];
 
-        // Sites without the agent's counters (agents before v0.17): from the access log.
-        $q = HttpQueries::bandwidthHourFromLogs(HttpQueries::organizationAccess($org, LokiAccessLogCounts::PROBE_AGENT));
-        $fromLogs = [];
+            foreach ($q as $field => $logql) {
+                foreach ($this->logs->queryRange($logql, $end, $end, 60) as $s) {
+                    $fromLogs[$s->labels['service_name'] ?? ''][strtolower($s->labels['falak_server_id'] ?? '')][$field] = (int) round((float) $s->last());
+                }
+            }
 
-        foreach ($q as $field => $logql) {
-            foreach ($this->logs->queryRange($logql, $end, $end, 60) as $s) {
-                $fromLogs[$s->labels['service_name'] ?? ''][$field] = (int) round((float) $s->last());
+            foreach ($fromLogs as $slug => $servers) {
+                foreach ($servers as $server => $row) {
+                    $edges[$slug][$server] ??= [...$empty, ...$row];
+                }
             }
         }
 
-        foreach ($fromLogs as $slug => $row) {
-            $rows[$slug] ??= ['bytes_out' => $row['bytes_out'] ?? 0, 'bytes_in' => $row['bytes_in'] ?? 0, 'requests' => $row['requests'] ?? 0];
+        $rows = [];
+
+        foreach ($edges as $slug => $servers) {
+            foreach ($servers as $row) {
+                $rows[$slug] ??= $empty;
+
+                foreach ($empty as $field => $_) {
+                    $rows[$slug][$field] += $row[$field];
+                }
+            }
         }
 
         return $rows;

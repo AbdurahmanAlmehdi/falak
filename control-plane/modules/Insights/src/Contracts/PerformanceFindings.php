@@ -30,12 +30,13 @@ interface PerformanceFindings
     ): array;
 
     /**
-     * Resolves (automatically) the site's open edge slow-endpoint Issues whose route is not in $stillSlow.
+     * Resolves (automatically) the site's open edge slow-endpoint Issues of the routes in $recovered: routes measured
+     * fast again (enough requests, p95 well under the threshold). A route not measured keeps its Issue as it is.
      *
-     * @param  list<string>  $stillSlow  routes found slow in this evaluation
+     * @param  list<string>  $recovered
      * @return list<IssueData> the issues resolved
      */
-    public function recoverSlowEndpoints(string $organizationId, string $siteId, array $stillSlow): array;
+    public function recoverSlowEndpoints(string $organizationId, string $siteId, array $recovered): array;
 
     /**
      * Open edge slow-endpoint Issues of a site, slowest seen last first.

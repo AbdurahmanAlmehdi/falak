@@ -7,6 +7,7 @@ import { RelativeTime } from '@/components/falak/relative-time';
 import { SecretInput } from '@/components/falak/secret-input';
 import { Section } from '@/components/falak/section';
 import { StatusBadge } from '@/components/falak/status';
+import { Switch } from '@/components/falak/switch';
 import SettingsLayout from '@/layouts/settings/layout';
 import { router, useForm, usePage } from '@inertiajs/react';
 import { ExternalLink, LayoutDashboard, RefreshCw } from 'lucide-react';
@@ -18,6 +19,7 @@ interface SettingsValues {
     environment: string | null;
     traces_ratio: number | null;
     metrics_interval_s: number | null;
+    request_id_linking: boolean;
 }
 
 interface Props {
@@ -70,6 +72,7 @@ export default function Settings({ settings, defaults, backends, can }: Props) {
         environment: settings.environment ?? '',
         traces_ratio: settings.traces_ratio?.toString() ?? '',
         metrics_interval_s: settings.metrics_interval_s?.toString() ?? '',
+        request_id_linking: settings.request_id_linking,
     });
     const hints = inlineErrors(form.data);
     const error = (key: keyof typeof hints) => form.errors[key] ?? hints[key];
@@ -193,6 +196,18 @@ export default function Settings({ settings, defaults, backends, can }: Props) {
                             />
                         </Field>
                     </div>
+                    <Field
+                        label="Request IDs"
+                        hint="The edge adds an X-Request-Id to requests that carry none (or a malformed one), passes it to the app and records it in the access log, so an access line links to the app's logs. Saving applies the edge configuration of every server whose agent supports it."
+                        inline
+                    >
+                        <Switch
+                            checked={form.data.request_id_linking}
+                            onCheckedChange={(checked) => form.setData('request_id_linking', checked)}
+                            disabled={!can.manage}
+                            aria-label="Request IDs"
+                        />
+                    </Field>
                 </Section>
             </form>
 

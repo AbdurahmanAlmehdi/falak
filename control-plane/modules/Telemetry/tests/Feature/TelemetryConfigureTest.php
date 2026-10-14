@@ -8,10 +8,13 @@ use Falak\Servers\Domain\Models\Server;
 use Falak\Servers\Events\ServerProvisioned;
 use Falak\Telemetry\Application\Jobs\DispatchPendingTelemetry;
 use Falak\Telemetry\Contracts\Data\SiteTelemetryTarget;
+use Falak\Telemetry\Contracts\RequestIdLinking;
 use Falak\Telemetry\Contracts\ServerSites;
 use Falak\Telemetry\Contracts\TelemetryConfigurator;
 use Falak\Telemetry\Domain\Models\PendingConfiguration;
 use Falak\Telemetry\Domain\Models\TelemetrySettings;
+use Falak\Telemetry\Events\RequestIdLinkingChanged;
+use Illuminate\Support\Facades\Event;
 
 require_once __DIR__.'/../../../Fleet/tests/Support/helpers.php';
 
@@ -207,6 +210,25 @@ it('updates settings, audits without secrets and reconfigures every active serve
 
     $this->put('/telemetry/settings', ['clear_otlp_token' => true])->assertSessionHasNoErrors();
     expect(TelemetrySettings::query()->findOrFail($this->organization->id)->otlp_token)->toBeNull();
+});
+
+it('turns request ID linking on per organization, off by default, and tells the edges', function () {
+    Event::fake([RequestIdLinkingChanged::class]);
+    expect(app(RequestIdLinking::class)->enabled($this->organization->id))->toBeFalse();
+
+    // A save without the field keeps it; only a change is announced.
+    $this->put('/telemetry/settings', ['environment' => 'staging'])->assertSessionHasNoErrors();
+    Event::assertNotDispatched(RequestIdLinkingChanged::class);
+
+    $this->put('/telemetry/settings', ['request_id_linking' => true])->assertSessionHasNoErrors();
+    expect(app(RequestIdLinking::class)->enabled($this->organization->id))->toBeTrue();
+    Event::assertDispatched(RequestIdLinkingChanged::class, fn ($e) => $e->organizationId === $this->organization->id && $e->enabled);
+
+    $this->put('/telemetry/settings', ['environment' => 'prod'])->assertSessionHasNoErrors();
+    expect(app(RequestIdLinking::class)->enabled($this->organization->id))->toBeTrue();
+    Event::assertDispatchedTimes(RequestIdLinkingChanged::class, 1);
+
+    $this->get('/settings/observability')->assertOk()->assertInertia(fn ($page) => $page->where('settings.request_id_linking', true));
 });
 
 it('validates settings and requires telemetry.manage', function () {

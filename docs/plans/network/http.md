@@ -21,7 +21,7 @@ control plane (Telemetry module, "Traffic")
   ├─ EvaluateHttpTraffic (every 5 min, per organization, LogQL): slow endpoints → performance Issues, probes → security
   │    Issues, 5xx spike / scanner surge / slow endpoint alerts
   ├─ RecordBandwidth (every 10 min): hourly bytes per site → telemetry_http_bandwidth, monthly alert threshold
-  └─ DownloadGeoDatabases (daily check, monthly refresh): DB-IP Lite country + ASN mmdb → lookups of top client IPs
+  └─ RefreshGeoDatabases (daily check, monthly refresh): DB-IP Lite country + ASN mmdb → lookups of top client IPs
 ```
 
 ## What Caddy logs, what the record carries
@@ -54,13 +54,16 @@ same function runs in the agent only (the control plane groups by the field).
 
 ### Threat rules (`logs.ClassifyThreat`)
 
-Stateless, per record (the agent sees every request; the control plane only aggregates):
+Stateless, per record (the agent sees every request; the control plane only aggregates). Probes, traversal and
+unusual methods count only when the response status is ≥ 400 (401, 403, 404, 405, …): a WordPress site's own
+`/wp-admin`, a real `/config.json` or a WebDAV `PROPFIND` answers 2xx / 3xx and is no attack. Injection markers in the
+query string count whatever the status (a 200 to a SQL injection is worse, not better).
 
 | Category | Rule | Matches |
 |---|---|---|
 | `probe` | `env` | `/.env`, `/.env.*`, `*/.env` |
 | `probe` | `git` | `/.git/`, `/.svn/`, `/.hg/` |
-| `probe` | `wordpress` | `/wp-admin`, `/wp-login.php`, `/xmlrpc.php`, `/wp-content/`, `/wp-includes/` (on any site; a WordPress site sees its own admin as probes too, documented) |
+| `probe` | `wordpress` | `/wp-admin`, `/wp-login.php`, `/xmlrpc.php`, `/wp-content/`, `/wp-includes/` |
 | `probe` | `phpmyadmin` | `/phpmyadmin`, `/pma`, `/myadmin`, `/adminer` |
 | `probe` | `phpunit` | `/vendor/phpunit` |
 | `probe` | `cgi` | `/cgi-bin/` |
@@ -90,9 +93,9 @@ hour are dropped.
 | `falak.net.http.requests` | counter | {request} | `http.response.status_class` (`1xx` … `5xx`) | `falak_net_http_requests_total` |
 | `falak.net.http.io` | counter | By | `network.io.direction` (`receive` = request bodies, `transmit` = response bodies) | `falak_net_http_io_bytes_total` |
 | `falak.net.http.server.duration` | histogram | ms | — (buckets 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000) | `falak_net_http_server_duration_milliseconds_bucket` / `_sum` / `_count` |
-| `falak.net.http.protocol` | counter | {request} | `network.protocol.version` (`1.0`, `1.1`, `2`, `3`, `other`) | `falak_net_http_protocol_requests_total` |
-| `falak.net.http.tls` | counter | {request} | `tls.protocol.version` (`1.0` … `1.3`, `none`, `other`) | `falak_net_http_tls_requests_total` |
-| `falak.net.http.threats` | counter | {request} | `falak.threat.category` (the four above) | `falak_net_http_threats_requests_total` |
+| `falak.net.http.protocol` | counter | {request} | `network.protocol.version` (`1.0`, `1.1`, `2`, `3`, `other`) | `falak_net_http_protocol_total` |
+| `falak.net.http.tls` | counter | {request} | `tls.protocol.version` (`1.0` … `1.3`, `none`, `other`) | `falak_net_http_tls_total` |
+| `falak.net.http.threats` | counter | {request} | `falak.threat.category` (the four above) | `falak_net_http_threats_total` |
 
 Labels are fixed sets: at most 5 + 2 + 12 + 5 + 6 + 4 series per site. The edge view of a server is the same metrics
 summed over the sites it serves (`falak_server_id`). Sites are selected by `falak_org_id` + `service_name` (the slug),
@@ -126,19 +129,25 @@ demand (the tab shown).
 `EvaluateHttpTraffic` runs every 5 minutes per organization with Loki configured, over the trailing hour:
 
 ```
-p95:   quantile_over_time(0.95, {org, kind=access} | url_route!="" | ua!~probe | unwrap http_server_duration_ms | __error__="" [1h]) by (service_name, url_route)
-count: sum by (service_name, url_route) (count_over_time({org, kind=access} | url_route!="" | ua!~probe [1h]))
+p95:   topk(1000, quantile_over_time(0.95, {org, kind=access} | url_route!="" | ua!~probe | unwrap http_server_duration_ms | __error__="" [1h]) by (service_name, url_route) >= <lowest recovery bound>)
+count: topk(1000, sum by (service_name, url_route) (count_over_time({org, kind=access} | url_route!="" | ua!~probe [1h])) >= <lowest minimum count>)
 ```
+
+Both are bounded (`telemetry.http.max_slow_series`, 1000) so an organization with many routes never reaches Loki's
+series limit (5000): only routes that could be slow or recovered come back. Each query of the evaluation runs on its
+own; one that Loki refuses skips the decisions it feeds (an alert condition is then neither raised nor cleared).
 
 A route of a site is **slow** when its count ≥ the site's `slow_min_requests` (default 20) and its p95 ≥ the site's
 `slow_ms` (default 1000 ms, `telemetry.http.slow_ms`). It is recorded through the Insights contract
 `PerformanceFindings::slowEndpoint()` (kind `performance`, the existing enum value; fingerprint
 `sha256("edge|<site id>|<route>")`, title `Slow endpoint: GET /orders/:id` — the method is not part of the route, so
 the title has none: `Slow endpoint: /orders/:id`; `meta.source = edge`, `meta.route`, `p95_ms`, `threshold_ms`,
-`count`). One occurrence per evaluation that finds it slow (as Insights thresholds do). Routes of the site whose
-open edge Issue is no longer slow (p95 under the threshold, or too few requests) are resolved automatically
-(`PerformanceFindings::recoverSlowEndpoints()`, `automatic: true`); a resolved one that is slow again regresses.
-At most 25 slow routes per site per evaluation (the slowest).
+`count`). One occurrence per evaluation that finds it slow (as Insights thresholds do). A route is **recovered** when
+it has at least its minimum of requests and a p95 under `recover_ratio` (80%) of the threshold (or is missing from a
+p95 answer that was not cut): its Issue is resolved automatically (`PerformanceFindings::recoverSlowEndpoints()`,
+`automatic: true`) and its alert recovers. Anything else — a quiet hour with too few requests, a p95 between 80% and
+100% of the threshold, a cut answer — keeps the state, so an Issue never flaps because its route was quiet. A resolved
+one that is slow again regresses. At most 25 slow routes per site per evaluation (the slowest).
 
 Settings per site (`telemetry_http_settings`, `PUT /telemetry/sites/{id}/http/settings`, `sites.manage`):
 `slow_ms` (100 – 60,000), `slow_min_requests` (1 – 10,000), `bandwidth_alert_bytes` (null = off).
@@ -148,9 +157,10 @@ Settings per site (`telemetry_http_settings`, `PUT /telemetry/sites/{id}/http/se
 `RecordBandwidth` (every 10 minutes) recomputes the last two complete hours per organization and upserts
 `telemetry_http_bandwidth` (site × hour: bytes out, bytes in, requests):
 
-- `sum by (service_name) (increase(falak_net_http_io_bytes_total{falak_org_id="…",network_io_direction="transmit"}[1h]))`
-  at the hour's end (and `receive`, and requests); sites without the series in that hour (older agents) get
-  `sum by (service_name) (sum_over_time({org, kind=access} | unwrap http_response_body_size | __error__="" [1h]))`.
+- per edge (site × server): `sum by (service_name, falak_server_id, network_io_direction) (increase(falak_net_http_io_bytes_total{falak_org_id="…"}[1h]))`
+  at the hour's end (and requests); an edge without the series in that hour (an agent before v0.17) counts from its
+  access log, `sum by (service_name, falak_server_id) (sum_over_time({org, kind=access} | unwrap http_response_body_size | __error__="" [1h]))`.
+  A site served by old and new agents side by side is counted whole and never twice (each edge from one source).
 - The month is the sum of its hours (UTC), kept 400 days (`telemetry.http.bandwidth_retention_days`) so last year's
   month can be compared. Response bodies only: headers and TLS overhead are not counted (documented in the UI).
 - A site with `bandwidth_alert_bytes` gets one `http.bandwidth` alert per month once the month's bytes out reach it
@@ -159,15 +169,17 @@ Settings per site (`telemetry_http_settings`, `PUT /telemetry/sites/{id}/http/se
 ## Countries and networks (DB-IP Lite)
 
 The control plane downloads **DB-IP IP to Country Lite** and **IP to ASN Lite** (mmdb, CC BY 4.0, free, no account)
-once a month: `DownloadGeoDatabases` runs daily and fetches when a file is missing or older than 32 days, from
+once a month: `RefreshGeoDatabases` runs daily and fetches when a file is missing or older than 32 days, from
 `telemetry.geoip.country_url` / `asn_url` (env `FALAK_GEOIP_COUNTRY_URL`, `FALAK_GEOIP_ASN_URL`; defaults
 `https://download.db-ip.com/free/dbip-country-lite-{Y}-{m}.mmdb.gz` and `…/dbip-asn-lite-{Y}-{m}.mmdb.gz`;
 `{Y}` / `{m}` are the current month, the previous month is tried when the current one is not published yet).
-The file is gunzipped to `storage/app/geoip/<name>.mmdb.tmp`, opened once to check it (metadata, a lookup) and
-renamed over the old one; a failed download keeps the old file. `FALAK_GEOIP_ENABLED=false` turns it off (air-gapped
+The download is capped at `telemetry.geoip.max_bytes` (200 MB, compressed and decompressed alike; the Lite files are
+5–40 MB), gunzipped to `storage/app/geoip/<name>.mmdb.tmp`, opened to check it is a MaxMind DB of the expected kind
+(`database_type` naming the country or ASN database) and renamed over the old one; a failed download keeps the old
+file. `FALAK_GEOIP_ENABLED=false` turns it off (air-gapped
 installs).
 
-Lookups happen in the control plane (`GeoLookup`, a small pure-PHP MaxMind DB reader: no extension, no package) on
+Lookups happen in the control plane (`GeoDatabases` with `MaxMindReader`, a small pure-PHP MaxMind DB reader: no extension, no package) on
 already aggregated top-N client IPs, never per record:
 
 - the agent would need the database on every server (a 30 MB download per server per month) for a breakdown that is
@@ -191,36 +203,45 @@ country or network, and in the docs.
   404s per client IP (`404_storm`: ≥ `telemetry.http.storm_404` (100) 404s from one IP in the window). A site and rule
   with at least `telemetry.http.security_min_hits` (20) hits in the window is recorded through the Insights contract
   `SecurityFindings::scanner()` (fingerprint `sha256("http|<site id>|<rule>")`, title `Scanner probing /.env files`,
-  `meta.source = http`, `meta.rule`, sample: top IPs and paths). Background noise (a few probes an hour, which every
-  public site gets) opens nothing; Issues are not resolved automatically (scanning comes and goes; the user resolves, a
-  new wave regresses it). Stream A records its own security findings through its own contract methods on the same kind.
+  `meta.source = http`, `meta.rule`, sample: the 5 top client IPs of the latest window). Background noise (a few probes
+  an hour, which every public site gets) opens nothing; Issues are not resolved automatically (scanning comes and goes;
+  the user resolves, a new wave regresses it). Client IPs are personal data: each occurrence replaces the sample (only
+  the latest window's 5 IPs are kept), and the Insights prune clears the sample of an Issue not seen for
+  `insights.retention_days` (30). A deleted site's thresholds and bandwidth rows are deleted with it. Stream A records its own security findings through its own contract methods on the same kind.
 
 ## Request IDs (agent feature `edge.request_id`)
 
-`edge.caddy.apply` gains a top-level `request_id: true` (always sent by the control plane, stripped by
-`PayloadCompatibility` for agents without `edge.request_id`). With it, every site's subroute starts with:
+**Off by default.** An organization turns it on in Settings → Observability ("Request IDs", `request_id_linking` on
+`telemetry_settings`, `PUT /telemetry/settings`, `telemetry.manage`); the Edge module asks the Telemetry contract
+`RequestIdLinking` while compiling and re-applies the organization's edges when it changes (`RequestIdLinkingChanged`).
+Only then does `edge.caddy.apply` carry a top-level `request_id: true` (stripped by `PayloadCompatibility` for agents
+without `edge.request_id`). With it, every site's subroute starts with:
 
 ```json
-{"match": [{"not": [{"header_regexp": {"X-Request-Id": {"pattern": "^[A-Za-z0-9._:-]{8,128}$"}}}]}],
+{"match": [{"not": [{"vars_regexp": {"{http.request.header.X-Request-Id}": {"pattern": "^[A-Za-z0-9._:-]{8,128}$"}}}]}],
  "handle": [{"handler": "headers",
              "request":  {"set": {"X-Request-Id": ["{http.request.uuid}"]}},
-             "response": {"set": {"X-Request-Id": ["{http.request.uuid}"]}, "deferred": true}}]},
-{"match": [{"header_regexp": {"X-Request-Id": {"pattern": "^[A-Za-z0-9._:-]{8,128}$"}}}],
+             "response": {"set": {"X-Request-Id": ["{http.request.uuid}"]}, "require": {"headers": {"X-Request-Id": null}}, "deferred": true}}]},
+{"match": [{"vars_regexp": {"{http.request.header.X-Request-Id}": {"pattern": "^[A-Za-z0-9._:-]{8,128}$"}}}],
  "handle": [{"handler": "headers",
-             "response": {"set": {"X-Request-Id": ["{http.request.header.X-Request-Id}"]}, "deferred": true}}]}
+             "response": {"set": {"X-Request-Id": ["{http.request.header.X-Request-Id}"]}, "require": {"headers": {"X-Request-Id": null}}, "deferred": true}}]}
 ```
 
-A well-formed incoming id is kept (a proxy in front, a client that correlates); anything else is replaced by a UUID.
-The header reaches the app (reverse proxy, FastCGI `HTTP_X_REQUEST_ID`, FrankenPHP) and the response. Caddy logs the
-request as received, so the record takes the id from `resp_headers` first, then the request header. Trusting incoming
-ids only from trusted proxies was considered and left out: an id is a correlation handle, not an authorization; a
-client that forges one only mislabels its own requests.
+A request carrying exactly one well-formed id keeps it untouched (a proxy in front, a client that correlates). The
+match is on the placeholder, which joins several headers with ","; the pattern never matches a comma, so two ids (or
+one over 128 characters, or a malformed one) are all replaced by a UUID, which `set` puts in place of every value. The
+header reaches the app (reverse proxy, FastCGI `HTTP_X_REQUEST_ID`, FrankenPHP). The response gets the id only when
+the app answered without one (`require`: an id the app sets is never overwritten). The record takes the id from
+`resp_headers` first (the app's own when it set one, else the edge's), then the request header. Trusting incoming ids
+only from trusted proxies was considered and left out: an id is a correlation handle, not an authorization; a client
+that forges one only mislabels its own requests.
 
-**Rendering stays byte-identical without the flag**: `Render` adds the routes only when `request_id` is true, so a
-server whose agent lacks the feature, and every config rendered before the control plane sends the flag, is unchanged
-(`edge_test.go` compares a full render with and without). Upgrading the agent re-applies the edge once (the existing
-`ReapplyAfterAgentUpgrade`), which now carries the flag: Caddy loads the new config through its admin API (`/load`),
-a graceful switch (listeners kept, in-flight requests finish on the old handlers). Nothing restarts.
+**Rendering stays byte-identical without the flag**: `Render` adds the routes only when `request_id` is true, so an
+organization that did not turn it on, and a server whose agent lacks the feature, keep exactly the config of before
+(`request_id_test.go` compares a full render against a golden file written by the previous renderer). An agent upgrade
+changes nothing by itself. Turning the setting on (or off) re-applies the edges: Caddy loads the new config through its
+admin API (`/load`), a graceful switch (listeners kept, in-flight requests finish on the old handlers). Nothing
+restarts.
 
 Linking (`GET /telemetry/sites/{id}/requests/{requestId}`):
 
@@ -289,7 +310,8 @@ Endpoints (JSON, Telemetry module):
 | Control plane | `Telemetry\Application\Queries\HttpQueries`, `Application\Http\EvaluateHttpTraffic` / `RecordBandwidth`, job `AnalyzeHttpTraffic` (`evaluate` every 5 min, `bandwidth` every 10 min), `RefreshGeoDatabases` (daily 04:17), `Infrastructure\Geo\MaxMindReader` / `GeoDatabases`, `HttpTrafficController`, tables `telemetry_http_settings`, `telemetry_http_bandwidth` |
 | Insights | `PerformanceFindings` (`slowEndpoint`, `recoverSlowEndpoints`, `openSlowEndpoints`), `SecurityFindings` (`scanner`, `openScanners`), `IssueKind::Security` |
 | UI | Site tab `http` (order 350), server section `telemetry.edge-traffic`, slot `registerIpActions()` / `ipActionsFor()` (`network.ip-actions`) |
-| Env | `FALAK_EDGE_REQUEST_ID` (default true), `FALAK_HTTP_SLOW_MS` (1000), `FALAK_GEOIP_ENABLED`, `FALAK_GEOIP_PATH` (`storage/app/geoip`), `FALAK_GEOIP_COUNTRY_URL`, `FALAK_GEOIP_ASN_URL`; the rest under `telemetry.http` |
+| Settings | Observability → Request IDs (`telemetry_settings.request_id_linking`, off by default; contract `RequestIdLinking`, event `RequestIdLinkingChanged`) |
+| Env | `FALAK_HTTP_SLOW_MS` (1000), `FALAK_GEOIP_ENABLED`, `FALAK_GEOIP_PATH` (`storage/app/geoip`), `FALAK_GEOIP_COUNTRY_URL`, `FALAK_GEOIP_ASN_URL`; the rest under `telemetry.http` |
 
 ## Not in this stream
 

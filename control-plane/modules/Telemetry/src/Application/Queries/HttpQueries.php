@@ -47,9 +47,9 @@ final class HttpQueries
             'requests' => "sum by (http_response_status_class) (rate(falak_net_http_requests_total{{$selector}}[{$w}]))",
             'bytes' => "sum by (network_io_direction) (rate(falak_net_http_io_bytes_total{{$selector}}[{$w}]))",
             'p95' => "histogram_quantile(0.95, sum by (le) (rate(falak_net_http_server_duration_milliseconds_bucket{{$selector}}[{$w}])))",
-            'protocols' => "sum by (network_protocol_version) (rate(falak_net_http_protocol_requests_total{{$selector}}[{$w}]))",
-            'tls' => "sum by (tls_protocol_version) (rate(falak_net_http_tls_requests_total{{$selector}}[{$w}]))",
-            'threats' => "sum by (falak_threat_category) (rate(falak_net_http_threats_requests_total{{$selector}}[{$w}]))",
+            'protocols' => "sum by (network_protocol_version) (rate(falak_net_http_protocol_total{{$selector}}[{$w}]))",
+            'tls' => "sum by (tls_protocol_version) (rate(falak_net_http_tls_total{{$selector}}[{$w}]))",
+            'threats' => "sum by (falak_threat_category) (rate(falak_net_http_threats_total{{$selector}}[{$w}]))",
         ];
     }
 
@@ -118,30 +118,37 @@ final class HttpQueries
     }
 
     /**
-     * Slow endpoints: p95 and request count per site and route over the last hour.
+     * Slow endpoints: p95 and request count per site and route over the last hour. Both are bounded so a busy
+     * organization never reaches Loki's series limit: p95 only from $minP95Ms (the lowest recovery bound of the
+     * organization's sites, so a counted route missing from the answer is known to be fast), counts only from
+     * $minCount, and at most $limit series each (an answer with $limit series may be cut: its missing routes are
+     * unknown, not fast).
      *
      * @return array{p95: string, count: string}
      */
-    public static function slowRoutes(string $organizationAccess): array
+    public static function slowRoutes(string $organizationAccess, float $minP95Ms, int $minCount, int $limit): array
     {
+        $min = rtrim(rtrim(number_format($minP95Ms, 3, '.', ''), '0'), '.');
+
         return [
-            'p95' => "quantile_over_time(0.95, {$organizationAccess} | url_route!=\"\" | unwrap http_server_duration_ms | __error__=\"\" [1h]) by (service_name, url_route)",
-            'count' => "sum by (service_name, url_route) (count_over_time({$organizationAccess} | url_route!=\"\" [1h]))",
+            'p95' => "topk({$limit}, quantile_over_time(0.95, {$organizationAccess} | url_route!=\"\" | unwrap http_server_duration_ms | __error__=\"\" [1h]) by (service_name, url_route) >= {$min})",
+            'count' => "topk({$limit}, sum by (service_name, url_route) (count_over_time({$organizationAccess} | url_route!=\"\" [1h])) >= {$minCount})",
         ];
     }
 
     /**
-     * The 5-minute window of the evaluations: threat hits per site and rule, the top clients per site and rule, 404s
-     * per site and client, requests and 5xx per site.
+     * The 5-minute window of the evaluations: threat hits per site and rule, the top clients per site and rule, clients
+     * with at least $storm 404s (404 storms), requests and 5xx per site. Series are bounded by the number of sites
+     * (and rules), or by the storm threshold.
      *
      * @return array<string, string>
      */
-    public static function window(string $organizationAccess): array
+    public static function window(string $organizationAccess, int $storm): array
     {
         return [
             'threats' => "sum by (service_name, falak_threat_rule) (count_over_time({$organizationAccess} | falak_threat_rule!=\"\" [5m]))",
             'threat_clients' => "topk by (service_name, falak_threat_rule) (5, sum by (service_name, falak_threat_rule, client_address) (count_over_time({$organizationAccess} | falak_threat_rule!=\"\" [5m])))",
-            'not_found' => "sum by (service_name, client_address) (count_over_time({$organizationAccess} | http_response_status_code=\"404\" [5m]))",
+            'not_found' => "sum by (service_name, client_address) (count_over_time({$organizationAccess} | http_response_status_code=\"404\" [5m])) >= {$storm}",
             'requests' => "sum by (service_name) (count_over_time({$organizationAccess} [5m]))",
             'errors' => "sum by (service_name) (count_over_time({$organizationAccess} | http_response_status_code >= 500 | __error__=\"\" [5m]))",
         ];
@@ -157,8 +164,8 @@ final class HttpQueries
         $o = PromQl::label('falak_org_id', strtoupper($organizationId));
 
         return [
-            'bytes' => "sum by (service_name, network_io_direction) (increase(falak_net_http_io_bytes_total{{$o}}[1h]))",
-            'requests' => "sum by (service_name) (increase(falak_net_http_requests_total{{$o}}[1h]))",
+            'bytes' => "sum by (service_name, falak_server_id, network_io_direction) (increase(falak_net_http_io_bytes_total{{$o}}[1h]))",
+            'requests' => "sum by (service_name, falak_server_id) (increase(falak_net_http_requests_total{{$o}}[1h]))",
         ];
     }
 
@@ -170,9 +177,9 @@ final class HttpQueries
     public static function bandwidthHourFromLogs(string $organizationAccess): array
     {
         return [
-            'bytes_out' => "sum by (service_name) (sum_over_time({$organizationAccess} | unwrap http_response_body_size | __error__=\"\" [1h]))",
-            'bytes_in' => "sum by (service_name) (sum_over_time({$organizationAccess} | unwrap http_request_body_size | __error__=\"\" [1h]))",
-            'requests' => "sum by (service_name) (count_over_time({$organizationAccess} [1h]))",
+            'bytes_out' => "sum by (service_name, falak_server_id) (sum_over_time({$organizationAccess} | unwrap http_response_body_size | __error__=\"\" [1h]))",
+            'bytes_in' => "sum by (service_name, falak_server_id) (sum_over_time({$organizationAccess} | unwrap http_request_body_size | __error__=\"\" [1h]))",
+            'requests' => "sum by (service_name, falak_server_id) (count_over_time({$organizationAccess} [1h]))",
         ];
     }
 }

@@ -94,4 +94,16 @@ it('downloads the month\'s database, falls back to the previous month and keeps 
     expect(fn () => (new GeoDatabases)->download('country'))->toThrow(RuntimeException::class, 'not downloaded');
     expect((new GeoDatabases)->lookup(['8.8.8.8'])['8.8.8.8']['country'])->toBe('US')
         ->and(file_exists($this->dir.'/country.mmdb.tmp'))->toBeFalse();
+
+    // A valid MaxMind DB of another kind (an ASN database at the country URL) is refused too.
+    (new MmdbWriter)->add('8.8.8.0/24', ['autonomous_system_number' => 15169])->write($this->dir.'/asn-src.mmdb', 'DBIP-ASN-Lite');
+    config(['telemetry.geoip.country_url' => 'https://wrong.test/country-{Y}-{m}.mmdb.gz']);
+    Http::fake(['wrong.test/*' => Http::response(gzencode((string) file_get_contents($this->dir.'/asn-src.mmdb')))]);
+    expect(fn () => (new GeoDatabases)->download('country'))->toThrow(RuntimeException::class, 'not a country one');
+
+    // Over the size cap (compressed or not): refused before anything is written.
+    config(['telemetry.geoip.country_url' => 'https://big.test/country-{Y}-{m}.mmdb.gz', 'telemetry.geoip.max_bytes' => 64]);
+    Http::fake(['big.test/*' => Http::response($gz)]);
+    expect(fn () => (new GeoDatabases)->download('country'))->toThrow(RuntimeException::class, 'larger than');
+    expect((new GeoDatabases)->lookup(['8.8.8.8'])['8.8.8.8']['country'])->toBe('US');
 });

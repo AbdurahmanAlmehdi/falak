@@ -3,6 +3,7 @@
 use Falak\Alerting\Domain\Models\Alert;
 use Falak\Identity\Contracts\OrganizationDirectory;
 use Falak\Identity\Contracts\Role;
+use Falak\Insights\Application\Jobs\PruneInsightsJob;
 use Falak\Insights\Contracts\IssueKind;
 use Falak\Insights\Contracts\IssueStatus;
 use Falak\Insights\Domain\Models\Issue;
@@ -11,6 +12,7 @@ use Falak\Sites\Contracts\Data\LaravelSettings;
 use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Contracts\SiteRuntime;
 use Falak\Sites\Domain\Models\Site;
+use Falak\Sites\Events\SiteDeleted;
 use Falak\Telemetry\Application\Http\EvaluateHttpTraffic;
 use Falak\Telemetry\Application\Http\RecordBandwidth;
 use Falak\Telemetry\Application\Jobs\AnalyzeHttpTraffic;
@@ -29,6 +31,10 @@ function http_fake_backends(ArrayObject $state): void
     $answer = function (Request $r) use ($state) {
         foreach ($state as $needle => $rows) {
             if (str_contains((string) $r['query'], $needle)) {
+                if ($rows === 'fail') {
+                    return Http::response(['status' => 'error', 'error' => 'maximum of series reached'], 400);
+                }
+
                 $result = array_map(fn (array $row) => ['metric' => $row[0], 'values' => [[1_790_000_000, $row[1]]]], $rows);
 
                 return Http::response(['status' => 'success', 'data' => ['resultType' => 'matrix', 'result' => $result]]);
@@ -40,6 +46,10 @@ function http_fake_backends(ArrayObject $state): void
     $vector = function (Request $r) use ($state) {
         foreach ($state as $needle => $rows) {
             if (str_contains((string) $r['query'], $needle)) {
+                if ($rows === 'fail') {
+                    return Http::response(['status' => 'error', 'error' => 'maximum of series reached'], 400);
+                }
+
                 $result = array_map(fn (array $row) => ['metric' => $row[0], 'value' => [1_790_000_000, $row[1]]], $rows);
 
                 return Http::response(['status' => 'success', 'data' => ['resultType' => 'vector', 'result' => $result]]);
@@ -95,7 +105,7 @@ it('opens slow endpoint issues per site and route, and resolves them once fast a
         ->and($issue->meta)->toMatchArray(['source' => 'edge', 'route' => '/orders/:id', 'p95_ms' => 1800, 'threshold_ms' => 1000, 'count' => 120])
         ->and(Alert::query()->where('type', 'http.slow_endpoint')->where('recovery', false)->count())->toBe(1);
     Http::assertSent(fn (Request $r) => str_contains($r->url(), 'loki') && $r['start'] === $r['end']
-        && str_starts_with($r['query'], 'quantile_over_time(0.95, {falak_org_id="'.strtoupper($this->organization->id).'", falak_log_kind="access"} | user_agent_original!~"Falak-HealthCheck/.*" | url_route!=""'));
+        && str_starts_with($r['query'], 'topk(1000, quantile_over_time(0.95, {falak_org_id="'.strtoupper($this->organization->id).'", falak_log_kind="access"} | user_agent_original!~"Falak-HealthCheck/.*" | url_route!=""') && str_ends_with($r['query'], 'by (service_name, url_route) >= 800)'));
 
     // Still slow: one more occurrence, no new alert.
     app(EvaluateHttpTraffic::class)($this->organization->id);
@@ -112,6 +122,54 @@ it('opens slow endpoint issues per site and route, and resolves them once fast a
     $this->state['quantile_over_time'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '2500']];
     app(EvaluateHttpTraffic::class)($this->organization->id);
     expect($issue->refresh()->status)->toBe(IssueStatus::Open)->and($issue->regressions)->toBe(1);
+});
+
+it('keeps a slow endpoint issue open through quiet hours and the band under the threshold', function () {
+    $this->state['quantile_over_time'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '1800']];
+    $this->state['sum by (service_name, url_route)'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '120']];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    $issue = Issue::query()->where('kind', IssueKind::Performance)->sole();
+    $alert = fn () => Alert::query()->where('type', 'http.slow_endpoint')->where('recovery', true)->count();
+
+    // A quiet hour: too few requests (or none) to tell, whatever the p95.
+    $this->state['quantile_over_time'] = [];
+    $this->state['sum by (service_name, url_route)'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '4']];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    $this->state['sum by (service_name, url_route)'] = [];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    expect($issue->refresh()->status)->toBe(IssueStatus::Open)->and($issue->occurrences)->toBe(1)->and($alert())->toBe(0);
+
+    // Under the threshold but above 80% of it: neither slow nor recovered.
+    $this->state['quantile_over_time'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '900']];
+    $this->state['sum by (service_name, url_route)'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '120']];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    expect($issue->refresh()->status)->toBe(IssueStatus::Open)->and($issue->occurrences)->toBe(1);
+
+    // A cut p95 answer (as many series as the limit): a counted route missing from it is unknown, not fast.
+    config(['telemetry.http.max_slow_series' => 1]);
+    $this->state['quantile_over_time'] = [[['service_name' => 'blog', 'url_route' => '/x'], '900']];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    expect($issue->refresh()->status)->toBe(IssueStatus::Open);
+
+    // Busy and missing from a complete p95 answer (under the query's lowest bound): recovered.
+    config(['telemetry.http.max_slow_series' => 1000]);
+    $this->state['quantile_over_time'] = [];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    expect($issue->refresh()->status)->toBe(IssueStatus::Resolved)->and($alert())->toBe(1);
+});
+
+it('keeps evaluating when one of Loki\'s answers fails', function () {
+    // The slow-endpoint p95 is refused (too many series): nothing about slow endpoints is decided...
+    $this->state['quantile_over_time'] = 'fail';
+    $this->state['sum by (service_name, url_route)'] = [[['service_name' => 'shop', 'url_route' => '/orders/:id'], '120']];
+    // ...and the 404 query is refused too; the threats and the error spike are still evaluated.
+    $this->state['http_response_status_code="404"'] = 'fail';
+    $this->state['sum by (service_name, falak_threat_rule)'] = [[['service_name' => 'shop', 'falak_threat_rule' => 'git'], '25']];
+
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+
+    expect(Issue::query()->where('kind', IssueKind::Performance)->count())->toBe(0)
+        ->and(Issue::query()->where('kind', IssueKind::Security)->pluck('title')->all())->toBe(['Scanner probing for version control folders (/.git)']);
 });
 
 it('records scanners and 404 storms as security issues, from a minimum of hits', function () {
@@ -200,4 +258,47 @@ it('runs every organization and skips the evaluation without Loki', function () 
     config(['telemetry.loki.url' => '']);
     Http::fake(fn () => throw new RuntimeException('no request expected'));
     dispatch_sync(new AnalyzeHttpTraffic('evaluate'));
+});
+
+it('counts a site on old and new agents from each edge\'s own source, never twice', function () {
+    // Server A's agent sends counters; server B's predates them: only its access log has its traffic.
+    $this->state['falak_net_http_io_bytes_total'] = [[['service_name' => 'shop', 'falak_server_id' => 'A', 'network_io_direction' => 'transmit'], '5000']];
+    $this->state['falak_net_http_requests_total'] = [[['service_name' => 'shop', 'falak_server_id' => 'A'], '10']];
+    $this->state['unwrap http_response_body_size'] = [
+        [['service_name' => 'shop', 'falak_server_id' => 'A'], '5000'], // also in the log: the counters win
+        [['service_name' => 'shop', 'falak_server_id' => 'B'], '700'],
+    ];
+    $this->state['count_over_time'] = [[['service_name' => 'shop', 'falak_server_id' => 'A'], '10'], [['service_name' => 'shop', 'falak_server_id' => 'B'], '3']];
+
+    app(RecordBandwidth::class)($this->organization->id);
+
+    expect(RecordBandwidth::months($this->organization->id, 'shop'))->toBe([['month' => '2026-10', 'bytes_out' => 11_400, 'bytes_in' => 0, 'requests' => 26]]);
+});
+
+it('forgets a deleted site\'s HTTP rows and old client IPs of scanner issues', function () {
+    HttpSettings::query()->create(['site_id' => $this->shop->id, 'organization_id' => $this->organization->id, 'slow_ms' => 500]);
+    DB::table('telemetry_http_bandwidth')->insert([
+        ['organization_id' => $this->organization->id, 'site_slug' => 'shop', 'hour' => now()->startOfHour(), 'bytes_out' => 1, 'bytes_in' => 0, 'requests' => 1],
+        ['organization_id' => $this->organization->id, 'site_slug' => 'blog', 'hour' => now()->startOfHour(), 'bytes_out' => 1, 'bytes_in' => 0, 'requests' => 1],
+    ]);
+
+    event(new SiteDeleted($this->shop->id, $this->organization->id, 'shop', []));
+
+    expect(HttpSettings::query()->count())->toBe(0)
+        ->and(DB::table('telemetry_http_bandwidth')->pluck('site_slug')->all())->toBe(['blog']);
+
+    // Scanner issues keep the client IPs of their latest window, and none once quiet for the retention.
+    $this->state['sum by (service_name, falak_threat_rule)'] = [[['service_name' => 'blog', 'falak_threat_rule' => 'env'], '30']];
+    $this->state['falak_threat_rule, client_address'] = [[['service_name' => 'blog', 'falak_threat_rule' => 'env', 'client_address' => '203.0.113.7'], '30']];
+    app(EvaluateHttpTraffic::class)($this->organization->id);
+    $issue = Issue::query()->where('kind', IssueKind::Security)->sole();
+    expect($issue->sample['clients'])->toBe(['203.0.113.7' => 30]);
+
+    Carbon::setTestNow(now()->addDays(20));
+    dispatch_sync(new PruneInsightsJob);
+    expect($issue->refresh()->sample)->not->toBeNull();
+
+    Carbon::setTestNow(now()->addDays(11));
+    dispatch_sync(new PruneInsightsJob);
+    expect($issue->refresh()->sample)->toBeNull();
 });

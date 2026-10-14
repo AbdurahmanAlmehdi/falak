@@ -27,6 +27,7 @@ use Falak\Sites\Contracts\Data\SiteData;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteRuntime;
 use Falak\Sites\Contracts\TargetStatus;
+use Falak\Telemetry\Contracts\RequestIdLinking;
 use Illuminate\Support\Collection;
 
 /**
@@ -133,9 +134,10 @@ final class RouteCompiler
                 'dns' => ['provider' => 'cloudflare', 'api_token' => $this->wildcard->dnsCredential->api_token],
             ]] : null,
         ])
-            // Every request gets an X-Request-Id, passed upstream and recorded in the access log (feature edge.request_id;
-            // stripped for older agents, docs/plans/network/http.md).
-            + (config('edge.request_id', true) ? ['request_id' => true] : [])
+            // Organizations that turned on request ID linking: requests without a valid X-Request-Id get one, passed
+            // upstream and recorded in the access log (feature edge.request_id, stripped for older agents;
+            // docs/plans/network/http.md). Off, the payload is what it always was.
+            + ($organizationId !== null && app(RequestIdLinking::class)->enabled($organizationId) ? ['request_id' => true] : [])
             + ['sites' => $entries];
     }
 
