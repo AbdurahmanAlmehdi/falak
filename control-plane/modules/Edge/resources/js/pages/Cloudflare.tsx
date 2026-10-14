@@ -76,6 +76,7 @@ const TOKEN_PERMISSIONS = [
     { key: 'zone', type: 'read' },
     { key: 'zone_settings', type: 'edit' },
     { key: 'cache', type: 'purge' },
+    { key: 'analytics', type: 'read' },
 ];
 const TOKEN_URL = `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${encodeURIComponent(JSON.stringify(TOKEN_PERMISSIONS))}&accountId=*&zoneId=all&name=${encodeURIComponent('Falak')}`;
 

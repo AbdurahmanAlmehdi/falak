@@ -212,6 +212,48 @@ final class CloudflareApi
     }
 
     /**
+     * GraphQL Analytics API (POST /graphql): the `data` object. Errors in the body throw CloudflareGraphqlError (with
+     * the partial data); transport failures and HTTP failures without a body throw CloudflareError.
+     *
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    public function graphql(string $query, array $variables = []): array
+    {
+        try {
+            $response = $this->client()->retry(2, 400, throw: false)->post('/graphql', ['query' => $query, 'variables' => (object) $variables]);
+        } catch (ConnectionException $e) {
+            throw new CloudflareError('Cloudflare is unreachable: '.$e->getMessage(), 0);
+        }
+
+        $body = $response->json();
+        $data = is_array($body) && is_array($body['data'] ?? null) ? $body['data'] : [];
+        $errors = is_array($body) && is_array($body['errors'] ?? null) ? array_values($body['errors']) : [];
+
+        if ($errors !== []) {
+            // REST-style errors (403 {code: 10000, message}) and GraphQL errors ({message, path, extensions.code}).
+            $list = array_map(fn ($e) => [
+                'message' => (string) (is_array($e) ? ($e['message'] ?? '') : $e),
+                'path' => is_array($e) && is_array($e['path'] ?? null) ? array_values($e['path']) : [],
+                'code' => match (true) {
+                    ! is_array($e) => null,
+                    isset($e['extensions']['code']) => (string) $e['extensions']['code'],
+                    isset($e['code']) => (string) $e['code'],
+                    default => null,
+                },
+            ], $errors);
+
+            throw new CloudflareGraphqlError($list, $data, $response->status());
+        }
+
+        if ($response->failed()) {
+            throw new CloudflareError("Cloudflare: HTTP {$response->status()}", $response->status());
+        }
+
+        return $data;
+    }
+
+    /**
      * @param  array<string, mixed>  $data  query (GET) or JSON body
      * @return array<int|string, mixed>
      */

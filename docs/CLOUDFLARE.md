@@ -17,6 +17,7 @@ protection, edge cache, hidden server IP). Everything here works on Cloudflare's
    | Zone → Cache Purge → Purge | purge the cache after deploys |
    | Zone → Cache Rules → Edit | cache modes per domain |
    | Account → Cloudflare Tunnel → Edit | route servers through a Cloudflare Tunnel |
+   | Zone → Analytics → Read | traffic analytics in the Networking tab |
 
    Under **Zone Resources** pick *Specific zone* and your domain.
 2. Paste the token in Falak and click **Connect**. Falak verifies it with Cloudflare and stores it encrypted.
@@ -44,6 +45,29 @@ protection, edge cache, hidden server IP). Everything here works on Cloudflare's
   deny lists and rate limits see the visitor, not Cloudflare.
 - **Never managed:** the panel and the agent API hosts. Agents authenticate with mutual TLS, which Cloudflare's proxy
   would terminate, so `agents.<your domain>` must stay DNS only.
+
+## Traffic analytics
+
+A site's **Settings → Networking → Cloudflare traffic** block covers the site's proxied names in managed zones. It
+uses Cloudflare's GraphQL Analytics API with the connection's token, and shows the last 24 hours:
+
+- requests and visits;
+- the share served from Cloudflare's cache (vs. the origin);
+- bandwidth;
+- threats the firewall stopped;
+- requests per hour;
+- top countries;
+- response status classes;
+- the whole zone's last 7 days as context.
+
+Results are cached for 5 minutes; **Refresh** fetches them again (at most once a minute).
+
+- **What the zone can read.** Falak asks Cloudflare first which datasets the zone can read and how far back. A
+  dataset the plan doesn't include is left out with a note. Firewall events, for example, may need a paid plan.
+- **Older tokens.** Tokens created before this feature lack **Zone → Analytics → Read**: the block then says so. To
+  fix it, edit the token in Cloudflare → My Profile → API Tokens and add that permission.
+- **Names left out.** Names that Cloudflare doesn't proxy (grey cloud) are not counted, and wildcard names aren't
+  either.
 
 ## Cloudflare Tunnel (no open ports)
 

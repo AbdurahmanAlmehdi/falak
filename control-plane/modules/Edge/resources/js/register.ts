@@ -16,6 +16,16 @@ registerServiceSettingsSections(
         permission: 'edge.view',
         component: lazy(() => networking().then((module) => ({ default: module.DomainsSettings }))),
     },
+    // Cloudflare traffic of the site's proxied names (docs/plans/network/tools.md part 2); nothing without one.
+    {
+        id: 'edge.cloudflare-analytics',
+        kinds: ['site'],
+        section: 'networking',
+        sectionTitle: 'Networking',
+        order: 415,
+        permission: 'edge.view',
+        component: lazy(() => import('./panel/cloudflare-analytics').then((module) => ({ default: module.CloudflareAnalytics }))),
+    },
     {
         id: 'edge.routing',
         kinds: ['site'],
