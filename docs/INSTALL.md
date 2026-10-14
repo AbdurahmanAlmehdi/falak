@@ -43,7 +43,7 @@ volumes stay); where Docker's repository has no packages for the release yet, th
 | horizon (`FALAK_HORIZON_MAX_PROCESSES`, default 4, auto-balanced from 1) | 512 MB | 130–150 MB | |
 | reverb | 192 MB | 50 MB | |
 | scheduler | 256 MB | 45 MB | a short `schedule:run` process every minute |
-| relay (consoles, Go) | 64 MB | ~12 MB | pipes console bytes between agents and browsers/the CLI |
+| relay (consoles, Go) | 64 MB | 4–12 MB | pipes console bytes between agents and browsers/the CLI |
 | postgres (`shared_buffers=128MB`) | 512 MB | 40–150 MB | agents' long-polls hold no connection |
 | valkey (`maxmemory 128mb`, AOF) | 192 MB | 15 MB | |
 | edge | 128 MB | 25–35 MB | |
