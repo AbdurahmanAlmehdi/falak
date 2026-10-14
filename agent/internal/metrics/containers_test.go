@@ -294,6 +294,19 @@ func TestWorkloadContainers(t *testing.T) {
 		}
 	})
 
+	t.Run("a stale pid whose re-inspect fails reads no network", func(t *testing.T) {
+		// The container restarts again and the Engine cannot answer: pid 170 now belongs to a host process.
+		writeTree(t, root, map[string]string{"proc/170/stat": procStat(170, "host", 1, 1, 990)})
+		delete(e.inspect, idSystemd)
+		for _, rm := range c.Collect(context.Background()) {
+			for _, p := range points(metricByName(rm, "falak.workload.network.io")) {
+				if attr(p.Attributes, "container.id") == idSystemd {
+					t.Fatal("the stale pid's net/dev (the host's) was read")
+				}
+			}
+		}
+	})
+
 	t.Run("gone containers leave the cache", func(t *testing.T) {
 		e.list = e.list[:1]
 		c.Collect(context.Background())

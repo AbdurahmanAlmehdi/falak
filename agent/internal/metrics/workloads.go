@@ -411,12 +411,16 @@ func (c *WorkloadCollector) sampleContainer(ctx context.Context, id string, info
 		// The cached pid is gone or reused: the container restarted (same id, new init process). Inspect again, once;
 		// a pid that is current but whose net/dev cannot be read is not retried (that would be an Engine call per
 		// sample).
+		// A failed inspect leaves no pid: the stale one may now be a host process, whose net/dev is the host's.
+		pid = 0
 		if fresh := c.inspect(ctx, id); fresh != nil {
 			pid = fresh.pid
 		}
 	}
-	devs, err := readNetDevAt(c.fs, "/proc/"+strconv.Itoa(pid)+"/net/dev")
-	if err == nil {
+	if pid <= 0 {
+		return u, true
+	}
+	if devs, err := readNetDevAt(c.fs, "/proc/"+strconv.Itoa(pid)+"/net/dev"); err == nil {
 		u.has |= hasNet
 		for _, d := range devs {
 			u.rx += int64(d.RxBytes)
@@ -489,6 +493,12 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, users map[string]st
 				continue
 			}
 			withSlice[slug] = true
+			if withContainers[slug] {
+				// The site's containers are measured already; a slice holding them (a custom cgroup parent) would count
+				// them twice. Only its limits are reported.
+				out.add(ownerKey, res, point{attrs: workloadAttrs("slice", key), u: usage{cpuLimit: s.CPULimit, memLimit: s.MemLimit, pidsLimit: s.PidsLimit}})
+				continue
+			}
 		}
 		out.add(ownerKey, res, point{attrs: workloadAttrs("slice", key), u: fromCgroup(s)})
 	}
