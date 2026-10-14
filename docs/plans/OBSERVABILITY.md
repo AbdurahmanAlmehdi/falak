@@ -651,16 +651,35 @@ weekly and on release tags, and running instances pick it up through a minor upg
 `observe` (and `reload`) on every engine: a slow MySQL / MariaDB query and a slow Redis / Valkey `EVAL` read back
 normalized through the cursor, PostgreSQL started with query insights.
 
-## Phase 4: network (v0.17.0)
+## Phase 4: network (v0.17.x)
 
-| Level | Shows | Source |
+Everything about traffic: what reaches a site, what it talks to, who attacks it, whether it is up, and tools to debug
+it. Five workstreams, built in parallel on their own branches and released as each is ready (v0.17.0, v0.17.1, …).
+Each stream writes its detailed design in its own file under `docs/plans/network/` (this section is only the index and
+the shared rules), gets its own independent review, and is checked live on cloud.falak.sh.
+
+| Stream | Plan | Scope |
 |---|---|---|
-| HTTP | requests, status codes, bytes, top paths, top client IPs per site | access logs (Loki) |
-| Connections | connections by state, listening ports, TCP/UDP, peers the workload talks to with bytes and counts | conntrack (netlink, with `nf_conntrack_acct`) and `/proc/<pid>/net/{tcp,tcp6,udp,udp6}` per container namespace; native sockets attributed by owning process → cgroup or uid |
+| A. Connections | `network/connections.md` | Agent network collector: TCP/UDP connections by state, listening ports, "talks to" peers with bytes and counts (per container, native site, server), WebSocket / long-lived connection counts, conntrack table usage, exposed-ports audit (public listeners vs firewall → security Issue), server-to-server and app-to-database latency over WireGuard and WireGuard peer health. Network tab on sites, containers and servers. |
+| B. HTTP analytics | `network/http.md` | From the edge access logs: requests / status / bytes / top paths / top clients, slow endpoints → performance Issues without the APM package, bandwidth per site per month with an alert, countries and ASN map (DB-IP lite, downloaded by the control plane), bot and scanner detection (probes of `/.env`, `/wp-admin`, `/.git`, injection patterns, 404 storms → a "Threats" view and Issues), TLS versions and HTTP protocol of clients, request ID linking (`X-Request-Id` stamped by the edge, access line → app logs and trace). |
+| C. Protection | `network/protection.md` | Act on what A and B find: block an IP or CIDR (firewall, nftables set) or rate-limit a path (edge) from the panel, with expiry and audit; SSH and auth brute-force from the auth log with optional auto-ban (fail2ban-like, built into the agent); per-rule firewall hit and drop counters. Exposes an API B and A call from their rows ("Block IP"). |
+| D. Uptime | `network/uptime.md` | Control-plane checks of every site domain (HTTP status and body match, TCP, TLS handshake and chain validity) every minute from the control plane, uptime %, incident history, alerts on down / recovered / certificate chain problems, optional public status page per project. |
+| E. Tools + Cloudflare | `network/tools.md` | Network tools in the panel through the terminal relay: `ping`, `traceroute`/`mtr`, `dig`, `curl -v` and "test connection to host:port" from a server or inside a container, streamed live, audited, own permission. Cloudflare analytics for proxied zones (cached vs origin, threats blocked, countries) through the existing Cloudflare connection. |
 
-Per-minute summaries, top 20 peers per workload, the rest folded into `other`, so label cardinality stays bounded.
-The site and container Network tab shows a "talks to" list (`postgres:5432`, `redis:6379`, `api.stripe.com:443`)
-over time and inbound traffic by port; the server's shows the sum.
+**Shared rules (all streams):**
+
+- **Metrics:** `falak.net.*`, bounded labels only (top 20 peers or paths per workload per minute, the rest `other`;
+  no raw client IPs as metric labels: IPs live in Loki records or control-plane tables).
+- **Agent features:** one per stream (`net.connections`, `net.protection`, `net.tools`; B and D are control-plane
+  only unless they need the edge: `edge.request_id`). PayloadCompatibility strips the new fields for older agents.
+- **Issues:** new Insights kinds `performance` (B), `security` (A exposed ports, B scanners, C brute force), `uptime`
+  (D), through additive contracts like `DatabaseIssues`.
+- **Alerts:** through Alerting events and the default rule pack, with sane thresholds so they don't fire constantly.
+- **Read-only by default:** nothing changes traffic unless the user acts (block, rate-limit, auto-ban are opt-in).
+  Blocking can never lock the user out of the panel or SSH from their current IP (refuse, or require confirmation).
+- **Shared files:** `agent/internal/version/version.go`, Fleet `PayloadCompatibility.php`, `contracts/agent-protocol/README.md`
+  and this index are touched additively only; each stream keeps its UI in its own panels/files.
+- **Order of merge:** A and B first (C hooks into both), then C, D, E.
 
 ## Phase 5: later
 
