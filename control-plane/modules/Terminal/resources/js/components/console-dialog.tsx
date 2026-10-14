@@ -1,4 +1,4 @@
-import { Button, Dialog, Field, Select, SkeletonRows } from '@/components/falak';
+import { Button, Dialog, Field, Input, Select, SkeletonRows } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { type ServiceActionDialogProps } from '@/lib/registry';
 import { router } from '@inertiajs/react';
@@ -23,12 +23,19 @@ export function ConsoleDialog({ ctx, open, onOpenChange }: ServiceActionDialogPr
     const [failure, setFailure] = useState<string | null>(null);
     const autoOpened = useRef(false);
 
+    // Reopening starts over: a failed automatic open is retried, not shown again.
+    useEffect(() => {
+        if (open) return;
+        autoOpened.current = false;
+        setFailure(null);
+    }, [open]);
+
     const servers = data?.servers ?? [];
     const services = data?.services ?? [];
     const chooseServer = servers.length > 1;
     const chooseService = data?.services !== null && data?.services !== undefined && services.length !== 1;
     const hasChoice = chooseServer || chooseService;
-    const ready = (!chooseServer || server !== undefined) && (!chooseService || service !== undefined);
+    const ready = (!chooseServer || server !== undefined) && (!chooseService || (service ?? '').trim() !== '');
 
     useEffect(() => {
         if (!data) return;
@@ -76,7 +83,7 @@ export function ConsoleDialog({ ctx, open, onOpenChange }: ServiceActionDialogPr
                         <Button variant="ghost" onClick={() => onOpenChange(false)}>
                             Cancel
                         </Button>
-                        <Button variant="primary" disabled={!ready} loading={opening} onClick={() => submit(server, service)}>
+                        <Button variant="primary" disabled={!ready} loading={opening} onClick={() => submit(server, service?.trim())}>
                             Open console
                         </Button>
                     </>
@@ -98,13 +105,17 @@ export function ConsoleDialog({ ctx, open, onOpenChange }: ServiceActionDialogPr
                         </Field>
                     )}
                     {chooseService && (
-                        <Field label="Service" hint={services.length === 0 ? 'The stack has not reported its services yet.' : undefined}>
-                            <Select
-                                value={service}
-                                onValueChange={setService}
-                                options={services.map((name) => ({ value: name, label: name }))}
-                                placeholder="Pick a service"
-                            />
+                        <Field label="Service" hint={services.length === 0 ? 'The stack has not reported its services yet: name one.' : undefined}>
+                            {services.length === 0 ? (
+                                <Input mono value={service ?? ''} placeholder="web" onChange={(event) => setService(event.target.value)} />
+                            ) : (
+                                <Select
+                                    value={service}
+                                    onValueChange={setService}
+                                    options={services.map((name) => ({ value: name, label: name }))}
+                                    placeholder="Pick a service"
+                                />
+                            )}
                         </Field>
                     )}
                 </div>
