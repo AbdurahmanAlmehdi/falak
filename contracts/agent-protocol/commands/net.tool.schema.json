@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/net.tool.schema.json",
+  "title": "net.tool — run one network tool from the host or inside a container's network namespace (feature net.tools, docs/plans/network/tools.md)",
+  "description": "Output streams as stdout events. A tool that exits non-zero fails the command with its exit code (124 timeout, 127 not installed). Each tool accepts only its own fields; the agent re-validates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool"
+  ],
+  "properties": {
+    "tool": {
+      "enum": [
+        "ping",
+        "traceroute",
+        "dns",
+        "http",
+        "tcp"
+      ]
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 254,
+      "pattern": "^[A-Za-z0-9_:.][A-Za-z0-9_:.-]*$",
+      "description": "ping, traceroute, dns, tcp: a hostname or an IP address (never starts with '-')"
+    },
+    "url": {
+      "type": "string",
+      "maxLength": 2048,
+      "pattern": "^https?://[^\\s\\\\]+$",
+      "description": "http: http(s)://host[:port]/path?query, no credentials"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "tcp"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "description": "ping: echo requests (default 4, at most 20); tcp: connection attempts (default 3, at most 10)"
+    },
+    "max_hops": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 30,
+      "description": "traceroute (default 20)"
+    },
+    "record_type": {
+      "enum": [
+        "A",
+        "AAAA",
+        "CNAME",
+        "MX",
+        "TXT",
+        "NS",
+        "SRV",
+        "PTR"
+      ],
+      "description": "dns (default A; PTR takes an IP target)"
+    },
+    "nameserver": {
+      "type": "string",
+      "maxLength": 45,
+      "pattern": "^[0-9A-Fa-f:.]+$",
+      "description": "dns: ask this server (an IP) instead of the namespace's resolver"
+    },
+    "method": {
+      "enum": [
+        "GET",
+        "HEAD"
+      ],
+      "description": "http (default GET)"
+    },
+    "connect_to": {
+      "type": "string",
+      "maxLength": 45,
+      "pattern": "^[0-9A-Fa-f:.]+$",
+      "description": "http: connect to this IP instead of resolving the URL's host (curl --resolve)"
+    },
+    "insecure": {
+      "type": "boolean",
+      "description": "http: skip certificate verification (flagged in the output)"
+    },
+    "timeout_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "description": "default 30; the process group is killed past it"
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "run in this container's network namespace (nsenter --net=/proc/<pid>/ns/net), resolving with its resolv.conf and hosts file. Fails with \"No running container to run the tool in (is it deployed?)\" when nothing matches",
+      "oneOf": [
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "labels"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,127}$",
+          "description": "the container (must run), e.g. falak-db-<id>"
+        },
+        "labels": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/@+-]{1,255}$"
+          },
+          "description": "the newest running container carrying all of them (falak.site, or the compose project and service labels)"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exit_code",
+        "timed_out",
+        "namespace"
+      ],
+      "properties": {
+        "exit_code": {
+          "type": "integer"
+        },
+        "timed_out": {
+          "type": "boolean"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "host | container:<name>"
+        }
+      }
+    }
+  }
+}

@@ -48,6 +48,8 @@ peer names, WireGuard peer names) and the agent's `net.observed` request (connec
 WireGuard, probes; `requests/net.observed.schema.json`).
 HTTP analytics (docs/plans/network/http.md): `edge.request_id` (edge.caddy.apply `request_id`: X-Request-Id stamped by
 the edge; stripped for older agents, whose rendered config is then unchanged).
+Network tools (docs/plans/network/tools.md): `net.tools` gates the whole `net.tool` command (ping, traceroute, DNS,
+HTTP, TCP from the host or, with `container`, inside a container's network namespace; output as stdout events).
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`

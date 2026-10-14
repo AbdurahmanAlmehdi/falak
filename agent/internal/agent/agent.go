@@ -32,6 +32,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/metrics"
 	"github.com/OthmanHaba/falak/agent/internal/netcfg"
 	"github.com/OthmanHaba/falak/agent/internal/netobs"
+	"github.com/OthmanHaba/falak/agent/internal/nettool"
 	"github.com/OthmanHaba/falak/agent/internal/provision"
 	"github.com/OthmanHaba/falak/agent/internal/pty"
 	"github.com/OthmanHaba/falak/agent/internal/resources"
@@ -164,6 +165,8 @@ func Build(d Deps) *Components {
 		StateDir: cfg.StateDir}).Register(reg)
 	d.Telemetry.Register(reg)
 	terms.Register(reg)
+	// net.tool (docs/plans/network/tools.md): the helper is this binary, re-run as `falak-agent nettool`.
+	nettool.New(nettool.Options{Logger: log, Docker: docker.NewClient(cfg.DockerSock), Binary: installedBinary(d.FS)}).Register(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
 		Events: &resources.Queue{}, Network: network}

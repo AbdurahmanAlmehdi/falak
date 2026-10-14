@@ -1,0 +1,13 @@
+{
+  "tool": "tcp",
+  "target": "db.internal",
+  "port": 5432,
+  "count": 3,
+  "timeout_s": 20,
+  "container": {
+    "labels": {
+      "com.docker.compose.project": "shop",
+      "com.docker.compose.service": "web"
+    }
+  }
+}

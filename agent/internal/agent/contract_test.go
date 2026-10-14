@@ -36,7 +36,7 @@ var Catalogue = []string{
 	"cron.apply",
 	"db.instance.create", "db.instance.update", "db.instance.restart", "db.instance.stop", "db.instance.delete", "db.instance.password", "db.instance.secrets", "db.instance.upgrade",
 	"db.create", "db.drop", "db.user.apply", "db.backup", "db.restore", "db.drill", "db.pitr.base", "db.pitr.restore", "db.pitr.promote",
-	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply", "net.connections.configure",
+	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply", "net.connections.configure", "net.tool",
 	"fn.release.apply", "fn.release.remove", "fn.run", "fn.status",
 	"docker.pull", "docker.run", "docker.stop", "docker.compose.up", "docker.compose.down", "docker.compose.pull", "docker.compose.ps", "docker.compose.restart", "docker.prune", "docker.update",
 	"telemetry.configure",
@@ -187,6 +187,7 @@ func TestSchemasRejectInvalidPayloads(t *testing.T) {
 		"volume.clone":           `{"source":{"id":"01j9z8y7x6w5v4t3s2r1q0p9na","kind":"sized"},"target":{"id":"01j9z8y7x6w5v4t3s2r1q0p9nb","kind":"docker"}}`,
 		"security.audit":         `{"expected_ports":["tcp/http"]}`,
 		"security.fix":           `{"fix_id":"sh -c reboot"}`,
+		"net.tool":               `{"tool":"ping","target":"-oProxyCommand=x"}`,
 		"security.undo":          `{"fix_id":"ssh.harden","backup_id":"../../../etc"}`,
 	}
 	for typ, payload := range bad {

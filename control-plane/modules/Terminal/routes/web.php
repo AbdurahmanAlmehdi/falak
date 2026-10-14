@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Terminal\Http\Controllers\ConsoleController;
+use Falak\Terminal\Http\Controllers\NetToolController;
 use Falak\Terminal\Http\Controllers\RecordingController;
 use Falak\Terminal\Http\Controllers\SessionController;
 use Falak\Terminal\Http\Controllers\StreamController;
@@ -32,3 +33,16 @@ Route::middleware(['auth', 'org'])->group(function () {
 Route::middleware(['auth', 'org', 'throttle:terminal-input'])
     ->post('terminal/sessions/{session}/input', [StreamController::class, 'input'])
     ->name('terminal.sessions.input');
+
+// Network tools (docs/plans/network/tools.md): runs are rate limited per user (the action also caps concurrent runs).
+Route::middleware(['auth', 'org'])->group(function () {
+    Route::get('sites/{site}/net-tools', [NetToolController::class, 'siteOptions'])->name('terminal.net-tools.site.options');
+    Route::get('net-tools/runs', [NetToolController::class, 'index'])->name('terminal.net-tools.runs.index');
+    Route::get('net-tools/runs/{run}', [NetToolController::class, 'show'])->name('terminal.net-tools.runs.show');
+
+    Route::middleware('throttle:net-tools')->group(function () {
+        Route::post('servers/{server}/net-tools', [NetToolController::class, 'server'])->name('terminal.net-tools.server');
+        Route::post('sites/{site}/net-tools', [NetToolController::class, 'site'])->name('terminal.net-tools.site');
+        Route::post('databases/instances/{instance}/net-tools', [NetToolController::class, 'database'])->name('terminal.net-tools.database');
+    });
+});

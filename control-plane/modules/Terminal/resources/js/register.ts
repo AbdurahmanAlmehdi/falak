@@ -1,5 +1,5 @@
-import { registerCommands, registerNavigation, registerServiceActions } from '@/lib/registry';
-import { SquareTerminal } from 'lucide-react';
+import { registerCommands, registerNavigation, registerServerSections, registerServiceActions } from '@/lib/registry';
+import { Radar, SquareTerminal } from 'lucide-react';
 import { lazy } from 'react';
 
 registerNavigation({ id: 'terminal', title: 'Terminal', url: '/terminal', icon: SquareTerminal, order: 600, permission: 'terminal.open' });
@@ -15,6 +15,27 @@ registerServiceActions({
     permission: 'terminal.open',
     when: (ctx) => ctx.service.icon !== 'function',
     dialog: lazy(() => import('./components/console-dialog').then((module) => ({ default: module.ConsoleDialog }))),
+});
+
+// Network tools (docs/plans/network/tools.md): from a site's container (or host for native sites) and from servers.
+const netTools = () => import('./components/net-tools');
+
+registerServiceActions({
+    id: 'terminal.net-tools',
+    kinds: ['site'],
+    label: 'Network tools',
+    icon: Radar,
+    order: 310,
+    permission: 'network.tools',
+    when: (ctx) => ctx.service.icon !== 'function',
+    dialog: lazy(() => netTools().then((module) => ({ default: module.SiteNetToolsDialog }))),
+});
+
+registerServerSections({
+    id: 'terminal.net-tools',
+    order: 700,
+    permission: 'network.tools',
+    component: lazy(() => netTools().then((module) => ({ default: module.ServerNetTools }))),
 });
 
 registerCommands({

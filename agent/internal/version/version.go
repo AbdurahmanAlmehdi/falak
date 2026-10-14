@@ -68,6 +68,9 @@ var Features = []string{
 	// edge.caddy.apply request_id: the edge stamps X-Request-Id on every request (kept when well-formed, passed
 	// upstream, echoed in the response and the access record), docs/plans/network/http.md.
 	"edge.request_id",
+	// net.tool (docs/plans/network/tools.md): ping, traceroute, DNS, HTTP and TCP checks from the host or inside a
+	// container's network namespace (the agent re-run as `falak-agent nettool`, under nsenter).
+	"net.tools",
 }
 
 var (

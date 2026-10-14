@@ -15,6 +15,7 @@ use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Application\Listeners\CloseSessionsOfDeletedServer;
 use Falak\Terminal\Application\Listeners\DropRelayClientsOfMember;
 use Falak\Terminal\Application\Listeners\HandleTerminalCommandOutcome;
+use Falak\Terminal\Application\Listeners\SettleNetToolRun;
 use Falak\Terminal\Application\Listeners\StreamTerminalOutput;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Falak\Terminal\Domain\Policies\TerminalSessionPolicy;
@@ -50,6 +51,10 @@ class TerminalServiceProvider extends ModuleServiceProvider
         $registry->register('terminal.attach', [Role::Admin], "Watch other members' shared terminal sessions", 'terminal');
         $registry->register('terminal.control', [Role::Admin], 'Type into and close terminal sessions opened by others', 'terminal');
         $registry->register('terminal.recordings.view', [Role::Admin], "Replay other members' terminal recordings", 'terminal');
+        // Network tools (docs/plans/network/tools.md): read-only probes from servers and containers, audited.
+        $registry->register('network.tools', [Role::Admin, Role::Developer], 'Run network tools (ping, traceroute, DNS, HTTP, TCP) from servers and containers', 'network');
+
+        RateLimiter::for('net-tools', fn (Request $request) => Limit::perMinute(10)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
 
         RateLimiter::for('terminal-input', function (Request $request) {
             // Throttling runs before route-model binding, so the parameter is usually still the raw id.
@@ -63,6 +68,8 @@ class TerminalServiceProvider extends ModuleServiceProvider
         Event::listen(CommandOutputReceived::class, StreamTerminalOutput::class);
         Event::listen(CommandFinished::class, [HandleTerminalCommandOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleTerminalCommandOutcome::class, 'handleFailed']);
+        Event::listen(CommandFinished::class, [SettleNetToolRun::class, 'handleFinished']);
+        Event::listen(CommandFailed::class, [SettleNetToolRun::class, 'handleFailed']);
         Event::listen(ServerDeleted::class, CloseSessionsOfDeletedServer::class);
         Event::listen(MemberRemoved::class, DropRelayClientsOfMember::class);
         Event::listen(MemberRoleChanged::class, DropRelayClientsOfMember::class);

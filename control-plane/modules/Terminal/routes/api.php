@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Terminal\Http\Controllers\Api\ConsoleApiController;
+use Falak\Terminal\Http\Controllers\NetToolController;
 use Illuminate\Support\Facades\Route;
 
 // `falak console` (docs/plans/CONSOLE.md): open a console and dial the relay URL it answers with.
@@ -11,4 +12,15 @@ Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group
     Route::post('servers/{server}/console', [ConsoleApiController::class, 'server'])->middleware('throttle:30,1')->name('servers.console');
     Route::post('terminal/sessions/{session}/ticket', [ConsoleApiController::class, 'ticket'])->middleware('throttle:120,1')->name('terminal.sessions.ticket');
     Route::delete('terminal/sessions/{session}', [ConsoleApiController::class, 'destroy'])->name('terminal.sessions.destroy');
+});
+
+// `falak net` (docs/plans/network/tools.md): run a tool, then poll the run for its output.
+Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group(function () {
+    Route::get('net-tools/runs/{run}', [NetToolController::class, 'show'])->name('net-tools.runs.show');
+
+    Route::middleware('throttle:net-tools')->group(function () {
+        Route::post('servers/{server}/net-tools', [NetToolController::class, 'server'])->name('servers.net-tools');
+        Route::post('sites/{site}/net-tools', [NetToolController::class, 'site'])->name('sites.net-tools');
+        Route::post('databases/instances/{instance}/net-tools', [NetToolController::class, 'database'])->name('databases.instances.net-tools');
+    });
 });

@@ -114,6 +114,7 @@ func (a *App) commands() []*command {
 		{name: "logs", args: "<site> [--follow] [--since 1h] [--limit N] [--level LEVEL]", summary: "show site logs", run: cmdLogs},
 		{name: "ssh", args: "<server> [--user USER] [-- ssh args]", summary: "open an SSH session to a server (site, container and database shells: falak console)", run: cmdSSH},
 		{name: "console", args: consoleSynopsis, summary: "open a shell where a site runs, in a database container, or on a server (through the terminal relay)", run: cmdConsole},
+		netCommands(),
 		{name: "open", args: "<site> [--panel]", summary: "open a site (or its panel page) in the browser", run: cmdOpen},
 		functionCommands(),
 		{name: "db", summary: "database containers", subs: []*command{

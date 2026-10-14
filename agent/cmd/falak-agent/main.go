@@ -7,6 +7,7 @@
 //	falak-agent fn-gateway serve functions (falak-fn-gateway.service; installed by fn.release.apply)
 //	falak-agent fn-run     run a function's schedule once (its cron job)
 //	falak-agent features   the protocol features this build understands, one per line
+//	falak-agent nettool    run one network tool (net.tool's helper, run by the agent; under nsenter for a container)
 //	falak-agent version
 package main
 
@@ -24,6 +25,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/config"
 	"github.com/OthmanHaba/falak/agent/internal/fngateway"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/nettool"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/version"
 )
@@ -38,6 +40,13 @@ func main() {
 		usage()
 	}
 	sub := os.Args[1]
+	if sub == nettool.HelperCommand {
+		// The agent's own helper (docs/plans/network/tools.md): no flags, one JSON spec, output on the PTY it runs in.
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+		code := nettool.Main(ctx, os.Args[2:], os.Stdout)
+		stop()
+		os.Exit(code)
+	}
 	fs := flag.NewFlagSet(sub, flag.ExitOnError)
 	cfg := config.Default()
 	cfg.Bind(fs)

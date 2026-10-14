@@ -5,6 +5,7 @@ namespace Falak\Terminal\Application\Jobs;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Terminal\Application\Actions\CloseSession;
 use Falak\Terminal\Domain\Enums\SessionStatus;
+use Falak\Terminal\Domain\Models\NetToolRun;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -30,6 +31,9 @@ final class SweepTerminalSessions implements ShouldQueue
     public function handle(CloseSession $close, AgentGateway $agents): void
     {
         $maxDuration = (int) config('terminal.max_duration', 3600);
+
+        // Network tool runs are kept 30 days (their output lives in Fleet's command output).
+        NetToolRun::query()->where('created_at', '<', now()->subDays(30))->delete();
 
         TerminalSession::query()
             ->whereIn('status', SessionStatus::live())
