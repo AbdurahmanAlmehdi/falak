@@ -36,8 +36,34 @@ type Source struct {
 	// Multiline merges continuation lines into the record they belong to. "laravel": a record starts
 	// with "[YYYY-MM-DD" (Monolog's line format), so stack traces become part of the error record.
 	Multiline string `json:"multiline,omitempty"`
+	// MultilinePattern is a start-of-record regular expression (RE2): a line it matches starts a record, every other
+	// line is appended to the record before it. Wins over Multiline.
+	MultilinePattern string `json:"multiline_pattern,omitempty"`
+	// Container: Path is inside the running containers of Site (label falak.site), read through their
+	// /proc/<pid>/root; ComposeService narrows them to one compose service (label falak.service).
+	Container      bool   `json:"container,omitempty"`
+	ComposeService string `json:"compose_service,omitempty"`
+	// Origin is the falak.log.origin attribute of the records: "file" (default), "php_fpm", "php_fpm_slow"; container
+	// sources are always "container_file". The Logs tab filters on it (structured metadata, not a Loki label).
+	Origin string `json:"origin,omitempty"`
 	// SiteFromFile takes the site slug from the file name (<slug>.log); the edge access logs use it.
 	SiteFromFile bool `json:"-"`
+}
+
+// Values of falak.log.origin.
+const (
+	OriginFile          = "file"
+	OriginContainerFile = "container_file"
+	OriginPHPFPM        = "php_fpm"
+	OriginPHPFPMSlow    = "php_fpm_slow"
+)
+
+// key identifies a source across SetSources calls: two sites may name the same path inside their containers.
+func (s Source) key() string {
+	if s.Container {
+		return ContainerKeyPrefix + s.Site + ":" + s.ComposeService + ":" + s.Path
+	}
+	return s.Path
 }
 
 // AccessLogDir holds the edge's per-site HTTP access logs (<slug>.log, Caddy JSON). falak-edge writes
@@ -67,6 +93,8 @@ const readChunk = 4 << 20
 
 type fileState struct {
 	src     Source
+	display string            // log.file.path: the host path, or the path inside the container
+	attrs   map[string]string // the container's attributes (container sources)
 	f       *os.File
 	ino     uint64
 	offset  int64
@@ -86,7 +114,8 @@ type savedOffset struct {
 	Head   []byte `json:"head,omitempty"`
 }
 
-// Tailer follows files matching the configured sources.
+// Tailer follows files matching the configured sources. Files are keyed by their real host path, or for container
+// sources by container:<id>:<path in the container> (offsets are per container).
 type Tailer struct {
 	fs        hostfs.FS
 	statePath string // real path of the offsets file
@@ -94,13 +123,18 @@ type Tailer struct {
 	log       *slog.Logger
 	interval  time.Duration
 
-	mu      sync.Mutex
-	sources []Source
-	fresh   map[string]bool // globs not yet polled: files existing at first sight start at EOF
-	files   map[string]*fileState
-	saved   map[string]savedOffset
-	dirty   bool
-	stop    context.Context // the running poll's: cancelled, it stops between files and lines
+	mu         sync.Mutex
+	sources    []Source
+	patterns   map[string]*regexp.Regexp // compiled MultilinePattern of the sources
+	fresh      map[string]bool           // sources not yet polled: files existing at first sight start at EOF
+	files      map[string]*fileState
+	saved      map[string]savedOffset
+	dirty      bool
+	stop       context.Context // the running poll's: cancelled, it stops between files and lines
+	containers *containerSet   // nil: no Docker, container sources match nothing
+	exceptions ExceptionObserver
+	excMinute  int64          // the minute excCount counts
+	excCount   map[string]int // site → error entries parsed for an exception this minute
 }
 
 // NewTailer creates a tailer; offsets persist in <stateDir>/log-offsets.json (stateDir is a host path).
@@ -119,18 +153,51 @@ func NewTailer(fs hostfs.FS, stateDir string, sink obs.Sink, log *slog.Logger) *
 // SetInterval changes the poll interval (tests).
 func (t *Tailer) SetInterval(d time.Duration) { t.interval = d }
 
-// SetSources replaces the configured sources; files no longer matched are closed.
+// Sources returns the configured sources.
+func (t *Tailer) Sources() []Source {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]Source(nil), t.sources...)
+}
+
+// SetContainerEngine lets container sources find the site's running containers. socket is checked before each list
+// ("" = never checked: tests).
+func (t *Tailer) SetContainerEngine(engine ContainerEngine, socket string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if engine == nil {
+		t.containers = nil
+		return
+	}
+	t.containers = newContainerSet(engine, socket, t.fs, t.log)
+}
+
+// SetExceptionObserver receives the exceptions found in Laravel log entries (Insights without the APM package).
+func (t *Tailer) SetExceptionObserver(o ExceptionObserver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.exceptions = o
+}
+
+// SetSources replaces the configured sources; files no longer matched are closed. A MultilinePattern that does not
+// compile (validated before) leaves its source line by line.
 func (t *Tailer) SetSources(srcs []Source) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	known := map[string]bool{}
 	for _, s := range t.sources {
-		known[s.Path] = true
+		known[s.key()] = true
 	}
 	t.sources = append([]Source(nil), srcs...)
+	t.patterns = map[string]*regexp.Regexp{}
 	for _, s := range srcs {
-		if !known[s.Path] {
-			t.fresh[s.Path] = true
+		if !known[s.key()] {
+			t.fresh[s.key()] = true
+		}
+		if s.MultilinePattern != "" {
+			if re, err := regexp.Compile(s.MultilinePattern); err == nil {
+				t.patterns[s.MultilinePattern] = re
+			}
 		}
 	}
 }
@@ -176,6 +243,7 @@ func (t *Tailer) poll(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
+	t.syncContainers(ctx)
 	seen := map[string]bool{}
 	for _, src := range t.sources {
 		if ctx.Err() != nil {
@@ -185,29 +253,34 @@ func (t *Tailer) poll(ctx context.Context) {
 			}
 			return
 		}
+		first := t.fresh[src.key()]
+		delete(t.fresh, src.key())
+		if src.Container {
+			t.pollContainerSource(ctx, src, first, seen)
+			continue
+		}
 		matches, err := filepath.Glob(t.fs.P(src.Path))
 		if err != nil {
 			continue
 		}
-		first := t.fresh[src.Path]
-		delete(t.fresh, src.Path)
 		sort.Strings(matches)
 		for _, real := range matches {
 			if seen[real] || ctx.Err() != nil {
 				continue
 			}
 			seen[real] = true
-			t.pollFile(real, src, first)
+			t.pollFile(t.hostTarget(real), src, first)
 		}
 	}
-	for real, st := range t.files {
-		if !seen[real] && ctx.Err() == nil {
-			// Path vanished (rotated away, not yet recreated): drain what is left, then close.
-			t.readAvailable(real, st)
-			t.flushPartial(real, st)
-			t.flushPending(real, st)
-			st.f.Close()
-			delete(t.files, real)
+	if t.containers != nil {
+		for _, c := range t.containers.byID {
+			c.firstPass = c.firstPass && c.root == nil // polled once its root is open
+		}
+	}
+	for key, st := range t.files {
+		if !seen[key] && ctx.Err() == nil {
+			// Path vanished (rotated away, not yet recreated, or its container stopped): drain what is left, then close.
+			t.closeFile(key, st, true)
 		}
 	}
 	if t.dirty {
@@ -215,8 +288,105 @@ func (t *Tailer) poll(ctx context.Context) {
 	}
 }
 
-func (t *Tailer) pollFile(real string, src Source, first bool) {
-	fi, err := os.Stat(real)
+// closeFile closes an open file and keeps its offset: a file that comes back with the same inode (a container
+// restarted in place, reopened through its new root) resumes there. A vanished file is drained first (what is left is
+// emitted, a partial last line included); a file closed only to be reopened keeps its partial line and pending record
+// out of the offset, so they are read again whole.
+func (t *Tailer) closeFile(key string, st *fileState, drain bool) {
+	if drain {
+		t.readAvailable(key, st)
+		t.flushPartial(key, st)
+		t.flushPending(key, st)
+	}
+	st.f.Close()
+	t.saved[key] = savedOffset{Ino: st.ino, Offset: st.offset - int64(len(st.partial)) - st.pendingN, Head: st.head}
+	delete(t.files, key)
+	t.dirty = true
+}
+
+// syncContainers refreshes the container list when a container source needs it: the offsets of containers that went
+// away are dropped, the files of a container restarted in place are reopened through its new root.
+func (t *Tailer) syncContainers(ctx context.Context) {
+	if t.containers == nil {
+		return
+	}
+	wanted := false
+	for _, src := range t.sources {
+		wanted = wanted || src.Container
+	}
+	if !wanted {
+		return
+	}
+	gone, reopened := t.containers.refresh(ctx)
+	for i, id := range append(gone, reopened...) {
+		prefix := ContainerKeyPrefix + id + ":"
+		for key, st := range t.files {
+			if strings.HasPrefix(key, prefix) {
+				t.closeFile(key, st, i < len(gone))
+			}
+		}
+	}
+	for _, id := range gone {
+		prefix := ContainerKeyPrefix + id + ":"
+		for key := range t.saved {
+			if strings.HasPrefix(key, prefix) {
+				delete(t.saved, key)
+				t.dirty = true
+			}
+		}
+	}
+}
+
+// target is one file to poll: how to reach it, and what its records say about it.
+type target struct {
+	key     string // offsets and open files
+	display string // log.file.path
+	attrs   map[string]string
+	stat    func() (os.FileInfo, error)
+	open    func() (*os.File, error)
+}
+
+func (t *Tailer) hostTarget(real string) target {
+	display := real
+	if !t.fs.IsReal() {
+		display = "/" + strings.TrimPrefix(strings.TrimPrefix(real, filepath.Clean(t.fs.Root)), "/")
+	}
+	return target{key: real, display: display,
+		stat: func() (os.FileInfo, error) { return os.Stat(real) },
+		open: func() (*os.File, error) { return os.OpenFile(real, openFlags, 0) }}
+}
+
+// pollContainerSource polls a container source's files in every running container of its site (and compose service).
+// Paths are resolved inside the container's root (GlobIn) and opened through it, never on the host. A container first
+// seen with this source starts its existing files at their end, unless it was created moments before (a deploy).
+func (t *Tailer) pollContainerSource(ctx context.Context, src Source, first bool, seen map[string]bool) {
+	if t.containers == nil || src.Site == "" {
+		return
+	}
+	now := t.containers.now()
+	for _, c := range t.containers.matching(src.Site, src.ComposeService) {
+		root := c.root
+		// Freshness is checked now, not when the container was first seen: a source added an hour after a deploy
+		// starts that container's files at their end like any other.
+		fromStart := c.fresh(now)
+		for _, inner := range globIn(root, src.Path, MaxFilesPerSource, c.lister(now)) {
+			key := containerKey(c.id, inner)
+			if seen[key] || ctx.Err() != nil {
+				continue
+			}
+			seen[key] = true
+			rel := rootRel(inner)
+			t.pollFile(target{key: key, display: inner, attrs: c.attrs(),
+				stat: func() (os.FileInfo, error) { return root.Stat(rel) },
+				open: func() (*os.File, error) { return root.OpenFile(rel, openFlags, 0) },
+			}, src, (first || c.firstPass) && !fromStart)
+		}
+	}
+}
+
+func (t *Tailer) pollFile(tg target, src Source, first bool) {
+	real := tg.key
+	fi, err := tg.stat()
 	if err != nil || !fi.Mode().IsRegular() {
 		return
 	}
@@ -234,11 +404,16 @@ func (t *Tailer) pollFile(real string, src Source, first bool) {
 		delete(t.saved, real)
 	}
 	if st == nil {
-		f, err := os.Open(real)
+		f, err := tg.open()
 		if err != nil {
 			return
 		}
-		st = &fileState{src: src, f: f, ino: ino}
+		if err := checkOpened(f, fi); err != nil {
+			f.Close()
+			t.log.Debug("log file refused", "path", tg.display, "err", err)
+			return
+		}
+		st = &fileState{src: src, f: f, ino: ino, display: tg.display, attrs: tg.attrs}
 		if sv, ok := t.saved[real]; ok && sv.Ino == ino && sv.Offset <= fi.Size() && bytes.HasPrefix(readHead(f), sv.Head) {
 			st.offset = sv.Offset
 			st.head = sv.Head
@@ -272,15 +447,25 @@ func readHead(f *os.File) []byte {
 	return b[:n]
 }
 
-// readAvailable consumes new bytes and returns how many were read.
+// readAvailable consumes new bytes and returns how many were read: at most up to the size the open file has now
+// (fstat) and readChunk per call, so a file that keeps producing data however much is read (a pseudo file that slipped
+// through) cannot hold the tailer's lock.
 func (t *Tailer) readAvailable(real string, st *fileState) int {
+	fi, err := st.f.Stat()
+	if err != nil {
+		return 0
+	}
+	budget := min(fi.Size()-st.offset, readChunk)
+	if budget <= 0 {
+		return 0
+	}
 	if _, err := st.f.Seek(st.offset, io.SeekStart); err != nil {
 		return 0
 	}
 	buf := make([]byte, 64<<10)
 	read := 0
-	for read < readChunk && !t.stopped() {
-		n, err := st.f.Read(buf)
+	for int64(read) < budget && !t.stopped() {
+		n, err := st.f.Read(buf[:min(int64(len(buf)), budget-int64(read))])
 		if n > 0 {
 			read += n
 			st.offset += int64(n)
@@ -331,8 +516,11 @@ func (t *Tailer) flushPartial(real string, st *fileState) {
 // multi-line record when the source groups continuation lines.
 func (t *Tailer) line(real string, st *fileState, line []byte, n int64) {
 	start := multilineStart[st.src.Multiline]
+	if re := t.patterns[st.src.MultilinePattern]; re != nil {
+		start = re
+	}
 	if start == nil {
-		t.emitLine(real, st.src, line)
+		t.emitLine(st, line)
 		return
 	}
 	line = bytes.TrimRight(line, "\r")
@@ -348,20 +536,18 @@ func (t *Tailer) line(real string, st *fileState, line []byte, n int64) {
 
 func (t *Tailer) flushPending(real string, st *fileState) {
 	if st.pending != nil {
-		t.emitLine(real, st.src, st.pending)
+		// A record's trailing blank lines (the PHP-FPM slow log separates its entries with one) are not part of it.
+		t.emitLine(st, bytes.TrimRight(st.pending, "\n"))
 		st.pending, st.pendingN = nil, 0
 		t.dirty = true
 	}
 }
 
-func (t *Tailer) emitLine(real string, src Source, line []byte) {
+func (t *Tailer) emitLine(st *fileState, line []byte) {
+	src := st.src
 	line = bytes.TrimRight(line, "\r")
 	if len(bytes.TrimSpace(line)) == 0 {
 		return
-	}
-	hostPath := real
-	if !t.fs.IsReal() {
-		hostPath = "/" + strings.TrimPrefix(strings.TrimPrefix(real, filepath.Clean(t.fs.Root)), "/")
 	}
 	var rec obs.LogRecord
 	if src.Kind == "access" {
@@ -371,7 +557,7 @@ func (t *Tailer) emitLine(real string, src Source, line []byte) {
 	}
 	rec.Site = src.Site
 	if src.SiteFromFile {
-		if slug := strings.TrimSuffix(filepath.Base(hostPath), ".log"); slugRE.MatchString(slug) {
+		if slug := strings.TrimSuffix(filepath.Base(st.display), ".log"); slugRE.MatchString(slug) {
 			rec.Site = slug
 		}
 	}
@@ -380,9 +566,46 @@ func (t *Tailer) emitLine(real string, src Source, line []byte) {
 	if rec.Attrs == nil {
 		rec.Attrs = map[string]string{}
 	}
-	rec.Attrs["log.file.path"] = hostPath
-	rec.Attrs["log.file.name"] = filepath.Base(hostPath)
+	for k, v := range st.attrs {
+		rec.Attrs[k] = v
+	}
+	rec.Attrs["log.file.path"] = st.display
+	rec.Attrs["log.file.name"] = filepath.Base(st.display)
+	if src.Kind != "access" {
+		origin := src.Origin
+		switch {
+		case src.Container:
+			origin = OriginContainerFile
+		case origin == "":
+			origin = OriginFile
+		}
+		rec.Attrs["falak.log.origin"] = origin
+		if origin == OriginPHPFPMSlow {
+			rec.Severity = "WARN" // a request over the pool's request_slowlog_timeout, with its backtrace
+		}
+	}
+	if t.exceptions != nil && rec.Site != "" && src.Multiline == "laravel" && (rec.Severity == "ERROR" || rec.Severity == "FATAL") && t.mayParseException(rec.Site) {
+		if ex, ok := ParseLaravelException(line); ok {
+			ex.Site = rec.Site
+			ex.File = filepath.Base(st.display)
+			t.exceptions.ObserveLogException(ex)
+		}
+	}
 	t.sink.EmitLog(rec)
+}
+
+// mayParseException counts the error entries of a site parsed for an exception this minute: at most
+// MaxExceptionParsesPerMinute, so a crash loop's log costs no more than that in regex work.
+func (t *Tailer) mayParseException(site string) bool {
+	minute := time.Now().Unix() / 60
+	if t.excCount == nil || t.excMinute != minute {
+		t.excCount, t.excMinute = map[string]int{}, minute
+	}
+	if t.excCount[site] >= MaxExceptionParsesPerMinute {
+		return false
+	}
+	t.excCount[site]++
+	return true
 }
 
 func (t *Tailer) saveLocked() {

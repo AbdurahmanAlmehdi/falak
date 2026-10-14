@@ -181,3 +181,20 @@ it('keeps counting ignored issues silently', function () {
     expect($issue->refresh()->status)->toBe(IssueStatus::Ignored)->and($issue->occurrences)->toBe(2);
     Event::assertNothingDispatched();
 });
+
+it('groups an exception found in a Laravel log with the same exception reported by the APM package', function () {
+    // The agent's line for a log entry (docs/plans/OBSERVABILITY.md phase 2): no trace, event type log, the log file's
+    // name, the "[stacktrace]" frames of another release with other line numbers.
+    $fromLog = insights_exception([
+        'trace_id' => '', 'span_id' => '', 'user_id' => '', 'event_type' => 'log', 'route_or_name' => 'laravel-2026-10-14.log',
+        'stacktrace' => str_replace(['01J8REL0000000000000000000', '(20)'], ['01J8LOG0000000000000000000', '(21)'], insights_exception(['line' => 50])['stacktrace']),
+    ]);
+
+    insights_ingest($this->organization->id, [insights_exception(), $fromLog]);
+
+    $issue = Issue::query()->sole();
+    $occurrence = ExceptionOccurrence::query()->where('event_type', 'log')->sole();
+    expect($issue->occurrences)->toBe(2)
+        ->and($occurrence->trace_id)->toBeNull()
+        ->and($occurrence->route_or_name)->toBe('laravel-2026-10-14.log');
+});

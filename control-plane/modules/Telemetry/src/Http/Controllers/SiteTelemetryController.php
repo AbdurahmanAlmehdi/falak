@@ -45,7 +45,8 @@ final class SiteTelemetryController extends Controller
         $site = $this->site($request, $siteId);
 
         return response()->json([
-            'site' => ['id' => $site->id, 'name' => $site->name],
+            // The runtime picks the Logs tab's source options (container files, PHP-FPM, slow requests).
+            'site' => ['id' => $site->id, 'name' => $site->name, 'runtime' => $site->runtime->value],
             'servers' => $this->serversOf($site),
             'levels' => LogController::LEVELS,
             'ranges' => array_keys(ServerMetricQueries::RANGES),

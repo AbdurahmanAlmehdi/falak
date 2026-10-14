@@ -14,6 +14,7 @@ use Falak\Servers\Events\ServerProvisioned;
 use Falak\Sites\Events\SiteCreated;
 use Falak\Sites\Events\SiteDeleted;
 use Falak\Sites\Events\SiteTargetsChanged;
+use Falak\Sites\Events\SiteUpdated;
 use Falak\Telemetry\Application\Console\ProvisionGrafanaCommand;
 use Falak\Telemetry\Application\Jobs\DispatchPendingTelemetry;
 use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnEnrollment;
@@ -21,6 +22,7 @@ use Falak\Telemetry\Application\Listeners\ConfigureTelemetryOnProvisioned;
 use Falak\Telemetry\Application\Listeners\ForgetOrganizationTelemetry;
 use Falak\Telemetry\Application\Listeners\ProvisionGrafanaForOrganization;
 use Falak\Telemetry\Application\Listeners\ReconfigureAfterAgentUpgrade;
+use Falak\Telemetry\Application\Listeners\ReconfigureOnLogSourceChanges;
 use Falak\Telemetry\Application\Listeners\ReconfigureOnReleaseActivated;
 use Falak\Telemetry\Application\Listeners\ReconfigureOnSiteChanges;
 use Falak\Telemetry\Contracts\AccessLogCounts;
@@ -93,6 +95,7 @@ class TelemetryServiceProvider extends ModuleServiceProvider
         Event::listen(OrganizationCreated::class, ProvisionGrafanaForOrganization::class);
         Event::listen(OrganizationDeleted::class, ForgetOrganizationTelemetry::class);
         Event::listen([SiteCreated::class, SiteTargetsChanged::class, SiteDeleted::class], ReconfigureOnSiteChanges::class);
+        Event::listen(SiteUpdated::class, ReconfigureOnLogSourceChanges::class);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->job(new DispatchPendingTelemetry)->everyMinute()->name('telemetry:pending-configure')->withoutOverlapping();

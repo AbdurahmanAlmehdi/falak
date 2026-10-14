@@ -32,7 +32,36 @@ type FPMPoolPayload struct {
 	Slice string `json:"slice"`
 	// OomScoreAdj is the own master's OOM preference (OOMScoreAdjust=).
 	OomScoreAdj int `json:"oom_score_adj"`
+	// SlowlogTimeout (seconds, 0 = off) writes the backtrace of a request running longer to FPMSlowlog(pool): a pool
+	// setting, so it works in the shared master and in an own one alike. Feature runtime.fpm.slowlog.
+	SlowlogTimeout int `json:"slowlog_timeout"`
 }
+
+// FPMSlowlogDir holds the pools' slow logs (<pool>.log), shipped as the site's php_fpm_slow logs.
+const FPMSlowlogDir = "/var/log/falak/php-fpm-slow"
+
+// FPMSlowlog is the slow log of a pool.
+func FPMSlowlog(pool string) string { return FPMSlowlogDir + "/" + pool + ".log" }
+
+// fpmLogrotate rotates the own masters' error logs and the pools' slow logs. copytruncate: a master reopens its logs on
+// SIGUSR1, but the slow logs of one directory belong to several masters (the shared phpX.Y-fpm of every version and each
+// site's own), so a postrotate would have to find and signal all of them; truncating in place needs no signal and the
+// tailer handles truncation (the lines written between the copy and the truncation can be lost, as with any
+// copytruncate).
+const fpmLogrotate = "/etc/logrotate.d/falak-php-fpm"
+
+const fpmLogrotateConf = `# Managed by Falak — do not edit
+/var/log/falak/fpm-*.log ` + FPMSlowlogDir + `/*.log {
+	daily
+	rotate 7
+	maxsize 50M
+	missingok
+	notifempty
+	compress
+	delaycompress
+	copytruncate
+}
+`
 
 // ListenResult is {changed, listen}.
 type ListenResult struct {
@@ -77,6 +106,9 @@ func RenderPool(p FPMPoolPayload, listenGroup string) string {
 		b.WriteString("pm.process_idle_timeout = 10s\n")
 	}
 	fmt.Fprintf(&b, "pm.max_requests = %d\ncatch_workers_output = yes\ndecorate_workers_output = no\n", maxReq)
+	if p.SlowlogTimeout > 0 {
+		fmt.Fprintf(&b, "request_slowlog_timeout = %ds\nrequest_slowlog_trace_depth = 20\nslowlog = %s\n", p.SlowlogTimeout, FPMSlowlog(p.Pool))
+	}
 	for _, k := range sortedKeys(p.PHPAdminValues) {
 		fmt.Fprintf(&b, "php_admin_value[%s] = %s\n", k, p.PHPAdminValues[k])
 	}
@@ -106,6 +138,9 @@ func (rt *Runtime) FPMPool(ctx context.Context, p FPMPoolPayload, st commands.St
 	if !poolRe.MatchString(p.Pool) || (p.Slice != "" && !cgroup.NameRe.MatchString(p.Slice)) || p.OomScoreAdj < -1000 || p.OomScoreAdj > 1000 {
 		return nil, &commands.PayloadError{Err: fmt.Errorf("invalid pool, slice or oom_score_adj")}
 	}
+	if p.SlowlogTimeout < 0 || p.SlowlogTimeout > 3600 {
+		return nil, &commands.PayloadError{Err: fmt.Errorf("slowlog_timeout must be within [0,3600]")}
+	}
 	if p.Listen == "" {
 		p.Listen = fmt.Sprintf("/run/php/falak-%s-%s.sock", p.Pool, p.PHPVersion)
 	}
@@ -114,6 +149,10 @@ func (rt *Runtime) FPMPool(ctx context.Context, p FPMPoolPayload, st commands.St
 	if p.State == "absent" {
 		ownChanged, err := rt.removeOwnFPM(ctx, st, p.Pool)
 		if err != nil {
+			return nil, err
+		}
+		// The site is gone from this server: its slow log goes too (a site of the same name later starts empty).
+		if _, err := rt.d.FS.Remove(FPMSlowlog(p.Pool)); err != nil {
 			return nil, err
 		}
 		removed, err := rt.d.FS.Remove(shared)
@@ -127,6 +166,15 @@ func (rt *Runtime) FPMPool(ctx context.Context, p FPMPoolPayload, st commands.St
 	}
 	if !rt.d.FS.Exists(fmt.Sprintf("/etc/php/%s/fpm", p.PHPVersion)) {
 		return nil, fmt.Errorf("php%s-fpm is not installed", p.PHPVersion)
+	}
+	if p.SlowlogTimeout > 0 {
+		// The master opens the slow log when it reads the pool (php-fpm -t too): its directory must exist first.
+		if err := rt.d.FS.MkdirAll(FPMSlowlogDir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := rt.d.FS.WriteFile(fpmLogrotate, []byte(fpmLogrotateConf), 0o644); err != nil {
+		return nil, err
 	}
 	if p.Slice != "" {
 		return rt.ownFPM(ctx, st, p, shared, svc)

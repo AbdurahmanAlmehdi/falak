@@ -15,7 +15,10 @@ use Illuminate\Support\Str;
 
 /**
  * Pools are only written when a site is provisioned. An upgraded agent keeps .env files on the tmpfs, which isolated
- * pools' open_basedir must allow (PHP checks the resolved path): re-apply them before the next deploy needs it.
+ * pools' open_basedir must allow (PHP checks the resolved path): re-apply them before the next deploy needs it. An
+ * agent that understands the pool's slow log (runtime.fpm.slowlog) also gets the pools whose slow log is on (sites
+ * created while it ran an older agent, which stripped it). Sites that predate the slow log have it off: their pool
+ * file is unchanged, so the upgrade reloads no PHP-FPM master for them.
  */
 final class ReapplyFpmPools implements ShouldQueue
 {
@@ -30,9 +33,11 @@ final class ReapplyFpmPools implements ShouldQueue
             return;
         }
 
+        $slowlog = in_array('runtime.fpm.slowlog', $event->features, true);
+
         $sites = Site::query()
             ->where('runtime', SiteRuntime::PhpFpm->value)
-            ->where('isolated', true)
+            ->where(fn ($q) => $q->where('isolated', true)->when($slowlog, fn ($q) => $q->orWhere('fpm_slowlog_timeout', '>', 0)))
             ->whereNotNull('php_version')
             ->whereHas('targets', fn ($q) => $q->where('server_id', $event->serverId))
             ->get();

@@ -3,6 +3,7 @@
 namespace Falak\Sites\Domain\Models;
 
 use Falak\Limits\Contracts\ResourceLimits;
+use Falak\Sites\Application\SiteLogSources;
 use Falak\Sites\Contracts\BuildMode;
 use Falak\Sites\Contracts\ComposeSource;
 use Falak\Sites\Contracts\Data\ComposeConfig;
@@ -54,6 +55,8 @@ use Illuminate\Support\Carbon;
  * @property ?string $health_check_path
  * @property ?array<string, mixed> $limits resource limits (Limits' ResourceLimits JSON)
  * @property ?array<string, array<string, mixed>> $compose_limits resource limits per compose service
+ * @property ?list<array{path: string, format?: 'plain'|'json', multiline?: 'laravel'|'pattern', multiline_pattern?: string, compose_service?: string}> $log_sources files inside the site's containers the agent tails (SiteLogSources)
+ * @property ?int $fpm_slowlog_timeout PHP-FPM slow log threshold in seconds (null or 0 = off; new PHP-FPM sites start with SiteLogSources::DEFAULT_SLOWLOG_TIMEOUT)
  * @property string $deploy_script
  * @property LaravelSettings $laravel
  * @property bool $test_domain_enabled
@@ -69,6 +72,17 @@ class Site extends Model
 
     /** @var list<string> */
     protected $guarded = [];
+
+    protected static function booted(): void
+    {
+        // New PHP-FPM sites get the slow log; sites that existed before it keep it off (null), so the agent upgrade
+        // that brings the slow log rewrites no pool and reloads no PHP-FPM master.
+        static::creating(function (Site $site) {
+            if ($site->runtime === SiteRuntime::PhpFpm && $site->fpm_slowlog_timeout === null) {
+                $site->fpm_slowlog_timeout = SiteLogSources::DEFAULT_SLOWLOG_TIMEOUT;
+            }
+        });
+    }
 
     /**
      * @return array<string, string>
@@ -93,6 +107,8 @@ class Site extends Model
             'template' => 'array',
             'limits' => 'array',
             'compose_limits' => 'array',
+            'log_sources' => 'array',
+            'fpm_slowlog_timeout' => 'integer',
         ];
     }
 

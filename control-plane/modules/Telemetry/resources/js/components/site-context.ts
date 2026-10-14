@@ -3,7 +3,7 @@ import { getJson } from '../lib';
 
 /** GET /telemetry/sites/{siteId} (Falak\Telemetry\Http\Controllers\SiteTelemetryController::context). */
 export interface SiteTelemetryContext {
-    site: { id: string; name: string };
+    site: { id: string; name: string; runtime?: string };
     servers: { id: string; name: string }[];
     levels: string[];
     ranges: string[];

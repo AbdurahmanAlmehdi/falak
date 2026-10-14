@@ -12,7 +12,21 @@ use InvalidArgumentException;
 final class LogQueryBuilder
 {
     /**
-     * @param  array{server_id?: ?string, site_id?: ?string, service?: ?string, kind?: ?string, compose_service?: ?string, level?: ?string, search?: ?string, regex?: bool, trace_id?: ?string}  $filters
+     * Where a site's records come from (the Logs tab's source filter, docs/plans/OBSERVABILITY.md phase 2), as
+     * structured metadata filters: no Loki index label is added, so stream cardinality does not change. Output is what
+     * containers, supervised programs and cron write to stdout / stderr; files are the host log files (records of agents
+     * before falak.log.origin have none, hence the empty alternative); the others are falak.log.origin values.
+     */
+    public const ORIGINS = [
+        'output' => ' | log_iostream=~"stdout|stderr"',
+        'file' => ' | log_file_path!="" | falak_log_origin=~"file|"',
+        'container_file' => ' | falak_log_origin="container_file"',
+        'php_fpm' => ' | falak_log_origin="php_fpm"',
+        'php_fpm_slow' => ' | falak_log_origin="php_fpm_slow"',
+    ];
+
+    /**
+     * @param  array{server_id?: ?string, site_id?: ?string, service?: ?string, kind?: ?string, compose_service?: ?string, origin?: ?string, level?: ?string, search?: ?string, regex?: bool, trace_id?: ?string}  $filters
      */
     public static function build(string $organizationId, array $filters): string
     {
@@ -26,7 +40,20 @@ final class LogQueryBuilder
 
         // kind: "app" (the site's own output) or "access" (edge HTTP access log), see observability/README.md. App is
         // "not access", so records of agents that predate the label still match.
-        if (($kind = $filters['kind'] ?? null) !== null && $kind !== '') {
+        $kind = $filters['kind'] ?? null;
+        $origin = $filters['origin'] ?? null;
+
+        // An origin narrows the app records: the edge's access records are log files too (log_file_path set), and must
+        // never pass for the site's own.
+        if ($origin !== null && $origin !== '') {
+            if ($kind === 'access') {
+                throw new InvalidArgumentException('An origin applies to app records only.');
+            }
+
+            $kind = 'app';
+        }
+
+        if ($kind !== null && $kind !== '') {
             $matchers[] = $kind === 'access' ? PromQl::label('falak_log_kind', 'access') : 'falak_log_kind!='.PromQl::quote('access');
         }
 
@@ -35,6 +62,10 @@ final class LogQueryBuilder
         // Compose sites: container logs carry the compose service as structured metadata (falak.compose.service).
         if (($composeService = $filters['compose_service'] ?? null) !== null && $composeService !== '') {
             $query .= ' | falak_compose_service='.PromQl::quote((string) $composeService);
+        }
+
+        if ($origin !== null && $origin !== '') {
+            $query .= self::ORIGINS[$origin] ?? throw new InvalidArgumentException('Unknown log origin.');
         }
 
         if (($search = $filters['search'] ?? null) !== null && $search !== '') {

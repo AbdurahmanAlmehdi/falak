@@ -51,6 +51,10 @@ Every APM span carries `falak.event.type`:
 ## Insights tee (agent → control plane)
 The agent inspects spans it relays and forwards compact summaries to `POST /agent/v1/insights` (NDJSON):
 - every span with an `exception` event → `{ "kind": "exception", "trace_id", "span_id", "site_id", "type", "message", "stacktrace", "handled", "user_id", "event_type", "route_or_name", "at" }`
+- every Laravel log entry at `ERROR` or above with an exception and its `[stacktrace]` (sites without the APM
+  package) → the same `exception` line with `event_type: "log"`, `route_or_name` = the log file's name, empty
+  `trace_id` / `span_id` / `user_id`, `handled: false`; held 15 s and dropped when the site's APM sent spans within
+  15 minutes or an exception with the same class + first in-app frame within ±60 s (docs/plans/OBSERVABILITY.md phase 2)
 - per-minute per-route/job/query-shape aggregates → `{ "kind": "aggregate", "site_id", "event_type", "name", "count", "p50_ms", "p95_ms", "max_ms", "errors", "minute" }`
 
 - every cron run → `{ "kind": "cron_heartbeat", ... }` (shape: `contracts/agent-protocol/commands/cron.apply.schema.json` `$defs.heartbeat`); drives missed-run detection

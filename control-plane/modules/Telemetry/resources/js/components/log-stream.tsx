@@ -8,6 +8,7 @@ import { format } from 'date-fns';
 import { Activity, History, Pause, Play, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { getJson, queryString } from '../lib';
+import { type LogOrigin } from '../log-sources';
 import { type LogLineDto } from '../types';
 
 export interface LogFilters {
@@ -18,6 +19,8 @@ export interface LogFilters {
     compose_service?: string;
     /** app (a site's own output) or access (edge requests); both when unset. */
     kind?: 'app' | 'access';
+    /** Where app records come from (output, file, container_file, php_fpm, php_fpm_slow). */
+    origin?: LogOrigin;
     level?: string;
     search?: string;
     regex?: boolean;

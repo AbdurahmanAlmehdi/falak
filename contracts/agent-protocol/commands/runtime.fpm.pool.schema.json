@@ -105,6 +105,13 @@
       "maximum": 1000,
       "default": 0,
       "description": "OOMScoreAdjust= of the own master (with slice)"
+    },
+    "slowlog_timeout": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "default": 0,
+      "description": "Seconds after which a request's backtrace is written to the pool's slow log, /var/log/falak/php-fpm-slow/<pool>.log (request_slowlog_timeout, slowlog); 0 = off. A pool setting: works in the shared master and in an own one alike (feature runtime.fpm.slowlog)"
     }
   },
   "$defs": {

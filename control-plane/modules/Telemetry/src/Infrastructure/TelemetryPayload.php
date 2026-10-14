@@ -64,6 +64,12 @@ final class TelemetryPayload
                     'format' => $source['format'] ?? null,
                     'kind' => $source['kind'] ?? null,
                     'multiline' => $source['multiline'] ?? null,
+                    // Feature logs.container_files: a path inside the site's containers (agents without it never get
+                    // the entry), a start-of-record pattern, the falak.log.origin the Logs tab filters on.
+                    'multiline_pattern' => $source['multiline_pattern'] ?? null,
+                    'container' => ($source['container'] ?? false) === true ? true : null,
+                    'compose_service' => $source['compose_service'] ?? null,
+                    'origin' => $source['origin'] ?? null,
                 ], fn ($v) => $v !== null && $v !== '');
             }
         }

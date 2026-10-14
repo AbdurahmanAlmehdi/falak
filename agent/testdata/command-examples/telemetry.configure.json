@@ -9,7 +9,9 @@
   ],
   "log_sources": [
     { "path": "/srv/falak/sites/shop-example-com/shared/storage/logs/*.log", "site": "shop-example-com", "format": "plain" },
-    { "path": "/var/log/caddy/access.log", "service": "caddy", "format": "json" }
+    { "path": "/var/log/caddy/access.log", "service": "caddy", "format": "json" },
+    { "path": "/var/www/html/storage/logs/*.log", "site": "shop-example-com", "container": true, "compose_service": "app", "multiline": "laravel" },
+    { "path": "/var/log/falak/php-fpm-slow/shop-example-com.log", "site": "shop-example-com", "origin": "php_fpm_slow", "multiline_pattern": "^\\[\\d{2}-[A-Za-z]{3}-\\d{4} \\d{2}:\\d{2}:\\d{2}\\]" }
   ],
   "docker_logs": { "enabled": true, "label_selector": { "falak.managed": "true" } },
   "metrics": { "enabled": true, "interval_s": 15 },

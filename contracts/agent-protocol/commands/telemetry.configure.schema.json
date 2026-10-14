@@ -145,6 +145,31 @@
               "laravel"
             ],
             "description": "Merge continuation lines into the preceding record. laravel: records start with \"[YYYY-MM-DD HH:MM:SS\" (Monolog line format), so stack traces stay with their error"
+          },
+          "multiline_pattern": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Start-of-record regular expression (RE2): a line it matches starts a record, every other line is appended to the record before it. Wins over multiline (feature logs.container_files)"
+          },
+          "container": {
+            "type": "boolean",
+            "default": false,
+            "description": "path is inside the running containers labelled falak.site=<site> (site required; no \"..\" segment): read through /proc/<container init pid>/root, symlinks resolved inside the container's root, offsets kept per container id. Records carry container.id, container.name, falak.compose.service and falak.log.origin=container_file (feature logs.container_files; agents without it never get such an entry)"
+          },
+          "compose_service": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$",
+            "description": "With container: only the containers labelled falak.service=<compose_service> (feature logs.container_files)"
+          },
+          "origin": {
+            "enum": [
+              "file",
+              "php_fpm",
+              "php_fpm_slow"
+            ],
+            "default": "file",
+            "description": "falak.log.origin record attribute (Loki structured metadata falak_log_origin), the Logs tab's source filter: file, php_fpm (an own PHP-FPM master's error log), php_fpm_slow (a pool's slow log, records at WARN). Container sources are always container_file (feature logs.container_files)"
           }
         }
       }

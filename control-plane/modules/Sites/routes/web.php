@@ -8,6 +8,7 @@ use Falak\Sites\Http\Controllers\EnvironmentController;
 use Falak\Sites\Http\Controllers\SiteCommandController;
 use Falak\Sites\Http\Controllers\SiteController;
 use Falak\Sites\Http\Controllers\SiteLimitsController;
+use Falak\Sites\Http\Controllers\SiteLogSourcesController;
 use Falak\Sites\Http\Controllers\SiteSettingsController;
 use Illuminate\Support\Facades\Route;
 
@@ -28,6 +29,8 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::get('sites/{site}/limits', [SiteLimitsController::class, 'show'])->name('sites.limits');
     Route::put('sites/{site}/limits', [SiteLimitsController::class, 'update'])->name('sites.limits.update');
     Route::put('sites/{site}/compose/services/{service}/limits', [SiteLimitsController::class, 'update'])->where('service', '[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}')->name('sites.compose.limits.update');
+    Route::get('sites/{site}/log-sources', [SiteLogSourcesController::class, 'show'])->name('sites.log-sources');
+    Route::put('sites/{site}/log-sources', [SiteLogSourcesController::class, 'update'])->name('sites.log-sources.update');
 
     Route::get('sites/{site}/environment', [EnvironmentController::class, 'show'])->name('sites.environment');
     Route::put('sites/{site}/environment', [EnvironmentController::class, 'update'])->name('sites.environment.update');

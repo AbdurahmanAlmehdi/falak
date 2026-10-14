@@ -37,6 +37,14 @@ final class PayloadCompatibility
         'telemetry.workloads.shared' => [
             'telemetry.configure' => ['sites.*.isolated'],
         ],
+        // Log sources v2 (docs/plans/OBSERVABILITY.md phase 2). Container sources are removed whole first (DROP).
+        'logs.container_files' => [
+            'telemetry.configure' => ['log_sources.*.container', 'log_sources.*.compose_service', 'log_sources.*.multiline_pattern', 'log_sources.*.origin'],
+        ],
+        // The pool's slow log; older agents run the pool without one.
+        'runtime.fpm.slowlog' => [
+            'runtime.fpm.pool' => ['slowlog_timeout'],
+        ],
         // Split-out compose services joining their stack's network; older agents run them on their own network only.
         'docker.networks' => [
             'docker.run' => ['networks'],
@@ -56,6 +64,19 @@ final class PayloadCompatibility
         // field is stripped all the same (a plan built from a report an upgraded agent sent, then downgraded).
         'provision.v2' => [
             'provision.apply' => ['components'],
+        ],
+    ];
+
+    /**
+     * feature => [command type => [list field path => flag]]: agents without the feature do not get the list items whose
+     * flag is true at all (applied first). For items whose meaning the flag changes: without it, a container log
+     * source's path would be tailed on the host.
+     *
+     * @var array<string, array<string, array<string, string>>>
+     */
+    public const DROP = [
+        'logs.container_files' => [
+            'telemetry.configure' => ['log_sources' => 'container'],
         ],
     ];
 
@@ -99,6 +120,16 @@ final class PayloadCompatibility
             }
         }
 
+        foreach (self::DROP as $feature => $commands) {
+            if (in_array($feature, $features, true) || ! isset($commands[$type])) {
+                continue;
+            }
+
+            foreach ($commands[$type] as $path => $flag) {
+                self::drop($document, explode('.', $path), $flag);
+            }
+        }
+
         foreach (self::UNLESS as $feature => $commands) {
             if (in_array($feature, $features, true) || ! isset($commands[$type])) {
                 continue;
@@ -120,6 +151,32 @@ final class PayloadCompatibility
         }
 
         return $document;
+    }
+
+    /**
+     * Removes the items whose flag is true from the list at the object path (no "*" segments).
+     *
+     * @param  list<string>  $segments
+     */
+    private static function drop(object $node, array $segments, string $flag): void
+    {
+        $key = (string) array_shift($segments);
+
+        if (! property_exists($node, $key)) {
+            return;
+        }
+
+        if ($segments !== []) {
+            if (is_object($node->{$key})) {
+                self::drop($node->{$key}, $segments, $flag);
+            }
+
+            return;
+        }
+
+        if (is_array($node->{$key})) {
+            $node->{$key} = array_values(array_filter($node->{$key}, fn (mixed $item) => ! is_object($item) || ($item->{$flag} ?? false) !== true));
+        }
     }
 
     /**

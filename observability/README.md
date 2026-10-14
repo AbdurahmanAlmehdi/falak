@@ -130,6 +130,10 @@ record, supervised programs, cron, containers) or `access` (the edge's per-site 
 request with structured metadata `http_request_method`, `url_path`, `url_query`, `http_response_status_code`,
 `http_server_duration_ms`, `http_response_body_size`, `client_address`, `user_agent_original`,
 `server_address`). Example: `{falak_site_id="01…", falak_log_kind="access"} | http_response_status_code >= 500`.
+App records read from files carry the structured metadata `falak_log_origin`: `file` (host log files),
+`container_file` (files inside the site's containers, with `container_id`, `container_name`,
+`falak_compose_service`), `php_fpm` (an own PHP-FPM master's error log), `php_fpm_slow` (a pool's slow log); output
+(containers, programs, cron) has `log_iostream` instead. It is not an index label: stream cardinality is unchanged.
 
 **Span metrics** (from Tempo, no app work needed): `traces_spanmetrics_calls_total`,
 `traces_spanmetrics_latency_{bucket,sum,count}` with `service`, `span_name`, `span_kind`,

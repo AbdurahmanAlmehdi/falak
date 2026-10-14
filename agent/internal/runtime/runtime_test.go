@@ -492,6 +492,80 @@ func TestFPMPool(t *testing.T) {
 	}
 }
 
+// The slow log is a pool setting: rendered in the shared master's pool file and in an own master's alike, its
+// directory made before php-fpm -t opens it, logrotate configured for it.
+func TestFPMPoolSlowlog(t *testing.T) {
+	f := &runnertest.Fake{}
+	rt, root, st := setup(t, f, nil)
+	mk(t, root, "/etc/php/8.4/fpm/pool.d")
+	ctx := context.Background()
+	read := func(rel string) string { b, _ := os.ReadFile(filepath.Join(root, rel)); return string(b) }
+	p := FPMPoolPayload{PHPVersion: "8.4", Pool: "shop", User: "shop"}
+	// A pool an older agent wrote: the payload without slowlog_timeout (a site that predates the slow log) rewrites
+	// nothing and reloads no master.
+	written := p
+	written.Listen = "/run/php/falak-shop-8.4.sock"
+	old := RenderPool(written, "caddy")
+	mkfile := filepath.Join(root, "etc/php/8.4/fpm/pool.d/falak-shop.conf")
+	if err := os.WriteFile(mkfile, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := rt.FPMPool(ctx, p, st); err != nil || r.(ListenResult).Changed || len(f.Lines()) != 0 {
+		t.Fatalf("an unchanged pool was rewritten: %v %v %v", r, err, f.Lines())
+	}
+	if read("etc/php/8.4/fpm/pool.d/falak-shop.conf") != old || strings.Contains(old, "slowlog") {
+		t.Fatal("slow log without slowlog_timeout")
+	}
+	if strings.Contains(read("etc/php/8.4/fpm/pool.d/falak-shop.conf"), "slowlog") {
+		t.Fatal("slow log without slowlog_timeout")
+	}
+	if !strings.Contains(read("etc/logrotate.d/falak-php-fpm"), "/var/log/falak/fpm-*.log /var/log/falak/php-fpm-slow/*.log {") {
+		t.Fatal(read("etc/logrotate.d/falak-php-fpm"))
+	}
+
+	p.SlowlogTimeout = 5
+	f.Reset()
+	if r, err := rt.FPMPool(ctx, p, st); err != nil || !r.(ListenResult).Changed {
+		t.Fatal(r, err)
+	}
+	want := "request_slowlog_timeout = 5s\nrequest_slowlog_trace_depth = 20\nslowlog = /var/log/falak/php-fpm-slow/shop.log\n"
+	if !strings.Contains(read("etc/php/8.4/fpm/pool.d/falak-shop.conf"), want) {
+		t.Fatal(read("etc/php/8.4/fpm/pool.d/falak-shop.conf"))
+	}
+	if fi, err := os.Stat(filepath.Join(root, "var/log/falak/php-fpm-slow")); err != nil || !fi.IsDir() {
+		t.Fatal("slow log directory missing", err)
+	}
+	if strings.Join(f.Lines(), "|") != "php-fpm8.4 -t|systemctl reload php8.4-fpm" {
+		t.Fatal(f.Lines())
+	}
+
+	p.Slice = "site_shop"
+	if _, err := rt.FPMPool(ctx, p, st); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read("etc/falak/fpm/shop.conf"), want) {
+		t.Fatal(read("etc/falak/fpm/shop.conf"))
+	}
+
+	for _, bad := range []int{-1, 3601} {
+		p.SlowlogTimeout = bad
+		if _, err := rt.FPMPool(ctx, p, st); !commands.IsPayloadError(err) {
+			t.Fatalf("slowlog_timeout %d: %v", bad, err)
+		}
+	}
+
+	// The pool removed: its slow log goes with it.
+	mk(t, root, "/var/log/falak/php-fpm-slow")
+	os.WriteFile(filepath.Join(root, "var/log/falak/php-fpm-slow/shop.log"), []byte("x\n"), 0o644)
+	p.SlowlogTimeout, p.State = 0, "absent"
+	if _, err := rt.FPMPool(ctx, p, st); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "var/log/falak/php-fpm-slow/shop.log")); !os.IsNotExist(err) {
+		t.Fatal("slow log left behind", err)
+	}
+}
+
 // A pool with a slice moves into its own master in that slice, and back into the shared one without.
 func TestFPMPoolOwnMasterInSlice(t *testing.T) {
 	f := &runnertest.Fake{}

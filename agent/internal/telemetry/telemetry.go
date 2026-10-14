@@ -11,6 +11,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,7 +144,14 @@ func New(opts Options) (*Service, error) {
 	var engine metrics.ContainerEngine
 	if opts.DockerSocket != "" {
 		s.docker = logs.NewDocker(opts.DockerSocket, relay, opts.Logger)
-		engine = docker.NewClient(opts.DockerSocket)
+		client := docker.NewClient(opts.DockerSocket)
+		engine = client
+		// Container log sources: files inside a site's containers, read through /proc/<pid>/root.
+		s.tailer.SetContainerEngine(client, opts.DockerSocket)
+	}
+	if s.tee != nil {
+		// Laravel log entries with a stack trace become Insights exceptions (sites without the APM package).
+		s.tailer.SetExceptionObserver(logExceptions{s})
 	}
 	s.workloads = metrics.NewWorkloadCollector(opts.FS, engine, relay)
 	s.workloads.Socket = opts.DockerSocket
@@ -162,6 +172,27 @@ func New(opts Options) (*Service, error) {
 }
 
 func (s *Service) configPath() string { return filepath.Join(s.opts.EtcDir, "telemetry.json") }
+
+// logExceptions hands the tailer's log-derived exceptions to the Insights tee, with the site's id for its slug (a
+// site this server does not know of has no Issues to land in).
+type logExceptions struct{ s *Service }
+
+func (l logExceptions) ObserveLogException(e logs.LogException) {
+	l.s.mu.Lock()
+	siteID := ""
+	for _, site := range l.s.cur.Sites {
+		if site.Slug == e.Site {
+			siteID = site.SiteID
+			break
+		}
+	}
+	l.s.mu.Unlock()
+	if siteID == "" {
+		return
+	}
+	l.s.tee.ObserveLogException(insights.LogException{SiteID: siteID, Type: e.Type, Message: e.Message,
+		Stacktrace: e.Stacktrace, Name: e.File, At: e.At})
+}
 
 // Start launches the receiver and background loops; returns an error when a listener fails. The loops stop when ctx
 // is cancelled; Wait returns once they have (some write state on the way out: log offsets, the OTLP disk buffer).
@@ -296,6 +327,57 @@ func validate(p Payload) error {
 	return nil
 }
 
+var (
+	slugRE           = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	composeServiceRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
+)
+
+// validateSourceV2 checks the fields of feature logs.container_files: a container source belongs to a site and names
+// a path inside its containers without "..", a multi-line pattern compiles. A source that fails is skipped (and
+// logged) when the configuration is applied, never the whole payload: one site's pattern that RE2 reads differently
+// from the control plane's check must not stop every other site's logs and the server's metrics settings.
+func validateSourceV2(src logs.Source) error {
+	switch src.Origin {
+	case "", logs.OriginFile, logs.OriginPHPFPM, logs.OriginPHPFPMSlow:
+	default:
+		return fmt.Errorf("log source origin %q", src.Origin)
+	}
+	if src.MultilinePattern != "" {
+		if len(src.MultilinePattern) > 256 {
+			return fmt.Errorf("log source multiline_pattern is longer than 256 bytes")
+		}
+		if _, err := regexp.Compile(src.MultilinePattern); err != nil {
+			return fmt.Errorf("log source multiline_pattern: %w", err)
+		}
+	}
+	if src.ComposeService != "" && (!src.Container || !composeServiceRE.MatchString(src.ComposeService)) {
+		return fmt.Errorf("log source compose_service %q needs container and a service name", src.ComposeService)
+	}
+	if !src.Container {
+		return nil
+	}
+	if !slugRE.MatchString(src.Site) {
+		return fmt.Errorf("container log source %q needs its site", src.Path)
+	}
+	if src.Kind == "access" || !strings.HasPrefix(src.Path, "/") || strings.ContainsRune(src.Path, 0) || slices.Contains(strings.Split(src.Path, "/"), "..") || logs.PseudoPath(src.Path) {
+		return fmt.Errorf("container log source path %q", src.Path)
+	}
+	return nil
+}
+
+// usableSources leaves out the sources validateSourceV2 refuses.
+func (s *Service) usableSources(srcs []logs.Source) []logs.Source {
+	out := make([]logs.Source, 0, len(srcs)+1)
+	for _, src := range srcs {
+		if err := validateSourceV2(src); err != nil {
+			s.log.Warn("log source skipped", "site", src.Site, "path", src.Path, "err", err)
+			continue
+		}
+		out = append(out, src)
+	}
+	return out
+}
+
 func boolOr(b *bool, def bool) bool {
 	if b == nil {
 		return def
@@ -342,7 +424,7 @@ func (s *Service) apply(p Payload) {
 	s.workloads.SetSites(p.Sites)
 	s.workloads.Configure(enabled, interval)
 	// The edge's per-site access logs are always shipped (edge.caddy.apply writes them; the file name is the slug).
-	s.tailer.SetSources(append(append([]logs.Source(nil), p.LogSources...), logs.AccessSource()))
+	s.tailer.SetSources(append(s.usableSources(p.LogSources), logs.AccessSource()))
 	if s.docker != nil {
 		on, labels := true, map[string]string(nil)
 		if p.DockerLogs != nil {

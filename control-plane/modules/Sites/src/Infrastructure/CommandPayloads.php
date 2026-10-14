@@ -4,6 +4,7 @@ namespace Falak\Sites\Infrastructure;
 
 use Falak\Limits\Contracts\ResourceLimits;
 use Falak\Servers\Contracts\Data\PhpSettings;
+use Falak\Sites\Application\SiteLogSources;
 use Falak\Sites\Domain\Models\Site;
 
 /**
@@ -58,6 +59,11 @@ final class CommandPayloads
             // checks the resolved path.
             $tmpfs = rtrim((string) config('sites.env_dir', '/run/falak/env'), '/')."/{$site->slug}";
             $payload['php_admin_values'] = ['open_basedir' => $site->rootPath()."/:/tmp/:/usr/share/php/:{$tmpfs}.env:{$tmpfs}.d/"];
+        }
+
+        // The pool's slow log (stripped for agents without runtime.fpm.slowlog), shipped as the site's php_fpm_slow logs.
+        if (($slowlog = SiteLogSources::slowlogTimeout($site)) > 0) {
+            $payload['slowlog_timeout'] = $slowlog;
         }
 
         if ($limits?->hasCgroupLimits()) {

@@ -54,6 +54,8 @@ use Falak\Sites\Infrastructure\PatternSecretVariables;
 use Falak\Sites\Infrastructure\SitesCapacity;
 use Falak\SourceControl\Events\ConnectionDeleted;
 use Falak\Telemetry\Contracts\ServerSites;
+use Illuminate\Foundation\Http\Middleware\TrimStrings;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 
@@ -120,5 +122,9 @@ class SitesServiceProvider extends ModuleServiceProvider
         Event::listen(AgentVersionChanged::class, ReapplyFpmPools::class);
         Event::listen(OrganizationDeleted::class, DeleteOrganizationSites::class);
         Event::listen(ConnectionDeleted::class, DetachSourceConnection::class);
+
+        // A log source's start-of-record pattern is kept as written (a trailing space can be part of it); its path is
+        // validated untrimmed.
+        TrimStrings::skipWhen(fn (Request $request) => $request->isMethod('PUT') && $request->is('sites/*/log-sources', 'api/v1/sites/*/log-sources'));
     }
 }

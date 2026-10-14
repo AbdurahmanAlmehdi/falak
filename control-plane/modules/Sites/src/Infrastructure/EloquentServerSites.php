@@ -2,6 +2,7 @@
 
 namespace Falak\Sites\Infrastructure;
 
+use Falak\Sites\Application\SiteLogSources;
 use Falak\Sites\Contracts\Data\SharedPath;
 use Falak\Sites\Contracts\TargetStatus;
 use Falak\Sites\Domain\Models\Site;
@@ -55,9 +56,20 @@ final class EloquentServerSites implements ServerSites
     }
 
     /**
-     * @return list<array{path: string, kind: 'app', multiline?: 'laravel'}>
+     * The shared log directory's files (PHP sites), then Site → Logs → Sources: files inside a Docker or compose site's
+     * containers; a PHP-FPM site's own master's error log and its pool's slow log (SiteLogSources).
+     *
+     * @return list<array<string, mixed>>
      */
     private function logSources(Site $site): array
+    {
+        return [...$this->sharedLogFiles($site), ...SiteLogSources::telemetrySources($site)];
+    }
+
+    /**
+     * @return list<array{path: string, kind: 'app', multiline?: 'laravel'}>
+     */
+    private function sharedLogFiles(Site $site): array
     {
         if (! $site->runtime->isPhp()) {
             return [];

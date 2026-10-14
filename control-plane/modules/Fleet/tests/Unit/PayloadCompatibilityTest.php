@@ -62,3 +62,27 @@ it('keeps a site\'s unix_user for agents without telemetry.workloads.shared only
         ->and($new->sites[0]->isolated)->toBeTrue()
         ->and(property_exists($new->sites[2], 'isolated'))->toBeTrue();
 });
+
+it('drops container log sources whole for agents without logs.container_files and strips the other new fields', function () {
+    $configure = fn () => json_decode(json_encode(['log_sources' => [
+        ['path' => '/srv/falak/sites/shop/shared/storage/logs/*.log', 'site' => 'shop', 'multiline' => 'laravel'],
+        ['path' => '/var/www/html/storage/logs/*.log', 'site' => 'stack', 'container' => true, 'compose_service' => 'app'],
+        ['path' => '/var/log/falak/php-fpm-slow/shop.log', 'site' => 'shop', 'origin' => 'php_fpm_slow', 'multiline_pattern' => '^\['],
+    ]]));
+
+    // Without it, the container source's path would be tailed on the host: it is not sent at all.
+    expect(json_decode(json_encode(PayloadCompatibility::adapt('telemetry.configure', $configure(), ['telemetry.log_kind'])), true)['log_sources'])->toBe([
+        ['path' => '/srv/falak/sites/shop/shared/storage/logs/*.log', 'site' => 'shop', 'multiline' => 'laravel'],
+        ['path' => '/var/log/falak/php-fpm-slow/shop.log', 'site' => 'shop'],
+    ])
+        ->and(json_decode(json_encode(PayloadCompatibility::adapt('telemetry.configure', $configure(), ['telemetry.log_kind', 'logs.container_files'])), true)['log_sources'])
+        ->toBe(json_decode(json_encode($configure()), true)['log_sources'])
+        ->and(PayloadCompatibility::adapt('telemetry.configure', json_decode('{"sites":[]}'), []))->toEqual(json_decode('{"sites":[]}'));
+});
+
+it('strips the pool\'s slow log for agents without runtime.fpm.slowlog', function () {
+    $pool = fn () => json_decode(json_encode(['php_version' => '8.4', 'pool' => 'shop', 'user' => 'shop', 'slowlog_timeout' => 5]));
+
+    expect(property_exists(PayloadCompatibility::adapt('runtime.fpm.pool', $pool(), []), 'slowlog_timeout'))->toBeFalse()
+        ->and(PayloadCompatibility::adapt('runtime.fpm.pool', $pool(), ['runtime.fpm.slowlog'])->slowlog_timeout)->toBe(5);
+});

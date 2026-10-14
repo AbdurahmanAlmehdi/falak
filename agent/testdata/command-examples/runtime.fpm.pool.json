@@ -17,5 +17,6 @@
   },
   "state": "present",
   "slice": "site_shop",
-  "oom_score_adj": -500
+  "oom_score_adj": -500,
+  "slowlog_timeout": 5
 }

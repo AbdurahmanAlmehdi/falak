@@ -16,10 +16,13 @@ use Falak\Telemetry\Http\Controllers\LogController;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
+use InvalidArgumentException;
 
 /**
  * GET /api/v1/sites/{site}/logs?since=<seconds>&limit=&level=&kind=&cursor= — newest first; `meta.cursor`
- * pages to older lines (the `falak logs` CLI). `kind`: app (the site's own output) or access (edge requests).
+ * pages to older lines (the `falak logs` CLI). `kind`: app (the site's own output) or access (edge requests);
+ * `origin`: where app records come from (LogQueryBuilder::ORIGINS: output, file, container_file, php_fpm, php_fpm_slow).
  */
 final class SiteLogsApiController extends Controller
 {
@@ -42,6 +45,7 @@ final class SiteLogsApiController extends Controller
             'level' => ['nullable', Rule::in(LogController::LEVELS)],
             'cursor' => ['nullable', 'string', 'regex:/^\d{1,20}$/'],
             'kind' => ['nullable', Rule::in(['app', 'access'])],
+            'origin' => ['nullable', Rule::in(array_keys(LogQueryBuilder::ORIGINS))],
         ]);
 
         $limit = (int) ($input['limit'] ?? 100);
@@ -53,7 +57,11 @@ final class SiteLogsApiController extends Controller
             $end = now()->setTimestamp(intdiv((int) $input['cursor'], 1_000_000_000))->setMicrosecond(intdiv((int) $input['cursor'] % 1_000_000_000, 1000));
         }
 
-        $logql = LogQueryBuilder::build($organizationId, ['site_id' => $data->id, 'level' => $input['level'] ?? null, 'kind' => $input['kind'] ?? null]);
+        try {
+            $logql = LogQueryBuilder::build($organizationId, ['site_id' => $data->id, 'level' => $input['level'] ?? null, 'kind' => $input['kind'] ?? null, 'origin' => $input['origin'] ?? null]);
+        } catch (InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['origin' => $e->getMessage()]);
+        }
 
         try {
             $lines = $start->lessThan($end) ? $logs->queryRange($logql, $start, $end, $limit, 'backward') : [];

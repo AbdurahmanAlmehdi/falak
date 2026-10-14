@@ -54,6 +54,11 @@ var Features = []string{
 	// telemetry.configure sites[].isolated, and sites[].unix_user for non-isolated sites too: the shared user's
 	// processes attributed per site (its PHP-FPM pool, else its working directory), falak.workload.kind=processes.
 	"telemetry.workloads.shared",
+	// telemetry.configure log_sources[].container / .compose_service (files inside a site's containers, read through
+	// /proc/<pid>/root), .multiline_pattern and .origin (falak.log.origin: the Logs tab's source filter).
+	"logs.container_files",
+	// runtime.fpm.pool slowlog_timeout (the pool's slow log, /var/log/falak/php-fpm-slow/<pool>.log).
+	"runtime.fpm.slowlog",
 }
 
 var (

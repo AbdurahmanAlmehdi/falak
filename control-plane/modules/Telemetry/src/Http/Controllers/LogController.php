@@ -61,6 +61,8 @@ final class LogController extends Controller
             'compose_service' => ['nullable', 'string', 'max:63', 'regex:/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/'],
             // app: a site's own output; access: the edge's per-request log (the deployment panel's Network Logs).
             'kind' => ['nullable', Rule::in(['app', 'access'])],
+            // Where app records come from: output (stdout / stderr), file, container_file, php_fpm, php_fpm_slow.
+            'origin' => ['nullable', Rule::in(array_keys(LogQueryBuilder::ORIGINS))],
             'level' => ['nullable', Rule::in(self::LEVELS)],
             'search' => ['nullable', 'string', 'max:500'],
             'regex' => ['nullable', 'boolean'],
