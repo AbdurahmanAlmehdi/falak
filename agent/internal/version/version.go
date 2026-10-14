@@ -47,6 +47,10 @@ var Features = []string{
 	// terminal.open relay_token (the terminal relay: output and input over a WebSocket, docs/plans/CONSOLE.md) and
 	// container (a console in a container: docker exec), and a missing cwd starts in the home directory.
 	"terminal.v2",
+	// Workload metrics (falak.workload.*, docs/plans/OBSERVABILITY.md phase 1) instead of falak.container.*, the host's
+	// system.cpu.logical.count, and telemetry.configure sites[].unix_user / sites[].runtime (native sites measured by
+	// their unix user's processes).
+	"telemetry.workloads",
 }
 
 var (

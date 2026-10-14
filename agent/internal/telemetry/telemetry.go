@@ -102,7 +102,7 @@ type Service struct {
 	collector *metrics.Collector
 	tailer    *logs.Tailer
 	docker    *logs.Docker
-	stats     *metrics.ContainerCollector
+	workloads *metrics.WorkloadCollector
 
 	mu        sync.Mutex
 	cur       Payload
@@ -134,13 +134,16 @@ func New(opts Options) (*Service, error) {
 	s.sampler = metrics.NewSampler(opts.FS)
 	s.collector = metrics.NewCollector(s.sampler, relay)
 	s.tailer = logs.NewTailer(opts.FS, opts.StateDir, relay, opts.Logger)
-	// The socket may appear later (Docker installed by provisioning after the agent started): both followers
-	// check for it on every cycle.
+	// The socket may appear later (Docker installed by provisioning after the agent started): the log follower and
+	// the workload collector's container pass check for it on every cycle. Without Docker the workload collector
+	// still measures slices and native sites.
+	var engine metrics.ContainerEngine
 	if opts.DockerSocket != "" {
 		s.docker = logs.NewDocker(opts.DockerSocket, relay, opts.Logger)
-		s.stats = metrics.NewContainerCollector(docker.NewClient(opts.DockerSocket), relay)
-		s.stats.Socket = opts.DockerSocket
+		engine = docker.NewClient(opts.DockerSocket)
 	}
+	s.workloads = metrics.NewWorkloadCollector(opts.FS, engine, relay)
+	s.workloads.Socket = opts.DockerSocket
 	// Persisted configuration from a previous telemetry.configure.
 	if b, err := opts.FS.ReadFile(s.configPath()); err == nil {
 		var p Payload
@@ -178,9 +181,7 @@ func (s *Service) Start(ctx context.Context) error {
 	if s.docker != nil {
 		run(s.docker.Run)
 	}
-	if s.stats != nil {
-		run(s.stats.Run)
-	}
+	run(s.workloads.Run)
 	if s.tee != nil {
 		run(s.tee.Run)
 	}
@@ -336,9 +337,8 @@ func (s *Service) apply(p Payload) {
 		}
 	}
 	s.collector.Configure(enabled, interval)
-	if s.stats != nil {
-		s.stats.Configure(enabled, interval)
-	}
+	s.workloads.SetSites(p.Sites)
+	s.workloads.Configure(enabled, interval)
 	// The edge's per-site access logs are always shipped (edge.caddy.apply writes them; the file name is the slug).
 	s.tailer.SetSources(append(append([]logs.Source(nil), p.LogSources...), logs.AccessSource()))
 	if s.docker != nil {

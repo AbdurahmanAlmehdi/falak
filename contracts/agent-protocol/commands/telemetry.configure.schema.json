@@ -84,6 +84,16 @@
             "type": "string",
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
             "description": "ULID"
+          },
+          "unix_user": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
+            "description": "The site's own unix user (isolated sites only; a user several sites share is never sent, and the agent skips one claimed by several sites). A native site without a cgroup slice (falak-site_<slug>.slice) is measured as the sum of the processes this user owns (falak.workload.kind=user)"
+          },
+          "runtime": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "The site's runtime: frankenphp, php-fpm, node, bun, deno, static, docker, compose or function. Container runtimes (docker, compose, function) are measured from their labelled containers and need no per-user collector"
           }
         }
       }

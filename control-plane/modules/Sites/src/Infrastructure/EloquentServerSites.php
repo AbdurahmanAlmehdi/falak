@@ -19,7 +19,9 @@ use Falak\Volumes\Contracts\VolumeMounts;
  * (`storage/logs` — Laravel's `daily`/`single` channels, the default `LOG_CHANNEL` of new Laravel sites — or
  * Symfony's `var/log`) is tailed as the site's `app` logs, with Laravel's multi-line stack traces merged into their
  * record. Supervised programs, cron and containers are attributed by the agent itself; the edge's per-site access
- * logs are always tailed.
+ * logs are always tailed. The unix user and runtime let the agent measure a native site without a cgroup slice by the
+ * processes its user owns; only an isolated site's user is sent, as every non-isolated site runs as the same shared
+ * user (its processes are all of those sites together).
  */
 final class EloquentServerSites implements ServerSites
 {
@@ -38,7 +40,13 @@ final class EloquentServerSites implements ServerSites
             ->whereIn('id', SiteTarget::query()->select('site_id')->where('server_id', strtolower($serverId))->where('status', '!=', TargetStatus::Removing->value))
             ->orderBy('slug')
             ->get()
-            ->map(fn (Site $site) => new SiteTelemetryTarget($site->id, $site->slug, logSources: $this->logSources($site)))
+            ->map(fn (Site $site) => new SiteTelemetryTarget(
+                $site->id,
+                $site->slug,
+                logSources: $this->logSources($site),
+                unixUser: $site->isolated ? $site->unix_user : null,
+                runtime: $site->runtime->value,
+            ))
             ->values()
             ->all();
     }

@@ -1,9 +1,10 @@
 {
   "uid": "falak-containers",
-  "title": "Falak / Containers",
-  "description": "Docker container metrics and logs collected by falak-agent.",
+  "title": "Falak / Workloads",
+  "description": "Per-workload CPU, memory, I/O and processes from cgroup v2 and /proc (falak-agent): site containers, database containers, native sites (slice or unix user) and worker / daemon slices, against their limits.",
   "tags": [
     "falak",
+    "workloads",
     "containers"
   ],
   "timezone": "browser",
@@ -20,17 +21,17 @@
     "list": [
       {
         "name": "host",
-        "label": "Host",
+        "label": "Server",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "falak-metrics"
         },
         "query": {
-          "query": "label_values(container_memory_usage_bytes, host_name)",
+          "query": "label_values(falak_workload_memory_usage_bytes, host_name)",
           "refId": "host-var"
         },
-        "definition": "label_values(container_memory_usage_bytes, host_name)",
+        "definition": "label_values(falak_workload_memory_usage_bytes, host_name)",
         "refresh": 2,
         "sort": 1,
         "multi": true,
@@ -40,18 +41,60 @@
         "hide": 0
       },
       {
-        "name": "container",
-        "label": "Container",
+        "name": "service",
+        "label": "Site / service",
         "type": "query",
         "datasource": {
           "type": "prometheus",
           "uid": "falak-metrics"
         },
         "query": {
-          "query": "label_values(container_memory_usage_bytes{host_name=~\"$host\"}, container_name)",
-          "refId": "container-var"
+          "query": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\"}, service_name)",
+          "refId": "service-var"
         },
-        "definition": "label_values(container_memory_usage_bytes{host_name=~\"$host\"}, container_name)",
+        "definition": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\"}, service_name)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "kind",
+        "label": "Kind",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "falak-metrics"
+        },
+        "query": {
+          "query": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\"}, falak_workload_kind)",
+          "refId": "kind-var"
+        },
+        "definition": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\"}, falak_workload_kind)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "workload",
+        "label": "Workload",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "falak-metrics"
+        },
+        "query": {
+          "query": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\"}, falak_workload_name)",
+          "refId": "workload-var"
+        },
+        "definition": "label_values(falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\"}, falak_workload_name)",
         "refresh": 2,
         "sort": 1,
         "multi": true,
@@ -112,7 +155,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Running containers",
+      "title": "Workloads",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -121,7 +164,7 @@
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -131,7 +174,7 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "count(count by (host_name, container_name) (container_memory_usage_bytes{host_name=~\"$host\", container_name=~\"$container\"}))",
+          "expr": "count(count by (host_name, service_name, falak_workload_name) (falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}))",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -158,16 +201,16 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Total container memory",
+      "title": "CPU used (cores)",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 0,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -177,7 +220,55 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "sum(container_memory_usage_bytes{host_name=~\"$host\", container_name=~\"$container\"})",
+          "expr": "sum(rate(falak_workload_cpu_time_seconds_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Memory used",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum(falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\",falak_memory_type=\"used\"})",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -204,18 +295,18 @@
       }
     },
     {
-      "id": 3,
+      "id": 4,
       "type": "stat",
-      "title": "Total container CPU",
+      "title": "OOM kills (range)",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 0,
-        "w": 8,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -225,7 +316,7 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "sum(container_cpu_utilization_ratio{host_name=~\"$host\", container_name=~\"$container\"})",
+          "expr": "sum(increase(falak_workload_memory_oom_kills_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__range]))",
           "legendFormat": "__auto",
           "range": false,
           "instant": true,
@@ -234,8 +325,23 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
-          "decimals": 1
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
         },
         "overrides": []
       },
@@ -253,17 +359,30 @@
       }
     },
     {
-      "id": 4,
+      "id": 5,
+      "type": "row",
+      "title": "CPU",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 6,
       "type": "timeseries",
-      "title": "CPU by container",
-      "description": "",
+      "title": "CPU by workload (cores)",
+      "description": "rate(cpu time) = cores used; dashed: the server's logical CPUs.",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 5,
         "w": 12,
         "h": 8
       },
@@ -274,8 +393,114 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "max by (host_name, container_name) (container_cpu_utilization_ratio{host_name=~\"$host\", container_name=~\"$container\"})",
-          "legendFormat": "{{host_name}}/{{container_name}}",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (rate(falak_workload_cpu_time_seconds_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "B",
+          "expr": "sum by (host_name) (system_cpu_logical_count{host_name=~\"$host\"})",
+          "legendFormat": "{{host_name}} cores",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    6,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "CPU against limit",
+      "description": "Workloads with a CPU limit (cpu.max) only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (rate(falak_workload_cpu_time_seconds_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval])) / sum by (host_name, service_name, falak_workload_name) (falak_workload_cpu_limit{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
           "range": true,
           "instant": false
         }
@@ -283,6 +508,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
+          "min": 0,
           "custom": {
             "drawStyle": "line",
             "lineWidth": 1,
@@ -310,17 +536,17 @@
       }
     },
     {
-      "id": 5,
+      "id": 8,
       "type": "timeseries",
-      "title": "Memory by container",
+      "title": "CPU throttled (share of periods)",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
-        "x": 12,
-        "y": 4,
+        "x": 0,
+        "y": 13,
         "w": 12,
         "h": 8
       },
@@ -331,8 +557,334 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "max by (host_name, container_name) (container_memory_usage_bytes{host_name=~\"$host\", container_name=~\"$container\"})",
-          "legendFormat": "{{host_name}}/{{container_name}}",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (rate(falak_workload_cpu_throttled_periods_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval])) / sum by (host_name, service_name, falak_workload_name) (rate(falak_workload_cpu_periods_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]) > 0)",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "CPU throttled time",
+      "description": "Seconds of throttling per second.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (rate(falak_workload_cpu_throttled_time_seconds_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Memory",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Memory used by workload",
+      "description": "Anon + kernel memory (the page cache is shown apart); dashed: the server's memory.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\",falak_memory_type=\"used\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "B",
+          "expr": "sum by (host_name) (system_memory_limit_bytes{host_name=~\"$host\"})",
+          "legendFormat": "{{host_name}} memory",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    6,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Memory against limit",
+      "description": "Workloads with a memory limit (memory.max) only.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\",falak_memory_type=\"used\"}) / sum by (host_name, service_name, falak_workload_name) (falak_workload_memory_limit_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Page cache by workload",
+      "description": "Reclaimable: the kernel drops it before the workload runs out of memory.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\",falak_memory_type=\"cache\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
           "range": true,
           "instant": false
         }
@@ -367,17 +919,17 @@
       }
     },
     {
-      "id": 6,
+      "id": 14,
       "type": "timeseries",
-      "title": "Memory vs limit",
+      "title": "OOM kills",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
-        "x": 0,
-        "y": 12,
+        "x": 12,
+        "y": 30,
         "w": 12,
         "h": 8
       },
@@ -388,23 +940,19 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "max by (host_name, container_name) (container_memory_usage_bytes{host_name=~\"$host\", container_name=~\"$container\"}) / max by (host_name, container_name) (container_memory_limit_bytes{host_name=~\"$host\", container_name=~\"$container\"} > 0)",
-          "legendFormat": "{{host_name}}/{{container_name}}",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (increase(falak_workload_memory_oom_kills_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
+          "decimals": 0,
           "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": true
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "showPoints": "never"
           }
         },
         "overrides": []
@@ -426,17 +974,30 @@
       }
     },
     {
-      "id": 7,
+      "id": 15,
+      "type": "row",
+      "title": "I/O and processes",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
       "type": "timeseries",
-      "title": "Network I/O by container",
+      "title": "Disk I/O",
       "description": "",
       "datasource": {
         "type": "prometheus",
         "uid": "falak-metrics"
       },
       "gridPos": {
-        "x": 12,
-        "y": 12,
+        "x": 0,
+        "y": 39,
         "w": 12,
         "h": 8
       },
@@ -447,8 +1008,8 @@
             "uid": "falak-metrics"
           },
           "refId": "A",
-          "expr": "sum by (host_name, container_name, network_io_direction) (rate(container_network_io_bytes_total{host_name=~\"$host\", container_name=~\"$container\"}[$__rate_interval]))",
-          "legendFormat": "{{container_name}} {{network_io_direction}}",
+          "expr": "sum by (host_name, service_name, falak_workload_name, disk_io_direction) (rate(falak_workload_disk_io_bytes_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}} {{disk_io_direction}}",
           "range": true,
           "instant": false
         }
@@ -483,7 +1044,280 @@
       }
     },
     {
-      "id": 8,
+      "id": 17,
+      "type": "timeseries",
+      "title": "Network I/O (containers)",
+      "description": "Containers only: a native workload shares the server's network (see Falak / Server).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 39,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name, network_io_direction) (rate(falak_workload_network_io_bytes_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}} {{network_io_direction}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Processes",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (falak_workload_pids{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "B",
+          "expr": "sum by (host_name, service_name, falak_workload_name) (falak_workload_pids_limit{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"})",
+          "legendFormat": "{{host_name}} {{service_name}}/{{falak_workload_name}} limit",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    6,
+                    4
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "table",
+      "title": "Workloads now",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "falak-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 47,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "A",
+          "expr": "sum by (host_name, service_name, falak_workload_name, falak_workload_kind, falak_compose_service) (rate(falak_workload_cpu_time_seconds_total{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"}[$__rate_interval]))",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "B",
+          "expr": "sum by (host_name, service_name, falak_workload_name, falak_workload_kind, falak_compose_service) (falak_workload_memory_usage_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\",falak_memory_type=\"used\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "falak-metrics"
+          },
+          "refId": "C",
+          "expr": "sum by (host_name, service_name, falak_workload_name, falak_workload_kind, falak_compose_service) (falak_workload_memory_limit_bytes{host_name=~\"$host\", service_name=~\"$service\", falak_workload_kind=~\"$kind\", falak_workload_name=~\"$workload\"})",
+          "legendFormat": "__auto",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "CPU (cores)"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #B"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Memory"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value #C"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Memory limit"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 20,
       "type": "logs",
       "title": "Container logs",
       "description": "",
@@ -493,7 +1327,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 55,
         "w": 24,
         "h": 12
       },
@@ -504,7 +1338,7 @@
             "uid": "falak-loki"
           },
           "refId": "A",
-          "expr": "{host_name=~\"${host:regex}\"} | container_name=~\"${container:regex}\"",
+          "expr": "{host_name=~\"${host:regex}\", service_name=~\"${service:regex}\"} | container_name=~\".+\"",
           "queryType": "range",
           "legendFormat": ""
         }

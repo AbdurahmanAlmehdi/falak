@@ -283,6 +283,28 @@ func TestEnrichNeverOverwrites(t *testing.T) {
 	}
 }
 
+func TestEnrichMetricsLeavesReleaseOffWorkloads(t *testing.T) {
+	cfg := &Config{ServerID: "S", Sites: []Site{{Slug: "shop", SiteID: "SITE1", DeploymentID: "D1", ReleaseID: "R1"}}}
+	mk := func(scope string) *metricspb.ResourceMetrics {
+		return &metricspb.ResourceMetrics{Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{Str("service.name", "shop")}},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{Scope: &commonpb.InstrumentationScope{Name: scope}}}}
+	}
+	workloads, app := mk(WorkloadsScope), mk("laravel")
+	EnrichMetrics(workloads, cfg)
+	EnrichMetrics(app, cfg)
+	if v, _ := Lookup(workloads.Resource.Attributes, "falak.site.id"); v != "SITE1" {
+		t.Fatal("workloads are still attributed to the site")
+	}
+	for _, k := range []string{"falak.deployment.id", "falak.release.id"} {
+		if _, ok := Lookup(workloads.Resource.Attributes, k); ok {
+			t.Fatalf("workload metrics carry %s: a deployment would split their series", k)
+		}
+		if _, ok := Lookup(app.Resource.Attributes, k); !ok {
+			t.Fatalf("an app's own metrics keep %s", k)
+		}
+	}
+}
+
 func TestSamplingKeepsErrors(t *testing.T) {
 	mk := func(tid byte, errored bool, exc bool) *tracepb.Span {
 		id := bytes.Repeat([]byte{tid}, 16)

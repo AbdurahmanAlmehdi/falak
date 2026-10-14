@@ -168,6 +168,9 @@ func (c *Collector) Collect() *metricspb.ResourceMetrics {
 		ms = append(ms, counter("system.cpu.time", "s", st("user", cur.User), st("nice", cur.Nice), st("system", cur.System),
 			st("idle", cur.Idle), st("iowait", cur.IOWait), st("interrupt", cur.IRQ+cur.SoftIRQ), st("steal", cur.Steal)))
 	}
+	if n, err := ReadLogicalCPUs(fs); err == nil {
+		ms = append(ms, gauge("system.cpu.logical.count", "{cpu}", in(int64(n))))
+	}
 	if l, err := ReadLoad(fs); err == nil {
 		ms = append(ms, gauge("system.cpu.load_average.1m", "{thread}", dbl(l[0])),
 			gauge("system.cpu.load_average.5m", "{thread}", dbl(l[1])),

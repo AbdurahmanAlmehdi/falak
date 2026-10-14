@@ -86,6 +86,11 @@ func TestConfigurePersistsAndIsIdempotent(t *testing.T) {
 	if cfg.Endpoint != "https://otel.falak.example:4318" || cfg.TracesRatio != 0.25 || cfg.OrgID == "" || len(cfg.Sites) != 1 || cfg.BufferMax != 67108864 {
 		t.Fatalf("relay config not applied: %+v", cfg)
 	}
+	// The workload collector gets the sites too (slice keys → slugs, native sites measured by their unix user).
+	wsites := s.workloads.Sites()
+	if len(wsites) != 1 || wsites[0].UnixUser != "shop" || wsites[0].Runtime != "php-fpm" {
+		t.Fatalf("workload sites not applied: %+v", wsites)
+	}
 	// Reload from disk on a fresh service.
 	s2, err := New(Options{FS: fs, EtcDir: "/etc/falak", StateDir: "/var/lib/falak", Endpoint: "https://enrolled.example:4318"})
 	if err != nil {

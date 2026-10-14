@@ -26,6 +26,7 @@ use Falak\Telemetry\Application\Listeners\ReconfigureOnSiteChanges;
 use Falak\Telemetry\Contracts\AccessLogCounts;
 use Falak\Telemetry\Contracts\AccessLogs;
 use Falak\Telemetry\Contracts\Annotations;
+use Falak\Telemetry\Contracts\LogMetrics;
 use Falak\Telemetry\Contracts\LogsQuery;
 use Falak\Telemetry\Contracts\MetricsBackend;
 use Falak\Telemetry\Contracts\ServerSites;
@@ -38,6 +39,7 @@ use Falak\Telemetry\Infrastructure\Grafana\GrafanaAnnotations;
 use Falak\Telemetry\Infrastructure\Grafana\GrafanaClient;
 use Falak\Telemetry\Infrastructure\LokiAccessLogCounts;
 use Falak\Telemetry\Infrastructure\LokiAccessLogs;
+use Falak\Telemetry\Infrastructure\LokiLogMetrics;
 use Falak\Telemetry\Infrastructure\LokiLogsQuery;
 use Falak\Telemetry\Infrastructure\Metrics\MimirBackend;
 use Falak\Telemetry\Infrastructure\Metrics\VictoriaMetricsBackend;
@@ -66,6 +68,7 @@ class TelemetryServiceProvider extends ModuleServiceProvider
             ? MimirBackend::fromConfig()
             : VictoriaMetricsBackend::fromConfig());
         $this->app->bind(LogsQuery::class, fn () => LokiLogsQuery::fromConfig());
+        $this->app->bind(LogMetrics::class, fn () => LokiLogMetrics::fromConfig());
         $this->app->bind(TracesQuery::class, fn () => TempoTracesQuery::fromConfig());
         $this->app->bind(GrafanaClient::class, fn () => GrafanaClient::fromConfig());
         $this->app->bind(Annotations::class, GrafanaAnnotations::class);

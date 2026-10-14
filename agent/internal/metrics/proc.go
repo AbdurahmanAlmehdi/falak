@@ -92,6 +92,25 @@ func ReadCPU(fs hostfs.FS) (CPUTimes, error) {
 	return CPUTimes{n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]}, nil
 }
 
+// ReadLogicalCPUs counts the cpuN lines of /proc/stat: the online logical CPUs, the host's capacity in the unit of a
+// workload's CPU limit and of rate(cpu time) (cores).
+func ReadLogicalCPUs(fs hostfs.FS) (int, error) {
+	b, err := readFile(fs, "/proc/stat")
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if len(line) > 3 && strings.HasPrefix(line, "cpu") && line[3] >= '0' && line[3] <= '9' {
+			n++
+		}
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("no cpuN lines in /proc/stat")
+	}
+	return n, nil
+}
+
 // ReadMem parses /proc/meminfo.
 func ReadMem(fs hostfs.FS) (Mem, error) {
 	b, err := readFile(fs, "/proc/meminfo")
@@ -168,8 +187,12 @@ func ReadUptime(fs hostfs.FS) (float64, error) {
 }
 
 // ReadNetDev parses /proc/net/dev, skipping loopback.
-func ReadNetDev(fs hostfs.FS) ([]NetDev, error) {
-	b, err := readFile(fs, "/proc/net/dev")
+func ReadNetDev(fs hostfs.FS) ([]NetDev, error) { return readNetDevAt(fs, "/proc/net/dev") }
+
+// readNetDevAt parses a net/dev file: /proc/net/dev (the agent's own namespace: the host's) or /proc/<pid>/net/dev
+// (that process's network namespace, i.e. a container's).
+func readNetDevAt(fs hostfs.FS, path string) ([]NetDev, error) {
+	b, err := readFile(fs, path)
 	if err != nil {
 		return nil, err
 	}

@@ -330,7 +330,7 @@ func (r *Relay) accept(it item, spans []*tracepb.ResourceSpans, logs []*logspb.R
 		logs = append(logs, rl)
 	}
 	for _, rm := range it.metrics {
-		rm.Resource = Enrich(rm.Resource, cfg)
+		EnrichMetrics(rm, cfg)
 		metrics = append(metrics, rm)
 	}
 	return spans, logs, metrics

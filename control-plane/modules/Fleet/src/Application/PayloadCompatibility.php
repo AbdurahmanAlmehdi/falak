@@ -28,6 +28,11 @@ final class PayloadCompatibility
         'telemetry.log_kind' => [
             'telemetry.configure' => ['log_sources.*.kind', 'log_sources.*.multiline'],
         ],
+        // Workload metrics (docs/plans/OBSERVABILITY.md phase 1): a native site without a slice is measured by the
+        // processes of its unix user. Older agents measure no workloads.
+        'telemetry.workloads' => [
+            'telemetry.configure' => ['sites.*.unix_user', 'sites.*.runtime'],
+        ],
         // Split-out compose services joining their stack's network; older agents run them on their own network only.
         'docker.networks' => [
             'docker.run' => ['networks'],

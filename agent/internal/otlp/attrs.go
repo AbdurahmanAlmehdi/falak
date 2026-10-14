@@ -6,6 +6,7 @@ import (
 	"math"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
@@ -91,6 +92,11 @@ type Site struct {
 	Environment  string `json:"environment,omitempty"`
 	DeploymentID string `json:"deployment_id,omitempty"`
 	ReleaseID    string `json:"release_id,omitempty"`
+	// UnixUser and Runtime let the workload metrics measure a native site without a slice: the sum of every process
+	// its unix user owns. Runtime is the control plane's SiteRuntime value (php-fpm, frankenphp, node, … docker,
+	// compose, function); container runtimes are measured through their containers.
+	UnixUser string `json:"unix_user,omitempty"`
+	Runtime  string `json:"runtime,omitempty"`
 }
 
 // Config is the hot-swappable relay configuration.
@@ -127,9 +133,29 @@ func (c *Config) siteBySlug(slug string) *Site {
 // AgentService is the service.name of records produced by the agent itself.
 const AgentService = "falak-agent"
 
+// WorkloadsScope is the instrumentation scope of the agent's falak.workload.* metrics. They describe the site's
+// processes, not a release of it: they get no falak.deployment.id / falak.release.id, so a deployment does not split
+// every workload series in two (and double sum(rate()) while both are in the rate window).
+const WorkloadsScope = "falak-agent/workloads"
+
 // Enrich fills missing resource attributes per the telemetry contract. Attributes set by the app are
 // never overwritten. The site is resolved from falak.site.id, then service.name (site slug).
 func Enrich(res *resourcepb.Resource, cfg *Config) *resourcepb.Resource {
+	return enrich(res, cfg, true)
+}
+
+// EnrichMetrics is Enrich for one ResourceMetrics: the agent's workload metrics get no deployment / release ids.
+func EnrichMetrics(rm *metricspb.ResourceMetrics, cfg *Config) {
+	release := true
+	for _, sm := range rm.GetScopeMetrics() {
+		if sm.GetScope().GetName() == WorkloadsScope {
+			release = false
+		}
+	}
+	rm.Resource = enrich(rm.Resource, cfg, release)
+}
+
+func enrich(res *resourcepb.Resource, cfg *Config, release bool) *resourcepb.Resource {
 	if res == nil {
 		res = &resourcepb.Resource{}
 	}
@@ -157,8 +183,9 @@ func Enrich(res *resourcepb.Resource, cfg *Config) *resourcepb.Resource {
 		add("service.name", site.Slug)
 		add("falak.site.id", site.SiteID)
 		// The agent's own records (e.g. deployment lifecycle events) carry their deployment/release
-		// ids as record attributes; the site's *currently active* ids would contradict them.
-		if svc != AgentService {
+		// ids as record attributes; the site's *currently active* ids would contradict them. Workload metrics
+		// (release false) get none either.
+		if svc != AgentService && release {
 			add("falak.deployment.id", site.DeploymentID)
 			add("falak.release.id", site.ReleaseID)
 		}

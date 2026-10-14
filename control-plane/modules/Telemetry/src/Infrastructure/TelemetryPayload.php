@@ -49,6 +49,8 @@ final class TelemetryPayload
                 'environment' => $site->environment,
                 'deployment_id' => $site->deploymentId ? strtoupper($site->deploymentId) : null,
                 'release_id' => $site->releaseId ? strtoupper($site->releaseId) : null,
+                'unix_user' => $site->unixUser,
+                'runtime' => $site->runtime,
             ], fn ($v) => $v !== null && $v !== '');
 
             foreach ($site->logSources as $source) {

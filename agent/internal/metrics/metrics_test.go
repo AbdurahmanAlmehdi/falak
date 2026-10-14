@@ -125,3 +125,32 @@ func TestMissingProcIsTolerated(t *testing.T) {
 		t.Fatalf("%+v", sum)
 	}
 }
+
+func TestLogicalCPUCount(t *testing.T) {
+	for _, tc := range []struct {
+		name, stat string
+		want       int
+		ok         bool
+	}{
+		{"one", fixStat1, 1, true},
+		{"four, other lines ignored", "cpu  1 2 3 4\ncpu0 1\ncpu1 1\ncpu2 1\ncpu3 1\nintr 5\nctxt 9\ncpufreq 1\n", 4, true},
+		{"aggregate only", fixStat2, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := ReadLogicalCPUs(fixture(t, tc.stat))
+			if n != tc.want || (err == nil) != tc.ok {
+				t.Fatalf("got %d %v, want %d", n, err, tc.want)
+			}
+		})
+	}
+	rm := NewCollector(NewSampler(fixture(t, "cpu  1 0 0 0\ncpu0 1 0 0 0\ncpu1 0 0 0 0\n")), &captured{}).Collect()
+	for _, m := range rm.ScopeMetrics[0].Metrics {
+		if m.Name == "system.cpu.logical.count" {
+			if v := m.GetGauge().DataPoints[0].GetAsInt(); v != 2 || m.Unit != "{cpu}" {
+				t.Fatalf("logical count %d %s", v, m.Unit)
+			}
+			return
+		}
+	}
+	t.Fatal("system.cpu.logical.count missing")
+}

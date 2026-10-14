@@ -6,8 +6,10 @@ import {
     Bar,
     BarChart,
     CartesianGrid,
+    ComposedChart,
     Line,
     LineChart,
+    ReferenceLine,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -20,6 +22,21 @@ export interface MetricSeries {
     /** Key in each data point. */
     key: string;
     label: string;
+    /** CSS color; defaults to the categorical palette by position. */
+    color?: string;
+    /** `composed` charts: how this series is drawn (default `line`). */
+    mark?: 'area' | 'line';
+    /** `composed` charts: areas with the same stack id stack on each other. */
+    stack?: string;
+    /** Dashed stroke (limits, capacity). */
+    dashed?: boolean;
+}
+
+/** A point in time marked with a vertical line (e.g. an OOM kill). */
+export interface MetricMarker {
+    t: number | string;
+    label: string;
+    color?: string;
 }
 
 export type MetricPoint = { t: number | string } & Record<string, number | string | null>;
@@ -28,7 +45,12 @@ export interface MetricChartProps {
     title: ReactNode;
     data: MetricPoint[];
     series: MetricSeries[];
-    type?: 'line' | 'area' | 'bar';
+    /** `composed`: each series picks its own mark (stacked areas under limit lines). */
+    type?: 'line' | 'area' | 'bar' | 'composed';
+    /** Vertical lines at points in time (`composed`, `line` and `area` charts). */
+    markers?: MetricMarker[];
+    /** Smallest y-axis maximum (keeps a near-zero series from filling the chart). */
+    minMax?: number;
     /** Formats y values in ticks/tooltip (e.g. `(v) => `${v.toFixed(1)}%``). */
     format?: (value: number) => string;
     /** Headline value shown next to the title (e.g. latest). */
@@ -45,6 +67,10 @@ export interface MetricChartProps {
 
 // Fixed categorical order (never cycled past 5: fold extra series into small multiples).
 const SERIES_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
+
+function colorOf(series: MetricSeries[], index: number): string {
+    return series[index]?.color ?? SERIES_COLORS[index] ?? 'var(--text-faint)';
+}
 
 const tickStyle = { fill: 'var(--text-faint)', fontSize: 11, fontFamily: 'var(--font-sans)' };
 
@@ -81,7 +107,7 @@ function ChartTooltip({
 
                 return (
                     <p key={String(entry.dataKey)} className="flex items-center gap-2">
-                        <span className="size-2 rounded-full" style={{ background: SERIES_COLORS[index] ?? 'var(--text-faint)' }} aria-hidden />
+                        <span className="size-2 rounded-full" style={{ background: colorOf(series, index) }} aria-hidden />
                         <span className="text-fg-muted">{series[index]?.label ?? entry.name}</span>
                         <span className="text-fg tabular ml-auto font-medium">{typeof entry.value === 'number' ? format(entry.value) : '—'}</span>
                     </p>
@@ -97,6 +123,8 @@ export function MetricChart({
     data,
     series,
     type = 'line',
+    markers = [],
+    minMax,
     format = (value) => (Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(1)),
     value,
     height = 180,
@@ -119,13 +147,30 @@ export function MetricChart({
         <>
             <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="0" />
             <XAxis dataKey="t" tickFormatter={timeFormat} tick={tickStyle} axisLine={false} tickLine={false} minTickGap={32} />
-            <YAxis tickFormatter={format} tick={tickStyle} axisLine={false} tickLine={false} width={44} />
+            <YAxis
+                tickFormatter={format}
+                tick={tickStyle}
+                axisLine={false}
+                tickLine={false}
+                width={44}
+                domain={minMax !== undefined ? [0, (dataMax: number) => Math.max(dataMax, minMax)] : undefined}
+            />
             <Tooltip
                 cursor={type === 'bar' ? { fill: 'var(--surface-2)' } : { stroke: 'var(--border-strong)', strokeWidth: 1 }}
                 content={(props) => (
                     <ChartTooltip {...(props as TooltipContentProps<number, string>)} format={format} series={visible} timeFormat={timeFormat} />
                 )}
             />
+            {type !== 'bar' &&
+                markers.map((marker) => (
+                    <ReferenceLine
+                        key={`${marker.t}-${marker.label}`}
+                        x={marker.t}
+                        stroke={marker.color ?? 'var(--danger)'}
+                        strokeDasharray="2 2"
+                        label={{ value: marker.label, position: 'insideTopLeft', fill: marker.color ?? 'var(--danger)', fontSize: 10 }}
+                    />
+                ))}
         </>
     );
 
@@ -138,7 +183,7 @@ export function MetricChart({
                         key={item.key}
                         dataKey={item.key}
                         name={item.label}
-                        fill={SERIES_COLORS[index]}
+                        fill={colorOf(visible, index)}
                         radius={[4, 4, 0, 0]}
                         isAnimationActive={false}
                     />
@@ -149,8 +194,8 @@ export function MetricChart({
                 <defs>
                     {visible.map((item, index) => (
                         <linearGradient key={item.key} id={`${gradientId}-${index}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={SERIES_COLORS[index]} stopOpacity={0.24} />
-                            <stop offset="100%" stopColor={SERIES_COLORS[index]} stopOpacity={0} />
+                            <stop offset="0%" stopColor={colorOf(visible, index)} stopOpacity={0.24} />
+                            <stop offset="100%" stopColor={colorOf(visible, index)} stopOpacity={0} />
                         </linearGradient>
                     ))}
                 </defs>
@@ -161,8 +206,9 @@ export function MetricChart({
                         type="monotone"
                         dataKey={item.key}
                         name={item.label}
-                        stroke={SERIES_COLORS[index]}
+                        stroke={colorOf(visible, index)}
                         strokeWidth={2}
+                        strokeDasharray={item.dashed ? '4 3' : undefined}
                         fill={`url(#${gradientId}-${index})`}
                         dot={false}
                         activeDot={{ r: 4, stroke: 'var(--surface-1)', strokeWidth: 2 }}
@@ -170,6 +216,42 @@ export function MetricChart({
                     />
                 ))}
             </AreaChart>
+        ) : type === 'composed' ? (
+            <ComposedChart {...common}>
+                {axes}
+                {visible.map((item, index) =>
+                    item.mark === 'area' ? (
+                        <Area
+                            key={item.key}
+                            type="monotone"
+                            dataKey={item.key}
+                            name={item.label}
+                            stackId={item.stack}
+                            stroke={colorOf(visible, index)}
+                            strokeWidth={1.5}
+                            fill={colorOf(visible, index)}
+                            fillOpacity={0.35}
+                            dot={false}
+                            activeDot={{ r: 3, stroke: 'var(--surface-1)', strokeWidth: 2 }}
+                            isAnimationActive={false}
+                        />
+                    ) : (
+                        <Line
+                            key={item.key}
+                            type="stepAfter"
+                            dataKey={item.key}
+                            name={item.label}
+                            stroke={colorOf(visible, index)}
+                            strokeWidth={1.5}
+                            strokeDasharray={item.dashed ? '4 3' : undefined}
+                            dot={false}
+                            activeDot={false}
+                            connectNulls
+                            isAnimationActive={false}
+                        />
+                    ),
+                )}
+            </ComposedChart>
         ) : (
             <LineChart {...common}>
                 {axes}
@@ -179,7 +261,8 @@ export function MetricChart({
                         type="monotone"
                         dataKey={item.key}
                         name={item.label}
-                        stroke={SERIES_COLORS[index]}
+                        stroke={colorOf(visible, index)}
+                        strokeDasharray={item.dashed ? '4 3' : undefined}
                         strokeWidth={2}
                         dot={false}
                         activeDot={{ r: 4, stroke: 'var(--surface-1)', strokeWidth: 2 }}
@@ -198,7 +281,11 @@ export function MetricChart({
                     <ul className="text-fg-muted flex flex-wrap items-center gap-3 text-xs" aria-label="Legend">
                         {visible.map((item, index) => (
                             <li key={item.key} className="flex items-center gap-1.5">
-                                <span className="h-0.5 w-3 rounded-full" style={{ background: SERIES_COLORS[index] }} aria-hidden />
+                                {item.dashed ? (
+                                    <span className="w-3 border-t-2 border-dashed" style={{ borderColor: colorOf(visible, index) }} aria-hidden />
+                                ) : (
+                                    <span className="h-0.5 w-3 rounded-full" style={{ background: colorOf(visible, index) }} aria-hidden />
+                                )}
                                 {item.label}
                             </li>
                         ))}

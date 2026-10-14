@@ -5,7 +5,7 @@
   "sampling": { "traces_ratio": 0.25 },
   "sites": [
     { "slug": "shop-example-com", "site_id": "01J9ZQ4C5M8W3X2Y1V0T9S8R7N", "environment": "production",
-      "deployment_id": "01J9ZQ4C5M8W3X2Y1V0T9S8R7M", "release_id": "01J9ZQ4C5M8W3X2Y1V0T9S8R7K" }
+      "deployment_id": "01J9ZQ4C5M8W3X2Y1V0T9S8R7M", "release_id": "01J9ZQ4C5M8W3X2Y1V0T9S8R7K", "unix_user": "shop", "runtime": "php-fpm" }
   ],
   "log_sources": [
     { "path": "/srv/falak/sites/shop-example-com/shared/storage/logs/*.log", "site": "shop-example-com", "format": "plain" },

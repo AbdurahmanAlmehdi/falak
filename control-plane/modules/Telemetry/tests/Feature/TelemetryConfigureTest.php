@@ -92,7 +92,8 @@ it('configures immediately once a server is provisioned', function () {
 
 it('includes organization overrides, the bearer token and sites from the ServerSites binding', function () {
     $server = telemetry_server($this->organization->id);
-    fleet_enroll($this->organization->id, $server->id);
+    // An agent with workload metrics gets each site's unix user and runtime.
+    fleet_enroll($this->organization->id, $server->id, ['features' => ['telemetry.workloads']]);
     TelemetrySettings::query()->create([
         'organization_id' => $this->organization->id,
         'otlp_endpoint' => 'https://collector.example.com',
@@ -107,7 +108,7 @@ it('includes organization overrides, the bearer token and sites from the ServerS
         {
             return [new SiteTelemetryTarget('01jsqte000000000000000000a', 'shop-example-com', 'production', '01jdep0000000000000000000a', null, [
                 ['path' => '/srv/falak/sites/shop-example-com/shared/storage/logs/*.log', 'format' => 'json'],
-            ])];
+            ], 'shop', 'php-fpm')];
         }
     });
 
@@ -120,7 +121,7 @@ it('includes organization overrides, the bearer token and sites from the ServerS
         ->and($payload['resource']['environment'])->toBe('staging')
         ->and($payload['sampling'])->toBe(['traces_ratio' => 0.25])
         ->and($payload['metrics']['interval_s'])->toBe(30)
-        ->and($payload['sites'])->toBe([['slug' => 'shop-example-com', 'site_id' => '01JSQTE000000000000000000A', 'environment' => 'production', 'deployment_id' => '01JDEP0000000000000000000A']])
+        ->and($payload['sites'])->toBe([['slug' => 'shop-example-com', 'site_id' => '01JSQTE000000000000000000A', 'environment' => 'production', 'deployment_id' => '01JDEP0000000000000000000A', 'unix_user' => 'shop', 'runtime' => 'php-fpm']])
         ->and($payload['log_sources'])->toBe([['path' => '/srv/falak/sites/shop-example-com/shared/storage/logs/*.log', 'site' => 'shop-example-com', 'format' => 'json']]);
 });
 

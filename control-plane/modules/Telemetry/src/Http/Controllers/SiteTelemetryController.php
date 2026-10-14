@@ -16,11 +16,14 @@ use Falak\Telemetry\Contracts\Data\AccessLogEntry;
 use Falak\Telemetry\Contracts\Data\MetricSeries;
 use Falak\Telemetry\Contracts\Exceptions\TelemetryQueryFailed;
 use Falak\Telemetry\Contracts\Exceptions\TelemetryUnavailable;
+use Falak\Telemetry\Contracts\LogMetrics;
 use Falak\Telemetry\Contracts\MetricsBackend;
 use Falak\Telemetry\Contracts\TelemetryLinks;
+use Falak\Telemetry\Infrastructure\LokiAccessLogCounts;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 /**
  * JSON behind the service panel's Metrics and Logs tabs for one site (docs/UI_DESIGN.md §5.1).
@@ -57,20 +60,38 @@ final class SiteTelemetryController extends Controller
         ]);
     }
 
-    /** GET /telemetry/sites/{siteId}/metrics/data?range=: CPU/memory per server, requests/errors/p95 for the site. */
-    public function metrics(Request $request, string $siteId, MetricsBackend $metrics): JsonResponse
+    /**
+     * GET /telemetry/sites/{siteId}/metrics/data?range=&server=: the site's workload (CPU, memory, disk, network,
+     * processes, per service) against its limits and its servers, the servers' utilisation, and its traffic. Traffic
+     * comes from span metrics when the site sends spans (`traffic_source: app`), else from its edge access log
+     * (`edge`). `server` narrows everything to one of the site's servers. `shared_user`: a native site that is not
+     * isolated runs as the unix user every such site shares, so the agent cannot measure it per user (only a cgroup
+     * slice, when it has limits, measures it); without workload series the panel then says why.
+     */
+    public function metrics(Request $request, string $siteId, MetricsBackend $metrics, LogMetrics $logMetrics): JsonResponse
     {
         $site = $this->site($request, $siteId);
-        $range = $request->validate(['range' => ['nullable', Rule::in(array_keys(ServerMetricQueries::RANGES))]])['range'] ?? '1h';
+        $input = $request->validate([
+            'range' => ['nullable', Rule::in(array_keys(ServerMetricQueries::RANGES))],
+            'server' => ['nullable', 'string', 'max:26'],
+        ]);
+        $range = $input['range'] ?? '1h';
         [$seconds, $step] = ServerMetricQueries::RANGES[$range];
+        $serverIds = array_map('strtolower', $site->serverIds());
+        $server = isset($input['server']) ? strtolower($input['server']) : null;
+
+        if ($server !== null && ! in_array($server, $serverIds, true)) {
+            throw ValidationException::withMessages(['server' => 'The site does not run on this server.']);
+        }
 
         $end = CarbonImmutable::now();
         $start = $end->subSeconds($seconds);
         $charts = [];
         $errors = [];
+        $queries = SiteMetricQueries::for($site->id, $server !== null ? [$server] : $serverIds, $site->runtime->usesDocker(), $step);
 
         try {
-            foreach (SiteMetricQueries::for($site->id, $site->serverIds()) as $key => $promql) {
+            foreach ($queries as $key => $promql) {
                 try {
                     $charts[$key] = array_map(fn (MetricSeries $s) => $s->toArray(), $metrics->queryRange($promql, $start, $end, $step));
                 } catch (TelemetryQueryFailed $e) {
@@ -82,15 +103,62 @@ final class SiteTelemetryController extends Controller
             return response()->json(['message' => $e->getMessage()], 503);
         }
 
+        $source = 'app';
+
+        // No spans in the range: the edge access log has every site's traffic.
+        if (! self::hasPoints($charts['requests'] ?? []) && (string) config('telemetry.loki.url') !== '') {
+            try {
+                $edgeCharts = [];
+                $edgeErrors = [];
+
+                foreach (SiteMetricQueries::edge($site->organizationId, $site->slug, $server, $step, LokiAccessLogCounts::PROBE_AGENT) as $key => $logql) {
+                    try {
+                        $edgeCharts[$key] = array_map(fn (MetricSeries $s) => $s->toArray(), $logMetrics->queryRange($logql, $start, $end, $step));
+                    } catch (TelemetryQueryFailed $e) {
+                        $edgeCharts[$key] = [];
+                        $edgeErrors[$key] = $e->getMessage();
+                    }
+                }
+
+                $charts = [...$charts, ...$edgeCharts];
+                $errors = [...array_diff_key($errors, $edgeCharts), ...$edgeErrors];
+                $source = 'edge';
+            } catch (TelemetryUnavailable $e) {
+                // Loki down: the (empty) span charts stay, the rest of the tab still renders.
+                $errors['requests'] ??= $e->getMessage();
+            }
+        }
+
         return response()->json([
             'range' => $range,
             'start' => $start->getTimestamp(),
             'end' => $end->getTimestamp(),
             'step' => $step,
+            'server' => $server,
             'servers' => $this->serversOf($site),
+            'runtime' => $site->runtime->value,
+            'containers' => $site->runtime->usesDocker(),
+            'shared_user' => ! $site->runtime->usesDocker() && ! $site->isolated,
+            'traffic_source' => $source,
             'charts' => $charts,
             'errors' => (object) $errors,
         ]);
+    }
+
+    /**
+     * @param  list<array{labels: array<string, string>, points: list<array{0: int, 1: float|null}>}>  $series
+     */
+    private static function hasPoints(array $series): bool
+    {
+        foreach ($series as $item) {
+            foreach ($item['points'] as [, $value]) {
+                if ($value !== null) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -260,8 +260,11 @@ type Container struct {
 	Created      string `json:"Created"`
 	RestartCount int    `json:"RestartCount"`
 	State        struct {
-		Status    string `json:"Status"`
-		Running   bool   `json:"Running"`
+		Status  string `json:"Status"`
+		Running bool   `json:"Running"`
+		// Pid is the container's init process on the host (0 when not running): its /proc/<pid>/net/dev is the
+		// container's network namespace (workload metrics).
+		Pid       int    `json:"Pid"`
 		ExitCode  int    `json:"ExitCode"`
 		OOMKilled bool   `json:"OOMKilled"`
 		StartedAt string `json:"StartedAt"`
@@ -273,10 +276,13 @@ type Container struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
-	// HostConfig: the limits db containers change in place (ContainerUpdate).
+	// HostConfig: the limits db containers change in place (ContainerUpdate), also read by the workload metrics on
+	// cgroup v1 hosts (where the cgroup files are not read); CgroupParent moves the container's cgroup directory.
 	HostConfig struct {
-		Memory   int64 `json:"Memory"`
-		NanoCpus int64 `json:"NanoCpus"`
+		Memory       int64  `json:"Memory"`
+		NanoCpus     int64  `json:"NanoCpus"`
+		PidsLimit    *int64 `json:"PidsLimit"`
+		CgroupParent string `json:"CgroupParent"`
 	} `json:"HostConfig"`
 	Mounts []struct {
 		Source      string `json:"Source"`

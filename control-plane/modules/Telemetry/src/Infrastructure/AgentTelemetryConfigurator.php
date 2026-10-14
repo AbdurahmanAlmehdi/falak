@@ -64,7 +64,7 @@ final class AgentTelemetryConfigurator implements TelemetryConfigurator
                 return $target;
             }
 
-            return new SiteTelemetryTarget($target->siteId, $target->slug, $target->environment, $release->deploymentId, $release->releaseId, $target->logSources);
+            return new SiteTelemetryTarget($target->siteId, $target->slug, $target->environment, $release->deploymentId, $release->releaseId, $target->logSources, $target->unixUser, $target->runtime);
         }, $targets);
     }
 

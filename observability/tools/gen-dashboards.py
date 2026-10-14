@@ -337,27 +337,87 @@ def deployments():
                      desc="Deployment timeline: Grafana annotations from the control plane + agent deployment log events.")
 
 
-# --------------------------------------------------------------------------- Containers
-def containers():
+# --------------------------------------------------------------------------- Workloads
+def workloads():
+    """Per-workload cgroup / per-user metrics (docs/plans/OBSERVABILITY.md phase 1): site containers (every compose
+    service), database containers, native sites' slices or unix users, worker / daemon slices."""
     L = Layout()
-    s = 'host_name=~"$host", container_name=~"$container"'
+    s = 'host_name=~"$host", service_name=~"$service", falak_workload_kind=~"$kind", falak_workload_name=~"$workload"'
+    h = 'host_name=~"$host"'
+    W = "host_name, service_name, falak_workload_name"
+    WL = "{{host_name}} {{service_name}}/{{falak_workload_name}}"
+    stacked = {"drawStyle": "line", "lineWidth": 1, "fillOpacity": 30, "stacking": {"mode": "normal"}, "showPoints": "never", "spanNulls": True}
     P = [
-        stat(L, "Running containers", [prom(f'count(count by (host_name, container_name) (container_memory_usage_bytes{{{s}}}))', instant=True)], w=8),
-        stat(L, "Total container memory", [prom(f'sum(container_memory_usage_bytes{{{s}}})', instant=True)], unit="bytes", w=8),
-        stat(L, "Total container CPU", [prom(f'sum(container_cpu_utilization_ratio{{{s}}})', instant=True)], unit="percentunit", w=8, decimals=1),
-        ts(L, "CPU by container", [prom(f'max by (host_name, container_name) (container_cpu_utilization_ratio{{{s}}})', "{{host_name}}/{{container_name}}")], unit="percentunit"),
-        ts(L, "Memory by container", [prom(f'max by (host_name, container_name) (container_memory_usage_bytes{{{s}}})', "{{host_name}}/{{container_name}}")], unit="bytes"),
-        ts(L, "Memory vs limit", [prom(f'max by (host_name, container_name) (container_memory_usage_bytes{{{s}}}) / max by (host_name, container_name) (container_memory_limit_bytes{{{s}}} > 0)', "{{host_name}}/{{container_name}}")], unit="percentunit", minv=0, maxv=1),
-        ts(L, "Network I/O by container", [prom(f'sum by (host_name, container_name, network_io_direction) (rate(container_network_io_bytes_total{{{s}}}[{RI}]))', "{{container_name}} {{network_io_direction}}")], unit="Bps"),
-        panel(L, "logs", "Container logs", [loki('{host_name=~"${host:regex}"} | container_name=~"${container:regex}"')], w=24, h=12, ds=LOKI,
+        stat(L, "Workloads", [prom(f'count(count by ({W}) (falak_workload_memory_usage_bytes{{{s}}}))', instant=True)], w=6),
+        stat(L, "CPU used (cores)", [prom(f'sum(rate(falak_workload_cpu_time_seconds_total{{{s}}}[{RI}]))', instant=True)], w=6, decimals=2),
+        stat(L, "Memory used", [prom(f'sum(falak_workload_memory_usage_bytes{{{s},falak_memory_type="used"}})', instant=True)], unit="bytes", w=6),
+        stat(L, "OOM kills (range)", [prom(f'sum(increase(falak_workload_memory_oom_kills_total{{{s}}}[$__range]))', instant=True)], w=6, decimals=0, thresholds=[(1, "red")]),
+        row(L, "CPU"),
+        ts(L, "CPU by workload (cores)", [
+            prom(f'sum by ({W}) (rate(falak_workload_cpu_time_seconds_total{{{s}}}[{RI}]))', WL, ref="A"),
+            prom(f'sum by (host_name) (system_cpu_logical_count{{{h}}})', "{{host_name}} cores", ref="B"),
+        ], custom=stacked, overrides=[{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [
+            {"id": "custom.stacking", "value": {"mode": "none"}}, {"id": "custom.fillOpacity", "value": 0},
+            {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 4]}}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "text"}}]}],
+           desc="rate(cpu time) = cores used; dashed: the server's logical CPUs."),
+        ts(L, "CPU against limit", [
+            prom(f'sum by ({W}) (rate(falak_workload_cpu_time_seconds_total{{{s}}}[{RI}])) / sum by ({W}) (falak_workload_cpu_limit{{{s}}})', WL),
+        ], unit="percentunit", minv=0, desc="Workloads with a CPU limit (cpu.max) only."),
+        ts(L, "CPU throttled (share of periods)", [
+            prom(f'sum by ({W}) (rate(falak_workload_cpu_throttled_periods_total{{{s}}}[{RI}])) / sum by ({W}) (rate(falak_workload_cpu_periods_total{{{s}}}[{RI}]) > 0)', WL),
+        ], unit="percentunit", minv=0, thresholds=[(0.25, "red")]),
+        ts(L, "CPU throttled time", [
+            prom(f'sum by ({W}) (rate(falak_workload_cpu_throttled_time_seconds_total{{{s}}}[{RI}]))', WL),
+        ], unit="s", desc="Seconds of throttling per second."),
+        row(L, "Memory"),
+        ts(L, "Memory used by workload", [
+            prom(f'sum by ({W}) (falak_workload_memory_usage_bytes{{{s},falak_memory_type="used"}})', WL, ref="A"),
+            prom(f'sum by (host_name) (system_memory_limit_bytes{{{h}}})', "{{host_name}} memory", ref="B"),
+        ], unit="bytes", custom=stacked, overrides=[{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [
+            {"id": "custom.stacking", "value": {"mode": "none"}}, {"id": "custom.fillOpacity", "value": 0},
+            {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 4]}}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "text"}}]}],
+           desc="Anon + kernel memory (the page cache is shown apart); dashed: the server's memory."),
+        ts(L, "Memory against limit", [
+            prom(f'sum by ({W}) (falak_workload_memory_usage_bytes{{{s},falak_memory_type="used"}}) / sum by ({W}) (falak_workload_memory_limit_bytes{{{s}}})', WL),
+        ], unit="percentunit", minv=0, maxv=1, thresholds=[(0.9, "red")], desc="Workloads with a memory limit (memory.max) only."),
+        ts(L, "Page cache by workload", [
+            prom(f'sum by ({W}) (falak_workload_memory_usage_bytes{{{s},falak_memory_type="cache"}})', WL),
+        ], unit="bytes", desc="Reclaimable: the kernel drops it before the workload runs out of memory."),
+        ts(L, "OOM kills", [prom(f'sum by ({W}) (increase(falak_workload_memory_oom_kills_total{{{s}}}[{RI}]))', WL)],
+           custom={"drawStyle": "bars", "fillOpacity": 80, "showPoints": "never"}, decimals=0),
+        row(L, "I/O and processes"),
+        ts(L, "Disk I/O", [prom(f'sum by ({W}, disk_io_direction) (rate(falak_workload_disk_io_bytes_total{{{s}}}[{RI}]))', WL + " {{disk_io_direction}}")], unit="Bps"),
+        ts(L, "Network I/O (containers)", [prom(f'sum by ({W}, network_io_direction) (rate(falak_workload_network_io_bytes_total{{{s}}}[{RI}]))', WL + " {{network_io_direction}}")], unit="Bps",
+           desc="Containers only: a native workload shares the server's network (see Falak / Server)."),
+        ts(L, "Processes", [
+            prom(f'sum by ({W}) (falak_workload_pids{{{s}}})', WL, ref="A"),
+            prom(f'sum by ({W}) (falak_workload_pids_limit{{{s}}})', WL + " limit", ref="B"),
+        ], decimals=0, overrides=[{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [
+            {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [6, 4]}}, {"id": "custom.fillOpacity", "value": 0}]}]),
+        table(L, "Workloads now", [
+            prom(f'sum by ({W}, falak_workload_kind, falak_compose_service) (rate(falak_workload_cpu_time_seconds_total{{{s}}}[{RI}]))', ref="A", instant=True),
+            prom(f'sum by ({W}, falak_workload_kind, falak_compose_service) (falak_workload_memory_usage_bytes{{{s},falak_memory_type="used"}})', ref="B", instant=True),
+            prom(f'sum by ({W}, falak_workload_kind, falak_compose_service) (falak_workload_memory_limit_bytes{{{s}}})', ref="C", instant=True),
+        ], w=12, overrides=[
+            {"matcher": {"id": "byName", "options": "Value #A"}, "properties": [{"id": "displayName", "value": "CPU (cores)"}, {"id": "decimals", "value": 2}]},
+            {"matcher": {"id": "byName", "options": "Value #B"}, "properties": [{"id": "displayName", "value": "Memory"}, {"id": "unit", "value": "bytes"}]},
+            {"matcher": {"id": "byName", "options": "Value #C"}, "properties": [{"id": "displayName", "value": "Memory limit"}, {"id": "unit", "value": "bytes"}]},
+        ]),
+        panel(L, "logs", "Container logs", [loki('{host_name=~"${host:regex}", service_name=~"${service:regex}"} | container_name=~".+"')], w=24, h=12, ds=LOKI,
               options={"showTime": True, "wrapLogMessage": True, "sortOrder": "Descending", "enableLogDetails": True}),
     ]
+    # Memory usage is the one series every workload has (Docker stats on cgroup v1 report no processes).
+    M = "falak_workload_memory_usage_bytes"
     V = [
-        var_query("host", "Host", "label_values(container_memory_usage_bytes, host_name)"),
-        var_query("container", "Container", 'label_values(container_memory_usage_bytes{host_name=~"$host"}, container_name)'),
+        var_query("host", "Server", f"label_values({M}, host_name)"),
+        var_query("service", "Site / service", f'label_values({M}{{host_name=~"$host"}}, service_name)'),
+        var_query("kind", "Kind", f'label_values({M}{{host_name=~"$host", service_name=~"$service"}}, falak_workload_kind)'),
+        var_query("workload", "Workload", f'label_values({M}{{host_name=~"$host", service_name=~"$service", falak_workload_kind=~"$kind"}}, falak_workload_name)'),
     ]
-    return dashboard("falak-containers", "Falak / Containers", ["containers"], P, V, DEPLOY_ANNOTATIONS[:1],
-                     desc="Docker container metrics and logs collected by falak-agent.")
+    # uid kept from "Falak / Containers": organizations' imported copies are replaced, not duplicated.
+    return dashboard("falak-containers", "Falak / Workloads", ["workloads", "containers"], P, V, DEPLOY_ANNOTATIONS[:1],
+                     desc="Per-workload CPU, memory, I/O and processes from cgroup v2 and /proc (falak-agent): site containers, "
+                          "database containers, native sites (slice or unix user) and worker / daemon slices, against their limits.")
 
 
 # --------------------------------------------------------------------------- Queues
@@ -393,7 +453,7 @@ def queues():
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, fn in [("server", server), ("laravel-site", laravel), ("node-app", node), ("deployments", deployments), ("containers", containers), ("queues", queues)]:
+    for name, fn in [("server", server), ("laravel-site", laravel), ("node-app", node), ("deployments", deployments), ("containers", workloads), ("queues", queues)]:
         path = OUT / f"falak-{name}.json"
         path.write_text(json.dumps(fn(), indent=2) + "\n")
         print(f"wrote {path.relative_to(OUT.parent.parent)}")
