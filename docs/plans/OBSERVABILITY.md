@@ -320,16 +320,18 @@ by the APM package and by the log lands in the **same** Issue. The agent compute
 frame) for its own de-duplication.
 
 **No double reports.** A site that also runs the APM package reports each exception twice (span event and log line).
-The agent drops a log-derived exception when the same site sent an APM span (`falak.event.type` set) within the last 15
-minutes, or sent an APM exception with the same key within ±60 s. Log-derived exceptions are held 15 s before they are
+The agent drops a log-derived exception when the same site sent an APM exception with the same key within ±60 s of
+the moment the log line was read (not of the entry's own timestamp, see the timezone note below). Log-derived exceptions are held 15 s before they are
 sent, so a span exported a few seconds after the log line still wins. Both spans and log lines pass through the same
 agent, so no control-plane state is needed. At most 120 log-derived exceptions per site and minute are sent (the rest
 are counted as dropped); at most 240 error entries per site and minute are parsed, only their first 64 KiB, and the
 message is cut at 4 KiB.
 
-The de-duplication is coarse on purpose: a site whose APM sent any span in 15 minutes gets no log-derived exceptions
-at all, including the ones its APM package does not report (a `Log::error($e)` the package does not see), and a site
-behind the APM's trace sampling keeps that sampling for its exceptions. A site without spans gets every one.
+Only a matching APM exception drops a log-derived one. v0.15.0 also dropped every log exception of a site whose APM
+sent any span in the last 15 minutes; on cloud.falak.sh that lost a Horizon supervisor's `RedisException`, which the
+APM package never sees (queue supervisors, artisan commands, a `Log::error($e)`), so v0.16.1 removed that rule. An
+exception the APM reports under another key (a different first in-app frame) can be reported twice; the control plane's
+fingerprinter usually still files both in the same Issue.
 
 The timestamp of Laravel's default line format has no zone: it is the app's `app.timezone`, UTC unless the app changed
 it. The agent does not know the app's setting and takes it as UTC; an app on another zone sees its log exceptions

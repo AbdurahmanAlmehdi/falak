@@ -98,7 +98,6 @@ type Tee struct {
 
 	// Log-derived exceptions (logexceptions.go): held until LogHold is over, dropped when the site's APM reported them.
 	held         []heldLog
-	apmSeen      map[string]time.Time      // site → last APM span seen
 	apmExc       map[string][]apmException // site → its recent APM exceptions' keys
 	logPerMinute map[string]int            // site → log-derived exceptions this minute
 	logMinute    int64
@@ -154,7 +153,7 @@ func (t *Tee) observeLocked(site string, sp *tracepb.Span, user string) {
 	name := NameFor(typ, sp)
 	isErr := sp.GetStatus().GetCode() == tracepb.Status_STATUS_CODE_ERROR
 	var apmExc []apmException
-	defer func() { t.observeAPMLocked(site, typ, apmExc) }()
+	defer func() { t.observeAPMLocked(site, apmExc) }()
 	for _, ev := range sp.GetEvents() {
 		if ev.GetName() != "exception" {
 			continue

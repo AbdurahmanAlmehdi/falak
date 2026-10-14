@@ -8,15 +8,19 @@ import (
 
 // Exceptions found in log files (a Laravel entry with a stack trace, logs.ParseLaravelException) reach Insights
 // without the APM package. A site that also runs the APM package reports each exception twice, as a span event and as
-// a log line: a log-derived exception is dropped when its site sent APM spans lately, or an APM exception with the same
-// key (class + first in-app frame) close to it. Both pass through this agent, so the tee decides alone.
+// a log line: a log-derived exception is dropped when an APM exception with the same key (class + first in-app frame)
+// arrived close to when the log line was read. Only that: a site running the APM package still logs exceptions the APM
+// never sees (queue supervisors, Horizon, artisan commands), and those must reach Insights. The match uses the time the
+// line was read, not the entry's own timestamp (Laravel writes it in the app's timezone, without the zone). Both pass
+// through this agent, so the tee decides alone.
 const (
 	// LogHold is how long a log-derived exception waits before it is sent: the span of the same exception is exported
 	// a few seconds after the log line is written.
 	LogHold = 15 * time.Second
-	// APMActiveWindow: a site that sent an APM span (falak.event.type set) this recently reports its exceptions itself.
+	// APMActiveWindow is how long an APM exception's key is remembered for matching.
 	APMActiveWindow = 15 * time.Minute
-	// APMMatchWindow: an APM exception with the same key within this much of the log entry is the same exception.
+	// APMMatchWindow: an APM exception with the same key within this much of the log line's reading is the same
+	// exception.
 	APMMatchWindow = time.Minute
 	// MaxLogExceptionsPerMinute bounds the log-derived exceptions of one site per minute (a crash loop logging the same
 	// error thousands of times); the rest are counted as dropped.
@@ -38,6 +42,7 @@ type LogException struct {
 type heldLog struct {
 	e     LogException
 	key   string
+	seen  time.Time // when the line was read (matched against APM exceptions)
 	until time.Time
 }
 
@@ -127,7 +132,7 @@ func (t *Tee) ObserveLogException(e LogException) {
 	if len(e.Stacktrace) > MaxStackBytes {
 		e.Stacktrace = e.Stacktrace[:MaxStackBytes]
 	}
-	t.held = append(t.held, heldLog{e: e, key: ExceptionKey(e.Type, e.Stacktrace), until: now.Add(LogHold)})
+	t.held = append(t.held, heldLog{e: e, key: ExceptionKey(e.Type, e.Stacktrace), seen: now, until: now.Add(LogHold)})
 	if over := len(t.held) - MaxPending; over > 0 {
 		t.held = t.held[over:]
 		t.dropped += int64(over)
@@ -145,16 +150,13 @@ func (t *Tee) HeldLogExceptions() []LogException {
 	return out
 }
 
-// observeAPMLocked remembers that a site sends APM spans, and the keys of its APM exceptions.
-func (t *Tee) observeAPMLocked(site, typ string, exc []apmException) {
+// observeAPMLocked remembers the keys of a site's APM exceptions.
+func (t *Tee) observeAPMLocked(site string, exc []apmException) {
 	if site == "" {
 		return
 	}
-	if t.apmSeen == nil {
-		t.apmSeen, t.apmExc = map[string]time.Time{}, map[string][]apmException{}
-	}
-	if typ != "" {
-		t.apmSeen[site] = t.now()
+	if t.apmExc == nil {
+		t.apmExc = map[string][]apmException{}
 	}
 	if len(exc) > 0 {
 		list := append(t.apmExc[site], exc...)
@@ -175,7 +177,7 @@ func (t *Tee) releaseHeldLocked() {
 			keep = append(keep, h)
 			continue
 		}
-		if t.reportedByAPMLocked(h, now) {
+		if t.reportedByAPMLocked(h) {
 			t.deduplicated++
 			continue
 		}
@@ -187,11 +189,6 @@ func (t *Tee) releaseHeldLocked() {
 		})
 	}
 	t.held = keep
-	for site, seen := range t.apmSeen {
-		if now.Sub(seen) > APMActiveWindow {
-			delete(t.apmSeen, site)
-		}
-	}
 	for site, list := range t.apmExc {
 		fresh := list[:0]
 		for _, x := range list {
@@ -207,12 +204,9 @@ func (t *Tee) releaseHeldLocked() {
 	}
 }
 
-func (t *Tee) reportedByAPMLocked(h heldLog, now time.Time) bool {
-	if seen, ok := t.apmSeen[h.e.SiteID]; ok && now.Sub(seen) <= APMActiveWindow {
-		return true
-	}
+func (t *Tee) reportedByAPMLocked(h heldLog) bool {
 	for _, x := range t.apmExc[h.e.SiteID] {
-		if x.key == h.key && absDuration(x.at.Sub(h.e.At)) <= APMMatchWindow {
+		if x.key == h.key && absDuration(x.at.Sub(h.seen)) <= APMMatchWindow {
 			return true
 		}
 	}

@@ -86,40 +86,44 @@ func TestLogExceptionIsHeldThenSent(t *testing.T) {
 	}
 }
 
-// A site whose APM package sends spans reports its exceptions itself: the log-derived ones are dropped.
-func TestLogExceptionDroppedWhenTheSiteRunsAPM(t *testing.T) {
+// A site running the APM package still logs exceptions the APM never sees (Horizon, queue supervisors, artisan
+// commands): its spans alone drop nothing. Found live: a Horizon supervisor's RedisException in a site sending requests.
+func TestLogExceptionSentWhenTheSiteRunsAPMButDidNotReportIt(t *testing.T) {
 	p := &fakePoster{}
 	now := base
 	tee := New(p, func() time.Time { return now }, nil)
 	tee.ObserveLogException(logException(base))
-	// The request span arrives a few seconds after the log line, within the hold.
 	now = base.Add(5 * time.Second)
 	tee.ObserveSpans(apmBatch("01SITE", span("GET /cart", 0, 10, otlp.Str("falak.event.type", "request"))))
 	now = base.Add(LogHold + time.Second)
 	tee.Flush(context.Background())
-	if n := len(p.byKind("exception")); n != 0 {
-		t.Fatalf("%d exceptions sent", n)
-	}
-	// Still active 10 minutes later; a different site is not affected.
-	now = base.Add(10 * time.Minute)
-	tee.ObserveLogException(logException(now))
-	other := logException(now)
-	other.SiteID = "01OTHER"
-	tee.ObserveLogException(other)
-	now = now.Add(LogHold)
-	tee.Flush(context.Background())
-	if got := p.byKind("exception"); len(got) != 1 || got[0]["site_id"] != "01OTHER" {
+	if got := p.byKind("exception"); len(got) != 1 || got[0]["event_type"] != "log" {
 		t.Fatalf("lines = %v", got)
 	}
-	// After APMActiveWindow without spans, the site's log exceptions are sent again.
-	now = base.Add(5*time.Second + APMActiveWindow + time.Minute)
-	tee.ObserveLogException(logException(now))
-	now = now.Add(LogHold)
-	tee.Flush(context.Background())
-	if got := p.byKind("exception"); len(got) != 2 {
-		t.Fatalf("lines = %v", got)
+	if tee.deduplicated != 0 {
+		t.Fatalf("deduplicated = %d", tee.deduplicated)
 	}
-	if tee.deduplicated != 2 {
+}
+
+// Laravel writes its timestamp in the app's timezone without the zone: an entry read as UTC can be hours off. The match
+// with the APM's exception uses the time the line was read.
+func TestLogExceptionMatchesAPMWhateverTheAppTimezone(t *testing.T) {
+	p := &fakePoster{}
+	now := base
+	tee := New(p, func() time.Time { return now }, nil)
+	sp := span("handle", 0, 10)
+	sp.Events = []*tracepb.Span_Event{{Name: "exception", TimeUnixNano: uint64(base.Add(time.Second).UnixNano()), Attributes: []*commonpb.KeyValue{
+		otlp.Str("exception.type", "DivisionByZeroError"), otlp.Str("exception.message", "Division by zero"),
+		otlp.Str("exception.stacktrace", "#0 /srv/falak/sites/shop/releases/01JNEW/app/Http/Middleware/Locale.php(21): Illuminate\\Routing\\Controller->callAction('show', Array)"),
+	}}}
+	tee.ObserveSpans(apmBatch("01SITE", sp))
+	tee.ObserveLogException(logException(base.Add(3 * time.Hour))) // an app in UTC+3
+	now = base.Add(LogHold)
+	tee.Flush(context.Background())
+	if got := p.byKind("exception"); len(got) != 1 || got[0]["event_type"] != "" {
+		t.Fatalf("only the APM's own line expected: %v", got)
+	}
+	if tee.deduplicated != 1 {
 		t.Fatalf("deduplicated = %d", tee.deduplicated)
 	}
 }
