@@ -154,6 +154,7 @@ type Tailer struct {
 	stop       context.Context // the running poll's: cancelled, it stops between files and lines
 	containers *containerSet   // nil: no Docker, container sources match nothing
 	exceptions ExceptionObserver
+	access     AccessObserver
 	excMinute  int64          // the minute excCount counts
 	excCount   map[string]int // site → error entries parsed for an exception this minute
 
@@ -208,6 +209,19 @@ func (t *Tailer) SetExceptionObserver(o ExceptionObserver) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.exceptions = o
+}
+
+// AccessObserver receives every parsed edge access record (kind access, with its site), e.g. the per-site HTTP
+// metrics of docs/plans/network/http.md. Called on the tailer's goroutine with the poll's lock held: it must not block.
+type AccessObserver interface {
+	ObserveAccess(obs.LogRecord)
+}
+
+// SetAccessObserver receives the edge's access records (HTTP analytics).
+func (t *Tailer) SetAccessObserver(o AccessObserver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.access = o
 }
 
 // SetSources replaces the configured sources; files no longer matched are closed. A MultilinePattern that does not
@@ -695,6 +709,9 @@ func (t *Tailer) emitLine(st *fileState, line []byte) {
 			ex.File = filepath.Base(st.display)
 			t.exceptions.ObserveLogException(ex)
 		}
+	}
+	if t.access != nil && src.Kind == "access" && rec.Site != "" && rec.Attrs["http.request.method"] != "" {
+		t.access.ObserveAccess(rec)
 	}
 	t.sink.EmitLog(rec)
 }

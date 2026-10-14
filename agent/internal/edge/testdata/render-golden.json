@@ -1,0 +1,600 @@
+{
+  "admin": {
+    "listen": "unix//run/falak-edge/admin.sock|0600"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "falak": {
+          "client_ip_headers": [
+            "CF-Connecting-IP"
+          ],
+          "listen": [
+            ":443"
+          ],
+          "logs": {
+            "logger_names": {
+              "api.test": [
+                "falak-access-api"
+              ],
+              "shop.test": [
+                "falak-access-shop"
+              ],
+              "www.api.test": [
+                "falak-access-api"
+              ]
+            },
+            "skip_unmapped_hosts": true
+          },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://api.test{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 308
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "www.api.test"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "@id": "falak-site-api",
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "status_code": 403
+                        }
+                      ],
+                      "match": [
+                        {
+                          "client_ip": {
+                            "ranges": [
+                              "10.0.0.0/8"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "headers",
+                          "response": {
+                            "set": {
+                              "X-Frame-Options": [
+                                "DENY"
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "headers": {
+                            "Location": [
+                              "/new"
+                            ]
+                          },
+                          "status_code": 301
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/old"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "encodings": {
+                            "gzip": {},
+                            "zstd": {}
+                          },
+                          "handler": "encode",
+                          "prefer": [
+                            "zstd",
+                            "gzip"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "@id": "falak-upstreams-api",
+                          "handler": "reverse_proxy",
+                          "headers": {
+                            "request": {
+                              "set": {
+                                "X-Falak-Function": [
+                                  "f"
+                                ]
+                              }
+                            }
+                          },
+                          "health_checks": {
+                            "active": {
+                              "interval": "10s",
+                              "timeout": "5s",
+                              "uri": "/up"
+                            }
+                          },
+                          "load_balancing": {
+                            "selection_policy": {
+                              "policy": "round_robin"
+                            },
+                            "try_duration": "5s"
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "127.0.0.1:3000"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "api.test"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "@id": "falak-site-go",
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "encodings": {
+                            "gzip": {},
+                            "zstd": {}
+                          },
+                          "handler": "encode",
+                          "prefer": [
+                            "zstd",
+                            "gzip"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "headers": {
+                            "Location": [
+                              "https://api.test"
+                            ]
+                          },
+                          "status_code": 308
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "go.test"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "@id": "falak-site-shop",
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "status_code": 403
+                        }
+                      ],
+                      "match": [
+                        {
+                          "not": [
+                            {
+                              "client_ip": {
+                                "ranges": [
+                                  "1.2.3.4/32"
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "authentication",
+                          "providers": {
+                            "http_basic": {
+                              "accounts": [
+                                {
+                                  "password": "$2y$x",
+                                  "username": "u"
+                                }
+                              ],
+                              "hash": {
+                                "algorithm": "bcrypt"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "request_body",
+                          "max_size": 1048576
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "encodings": {
+                            "gzip": {},
+                            "zstd": {}
+                          },
+                          "handler": "encode",
+                          "prefer": [
+                            "zstd",
+                            "gzip"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "vars",
+                          "root": "/srv/shop/current/public"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "static_response",
+                          "headers": {
+                            "Location": [
+                              "{http.request.orig_uri.path}/{http.request.orig_uri.prefixed_query}"
+                            ]
+                          },
+                          "status_code": 308
+                        }
+                      ],
+                      "match": [
+                        {
+                          "file": {
+                            "root": "/srv/shop/current/public",
+                            "try_files": [
+                              "{http.request.uri.path}/index.php"
+                            ]
+                          },
+                          "not": [
+                            {
+                              "path": [
+                                "*/"
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "uri": "{http.matchers.file.relative}"
+                        }
+                      ],
+                      "match": [
+                        {
+                          "file": {
+                            "root": "/srv/shop/current/public",
+                            "split_path": [
+                              ".php"
+                            ],
+                            "try_files": [
+                              "{http.request.uri.path}",
+                              "{http.request.uri.path}/index.php",
+                              "index.php"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "transport": {
+                            "protocol": "fastcgi",
+                            "resolve_root_symlink": true,
+                            "root": "/srv/shop/current/public",
+                            "split_path": [
+                              ".php"
+                            ]
+                          },
+                          "upstreams": [
+                            {
+                              "dial": "unix//run/php/shop.sock"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "*.php"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "hide": [
+                            ".env",
+                            ".git"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "shop.test"
+                  ]
+                }
+              ],
+              "terminal": true
+            }
+          ],
+          "trusted_proxies": {
+            "ranges": [
+              "173.245.48.0/20"
+            ],
+            "source": "static"
+          }
+        },
+        "falak_http": {
+          "client_ip_headers": [
+            "CF-Connecting-IP"
+          ],
+          "listen": [
+            ":80"
+          ],
+          "routes": [
+            {
+              "@id": "falak-site-web",
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "vars",
+                          "root": "/srv/web"
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "hide": [
+                            ".env",
+                            ".git"
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "file": {
+                            "root": "/srv/web",
+                            "try_files": [
+                              "{http.request.uri.path}",
+                              "{http.request.uri.path}/"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "uri": "/404.html"
+                        },
+                        {
+                          "handler": "file_server",
+                          "hide": [
+                            ".env",
+                            ".git"
+                          ],
+                          "status_code": "404"
+                        }
+                      ],
+                      "match": [
+                        {
+                          "file": {
+                            "root": "/srv/web",
+                            "try_files": [
+                              "/404.html"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "uri": "/index.html"
+                        },
+                        {
+                          "handler": "file_server",
+                          "hide": [
+                            ".env",
+                            ".git"
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "file": {
+                            "root": "/srv/web",
+                            "try_files": [
+                              "/index.html"
+                            ]
+                          },
+                          "not": [
+                            {
+                              "path_regexp": {
+                                "pattern": "\\.[A-Za-z0-9]+$"
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "file_server",
+                          "hide": [
+                            ".env",
+                            ".git"
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.test"
+                  ]
+                }
+              ],
+              "terminal": true
+            }
+          ],
+          "trusted_proxies": {
+            "ranges": [
+              "173.245.48.0/20"
+            ],
+            "source": "static"
+          }
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "issuers": [
+              {
+                "email": "ops@example.com",
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "api.test",
+              "www.api.test",
+              "go.test",
+              "shop.test"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "default": {
+        "exclude": [
+          "http.log.access"
+        ]
+      },
+      "falak-access-api": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "http.log.access.falak-access-api"
+        ],
+        "writer": {
+          "filename": "/var/log/falak/access/api.log",
+          "output": "file",
+          "roll_keep": 3,
+          "roll_keep_days": 7,
+          "roll_size_mb": 10
+        }
+      },
+      "falak-access-shop": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "http.log.access.falak-access-shop"
+        ],
+        "writer": {
+          "filename": "/var/log/falak/access/shop.log",
+          "output": "file",
+          "roll_keep": 3,
+          "roll_keep_days": 7,
+          "roll_size_mb": 10
+        }
+      }
+    }
+  }
+}

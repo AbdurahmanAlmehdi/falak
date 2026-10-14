@@ -20,6 +20,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/docker"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/httpstats"
 	"github.com/OthmanHaba/falak/agent/internal/insights"
 	"github.com/OthmanHaba/falak/agent/internal/logs"
 	"github.com/OthmanHaba/falak/agent/internal/metrics"
@@ -108,6 +109,7 @@ type Service struct {
 	docker    *logs.Docker
 	workloads *metrics.WorkloadCollector
 	followers []MetricsFollower
+	http      *httpstats.Aggregator
 
 	mu        sync.Mutex
 	cur       Payload
@@ -139,6 +141,9 @@ func New(opts Options) (*Service, error) {
 	s.sampler = metrics.NewSampler(opts.FS)
 	s.collector = metrics.NewCollector(s.sampler, relay)
 	s.tailer = logs.NewTailer(opts.FS, opts.StateDir, relay, opts.Logger)
+	// The edge's access records also become per-site HTTP metrics (falak.net.http.*, docs/plans/network/http.md).
+	s.http = httpstats.New(relay)
+	s.tailer.SetAccessObserver(s.http)
 	// The socket may appear later (Docker installed by provisioning after the agent started): the log follower and
 	// the workload collector's container pass check for it on every cycle. Without Docker the workload collector
 	// still measures slices and native sites.
@@ -216,6 +221,7 @@ func (s *Service) Start(ctx context.Context) error {
 		run(s.docker.Run)
 	}
 	run(s.workloads.Run)
+	run(s.http.Run)
 	if s.tee != nil {
 		run(s.tee.Run)
 	}
@@ -453,6 +459,7 @@ func (s *Service) apply(p Payload) {
 	}
 	s.workloads.SetSites(p.Sites)
 	s.workloads.Configure(enabled, interval)
+	s.http.SetEnabled(enabled)
 	// The edge's per-site access logs are always shipped (edge.caddy.apply writes them; the file name is the slug).
 	s.tailer.SetSources(append(s.usableSources(p.LogSources), logs.AccessSource()))
 	if s.docker != nil {

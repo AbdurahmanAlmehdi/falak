@@ -310,6 +310,10 @@
       "type": "object",
       "description": "Escape hatch: complete Caddy JSON config; when present it is loaded verbatim and `sites` is ignored"
     },
+    "request_id": {
+      "type": "boolean",
+      "description": "Feature edge.request_id: every site's requests get an X-Request-Id (a well-formed incoming one, ^[A-Za-z0-9._:-]{8,128}$, is kept; else a UUID), passed upstream, echoed in the response and recorded in the access log (http.request.id). Absent or false: the config renders as without the feature"
+    },
     "trusted_proxies": {
       "type": "array",
       "description": "CIDRs whose CF-Connecting-IP header is trusted for the client IP (Cloudflare's ranges for proxied sites)",

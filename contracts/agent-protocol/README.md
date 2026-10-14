@@ -46,6 +46,8 @@ Logs (docs/plans/OBSERVABILITY.md phase 2): `logs.container_files` (telemetry.co
 Network (docs/plans/network/): `net.connections` gates the whole command `net.connections.configure` (latency probes,
 peer names, WireGuard peer names) and the agent's `net.observed` request (connections, listeners, peers, conntrack,
 WireGuard, probes; `requests/net.observed.schema.json`).
+HTTP analytics (docs/plans/network/http.md): `edge.request_id` (edge.caddy.apply `request_id`: X-Request-Id stamped by
+the edge; stripped for older agents, whose rendered config is then unchanged).
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`

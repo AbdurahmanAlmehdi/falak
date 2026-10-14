@@ -27,6 +27,10 @@ type Payload struct {
 	// WildcardCertificates are obtained and renewed through ACME DNS-01 (a preview domain): sites in tls mode
 	// "wildcard" are served by the one covering their hosts, with no certificate per host.
 	WildcardCertificates []WildcardCertificate `json:"wildcard_certificates,omitempty"`
+	// RequestID stamps X-Request-Id on every request of every site (feature edge.request_id): a well-formed incoming
+	// id is kept, anything else replaced by a UUID; passed upstream and echoed in the response (and so in the access
+	// log). Without it the rendered config is exactly what it was before the feature.
+	RequestID bool `json:"request_id,omitempty"`
 }
 
 // WildcardCertificate is one *.<domain> certificate managed by the edge.
@@ -211,7 +215,7 @@ func Render(p Payload, certDir string) (obj, error) {
 			}
 			seen[d] = s.ID
 		}
-		routes, err := siteRoutes(s)
+		routes, err := siteRoutes(s, p.RequestID)
 		if err != nil {
 			return nil, fmt.Errorf("site %s: %w", s.ID, err)
 		}
@@ -341,7 +345,7 @@ func Render(p Payload, certDir string) (obj, error) {
 	return cfg, nil
 }
 
-func siteRoutes(s Site) ([]any, error) {
+func siteRoutes(s Site, requestID bool) ([]any, error) {
 	var out []any
 	if len(s.RedirectDomains) > 0 {
 		scheme := "https"
@@ -356,6 +360,10 @@ func siteRoutes(s Site) ([]any, error) {
 		})
 	}
 	var sub []any
+	if requestID {
+		// First, so every response of the site carries it (a 403 of the IP rules, a basic auth challenge, a redirect).
+		sub = append(sub, requestIDRoutes()...)
+	}
 	if len(s.DenyIPs) > 0 {
 		sub = append(sub, obj{"match": []any{obj{"client_ip": obj{"ranges": toAny(s.DenyIPs)}}}, "handle": []any{forbidden()}})
 	}
@@ -573,6 +581,20 @@ func acmeIssuer(p Payload) obj {
 		iss["ca"] = p.ACMECA
 	}
 	return iss
+}
+
+// requestIDRoutes stamp X-Request-Id: a request without a well-formed one gets {http.request.uuid} (generated once per
+// request), upstream and in the response; a well-formed incoming id is echoed in the response. The response header is
+// deferred so it replaces whatever the app set, and Caddy's access log (resp_headers) records the id the app saw.
+func requestIDRoutes() []any {
+	valid := obj{"header_regexp": obj{logs.RequestIDHeader: obj{"pattern": logs.RequestIDPattern}}}
+	return []any{
+		obj{"match": []any{obj{"not": []any{valid}}}, "handle": []any{obj{"handler": "headers",
+			"request":  obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.uuid}"}}},
+			"response": obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.uuid}"}}, "deferred": true}}}},
+		obj{"match": []any{valid}, "handle": []any{obj{"handler": "headers",
+			"response": obj{"set": obj{logs.RequestIDHeader: []any{"{http.request.header." + logs.RequestIDHeader + "}"}}, "deferred": true}}}},
+	}
 }
 
 func forbidden() obj { return obj{"handler": "static_response", "status_code": 403} }

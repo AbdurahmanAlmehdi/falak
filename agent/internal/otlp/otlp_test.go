@@ -305,6 +305,19 @@ func TestEnrichMetricsLeavesReleaseOffWorkloads(t *testing.T) {
 	}
 }
 
+func TestEnrichMetricsLeavesReleaseOffHTTPMetrics(t *testing.T) {
+	cfg := &Config{OrgID: "O", Sites: []Site{{Slug: "shop", SiteID: "SITE1", DeploymentID: "D1", ReleaseID: "R1"}}}
+	rm := &metricspb.ResourceMetrics{Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{Str("service.name", "shop")}},
+		ScopeMetrics: []*metricspb.ScopeMetrics{{Scope: &commonpb.InstrumentationScope{Name: HTTPScope}}}}
+	EnrichMetrics(rm, cfg)
+	if v, _ := Lookup(rm.Resource.Attributes, "falak.site.id"); v != "SITE1" {
+		t.Fatal("HTTP metrics are not attributed to the site")
+	}
+	if _, ok := Lookup(rm.Resource.Attributes, "falak.release.id"); ok {
+		t.Fatal("HTTP metrics carry the release: a deployment would split the request counters")
+	}
+}
+
 func TestSamplingKeepsErrors(t *testing.T) {
 	mk := func(tid byte, errored bool, exc bool) *tracepb.Span {
 		id := bytes.Repeat([]byte{tid}, 16)

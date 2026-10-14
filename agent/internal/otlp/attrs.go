@@ -141,6 +141,11 @@ const AgentService = "falak-agent"
 // every workload series in two (and double sum(rate()) while both are in the rate window).
 const WorkloadsScope = "falak-agent/workloads"
 
+// HTTPScope is the instrumentation scope of the agent's falak.net.http.* metrics (the edge's traffic per site,
+// docs/plans/network/http.md). Like the workload metrics they get no deployment / release ids: a deployment must not
+// split the site's request counters.
+const HTTPScope = "falak-agent/http"
+
 // Enrich fills missing resource attributes per the telemetry contract. Attributes set by the app are
 // never overwritten. The site is resolved from falak.site.id, then service.name (site slug).
 func Enrich(res *resourcepb.Resource, cfg *Config) *resourcepb.Resource {
@@ -151,7 +156,7 @@ func Enrich(res *resourcepb.Resource, cfg *Config) *resourcepb.Resource {
 func EnrichMetrics(rm *metricspb.ResourceMetrics, cfg *Config) {
 	release := true
 	for _, sm := range rm.GetScopeMetrics() {
-		if sm.GetScope().GetName() == WorkloadsScope {
+		if name := sm.GetScope().GetName(); name == WorkloadsScope || name == HTTPScope {
 			release = false
 		}
 	}

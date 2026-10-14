@@ -65,6 +65,9 @@ var Features = []string{
 	// Network connections (docs/plans/network/connections.md): the net.connections.configure command (probes, peer
 	// names), falak.net.* metrics and the net.observed request.
 	"net.connections",
+	// edge.caddy.apply request_id: the edge stamps X-Request-Id on every request (kept when well-formed, passed
+	// upstream, echoed in the response and the access record), docs/plans/network/http.md.
+	"edge.request_id",
 }
 
 var (
