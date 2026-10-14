@@ -224,21 +224,36 @@ container (deploy: new id) is a new container. The files are read through `/proc
 - The root is opened once per pid as an `os.Root`. The pid may exit and be reused (by any process, possibly a host
   one) between the inspect and the open, so the pid's start time is read before and after the open and the container
   is inspected again after it: same pid, same `StartedAt`, still running, or the root is refused. A root that is the
-  host's own (the same directory as the host's `/`, or `/proc/<pid>/ns/mnt` equal to `/proc/1/ns/mnt`) is refused too.
+  host's own (the same directory as the host's `/`, or `/proc/<pid>/ns/mnt` equal to `/proc/1/ns/mnt`) is refused too,
+  and so is a pid whose `/proc/<pid>/cgroup` (read between the two start-time reads) does not name the container's id.
   Every later open, stat, `lstat` and `readlink` is resolved beneath that root (`os.Root` refuses to leave it), so a
   symlink swapped in by the container between two checks cannot point the agent at a host file.
 - Globs are expanded segment by segment inside that root. Symlinks are resolved **in** the container root, as the
   container sees them: an absolute target (`/app/storage → /data/storage`) restarts at the container root, `..` stops
   at it. A target that names a host path (`../../../../etc/shadow`) therefore names that path inside the container,
   never on the host. At most 40 links per path, 256 files per source and container; a directory listing reads at most
-  4096 entries and is reused for 5 s (a glob is expanded every second).
+  4096 entries and is reused for 5 s (a glob is expanded every second). A glob has a budget of operations (directory
+  entries looked at, lstats, stats): 16384 per source and container, 131072 per poll for all container sources; one
+  that spends it stops (logged once).
 - Kernel state is never read. A resolved path under `/proc`, `/sys` or `/dev` is skipped (a link
   `storage/logs/laravel.log → /proc/kmsg` would drain the host's kernel log and block, `/proc/kallsyms` would show
-  kernel addresses to the agent's root reader). Every file, host files included, is opened `O_RDONLY | O_NONBLOCK |
-  O_NOCTTY` (a FIFO swapped in never blocks the tailer, which holds its lock), then checked on the open descriptor:
-  a regular file, the same device and inode the stat before the open saw, and not on a kernel pseudo filesystem
-  (`fstatfs`: procfs, sysfs, debugfs, tracefs, cgroup, securityfs, devpts, bpf, …). A poll reads a file at most up to
-  the size `fstat` gives it then, 4 MiB at a time.
+  kernel addresses to the agent's root reader).
+- Nothing but a regular file is ever opened for reading. A container has `CAP_MKNOD`: a device node exchanged with the
+  log file between the stat and the open (`renameat2(RENAME_EXCHANGE)`, e.g. `/dev/watchdog`, whose open arms the
+  host's watchdog) must never be opened at all. On Linux every log file, host files included, is first opened
+  `O_PATH` (through the container's `os.Root`, which adds `O_NOFOLLOW`: no driver's open, no read access), checked on
+  that handle (`fstat`: a regular file, the same device and inode the stat saw; `fstatfs`: not procfs, sysfs, debugfs,
+  tracefs, cgroup, securityfs, devpts, bpf, …), and only then reopened `O_RDONLY | O_NONBLOCK | O_NOCTTY` through
+  `/proc/self/fd/<n>`, which names that same inode, and checked again. Container directories are opened
+  `O_DIRECTORY | O_NONBLOCK | O_NOCTTY`: on a FIFO or a device, `O_DIRECTORY` fails with `ENOTDIR` in the path walk
+  (the kernel's `do_open` checks it against the dentry before `vfs_open`), so no driver's open runs and nothing
+  blocks; `os.Root` opens every intermediate directory `O_DIRECTORY | O_NOFOLLOW` too.
+- The tailer holds its lock during a poll, so every call it makes is non-blocking and bounded: a poll reads a file at
+  most up to the size `fstat` gives it then (4 MiB at a time), at most 16 MiB per site per poll (the rest follows),
+  with at most 256 files open per site. A file already larger than 1 MiB when first seen in a fresh container is read
+  from the first whole line of its last MiB. Known exception: host sources are expanded with `filepath.Glob`, whose
+  plain open of the directories of the paths the control plane names (a site's shared log directory) would block on a
+  FIFO a site user swapped in for such a directory.
 - Only regular files are read (a log symlinked to `/dev/stdout`, as official nginx images do, is skipped: it is already
   in the container's stdout).
 - Offsets are kept per container id and in-container path (`container:<id>:<path>` in `log-offsets.json`), with the

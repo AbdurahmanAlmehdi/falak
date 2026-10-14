@@ -91,6 +91,18 @@ const MaxLine = 64 << 10
 // readChunk bounds bytes read per file per poll so one busy file cannot starve the others.
 const readChunk = 4 << 20
 
+// Per-site bounds of one poll (a site with many busy files, or a container that writes faster than it can be shipped,
+// cannot hold the tailer's lock for long or starve the other sites).
+const (
+	// MaxBytesPerSitePerPoll bounds what one poll reads from the files of one site (the rest is read next poll).
+	MaxBytesPerSitePerPoll = 16 << 20
+	// MaxOpenFilesPerSite bounds the files open for one site (each open file is a descriptor of the agent).
+	MaxOpenFilesPerSite = 256
+	// freshTail: a file first seen in a fresh container (read from its start) that is already larger is read from its
+	// last freshTail bytes instead (from the first whole line in them): a deploy's startup lines, not a copied history.
+	freshTail = 1 << 20
+)
+
 type fileState struct {
 	src     Source
 	display string            // log.file.path: the host path, or the path inside the container
@@ -116,6 +128,15 @@ type savedOffset struct {
 
 // Tailer follows files matching the configured sources. Files are keyed by their real host path, or for container
 // sources by container:<id>:<path in the container> (offsets are per container).
+//
+// Invariant: a poll holds mu (SetSources and shutdown wait for it), so no file system call made during a poll may
+// block or run unbounded, whatever a container or a site user puts in the way: log files are opened O_PATH first
+// (Linux) and read non-blocking, up to their size and the per-site budget (MaxBytesPerSitePerPoll); container
+// directories are opened O_DIRECTORY|O_NONBLOCK (O_DIRECTORY fails with ENOTDIR in the path walk, before any driver's
+// open, on a FIFO or a device) and globs inside containers stop at their operation budget (MaxGlobOps,
+// MaxPollGlobOps); stat, lstat and readlink do not open anything. Known exception: host sources are expanded with
+// filepath.Glob, which opens the directories of the paths the control plane names (a site's shared log directory)
+// with a plain open; a FIFO a site user swapped in for such a directory would block that open.
 type Tailer struct {
 	fs        hostfs.FS
 	statePath string // real path of the offsets file
@@ -135,6 +156,16 @@ type Tailer struct {
 	exceptions ExceptionObserver
 	excMinute  int64          // the minute excCount counts
 	excCount   map[string]int // site → error entries parsed for an exception this minute
+
+	// Budgets of the running poll.
+	siteRead     map[string]int64 // site → bytes read this poll
+	siteOpen     map[string]int   // site → open files
+	globLeft     int              // container glob operations left this poll
+	globWarned   map[string]bool  // sources whose glob hit its budget (logged once)
+	openWarned   map[string]bool  // sites that hit MaxOpenFilesPerSite (logged once)
+	budgetWarned map[string]bool  // sites that hit MaxBytesPerSitePerPoll (logged once)
+	maxSiteBytes int64            // MaxBytesPerSitePerPoll (tests lower it)
+	maxSiteOpen  int              // MaxOpenFilesPerSite (tests lower it)
 }
 
 // NewTailer creates a tailer; offsets persist in <stateDir>/log-offsets.json (stateDir is a host path).
@@ -143,7 +174,7 @@ func NewTailer(fs hostfs.FS, stateDir string, sink obs.Sink, log *slog.Logger) *
 		log = slog.Default()
 	}
 	t := &Tailer{fs: fs, statePath: fs.P(filepath.Join(stateDir, "log-offsets.json")), sink: sink, log: log,
-		interval: time.Second, fresh: map[string]bool{}, files: map[string]*fileState{}, saved: map[string]savedOffset{}}
+		interval: time.Second, maxSiteBytes: MaxBytesPerSitePerPoll, maxSiteOpen: MaxOpenFilesPerSite, fresh: map[string]bool{}, files: map[string]*fileState{}, saved: map[string]savedOffset{}}
 	if b, err := os.ReadFile(t.statePath); err == nil {
 		_ = json.Unmarshal(b, &t.saved)
 	}
@@ -244,6 +275,10 @@ func (t *Tailer) poll(ctx context.Context) {
 		return
 	}
 	t.syncContainers(ctx)
+	t.siteRead, t.siteOpen, t.globLeft = map[string]int64{}, map[string]int{}, MaxPollGlobOps
+	for _, st := range t.files {
+		t.siteOpen[st.src.Site]++
+	}
 	seen := map[string]bool{}
 	for _, src := range t.sources {
 		if ctx.Err() != nil {
@@ -301,6 +336,9 @@ func (t *Tailer) closeFile(key string, st *fileState, drain bool) {
 	st.f.Close()
 	t.saved[key] = savedOffset{Ino: st.ino, Offset: st.offset - int64(len(st.partial)) - st.pendingN, Head: st.head}
 	delete(t.files, key)
+	if t.siteOpen != nil {
+		t.siteOpen[st.src.Site]--
+	}
 	t.dirty = true
 }
 
@@ -343,7 +381,9 @@ type target struct {
 	display string // log.file.path
 	attrs   map[string]string
 	stat    func() (os.FileInfo, error)
-	open    func() (*os.File, error)
+	open    func(flag int) (*os.File, error) // openLog's: O_PATH first on Linux
+	// tail: a new file read from its start reads at most its last freshTail bytes (files of a fresh container).
+	tail bool
 }
 
 func (t *Tailer) hostTarget(real string) target {
@@ -353,7 +393,7 @@ func (t *Tailer) hostTarget(real string) target {
 	}
 	return target{key: real, display: display,
 		stat: func() (os.FileInfo, error) { return os.Stat(real) },
-		open: func() (*os.File, error) { return os.OpenFile(real, openFlags, 0) }}
+		open: func(flag int) (*os.File, error) { return os.OpenFile(real, flag, 0) }}
 }
 
 // pollContainerSource polls a container source's files in every running container of its site (and compose service).
@@ -369,19 +409,58 @@ func (t *Tailer) pollContainerSource(ctx context.Context, src Source, first bool
 		// Freshness is checked now, not when the container was first seen: a source added an hour after a deploy
 		// starts that container's files at their end like any other.
 		fromStart := c.fresh(now)
-		for _, inner := range globIn(root, src.Path, MaxFilesPerSource, c.lister(now)) {
+		budget := &globBudget{left: min(MaxGlobOps, t.globLeft)}
+		before := budget.left
+		paths := globIn(root, src.Path, MaxFilesPerSource, c.lister(now), budget)
+		t.globLeft -= before - max(budget.left, 0)
+		if budget.left < 0 && !t.globWarned[src.key()] {
+			if t.globWarned == nil {
+				t.globWarned = map[string]bool{}
+			}
+			t.globWarned[src.key()] = true
+			t.log.Warn("container log source: glob stopped at its budget", "site", src.Site, "path", src.Path, "container", c.name)
+		}
+		for _, inner := range paths {
 			key := containerKey(c.id, inner)
 			if seen[key] || ctx.Err() != nil {
 				continue
 			}
 			seen[key] = true
 			rel := rootRel(inner)
-			t.pollFile(target{key: key, display: inner, attrs: c.attrs(),
+			t.pollFile(target{key: key, display: inner, attrs: c.attrs(), tail: fromStart,
 				stat: func() (os.FileInfo, error) { return root.Stat(rel) },
-				open: func() (*os.File, error) { return root.OpenFile(rel, openFlags, 0) },
+				open: func(flag int) (*os.File, error) { return root.OpenFile(rel, flag, 0) },
 			}, src, (first || c.firstPass) && !fromStart)
 		}
 	}
+}
+
+// siteBudget is what this poll may still read from a site's files.
+func (t *Tailer) siteBudget(site string) int64 {
+	if t.siteRead == nil {
+		return t.maxSiteBytes
+	}
+	return t.maxSiteBytes - t.siteRead[site]
+}
+
+// startOfLastLines is the offset of the first whole line in the last n bytes of a file of size size.
+func startOfLastLines(f *os.File, size, n int64) int64 {
+	if size <= n {
+		return 0
+	}
+	off := size - n
+	buf := make([]byte, 64<<10)
+	for scanned := int64(0); scanned < n; {
+		k, err := f.ReadAt(buf, off+scanned)
+		if i := bytes.IndexByte(buf[:k], '\n'); i >= 0 {
+			return off + scanned + int64(i) + 1
+		}
+		scanned += int64(k)
+		if err != nil || k == 0 {
+			break
+		}
+	}
+	return size
 }
 
 func (t *Tailer) pollFile(tg target, src Source, first bool) {
@@ -399,17 +478,26 @@ func (t *Tailer) pollFile(tg target, src Source, first bool) {
 		t.flushPending(real, st)
 		st.f.Close()
 		delete(t.files, real)
+		if t.siteOpen != nil {
+			t.siteOpen[src.Site]--
+		}
 		st = nil
 		first = false
 		delete(t.saved, real)
 	}
 	if st == nil {
-		f, err := tg.open()
-		if err != nil {
+		if t.siteOpen != nil && t.siteOpen[src.Site] >= t.maxSiteOpen {
+			if !t.openWarned[src.Site] {
+				if t.openWarned == nil {
+					t.openWarned = map[string]bool{}
+				}
+				t.openWarned[src.Site] = true
+				t.log.Warn("log files: too many open for one site", "site", src.Site, "max", t.maxSiteOpen)
+			}
 			return
 		}
-		if err := checkOpened(f, fi); err != nil {
-			f.Close()
+		f, err := openLog(tg.open, fi)
+		if err != nil {
 			t.log.Debug("log file refused", "path", tg.display, "err", err)
 			return
 		}
@@ -419,8 +507,13 @@ func (t *Tailer) pollFile(tg target, src Source, first bool) {
 			st.head = sv.Head
 		} else if first {
 			st.offset = fi.Size() // pre-existing history is not shipped
+		} else if tg.tail {
+			st.offset = startOfLastLines(f, fi.Size(), freshTail)
 		}
 		t.files[real] = st
+		if t.siteOpen != nil {
+			t.siteOpen[src.Site]++
+		}
 		t.dirty = true
 	}
 	st.src = src
@@ -432,7 +525,7 @@ func (t *Tailer) pollFile(tg target, src Source, first bool) {
 		st.head = nil
 		t.dirty = true
 	}
-	if t.readAvailable(real, st) == 0 {
+	if t.readAvailable(real, st) == 0 && t.siteBudget(src.Site) > 0 {
 		// Nothing new for a whole poll interval: the collected record is complete.
 		t.flushPending(real, st)
 	}
@@ -448,16 +541,28 @@ func readHead(f *os.File) []byte {
 }
 
 // readAvailable consumes new bytes and returns how many were read: at most up to the size the open file has now
-// (fstat) and readChunk per call, so a file that keeps producing data however much is read (a pseudo file that slipped
-// through) cannot hold the tailer's lock.
+// (fstat), readChunk per call and what the poll's budget of the file's site has left, so a file that keeps producing
+// data however much is read (a pseudo file that slipped through) or a site with many busy files cannot hold the
+// tailer's lock.
 func (t *Tailer) readAvailable(real string, st *fileState) int {
 	fi, err := st.f.Stat()
 	if err != nil {
 		return 0
 	}
-	budget := min(fi.Size()-st.offset, readChunk)
+	site := st.src.Site
+	budget := min(fi.Size()-st.offset, readChunk, t.siteBudget(site))
+	if t.siteBudget(site) <= 0 && fi.Size() > st.offset && !t.budgetWarned[site] {
+		if t.budgetWarned == nil {
+			t.budgetWarned = map[string]bool{}
+		}
+		t.budgetWarned[site] = true
+		t.log.Warn("log files: a site's read budget per poll reached, the rest follows", "site", site, "bytes", t.maxSiteBytes)
+	}
 	if budget <= 0 {
 		return 0
+	}
+	if t.siteRead != nil {
+		defer func(start int64) { t.siteRead[site] += st.offset - start }(st.offset)
 	}
 	if _, err := st.f.Seek(st.offset, io.SeekStart); err != nil {
 		return 0

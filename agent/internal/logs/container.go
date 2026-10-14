@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/docker"
@@ -178,7 +179,8 @@ func (s *containerSet) refresh(ctx context.Context) (gone, reopened []string) {
 
 // open inspects c for its init pid and opens /proc/<pid>/root. The pid may have exited and been reused (by any
 // process, possibly a host one) between the inspect and the open, so after the open the container is inspected again
-// and must still run with the same pid and start (StartedAt), and the pid's start time must not have changed either.
+// and must still run with the same pid and start (StartedAt), the pid's start time must not have changed either, and
+// the pid's cgroup must name the container's id (read between the two start-time reads).
 // A root that is the host's own (same directory as the host's "/", or the host's mount namespace) is refused. Once
 // open, the root stays pinned to the container's filesystem whatever happens to the pid.
 func (s *containerSet) open(ctx context.Context, c *logContainer) error {
@@ -203,6 +205,12 @@ func (s *containerSet) open(ctx context.Context, c *logContainer) error {
 	refuse := func(format string, args ...any) error {
 		root.Close()
 		return fmt.Errorf(format, args...)
+	}
+	// The process the root was opened through belongs to the container: its cgroup names the container's id (docker-<id>
+	// .scope, /docker/<id>, …). Read inside the start-time bracket, so it is the same process as the root's.
+	cg, err := s.fs.ReadFile(proc + "/cgroup")
+	if err != nil || !strings.Contains(string(cg), c.id) {
+		return refuse("pid %d is not in container %s's cgroup", pid, c.name)
 	}
 	if after, ok := procStart(s.fs, pid); !ok || after != before {
 		return refuse("pid %d was reused", pid)
@@ -296,7 +304,30 @@ func rootRel(p string) string {
 // ResolveIn resolves every symlink of the absolute path p as the container sees it: an absolute link target starts
 // again at the container's root, ".." stops at it. The result names a path inside root that has no symlink left (it
 // may not exist). Lstat and Readlink go through the os.Root, so nothing here can reach outside it either.
-func ResolveIn(root *os.Root, p string) (string, error) {
+func ResolveIn(root *os.Root, p string) (string, error) { return resolveIn(root, p, nil) }
+
+// errGlobBudget ends a glob that spent its budget.
+var errGlobBudget = errors.New("glob budget spent")
+
+// Budgets of the globs inside containers, in operations: a directory entry looked at, an lstat, a stat. A glob over a
+// huge tree or a maze of links stops there (and is logged once) instead of holding the tailer's lock.
+const (
+	MaxGlobOps     = 16384  // per glob (one source in one container)
+	MaxPollGlobOps = 131072 // per poll, every container source together
+)
+
+// globBudget counts the operations a glob may still do (nil: unbounded).
+type globBudget struct{ left int }
+
+func (b *globBudget) spend(n int) bool {
+	if b == nil {
+		return true
+	}
+	b.left -= n
+	return b.left >= 0
+}
+
+func resolveIn(root *os.Root, p string, budget *globBudget) (string, error) {
 	rest := strings.Split(path.Clean("/"+p), "/")
 	cur := "/"
 	for links := 0; len(rest) > 0; {
@@ -308,6 +339,9 @@ func ResolveIn(root *os.Root, p string) (string, error) {
 		case "..":
 			cur = path.Dir(cur) // path.Dir("/") is "/": clamped at the container's root
 			continue
+		}
+		if !budget.spend(1) {
+			return "", errGlobBudget
 		}
 		next := path.Join(cur, name)
 		fi, err := root.Lstat(rootRel(next))
@@ -347,11 +381,13 @@ func PseudoPath(p string) bool {
 // (ResolveIn). It returns the symlink-free in-container paths of the regular files it matches, sorted, at most limit.
 // Paths under /proc, /sys and /dev are left out (PseudoPath).
 func GlobIn(root *os.Root, pattern string, limit int) []string {
-	return globIn(root, pattern, limit, func(dir string) []string { return readDirNames(root, dir) })
+	return globIn(root, pattern, limit, func(dir string) []string { return readDirNames(root, dir) }, nil)
 }
 
-// globIn is GlobIn with the directory listing given (a container caches its listings for dirCacheTTL).
-func globIn(root *os.Root, pattern string, limit int, list func(dir string) []string) []string {
+// globIn is GlobIn with the directory listing given (a container caches its listings for dirCacheTTL) and a budget
+// of operations (nil: unbounded). A glob that spends its budget stops: it returns the files it matched so far if it
+// was at its last segment, none otherwise, and leaves budget.left below zero.
+func globIn(root *os.Root, pattern string, limit int, list func(dir string) []string, budget *globBudget) []string {
 	segs := strings.Split(strings.Trim(path.Clean("/"+pattern), "/"), "/")
 	if len(segs) == 0 || segs[0] == "" {
 		return nil
@@ -361,18 +397,29 @@ func globIn(root *os.Root, pattern string, limit int, list func(dir string) []st
 		last := i == len(segs)-1
 		seen := map[string]bool{}
 		var next []string
+		spent := false
+	dirs:
 		for _, dir := range cur {
 			names := []string{seg}
 			if hasMeta(seg) {
+				entries := list(dir)
+				if !budget.spend(len(entries)) {
+					spent = true
+					break
+				}
 				names = nil
-				for _, n := range list(dir) {
+				for _, n := range entries {
 					if ok, _ := path.Match(seg, n); ok {
 						names = append(names, n)
 					}
 				}
 			}
 			for _, name := range names {
-				p, err := ResolveIn(root, path.Join(dir, name))
+				p, err := resolveIn(root, path.Join(dir, name), budget)
+				if errors.Is(err, errGlobBudget) || !budget.spend(1) {
+					spent = true
+					break dirs
+				}
 				if err != nil || seen[p] || PseudoPath(p) {
 					continue
 				}
@@ -383,25 +430,33 @@ func globIn(root *os.Root, pattern string, limit int, list func(dir string) []st
 				seen[p] = true
 				next = append(next, p)
 				if len(next) >= limit {
-					break
+					break dirs
 				}
 			}
-			if len(next) >= limit {
-				break
-			}
+		}
+		if spent && !last {
+			return nil
 		}
 		if len(next) == 0 {
 			return nil
 		}
 		sort.Strings(next)
+		if spent {
+			return next
+		}
 		cur = next
 	}
 	return cur
 }
 
 // readDirNames lists the entries of dir (a resolved in-container directory), sorted, at most maxDirEntries of them.
+//
+// The directory is opened O_DIRECTORY|O_NONBLOCK|O_NOCTTY (the tailer holds its lock): a FIFO or a device swapped in
+// for it fails with ENOTDIR while the path is walked, before the kernel's open of the file (do_open checks
+// O_DIRECTORY against the dentry before vfs_open, so no driver's open runs), and O_NONBLOCK would keep anything else
+// from blocking. os.Root opens every intermediate directory O_DIRECTORY|O_NOFOLLOW as well.
 func readDirNames(root *os.Root, dir string) []string {
-	f, err := root.Open(rootRel(dir))
+	f, err := root.OpenFile(rootRel(dir), os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return nil
 	}

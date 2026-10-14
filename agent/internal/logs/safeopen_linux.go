@@ -2,8 +2,46 @@ package logs
 
 import (
 	"os"
+	"strconv"
 	"syscall"
 )
+
+// openLog opens a log file without opening anything else on the way. A plain open of a device node runs its driver's
+// open (a container has CAP_MKNOD: a /dev/watchdog node exchanged with the log file between the stat and the open
+// would arm the host's watchdog), and refusing the descriptor afterwards is too late. So the file is first opened
+// O_PATH (no driver open, no read access: a handle on the inode), checked on that handle (fstat: a regular file, the
+// inode the stat saw; fstatfs: not a kernel pseudo filesystem), and only then reopened for reading through
+// /proc/self/fd/<n>, which names that same inode: nothing can be swapped in between. The reopened descriptor is checked
+// again.
+func openLog(open func(flag int) (*os.File, error), want os.FileInfo) (*os.File, error) {
+	handle, err := open(syscall.O_PATH)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	if err := checkOpened(handle, want); err != nil {
+		return nil, err
+	}
+	rc, err := handle.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var f *os.File
+	var oerr error
+	if err := rc.Control(func(fd uintptr) {
+		f, oerr = os.OpenFile("/proc/self/fd/"+strconv.Itoa(int(fd)), openFlags, 0)
+	}); err != nil {
+		return nil, err
+	}
+	if oerr != nil {
+		return nil, oerr
+	}
+	if err := checkOpened(f, want); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
 
 // pseudoFilesystems are the statfs magics of kernel filesystems whose files are kernel state, not logs (linux/magic.h).
 var pseudoFilesystems = map[int64]bool{

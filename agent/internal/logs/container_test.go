@@ -162,9 +162,16 @@ func writeStat(t *testing.T, fs hostfs.FS, pid int, start uint64) {
 }
 
 // containerRoot makes /proc/<pid>/root a link to the container's filesystem (dir), as the kernel's magic link is.
-func containerRoot(t *testing.T, fs hostfs.FS, pid int, dir string) {
+// The pid's cgroup names the container's id (cgroup v2 with the systemd driver).
+func containerRoot(t *testing.T, fs hostfs.FS, pid int, dir, id string) {
 	t.Helper()
 	symlink(t, dir, fs.P(fmt.Sprintf("/proc/%d/root", pid)))
+	writeCgroup(t, fs, pid, id)
+}
+
+func writeCgroup(t *testing.T, fs hostfs.FS, pid int, id string) {
+	t.Helper()
+	mkfile(t, fs.P(fmt.Sprintf("/proc/%d/cgroup", pid)), "0::/system.slice/docker-"+id+".scope\n")
 }
 
 func TestProcStart(t *testing.T) {
@@ -190,9 +197,9 @@ func TestContainerSourceRestartRotationAndOffsets(t *testing.T) {
 	mkfile(t, logPath, "history before the agent\n")
 	mkfile(t, filepath.Join(otherDir, "var/www/html/storage/logs/laravel.log"), "")
 	writeStat(t, fs, 42, 1000)
-	containerRoot(t, fs, 42, c1Dir)
+	containerRoot(t, fs, 42, c1Dir, "c1")
 	writeStat(t, fs, 50, 3000)
-	containerRoot(t, fs, 50, otherDir)
+	containerRoot(t, fs, 50, otherDir, "other")
 
 	old := time.Now().Add(-time.Hour).Unix()
 	engine := &fakeEngine{}
@@ -231,7 +238,7 @@ func TestContainerSourceRestartRotationAndOffsets(t *testing.T) {
 	appendFile(t, logPath, "written while restarting\n")
 	os.RemoveAll(fs.P("/proc/42"))
 	writeStat(t, fs, 43, 2000)
-	containerRoot(t, fs, 43, c1Dir)
+	containerRoot(t, fs, 43, c1Dir, "c1")
 	engine.set(engine.list, map[string]int{"c1": 43, "other": 50})
 	tl.Poll()
 	appendFile(t, logPath, "after the restart\n")
@@ -257,7 +264,7 @@ func TestContainerSourceRestartRotationAndOffsets(t *testing.T) {
 	// A deploy replaces c1 by c2 (created moments ago): its file is read from the start, c1's offsets are dropped.
 	mkfile(t, filepath.Join(c2Dir, "var/www/html/storage/logs/laravel.log"), "booted\n")
 	writeStat(t, fs, 60, 4000)
-	containerRoot(t, fs, 60, c2Dir)
+	containerRoot(t, fs, 60, c2Dir, "c2")
 	engine.set([]docker.ContainerSummary{
 		{ID: "c2", Names: []string{"/shop-app-2"}, Created: time.Now().Unix(), Labels: map[string]string{"falak.site": "shop", "falak.service": "app"}},
 		{ID: "other", Names: []string{"/blog-app-1"}, Created: old, Labels: map[string]string{"falak.site": "blog", "falak.service": "app"}},
@@ -309,7 +316,7 @@ func TestContainerOpenRefusesAReusedPid(t *testing.T) {
 		t.Fatal("a container without a root matches")
 	}
 	writeStat(t, fs, 42, 1)
-	containerRoot(t, fs, 42, t.TempDir())
+	containerRoot(t, fs, 42, t.TempDir(), "c1")
 	s.listed = time.Time{}
 	s.refresh(context.Background())
 	if len(s.matching("shop", "")) != 1 || len(s.matching("shop", "worker")) != 0 || len(s.matching("blog", "")) != 0 {

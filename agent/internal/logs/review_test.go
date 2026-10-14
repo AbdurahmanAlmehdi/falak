@@ -116,7 +116,7 @@ func TestGlobInRefusesPseudoPaths(t *testing.T) {
 func TestContainerOpenRefusesPidReuseAndTheHostRoot(t *testing.T) {
 	fs := hostfs.FS{Root: t.TempDir()}
 	writeStat(t, fs, 42, 1)
-	containerRoot(t, fs, 42, t.TempDir())
+	containerRoot(t, fs, 42, t.TempDir(), "c1")
 	engine := &fakeEngine{}
 	engine.set([]docker.ContainerSummary{{ID: "c1", Labels: map[string]string{"falak.site": "shop"}}}, map[string]int{"c1": 42})
 	s := newContainerSet(engine, "", fs, slog.Default())
@@ -153,6 +153,7 @@ func TestContainerOpenRefusesPidReuseAndTheHostRoot(t *testing.T) {
 	// /proc/50/root is the host's "/".
 	writeStat(t, fs, 50, 1)
 	symlink(t, fs.P("/"), fs.P("/proc/50/root"))
+	writeCgroup(t, fs, 50, "c1")
 	engine.set([]docker.ContainerSummary{{ID: "c1", Labels: map[string]string{"falak.site": "shop"}}}, map[string]int{"c1": 50})
 	if open() {
 		t.Fatal("opened the host's root")
@@ -160,7 +161,7 @@ func TestContainerOpenRefusesPidReuseAndTheHostRoot(t *testing.T) {
 
 	// Same mount namespace as the host's init.
 	writeStat(t, fs, 51, 1)
-	containerRoot(t, fs, 51, t.TempDir())
+	containerRoot(t, fs, 51, t.TempDir(), "c1")
 	symlink(t, "mnt:[4026531841]", fs.P("/proc/51/ns/mnt"))
 	symlink(t, "mnt:[4026531841]", fs.P("/proc/1/ns/mnt"))
 	engine.set([]docker.ContainerSummary{{ID: "c1", Labels: map[string]string{"falak.site": "shop"}}}, map[string]int{"c1": 51})
@@ -177,7 +178,7 @@ func TestContainerFreshnessIsCheckedWhenAFileIsFirstSeen(t *testing.T) {
 	mkfile(t, filepath.Join(dir, "app/boot.log"), "booted\n")
 	mkfile(t, filepath.Join(dir, "app/history.json"), "{\"message\":\"an hour of history\"}\n")
 	writeStat(t, fs, 42, 1)
-	containerRoot(t, fs, 42, dir)
+	containerRoot(t, fs, 42, dir, "c1")
 	now := time.Now()
 	engine := &fakeEngine{}
 	engine.set([]docker.ContainerSummary{{ID: "c1", Created: now.Unix(), Labels: map[string]string{"falak.site": "shop"}}}, map[string]int{"c1": 42})
