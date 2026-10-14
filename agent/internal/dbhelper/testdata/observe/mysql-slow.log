@@ -1,0 +1,21 @@
+/usr/sbin/mysqld, Version: 8.4.3 (MySQL Community Server - GPL). started with:
+Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
+Time                 Id Command    Argument
+# Time: 2026-10-14T12:00:01.123456Z
+# User@Host: app[app] @  [172.18.0.5]  Id:    12
+# Query_time: 2.500000  Lock_time: 0.000002 Rows_sent: 1  Rows_examined: 120000
+use shop;
+SET timestamp=1760443201;
+SELECT * FROM orders WHERE customer_email = 'alice@example.com' AND total > 100;
+# Time: 2026-10-14T12:00:05.000000Z
+# User@Host: app[app] @  [172.18.0.5]  Id:    12
+# Query_time: 1.250000  Lock_time: 0.000002 Rows_sent: 0  Rows_examined: 5
+SET timestamp=1760443205;
+UPDATE users
+SET password_hash = 'secret-hash', login_count = 42
+WHERE id IN (1, 2, 3);
+# Time: 2026-10-14T12:00:09.000000Z
+# User@Host: app[app] @  [172.18.0.5]  Id:    12
+# Query_time: 3.000000  Lock_time: 0.000002 Rows_sent: 0  Rows_examined: 5
+SET timestamp=1760443209;
+SELECT SLEEP(3) FROM dual WHERE note = 'still being

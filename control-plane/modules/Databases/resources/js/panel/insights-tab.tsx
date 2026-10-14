@@ -95,7 +95,12 @@ export function DatabaseInsightsTab({ ctx }: ServiceTabProps) {
     const enable = async () => {
         setEnabling(true);
         try {
-            await mutate('POST', `/databases/instances/${instance.id}/query-insights`, {}, { success: `Restarting ${instance.name} with query insights`, reload });
+            await mutate(
+                'POST',
+                `/databases/instances/${instance.id}/query-insights`,
+                {},
+                { success: `Restarting ${instance.name} with query insights`, reload },
+            );
         } finally {
             // Success or not, the dialog closes and the card shows what the server says (pending, or why not).
             setEnabling(false);
@@ -114,7 +119,9 @@ export function DatabaseInsightsTab({ ctx }: ServiceTabProps) {
                     panel.data.can.manage &&
                     data.query_insights.can_enable && (
                         <Button size="sm" onClick={() => setConfirming(true)}>
-                            {data.query_insights.enabled ? 'Apply query insights now (restarts the database)' : 'Enable query insights (restarts the database)'}
+                            {data.query_insights.enabled
+                                ? 'Apply query insights now (restarts the database)'
+                                : 'Enable query insights (restarts the database)'}
                         </Button>
                     )
                 }

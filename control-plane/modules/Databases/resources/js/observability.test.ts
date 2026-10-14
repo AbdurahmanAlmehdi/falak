@@ -122,11 +122,18 @@ describe('insights state', () => {
             label: 'On',
             text: 'On',
         });
-        expect(queryInsightsState({ enabled: true, status: 'off', reason: null, can_enable: true, pending: true }, 'postgresql').label).toBe('Pending');
+        expect(queryInsightsState({ enabled: true, status: 'off', reason: null, can_enable: true, pending: true }, 'postgresql').label).toBe(
+            'Pending',
+        );
         expect(
-            queryInsightsState({ enabled: true, status: 'off', reason: null, can_enable: true, pending: true, error: 'Not applied: no agent' }, 'mariadb').tone,
+            queryInsightsState(
+                { enabled: true, status: 'off', reason: null, can_enable: true, pending: true, error: 'Not applied: no agent' },
+                'mariadb',
+            ).tone,
         ).toBe('danger');
-        expect(queryInsightsState({ enabled: false, status: 'unavailable', reason: 'read-only', can_enable: false }, 'postgresql').text).toBe('read-only');
+        expect(queryInsightsState({ enabled: false, status: 'unavailable', reason: 'read-only', can_enable: false }, 'postgresql').text).toBe(
+            'read-only',
+        );
         expect(queryInsightsState({ enabled: false, status: 'on', reason: null, can_enable: false }, 'redis').text).toBe('On (SLOWLOG)');
         expect(queryInsightsState({ enabled: true, status: 'off', reason: null, can_enable: false }, 'postgresql').tone).toBe('warning');
         expect(queryInsightsState({ enabled: false, status: 'off', reason: 'performance_schema is off', can_enable: false }, 'mysql').text).toBe(

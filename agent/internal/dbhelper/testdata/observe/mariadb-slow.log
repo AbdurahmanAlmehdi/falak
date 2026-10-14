@@ -1,0 +1,13 @@
+# Time: 261014 12:00:01
+# User@Host: app[app] @  [172.18.0.5]
+# Thread_id: 8  Schema: shop  QC_hit: No
+# Query_time: 1.500000  Lock_time: 0.000010  Rows_sent: 3  Rows_examined: 9000
+# Rows_affected: 0  Bytes_sent: 120
+SET timestamp=1760443201;
+SELECT id FROM carts WHERE token = 'abc123';
+# User@Host: app[app] @  [172.18.0.5]
+# Thread_id: 9  Schema: shop  QC_hit: No
+# Query_time: 1.100000  Lock_time: 0.000010  Rows_sent: 1  Rows_examined: 1
+# Rows_affected: 0  Bytes_sent: 60
+SET timestamp=1760443201;
+SELECT COUNT(*) FROM carts;

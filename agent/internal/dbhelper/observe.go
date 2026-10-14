@@ -237,7 +237,7 @@ const pgObserveSQL = observeMarker + `SELECT json_build_object(
    THEN CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0
      ELSE coalesce(extract(epoch FROM now() - pg_last_xact_replay_timestamp()), 0) END END,
  'shared_buffers_bytes', (SELECT setting::bigint * current_setting('block_size')::bigint FROM pg_settings WHERE name = 'shared_buffers'),
- 'slow_ms', current_setting('log_min_duration_statement')::bigint,
+ 'slow_ms', (SELECT setting::bigint FROM pg_settings WHERE name = 'log_min_duration_statement'),
  'preload', current_setting('shared_preload_libraries'),
  'uptime_s', extract(epoch FROM now() - pg_postmaster_start_time()),
  'stats_age_s', extract(epoch FROM now() - coalesce((SELECT max(stats_reset) FROM pg_stat_database), pg_postmaster_start_time())),
