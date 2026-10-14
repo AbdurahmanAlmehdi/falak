@@ -1,7 +1,36 @@
-import { registerCommands, registerNavigation } from '@/lib/registry';
+import { registerCommands, registerNavigation, registerServiceTabs, type ServiceTabProps } from '@/lib/registry';
 import { Network, Shield } from 'lucide-react';
+import { createElement, lazy } from 'react';
 
 registerNavigation({ id: 'network', title: 'Network', url: '/network', icon: Network, order: 400, permission: 'network.view' });
+
+const ConnectionsView = lazy(() => import('./components/connections-view').then((module) => ({ default: module.ConnectionsView })));
+
+// Canvas service panel: a site's and a database's connections (docs/plans/network/connections.md, "UI").
+registerServiceTabs(
+    {
+        id: 'network',
+        kinds: ['site'],
+        title: 'Network',
+        order: 350,
+        permission: 'telemetry.view',
+        component: ({ ctx }: ServiceTabProps) =>
+            createElement(ConnectionsView, {
+                url: `/network/sites/${encodeURIComponent(ctx.service.ref_id)}/connections`,
+                scope: 'site',
+                siteId: ctx.service.ref_id,
+            }),
+    },
+    {
+        id: 'network',
+        kinds: ['database'],
+        title: 'Network',
+        order: 450,
+        permission: 'databases.view',
+        component: ({ ctx }: ServiceTabProps) =>
+            createElement(ConnectionsView, { url: `/network/databases/${encodeURIComponent(ctx.service.ref_id)}/connections`, scope: 'database' }),
+    },
+);
 
 registerCommands({
     id: 'network.navigation',

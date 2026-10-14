@@ -14,6 +14,7 @@ import ServerLayout, { type ServerHeader } from '@/layouts/server-layout';
 import { Link, router, useForm, usePoll } from '@inertiajs/react';
 import { Network, Plus, RefreshCw, Unplug } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
+import { ConnectionsView } from '../components/connections-view';
 import { ApplyStatusBadge } from '../components/network-ui';
 import { type ApplyStatus } from '../types';
 
@@ -302,6 +303,11 @@ export default function ServerNetwork({ server, privateIpv4, memberships, availa
                     network stop working.
                 </p>
             </Dialog>
+
+            <div className="border-border mt-8 border-t pt-6">
+                <h2 className="text-fg mb-3 text-base font-medium">Connections</h2>
+                <ConnectionsView url={`/network/servers/${server.id}/connections`} scope="server" serverId={server.id} />
+            </div>
         </ServerLayout>
     );
 }

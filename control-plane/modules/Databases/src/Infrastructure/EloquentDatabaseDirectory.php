@@ -71,6 +71,9 @@ final class EloquentDatabaseDirectory implements DatabaseDirectory
             version: $instance->version,
             status: $instance->status->value,
             container: $instance->container(),
+            hostPort: $instance->host_port,
+            publishedAddresses: array_values((array) ($instance->published_addresses ?? [])),
+            publicAccess: (bool) $instance->public_access,
         );
     }
 

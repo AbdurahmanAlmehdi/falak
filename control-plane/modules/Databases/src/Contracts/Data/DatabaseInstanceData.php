@@ -21,6 +21,12 @@ final readonly class DatabaseInstanceData
         public string $status,
         /** The Docker container's name */
         public string $container,
+        /** The port published on 127.0.0.1 and the private addresses (null once retired) */
+        public ?int $hostPort = null,
+        /** @var list<string> private addresses the port is published on */
+        public array $publishedAddresses = [],
+        /** Published to the internet (behind its allowlist) */
+        public bool $publicAccess = false,
     ) {}
 
     /** Its container exists and is meant to run. */

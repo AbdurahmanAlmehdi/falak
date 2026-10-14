@@ -14,6 +14,7 @@ use Falak\Insights\Application\Listeners\ExpectScheduledJobs;
 use Falak\Insights\Application\Listeners\IngestReceivedInsights;
 use Falak\Insights\Contracts\DatabaseIssues;
 use Falak\Insights\Contracts\IssueDirectory;
+use Falak\Insights\Contracts\SecurityIssues;
 use Falak\Insights\Contracts\SiteNameResolver;
 use Falak\Insights\Domain\Models\HeartbeatMonitor;
 use Falak\Insights\Domain\Models\Issue;
@@ -22,6 +23,7 @@ use Falak\Insights\Domain\Policies\OrganizationScopedPolicy;
 use Falak\Insights\Infrastructure\EloquentIssueDirectory;
 use Falak\Insights\Infrastructure\IdSiteNameResolver;
 use Falak\Insights\Infrastructure\TrackedDatabaseIssues;
+use Falak\Insights\Infrastructure\TrackedSecurityIssues;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Processes\Events\SchedulesApplied;
 use Illuminate\Console\Scheduling\Schedule;
@@ -38,6 +40,7 @@ class InsightsServiceProvider extends ModuleServiceProvider
     public array $singletons = [
         IssueDirectory::class => EloquentIssueDirectory::class,
         DatabaseIssues::class => TrackedDatabaseIssues::class,
+        SecurityIssues::class => TrackedSecurityIssues::class,
     ];
 
     public function register(): void

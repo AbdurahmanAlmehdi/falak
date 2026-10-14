@@ -535,3 +535,35 @@ export function shellContext(props: SharedData): ShellContext {
 
     return { props, permissions, can: (permission: string) => permissions.includes(permission) };
 }
+
+/** Props of a `network.ip-actions` slot entry: a row of a Network tab that shows a remote IP. */
+export interface IpActionProps {
+    ip: string;
+    /** The server the row was observed on. */
+    serverId: string | null;
+    siteId?: string | null;
+    /** Which table the row is in. */
+    context: 'talks_to' | 'clients';
+}
+
+/**
+ * The `network.ip-actions` slot (docs/plans/network/connections.md, "UI"): actions rendered on every Network-tab row
+ * with a remote IP. Network renders the slot and fills nothing; Protection registers "Block IP" there.
+ */
+export interface IpAction {
+    id: string;
+    /** Lower comes first. */
+    order: number;
+    permission?: string;
+    component: ComponentType<IpActionProps>;
+}
+
+const ipActions = new Map<string, IpAction>();
+
+export function registerIpActions(...actions: IpAction[]): void {
+    actions.forEach((action) => ipActions.set(action.id, action));
+}
+
+export function ipActionsFor(ctx: Pick<ShellContext, 'can'>): IpAction[] {
+    return [...ipActions.values()].filter((action) => !action.permission || ctx.can(action.permission)).sort((a, b) => a.order - b.order);
+}

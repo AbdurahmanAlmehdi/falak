@@ -570,7 +570,7 @@ export default function Issue({ issue, occurrences, timeline, monitor, activity,
                             </div>
                         </Block>
                     )}
-                    {issue.meta && (issue.kind === 'heartbeat' || issue.kind === 'database') && (
+                    {issue.meta && (issue.kind === 'heartbeat' || issue.kind === 'database' || issue.kind === 'security') && (
                         <Block title="Context">
                             <div className="p-3">
                                 <CodeBlock

@@ -9,6 +9,8 @@ enum IssueKind: string
     case Heartbeat = 'heartbeat';
     /** A managed database's slow query shape or engine error ({@see DatabaseIssues}). */
     case Database = 'database';
+    /** A security finding on a server: an exposed port, a scanner, brute force ({@see SecurityIssues}). */
+    case Security = 'security';
 
     public function label(): string
     {
@@ -17,6 +19,7 @@ enum IssueKind: string
             self::Performance => 'Performance',
             self::Heartbeat => 'Scheduled task',
             self::Database => 'Database',
+            self::Security => 'Security',
         };
     }
 }
