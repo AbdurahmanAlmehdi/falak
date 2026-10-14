@@ -98,15 +98,15 @@ func TestParseHexAddr(t *testing.T) {
 }
 
 func TestParseSocketsStatesListenersAndLimit(t *testing.T) {
-	b := []byte(table(
+	b := strings.NewReader(table(
 		sock{"0.0.0.0:80", "0.0.0.0:0", tcpListen, 1},
 		sock{"10.0.0.5:80", "203.0.113.9:51000", tcpEstablished, 2},
 		sock{"10.0.0.5:44000", "10.90.0.2:5432", tcpTimeWait, 0},
 		sock{"10.0.0.5:44001", "10.90.0.2:5432", tcpFinWait2, 3},
 	))
 	socks, tr := parseSockets(b, "tcp", 3)
-	if len(socks) != 3 || tr != 1 {
-		t.Fatalf("got %d truncated %d", len(socks), tr)
+	if len(socks) != 3 || !tr {
+		t.Fatalf("got %d truncated %v", len(socks), tr)
 	}
 	if !socks[0].Listening() || socks[1].Listening() || socks[1].Inode != 2 || socks[1].UID != 1000 {
 		t.Fatalf("%+v", socks)
@@ -119,7 +119,7 @@ func TestParseSocketsStatesListenersAndLimit(t *testing.T) {
 		t.Fatal("direction")
 	}
 	// UDP: bound and unconnected listens; connected does not.
-	u, _ := parseSockets([]byte(table(sock{"0.0.0.0:53", "0.0.0.0:0", tcpClose, 9}, sock{"10.0.0.5:40000", "1.1.1.1:53", tcpEstablished, 10})), "udp", 10)
+	u, _ := parseSockets(strings.NewReader(table(sock{"0.0.0.0:53", "0.0.0.0:0", tcpClose, 9}, sock{"10.0.0.5:40000", "1.1.1.1:53", tcpEstablished, 10})), "udp", 10)
 	if !u[0].Listening() || u[1].Listening() {
 		t.Fatal("udp listeners")
 	}
@@ -275,7 +275,7 @@ func TestCollectAttributesSocketsPeersAndReports(t *testing.T) {
 		{ID: 2, Proto: 6, OrigSrc: netip.MustParseAddrPort("198.51.100.7:50000"), OrigDst: netip.MustParseAddrPort("203.0.113.10:80"),
 			ReplySrc: netip.MustParseAddrPort("203.0.113.10:80"), ReplyDst: netip.MustParseAddrPort("198.51.100.7:50000"), OrigBytes: 300, ReplyBytes: 9000, Counters: true},
 	}
-	c.conntrack = func(int) ([]Flow, error) { return flows, nil }
+	c.conntrack = func(int) ([]Flow, bool, error) { return flows, false, nil }
 	c.wireguard = func(context.Context) ([]netcfg.PeerStats, error) {
 		return []netcfg.PeerStats{{Interface: "wg0", PublicKey: "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=", AllowedIPs: []string{"10.90.0.2/32"},
 			LatestHandshake: now.Add(-90 * time.Second), RxBytes: 10, TxBytes: 20}}, nil
@@ -417,7 +417,7 @@ func validateReport(t *testing.T, rep *Report) {
 func TestAccountingOffReportsCountsOnly(t *testing.T) {
 	root, c, _, cp := fixture(t)
 	writeTree(t, root, map[string]string{"proc/sys/net/netfilter/nf_conntrack_acct": "0\n"})
-	c.conntrack = func(int) ([]Flow, error) { t.Fatal("no dump without accounting"); return nil, nil }
+	c.conntrack = func(int) ([]Flow, bool, error) { t.Fatal("no dump without accounting"); return nil, false, nil }
 	c.dial = func(context.Context, string, string) (net.Conn, error) { return nil, context.DeadlineExceeded }
 	_, rep := c.Collect(context.Background())
 	if rep.Conntrack.Accounting != acctOff || rep.Probes[0].OK || rep.Probes[0].Error != "timeout" {
@@ -506,8 +506,8 @@ func TestParseConntrackMessages(t *testing.T) {
 	}, nil)...)
 	v6 := append([]byte{10, 0, 0, 0}, tuple(ctaTupleOrig, "2001:db8::1", "2001:db8::2", 1, 2, true)...)
 	buf := bytes.Join([][]byte{nlmsg(nfnlSubsysCT<<8, v4), nlmsg(nfnlSubsysCT<<8, v6), nlmsg(nlmsgDone, []byte{0, 0, 0, 0})}, nil)
-	flows, done, err := parseConntrackMessages(buf, nil, 10)
-	if err != nil || !done || len(flows) != 2 {
+	flows, done, capped, err := parseConntrackMessages(buf, nil, 10)
+	if err != nil || !done || capped || len(flows) != 2 {
 		t.Fatalf("flows %v done %v err %v", flows, done, err)
 	}
 	f := flows[0]
@@ -517,15 +517,15 @@ func TestParseConntrackMessages(t *testing.T) {
 	if flows[1].OrigDst.String() != "[2001:db8::2]:2" || flows[1].Counters {
 		t.Fatalf("%+v", flows[1])
 	}
-	// Limit, and a kernel error.
-	if flows, _, _ := parseConntrackMessages(buf, nil, 1); len(flows) != 1 {
+	// At the cap the rest is not read (capped, done), and a kernel error.
+	if flows, done, capped, _ := parseConntrackMessages(buf, nil, 1); len(flows) != 1 || !done || !capped {
 		t.Fatal("limit")
 	}
 	errMsg := nlmsg(nlmsgError, be32(0xffffffff))
-	if _, done, err := parseConntrackMessages(errMsg, nil, 10); !done || !errors.Is(err, errNetlink) {
+	if _, done, _, err := parseConntrackMessages(errMsg, nil, 10); !done || !errors.Is(err, errNetlink) {
 		t.Fatal("error message")
 	}
-	if _, _, err := parseConntrackMessages(nlmsg(nfnlSubsysCT<<8, v4)[:20], nil, 10); err == nil {
+	if _, _, _, err := parseConntrackMessages(nlmsg(nfnlSubsysCT<<8, v4)[:20], nil, 10); err == nil {
 		t.Fatal("truncated")
 	}
 }
@@ -540,17 +540,43 @@ func TestFlowIndexAndDeltas(t *testing.T) {
 		t.Fatalf("%+v %v", m, ok)
 	}
 	var fc flowCounters
-	if d := fc.deltas([]Flow{dnat}); len(d) != 0 {
+	if d := fc.deltas([]Flow{dnat}, false); len(d) != 0 {
 		t.Fatal("baseline")
 	}
 	dnat.OrigBytes, dnat.ReplyBytes = 15, 50
 	fresh := Flow{ID: 6, Proto: 6, OrigSrc: dnat.OrigSrc, OrigDst: dnat.OrigDst, OrigBytes: 7, Counters: true}
-	d := fc.deltas([]Flow{dnat, fresh})
+	d := fc.deltas([]Flow{dnat, fresh}, false)
 	if d["id:5"] != [2]uint64{5, 30} || d["id:6"] != [2]uint64{7, 0} {
 		t.Fatalf("%v", d)
 	}
 	dnat.OrigBytes = 1 // a reused id: counted from zero
-	if d := fc.deltas([]Flow{dnat}); d["id:5"] != [2]uint64{1, 0} {
+	if d := fc.deltas([]Flow{dnat}, false); d["id:5"] != [2]uint64{1, 0} {
+		t.Fatalf("%v", d)
+	}
+}
+
+func TestFlowDeltasOverTruncatedDumps(t *testing.T) {
+	flow := func(id uint32, orig uint64) Flow { return Flow{ID: id, Proto: 6, OrigBytes: orig, Counters: true} }
+	var fc flowCounters
+	fc.deltas([]Flow{flow(1, 100)}, false)
+	// A truncated dump: a flow first seen in it may have been open (unseen) for long: baseline only.
+	if d := fc.deltas([]Flow{flow(1, 150), flow(2, 1_000_000)}, true); d["id:1"] != [2]uint64{50, 0} || len(d) != 1 {
+		t.Fatalf("%v", d)
+	}
+	// Flow 1 drops out of the next truncated dumps and comes back: only what it carried since counts.
+	fc.deltas([]Flow{flow(2, 1_000_010)}, true)
+	fc.deltas([]Flow{flow(2, 1_000_020)}, true)
+	if d := fc.deltas([]Flow{flow(1, 180), flow(2, 1_000_030)}, true); d["id:1"] != [2]uint64{30, 0} || d["id:2"] != [2]uint64{10, 0} {
+		t.Fatalf("%v", d)
+	}
+	// Missing for more than keepMissing dumps: forgotten (and a baseline again when it reappears in a truncated dump).
+	for range keepMissing + 1 {
+		fc.deltas([]Flow{flow(2, 1_000_030)}, true)
+	}
+	if _, ok := fc.last["id:1"]; ok {
+		t.Fatal("kept too long")
+	}
+	if d := fc.deltas([]Flow{flow(1, 500)}, true); len(d) != 0 {
 		t.Fatalf("%v", d)
 	}
 }
@@ -558,7 +584,7 @@ func TestFlowIndexAndDeltas(t *testing.T) {
 func TestConfigureValidatesAndPersists(t *testing.T) {
 	root := t.TempDir()
 	c := New(Options{FS: hostfs.FS{Root: root}, EtcDir: "/etc/falak", Out: &emitter{}})
-	good := Config{Probes: []ProbeTarget{{Name: "db:01k", Kind: "database", Host: "127.0.0.1", Port: 15432}},
+	good := Config{Probes: []ProbeTarget{{Name: "server:01k", Kind: "server", Host: "10.90.0.2", Port: 1}},
 		Names: []PeerName{{Address: "10.90.0.2", Name: "server:01a"}}, WireGuard: []WGName{}}
 	res, err := c.configure(context.Background(), good, nil)
 	if err != nil || !res.(Result).Changed {
@@ -573,11 +599,13 @@ func TestConfigureValidatesAndPersists(t *testing.T) {
 	}
 	// A restarted agent loads it.
 	c2 := New(Options{FS: hostfs.FS{Root: root}, EtcDir: "/etc/falak", Out: &emitter{}})
-	if len(c2.cfg.Probes) != 1 || c2.cfg.Probes[0].Port != 15432 {
+	if len(c2.cfg.Probes) != 1 || c2.cfg.Probes[0].Port != 1 {
 		t.Fatalf("%+v", c2.cfg)
 	}
 	for _, bad := range []Config{
 		{Probes: []ProbeTarget{{Name: "db:x", Kind: "nope", Host: "h", Port: 1}}},
+		// Database ports are never probed (an aborted connect for MySQL / MariaDB).
+		{Probes: []ProbeTarget{{Name: "db:x", Kind: "database", Host: "127.0.0.1", Port: 3306}}},
 		{Probes: []ProbeTarget{{Name: "db:x", Kind: "server", Host: "h; rm -rf /", Port: 1}}},
 		{Names: []PeerName{{Address: "not-an-ip", Name: "server:x"}}},
 		{Names: []PeerName{{Address: "10.0.0.1", Name: "evil"}}},
@@ -598,7 +626,7 @@ func TestProbeMeasuresAConnect(t *testing.T) {
 	defer ln.Close()
 	port := ln.Addr().(*net.TCPAddr).Port
 	d := &net.Dialer{}
-	out := runProbes(context.Background(), d.DialContext, []ProbeTarget{{Name: "db:01k", Kind: "database", Host: "127.0.0.1", Port: port}}, time.Now)
+	out := runProbes(context.Background(), d.DialContext, []ProbeTarget{{Name: "server:01k", Kind: "server", Host: "127.0.0.1", Port: port}}, time.Now)
 	if !out[0].OK || out[0].ConnectMS == nil || out[0].Refused {
 		t.Fatalf("%+v", out[0])
 	}
@@ -606,4 +634,53 @@ func TestProbeMeasuresAConnect(t *testing.T) {
 	if r := runProbes(context.Background(), failing, []ProbeTarget{{Name: "server:a", Kind: "server", Host: "10.0.0.9", Port: 22}}, time.Now); r[0].OK || r[0].Error != "host unreachable" {
 		t.Fatalf("%+v", r[0])
 	}
+}
+
+func TestListenersKeepPublicOnesFirstAtTheCap(t *testing.T) {
+	root := t.TempDir()
+	var socks []sock
+	for i := range maxListeners + 10 {
+		socks = append(socks, sock{fmt.Sprintf("127.0.0.1:%d", 1000+i), "0.0.0.0:0", tcpListen, uint64(i + 1)})
+	}
+	socks = append(socks, sock{"0.0.0.0:60000", "0.0.0.0:0", tcpListen, 9999})
+	writeTree(t, root, map[string]string{"proc/1/net/tcp": table(socks...), "proc/1/ns/net": "->net:[1]"})
+	c := New(Options{FS: hostfs.FS{Root: root}, Out: &emitter{}})
+	_, rep := c.Collect(context.Background())
+	w := rep.Workloads[0]
+	if len(w.Listeners) != maxListeners || !w.ListenersTruncated || w.Listeners[0].Port != 60000 || !w.Listeners[0].Public {
+		t.Fatalf("%d truncated %v first %+v", len(w.Listeners), w.ListenersTruncated, w.Listeners[0])
+	}
+	validateReport(t, rep)
+}
+
+func TestNamesNeverMatchAContainersOwnLoopback(t *testing.T) {
+	n := &names{cfg: map[string]string{"127.0.0.1|5432": "db:01k"}, hostAddrs: map[netip.Addr]bool{}, hostOwners: map[listenerKey]string{}}
+	lo := netip.MustParseAddr("127.0.0.1")
+	if got := n.name(&workload{inHost: true}, dirOut, lo, 5432); got != "db:01k" {
+		t.Fatalf("host: %q", got)
+	}
+	if got := n.name(&workload{}, dirOut, lo, 5432); got != "" {
+		t.Fatalf("container: %q", got)
+	}
+}
+
+func TestNativeSitesPastTheCapCountForTheHost(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{"proc/1/ns/net": "->net:[1]"}
+	var socks []sock
+	native := map[int]string{}
+	for i := range maxWorkloads + 5 {
+		pid, inode := 1000+i, uint64(5000+i)
+		socks = append(socks, sock{fmt.Sprintf("10.0.0.5:%d", 20000+i), "203.0.113.1:443", tcpEstablished, inode})
+		files[fmt.Sprintf("proc/%d/fd/3", pid)] = fmt.Sprintf("->socket:[%d]", inode)
+		native[pid] = fmt.Sprintf("site%03d", i)
+	}
+	files["proc/1/net/tcp"] = table(socks...)
+	writeTree(t, root, files)
+	c := New(Options{FS: hostfs.FS{Root: root}, Workloads: snap{Native: native}, Out: &emitter{}})
+	_, rep := c.Collect(context.Background())
+	if len(rep.Workloads) != maxWorkloads || !rep.Truncated || rep.Workloads[0].Connections.Outbound != 6 {
+		t.Fatalf("%d workloads, truncated %v, host outbound %d", len(rep.Workloads), rep.Truncated, rep.Workloads[0].Connections.Outbound)
+	}
+	validateReport(t, rep)
 }

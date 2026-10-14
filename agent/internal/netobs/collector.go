@@ -83,7 +83,7 @@ type Collector struct {
 	log       *slog.Logger
 	now       func() time.Time
 	dial      dialFunc
-	conntrack func(limit int) ([]Flow, error)
+	conntrack func(limit int) ([]Flow, bool, error)
 	wireguard func(ctx context.Context) ([]netcfg.PeerStats, error)
 
 	enabled  atomic.Bool
@@ -235,11 +235,27 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 	fs := c.opts.FS
 	truncated := false
 	var wls []*workload
+	// Probes and WireGuard (execs, network round trips) run alongside the socket pass, not after it.
+	var wg []ReportWireGuard
+	var probes []ReportProbe
+	slow := make(chan struct{})
+	if full {
+		go func() {
+			defer close(slow)
+			var both sync.WaitGroup
+			both.Add(2)
+			go func() { defer both.Done(); wg = c.wireGuard(ctx, cfg, now) }()
+			go func() { defer both.Done(); probes = runProbes(ctx, c.dial, cfg.Probes, c.now) }()
+			both.Wait()
+		}()
+	} else {
+		close(slow)
+	}
 
 	// The host namespace: the host's processes, native sites (by socket inode) and docker-proxy listeners.
 	hostNS := nsID(fs, 1)
 	hostSocks, tr, ok := readSockets(fs, "/proc/1", maxSocketsPerNS)
-	truncated = truncated || tr > 0
+	truncated = truncated || tr
 	hostListening := listeningOf(hostSocks)
 	host := &workload{key: "host", owner: "host", res: []*commonpb.KeyValue{str("service.name", hostService)},
 		attrs: workloadAttrs("host", "host"), ns: "host", inHost: true, listening: hostListening,
@@ -267,6 +283,12 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 		}
 		wls = append(wls, host)
 		for _, slug := range sortedKeys(natives) {
+			if len(wls) >= maxWorkloads {
+				// Past the cap a site's sockets count for the host (the report's schema holds maxWorkloads).
+				host.socks = append(host.socks, natives[slug].socks...)
+				truncated = true
+				continue
+			}
 			wls = append(wls, natives[slug])
 		}
 	}
@@ -283,12 +305,16 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 			}
 		}
 		ns := nsID(fs, ct.Pid)
-		if ns == "" || nsDone[ns] || len(wls) >= maxWorkloads {
+		if ns == "" || nsDone[ns] {
+			continue
+		}
+		if len(wls) >= maxWorkloads {
+			truncated = true
 			continue
 		}
 		nsDone[ns] = true
 		socks, tr, ok := readSockets(fs, "/proc/"+strconv.Itoa(ct.Pid), maxSocketsPerNS)
-		truncated = truncated || tr > 0
+		truncated = truncated || tr
 		if !ok {
 			continue
 		}
@@ -321,9 +347,10 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 		names := c.resolver(cfg, host, ctByIP, ctNameByIP, inodeSite, snap)
 		c.listeners(wls, names)
 		c.peers(wls, names, usage.Accounting == acctOn, now)
-		report.WireGuard = c.wireGuard(ctx, cfg, now)
-		if len(cfg.Probes) > 0 {
-			report.Probes = runProbes(ctx, c.dial, cfg.Probes, c.now)
+		<-slow
+		report.WireGuard = wg
+		if probes != nil {
+			report.Probes = probes
 		}
 		for _, w := range wls {
 			report.Workloads = append(report.Workloads, w.rep)
@@ -505,11 +532,14 @@ func (c *Collector) resolver(cfg Config, host *workload, ctByIP, ctNameByIP map[
 
 // name is the peer's name ("" when unnamed) as seen from w.
 func (n *names) name(w *workload, dir string, a netip.Addr, port uint16) string {
-	if v := n.cfg[nameKey(a, port)]; v != "" {
-		return v
-	}
-	if v := n.cfg[nameKey(a, 0)]; v != "" {
-		return v
+	// The control plane's names are host addresses: a container's loopback is the container itself.
+	if w.inHost || !a.IsLoopback() {
+		if v := n.cfg[nameKey(a, port)]; v != "" {
+			return v
+		}
+		if v := n.cfg[nameKey(a, 0)]; v != "" {
+			return v
+		}
 	}
 	if v := n.ctByIP[a]; v != "" {
 		return v
@@ -596,7 +626,7 @@ func (c *Collector) listeners(wls []*workload, n *names) {
 				continue
 			}
 			key := s.Proto + "|" + s.Local.String()
-			if seen[key] || len(w.rep.Listeners) >= maxListeners {
+			if seen[key] {
 				continue
 			}
 			seen[key] = true
@@ -616,8 +646,13 @@ func (c *Collector) listeners(wls []*workload, n *names) {
 			}
 			w.rep.Listeners = append(w.rep.Listeners, l)
 		}
+		// Public listeners first, then by port: the cap keeps the same ones every pass (the exposed-ports audit must not
+		// see one come and go), and says it cut some.
 		sort.Slice(w.rep.Listeners, func(i, j int) bool {
 			a, b := w.rep.Listeners[i], w.rep.Listeners[j]
+			if a.Public != b.Public {
+				return a.Public
+			}
 			if a.Port != b.Port {
 				return a.Port < b.Port
 			}
@@ -626,6 +661,9 @@ func (c *Collector) listeners(wls []*workload, n *names) {
 			}
 			return a.Address < b.Address
 		})
+		if len(w.rep.Listeners) > maxListeners {
+			w.rep.Listeners, w.rep.ListenersTruncated = w.rep.Listeners[:maxListeners], true
+		}
 	}
 }
 
@@ -645,13 +683,13 @@ func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.T
 	var deltas map[string][2]uint64
 	var idx map[string]flowMatch
 	if accounting && c.conntrack != nil {
-		flows, err := c.conntrack(maxFlows)
+		flows, capped, err := c.conntrack(maxFlows)
 		if err != nil {
 			c.log.Debug("conntrack dump failed", "err", err)
 			accounting = false
 		} else {
 			c.mu.Lock()
-			deltas = c.flows.deltas(flows)
+			deltas = c.flows.deltas(flows, capped)
 			c.mu.Unlock()
 			idx = flowIndex(flows)
 		}

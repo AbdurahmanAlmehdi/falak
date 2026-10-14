@@ -6,10 +6,11 @@ package netobs
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"io"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 
@@ -105,10 +106,11 @@ func parseHexAddr(s string) (netip.AddrPort, bool) {
 	return netip.AddrPortFrom(addr, uint16(port)), true
 }
 
-// parseSockets parses one socket table, at most limit lines (truncated reports lines left over).
-func parseSockets(b []byte, proto string, limit int) (out []Socket, truncated int) {
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+// parseSockets reads one socket table line by line, at most limit sockets; truncated is true when lines were left
+// unread (the rest of the table is never read: a busy server's table can be megabytes).
+func parseSockets(r io.Reader, proto string, limit int) (out []Socket, truncated bool) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 4096), 64*1024)
 	first := true
 	for sc.Scan() {
 		if first {
@@ -121,8 +123,7 @@ func parseSockets(b []byte, proto string, limit int) (out []Socket, truncated in
 			continue
 		}
 		if len(out) >= limit {
-			truncated++
-			continue
+			return out, true
 		}
 		local, ok1 := parseHexAddr(f[1])
 		remote, ok2 := parseHexAddr(f[2])
@@ -134,21 +135,23 @@ func parseSockets(b []byte, proto string, limit int) (out []Socket, truncated in
 		inode, _ := strconv.ParseUint(f[9], 10, 64)
 		out = append(out, Socket{Proto: proto, Local: local, Remote: remote, State: uint8(st), UID: uid, Inode: inode})
 	}
-	return out, truncated
+	return out, false
 }
 
-// readSockets reads the four socket tables of the network namespace /proc/<pid>/net belongs to (dir = "/proc/<pid>"),
-// at most limit sockets in all. A missing table (no IPv6) is skipped; ok is false when none could be read.
-func readSockets(fs hostfs.FS, dir string, limit int) (out []Socket, truncated int, ok bool) {
+// readSockets streams the four socket tables of the network namespace /proc/<pid>/net belongs to (dir =
+// "/proc/<pid>"), at most limit sockets in all. A missing table (no IPv6) is skipped; ok is false when none could be
+// read.
+func readSockets(fs hostfs.FS, dir string, limit int) (out []Socket, truncated, ok bool) {
 	for _, t := range []struct{ file, proto string }{{"tcp", "tcp"}, {"tcp6", "tcp"}, {"udp", "udp"}, {"udp6", "udp"}} {
-		b, err := fs.ReadFile(dir + "/net/" + t.file)
+		f, err := os.Open(fs.P(dir + "/net/" + t.file))
 		if err != nil {
 			continue
 		}
 		ok = true
-		socks, tr := parseSockets(b, t.proto, limit-len(out))
+		socks, tr := parseSockets(f, t.proto, limit-len(out))
+		_ = f.Close()
 		out = append(out, socks...)
-		truncated += tr
+		truncated = truncated || tr
 	}
 	return out, truncated, ok
 }

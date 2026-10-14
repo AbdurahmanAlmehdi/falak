@@ -121,34 +121,35 @@ const (
 
 var errNetlink = errors.New("conntrack: netlink error")
 
-// parseConntrackMessages parses one buffer of netlink messages of a ctnetlink dump, appending flows to out (at most
-// limit). done is true at NLMSG_DONE.
-func parseConntrackMessages(b []byte, out []Flow, limit int) (flows []Flow, done bool, err error) {
+// parseConntrackMessages parses one buffer of netlink messages of a ctnetlink dump, appending flows to out. done is
+// true at NLMSG_DONE, and when a flow arrives past limit (capped: the rest of the dump is not read).
+func parseConntrackMessages(b []byte, out []Flow, limit int) (flows []Flow, done, capped bool, err error) {
 	flows = out
 	for len(b) >= nlmsgHdrLen {
 		l := int(binary.NativeEndian.Uint32(b[0:4]))
 		typ := binary.NativeEndian.Uint16(b[4:6])
 		if l < nlmsgHdrLen || l > len(b) {
-			return flows, false, errors.New("conntrack: truncated netlink message")
+			return flows, false, false, errors.New("conntrack: truncated netlink message")
 		}
 		msg := b[nlmsgHdrLen:l]
 		switch {
 		case typ == nlmsgDone:
-			return flows, true, nil
+			return flows, true, false, nil
 		case typ == nlmsgError:
 			if len(msg) >= 4 && int32(binary.NativeEndian.Uint32(msg[0:4])) != 0 {
-				return flows, true, errNetlink
+				return flows, true, false, errNetlink
 			}
 		case typ>>8 == nfnlSubsysCT && len(msg) >= nfgenmsgLen:
-			if len(flows) < limit {
-				if f, ok := parseFlow(msg[nfgenmsgLen:]); ok {
-					flows = append(flows, f)
-				}
+			if len(flows) >= limit {
+				return flows, true, true, nil
+			}
+			if f, ok := parseFlow(msg[nfgenmsgLen:]); ok {
+				flows = append(flows, f)
 			}
 		}
 		b = b[align4(l):]
 	}
-	return flows, false, nil
+	return flows, false, false, nil
 }
 
 func align4(n int) int {
@@ -298,31 +299,46 @@ func flowIndex(flows []Flow) map[string]flowMatch {
 // flowCounters keeps every flow's last counters between dumps and turns them into deltas: monotonic per-peer bytes.
 type flowCounters struct {
 	primed bool
-	last   map[string][2]uint64
+	last   map[string]flowSeen
 }
 
+// flowSeen is a flow's last counters and the dumps it has been missing from since.
+type flowSeen struct {
+	v      [2]uint64
+	missed int
+}
+
+// keepMissing is how many dumps a flow's counters are kept while it is absent: a truncated dump leaves some flows out
+// one pass and in the next, and their whole lifetime must not count again when they come back.
+const keepMissing = 3
+
 // deltas returns what each flow carried since the previous dump (orig, reply). The first dump only records a baseline
-// (flows already open count only what they carry after it); a flow first seen later counts fully; a counter that went
-// down (a new flow reusing an id) counts from zero.
-func (fc *flowCounters) deltas(flows []Flow) map[string][2]uint64 {
-	cur := make(map[string][2]uint64, len(flows))
+// (flows already open count only what they carry after it); a flow first seen later counts fully, unless the dump was
+// truncated (it may have been open, unseen, for long): then it is a baseline too. A counter that went down (a new flow
+// reusing an id) counts from zero. Flows missing from a dump keep their counters for keepMissing dumps.
+func (fc *flowCounters) deltas(flows []Flow, truncated bool) map[string][2]uint64 {
+	if fc.last == nil {
+		fc.last = map[string]flowSeen{}
+	}
 	out := make(map[string][2]uint64, len(flows))
+	seen := make(map[string]bool, len(flows))
 	for _, f := range flows {
 		if !f.Counters {
 			continue
 		}
 		k := f.key()
 		v := [2]uint64{f.OrigBytes, f.ReplyBytes}
-		cur[k] = v
-		if !fc.primed {
+		seen[k] = true
+		prev, known := fc.last[k]
+		fc.last[k] = flowSeen{v: v}
+		if !fc.primed || (!known && truncated) {
 			continue
 		}
-		prev, ok := fc.last[k]
 		d := v
-		if ok {
+		if known {
 			for i := range d {
-				if v[i] >= prev[i] {
-					d[i] = v[i] - prev[i]
+				if v[i] >= prev.v[i] {
+					d[i] = v[i] - prev.v[i]
 				}
 			}
 		}
@@ -330,6 +346,16 @@ func (fc *flowCounters) deltas(flows []Flow) map[string][2]uint64 {
 			out[k] = d
 		}
 	}
-	fc.last, fc.primed = cur, true
+	for k, f := range fc.last {
+		if seen[k] {
+			continue
+		}
+		if f.missed++; f.missed > keepMissing {
+			delete(fc.last, k)
+			continue
+		}
+		fc.last[k] = f
+	}
+	fc.primed = true
 	return out
 }

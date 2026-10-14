@@ -4,13 +4,7 @@
       "name": "server:01j9zq4c5m8w3x2y1v0t9s8r7p",
       "kind": "server",
       "host": "10.90.0.2",
-      "port": 22
-    },
-    {
-      "name": "db:01j9zq4c5m8w3x2y1v0t9s8r7n",
-      "kind": "database",
-      "host": "127.0.0.1",
-      "port": 15432
+      "port": 1
     }
   ],
   "names": [

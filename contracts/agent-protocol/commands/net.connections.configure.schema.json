@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/net.connections.configure.schema.json",
-  "title": "net.connections.configure \u2014 the network collector's targets and names (docs/plans/network/connections.md): latency probes, names of the addresses it sees, WireGuard peer names. Persisted in /etc/falak/net.json; feature net.connections.",
+  "title": "net.connections.configure \u2014 the network collector's targets and names (docs/plans/network/connections.md): latency probes to private-network peers (a closed port: the peer's kernel answers with a RST, no service sees a connection; never a database port), names of the addresses it sees, WireGuard peer names. Persisted in /etc/falak/net.json; feature net.connections.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -29,8 +29,7 @@
           },
           "kind": {
             "enum": [
-              "server",
-              "database"
+              "server"
             ]
           },
           "host": {

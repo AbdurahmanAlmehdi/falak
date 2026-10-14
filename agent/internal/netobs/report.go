@@ -22,16 +22,18 @@ type ReportConntrack struct {
 
 // ReportWorkload is one workload's connections, listeners and peers.
 type ReportWorkload struct {
-	Kind           string              `json:"kind"` // container | processes | host
-	Name           string              `json:"name"`
-	Site           string              `json:"site,omitempty"`
-	ComposeService string              `json:"compose_service,omitempty"`
-	DBInstance     string              `json:"db_instance,omitempty"`
-	ContainerID    string              `json:"container_id,omitempty"`
-	Connections    ReportConnections   `json:"connections"`
-	Listeners      []ReportListener    `json:"listeners"`
-	Peers          []ReportPeer        `json:"peers"`
-	Other          map[string]PeerSums `json:"other,omitempty"` // by direction: the peers past the top 20
+	Kind           string            `json:"kind"` // container | processes | host
+	Name           string            `json:"name"`
+	Site           string            `json:"site,omitempty"`
+	ComposeService string            `json:"compose_service,omitempty"`
+	DBInstance     string            `json:"db_instance,omitempty"`
+	ContainerID    string            `json:"container_id,omitempty"`
+	Connections    ReportConnections `json:"connections"`
+	Listeners      []ReportListener  `json:"listeners"`
+	// ListenersTruncated: more than maxListeners; the public ones are kept first.
+	ListenersTruncated bool                `json:"listeners_truncated,omitempty"`
+	Peers              []ReportPeer        `json:"peers"`
+	Other              map[string]PeerSums `json:"other,omitempty"` // by direction: the peers past the top 20
 }
 
 // ReportConnections are the workload's TCP connections.

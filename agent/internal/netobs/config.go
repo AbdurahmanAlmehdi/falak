@@ -22,10 +22,12 @@ type Config struct {
 	LongLivedAfterS int           `json:"long_lived_after_s,omitempty"`
 }
 
-// ProbeTarget is a TCP connect probe, once a minute.
+// ProbeTarget is a TCP connect probe, once a minute: a private-network peer's address on a port nothing listens on, so
+// the peer's kernel answers with a RST (the round trip) and no service ever sees a connection. Never a database port:
+// MySQL and MariaDB count a connection closed before its handshake as an aborted connect (and may block the host).
 type ProbeTarget struct {
 	Name string `json:"name"`
-	Kind string `json:"kind"` // server | database
+	Kind string `json:"kind"` // server
 	Host string `json:"host"`
 	Port int    `json:"port"`
 }
@@ -58,7 +60,6 @@ const (
 	minLongLived         = 15
 	maxLongLived         = 3600
 	probeKindServer      = "server"
-	probeKindDatabase    = "database"
 	maxNameLen           = 160
 	maxProbeHostLen      = 253
 	namePrefixPattern    = `^(server|db|site):[A-Za-z0-9._/-]{1,150}$`
@@ -76,8 +77,8 @@ func (cfg Config) validate() error {
 		return errors.New("too many probes, names or wireguard peers")
 	}
 	for _, p := range cfg.Probes {
-		if p.Kind != probeKindServer && p.Kind != probeKindDatabase {
-			return fmt.Errorf("probe %q: kind must be server or database", p.Name)
+		if p.Kind != probeKindServer {
+			return fmt.Errorf("probe %q: kind must be server", p.Name)
 		}
 		if !nameRe.MatchString(p.Name) || p.Port < 1 || p.Port > 65535 || len(p.Host) > maxProbeHostLen {
 			return fmt.Errorf("probe %q: invalid name or port", p.Name)

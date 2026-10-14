@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	probeTimeout     = 3 * time.Second
-	probeConcurrency = 8
+	probeTimeout     = 2 * time.Second
+	probeConcurrency = 16
 )
 
 // dialFunc opens a TCP connection (net.Dialer.DialContext; replaced in tests).

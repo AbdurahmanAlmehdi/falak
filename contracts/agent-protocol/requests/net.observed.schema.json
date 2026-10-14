@@ -200,6 +200,10 @@
             }
           }
         },
+        "listeners_truncated": {
+          "type": "boolean",
+          "description": "more listeners than the 64 sent; the public ones come first"
+        },
         "peers": {
           "type": "array",
           "maxItems": 42,
@@ -390,8 +394,7 @@
         },
         "kind": {
           "enum": [
-            "server",
-            "database"
+            "server"
           ]
         },
         "host": {

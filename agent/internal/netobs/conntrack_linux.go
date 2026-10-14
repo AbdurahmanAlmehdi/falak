@@ -11,19 +11,20 @@ import (
 )
 
 // dumpConntrack reads the conntrack table over netlink (NETLINK_NETFILTER, IPCTNL_MSG_CT_GET with NLM_F_DUMP, every
-// address family), at most limit flows, in the agent's network namespace (the host's). Read-only.
-func dumpConntrack(limit int) ([]Flow, error) {
+// address family), at most limit flows, in the agent's network namespace (the host's). Read-only. At the cap it stops
+// reading and closes the socket (truncated: the rest of the dump is dropped by the kernel).
+func dumpConntrack(limit int) (flows []Flow, truncated bool, err error) {
 	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW|unix.SOCK_CLOEXEC, unix.NETLINK_NETFILTER)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer unix.Close(fd)
 	tv := unix.NsecToTimeval(int64(5 * time.Second))
 	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := unix.Bind(fd, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req := make([]byte, nlmsgHdrLen+nfgenmsgLen)
 	binary.NativeEndian.PutUint32(req[0:4], uint32(len(req)))
@@ -32,22 +33,21 @@ func dumpConntrack(limit int) ([]Flow, error) {
 	binary.NativeEndian.PutUint32(req[8:12], 1)
 	req[16] = unix.AF_UNSPEC // nfgenmsg: family (all), version 0, res_id 0
 	if err := unix.Sendto(fd, req, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	buf := make([]byte, 1<<16)
-	var flows []Flow
 	for {
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
 			if errors.Is(err, unix.EINTR) {
 				continue
 			}
-			return flows, err
+			return flows, false, err
 		}
 		var done bool
-		flows, done, err = parseConntrackMessages(buf[:n], flows, limit)
+		flows, done, truncated, err = parseConntrackMessages(buf[:n], flows, limit)
 		if err != nil || done {
-			return flows, err
+			return flows, truncated, err
 		}
 	}
 }
