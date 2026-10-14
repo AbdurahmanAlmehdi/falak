@@ -59,9 +59,9 @@ The output stays in Fleet's command output like any other command's (not `termin
 
 | Target | Namespace | How |
 |---|---|---|
-| Server | host | `falak-agent nettool <spec>` |
+| Server | host | `falak-agent nettool` (the spec on stdin) |
 | Native site (PHP, Node, Bun, Deno, static) | host (native sites use the host network) | same; the run is recorded with the site as its target |
-| Docker site | its newest running container (`falak.site=<slug>`) | `nsenter --net=/proc/<pid>/ns/net -- falak-agent nettool <spec>` |
+| Docker site | its newest running container (`falak.site=<slug>`) | `nsenter --net=/proc/self/fd/3 -- falak-agent nettool`, fd 3 the container's network namespace |
 | Compose site | a service's container (`com.docker.compose.project` + `.service`; the service is required when the stack has several) | same |
 | Database instance | `falak-db-<id>` | same |
 | Function | refused (422, "Functions run on demand; they have no network of their own to test from.") | |
@@ -78,11 +78,19 @@ The output stays in Fleet's command output like any other command's (not `termin
 - **Finding the container's process.** The agent resolves the container (by name, or the newest running one by
   labels, exactly like consoles) and reads `State.Pid` from inspect. A container that isn't running fails the run
   with "No running container to run the tool in (is it deployed?)".
+- **Pinning the namespace (pid reuse).** The agent opens `/proc/<pid>/ns/net` first and keeps the descriptor. Only
+  then does it check that the process is the container's: `/proc/<pid>/cgroup` must name the container id, and a
+  second inspect must show the same pid and `StartedAt`. The descriptor goes to the child as fd 3 and nsenter enters
+  `/proc/self/fd/3`, so a pid reused after the checks can't redirect the run into another process's network.
 - **The container's DNS.** With only the network namespace switched, the helper would still read the host's
-  `/etc/resolv.conf`, whose `127.0.0.53` doesn't exist inside the container. So the agent passes the container's
-  files: `/proc/<pid>/root/etc/resolv.conf` (Docker's embedded `127.0.0.11` on user networks) and
-  `/proc/<pid>/root/etc/hosts`. The helper's resolver dials those nameservers and checks that hosts file first.
-  Compose service names and `extra_hosts` then resolve exactly as they do in the app.
+  `/etc/resolv.conf`, whose `127.0.0.53` doesn't exist inside the container. So the agent reads the container's
+  files from Docker's host-side copies (inspect's `ResolvConfPath` and `HostsPath`, under Docker's data root), never
+  through `/proc/<pid>/root`, whose `/etc` the container controls (a symlink to a FIFO or a device, a watchdog, would
+  block or reboot the host). They are opened `O_RDONLY|O_NONBLOCK|O_NOFOLLOW`, must be regular files by `fstat`, and
+  are read up to 64 KiB. Their **contents** go to the helper in its spec; the helper opens nothing the container
+  controls. Its resolver dials those nameservers (Docker's embedded `127.0.0.11` on user networks) and checks the
+  hosts entries first, so compose service names and `extra_hosts` resolve exactly as they do in the app.
+- **The spec goes on stdin**, not argv (process listings would show it, resolv.conf and hosts included).
 
 ### Agent
 
@@ -121,25 +129,30 @@ The output stays in Fleet's command output like any other command's (not `termin
   - The URL must use the `http`/`https` scheme, with no userinfo and no control characters or spaces.
   - Each tool accepts only its own fields: a stray field is refused with a payload error.
   - argv is built from fixed templates and never through a shell.
-- **The PTY.** The helper runs under a PTY of 160×50, so the system tools line-buffer. `\r\n` becomes `\n`, and the
-  output goes to the command's stdout stream.
+- **The PTY.** The helper's stdout and stderr are a PTY of 160×50 (its controlling terminal), so the system tools
+  line-buffer. `\r\n` becomes `\n`, and the output goes to the command's stdout stream. What servers send (reason
+  phrases, header values, certificate names) is printed `%q`-quoted when it holds non-printable characters, and
+  `falak net` drops C0/C1 control characters (except newline and tab) before printing.
 - **Limits.**
   - The agent runs at most 4 tools at once; a fifth fails with "too many network tools running".
-  - The output is capped at 256 KiB: beyond that, the run says `… output truncated` and the tool is stopped.
+  - The output is capped at 256 KiB: beyond that, the run says `… output truncated` and the tool is stopped; the
+    command fails with "output limit reached" (exit 1), not a signal's 137.
+  - A cancelled command ends the tool as "cancelled" (exit 130, run status `cancelled`), not as a timeout.
 
 ### Control plane (Terminal module)
 
 The runs live in the Terminal module, which already resolves sites, compose services and database containers to a
 server and a container selector for consoles (`ConsoleTargets`). Tools reuse that.
 
-- **Permission `network.tools`:** Admin and Developer (owners have every permission), group `network`, described as
+- **Permission `network.tools`:** Admin only by default, like `terminal.open` (owners have every permission; a role can be
+  granted it), group `network`, described as
   "Run network tools (ping, traceroute, DNS, HTTP, TCP) from servers and containers". Running a tool on a site or
   database also requires `sites.view` / `databases.view`, as consoles do.
 - **Table `terminal_net_tool_runs`** (30-day retention; pruned by the existing `terminal:sweep` job). Columns:
   - `id`, `organization_id`, `user_id`, `server_id`, `server_name`;
   - `target_type` (server, site or database), `target_id`, `target_name`, `container` (display);
   - `tool`, `input` (json: the validated arguments), `command_id`;
-  - `status` (running, succeeded, failed or timed_out), `exit_code`, `error`, `created_at`, `finished_at`.
+  - `status` (running, succeeded, failed, timed_out or cancelled), `exit_code`, `error`, `created_at`, `finished_at`.
 
   The command outcome listeners (`CommandFinished` / `CommandFailed`) settle a run. Output isn't copied: Fleet
   keeps it.
@@ -148,7 +161,8 @@ server and a container selector for consoles (`ConsoleTargets`). Tools reuse tha
 - **Rate limits:**
   - 10 runs a minute per user (`throttle:net-tools`);
   - at most 2 runs `running` per user, otherwise 429 "Wait for your other network tools to finish." (runs older than
-    2 minutes don't count).
+    2 minutes don't count). The count and the insert run under one cache lock per user, so concurrent requests can't
+    both pass.
 - **Audit:** `network.tool_run` on the run, with `tool`, `target_type`, `target_name`, `server_name` and the
   arguments (a URL's query string included: it's what the user typed, and it's never a credential Falak holds).
 - **Routes** (the web routes use `auth, org`; the API routes use `auth:sanctum, org`, with prefix `v1`):
@@ -266,7 +280,7 @@ the cache, at most once a minute per site (`throttle`).
   - output capping and timeout killing, with a stand-in helper;
   - the CLI against an `httptest` API.
 - **PHP:**
-  - the permission (Admin, Developer and owner allowed; Viewer 403);
+  - the permission (Admin and owner allowed; Developer and Viewer 403);
   - validation per tool;
   - the payload sent to Fleet (fake gateway) for a server, a native site, a Docker site, a compose service and a
     database;

@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestParseResolvConf(t *testing.T) {
@@ -31,13 +33,8 @@ func TestParseHosts(t *testing.T) {
 	}
 }
 
-func TestNamesFromContainerFiles(t *testing.T) {
-	dir := t.TempDir()
-	rc := filepath.Join(dir, "resolv.conf")
-	hosts := filepath.Join(dir, "hosts")
-	_ = os.WriteFile(rc, []byte("nameserver 127.0.0.11\n"), 0o644)
-	_ = os.WriteFile(hosts, []byte("10.1.2.3 cache.internal\n"), 0o644)
-	n, err := newNames("", rc, hosts)
+func TestNamesFromContainerContents(t *testing.T) {
+	n, err := newNames("", true, "nameserver 127.0.0.11\n", "10.1.2.3 cache.internal\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,17 +50,61 @@ func TestNamesFromContainerFiles(t *testing.T) {
 	}
 
 	// A requested nameserver wins over the container's files (and its hosts file).
-	n, _ = newNames("9.9.9.9", rc, hosts)
+	n, _ = newNames("9.9.9.9", true, "nameserver 127.0.0.11\n", "10.1.2.3 cache.internal\n")
 	if n.servers[0] != "9.9.9.9:53" || len(n.hosts) != 0 {
 		t.Fatalf("nameserver override: %v %v", n.servers, n.hosts)
 	}
-
-	_ = os.WriteFile(rc, []byte("search x\n"), 0o644)
-	if _, err := newNames("", rc, ""); err == nil {
+	if _, err := newNames("", true, "search x\n", ""); err == nil {
 		t.Fatal("a resolv.conf without nameservers is an error")
 	}
-	if _, err := newNames("", filepath.Join(dir, "missing"), ""); err == nil {
-		t.Fatal("a missing resolv.conf is an error")
+	// On the host: the system resolver, no hosts map of ours.
+	if n, err := newNames("", false, "", ""); err != nil || len(n.servers) != 0 || n.source != "system resolver" {
+		t.Fatalf("host: %v %+v", err, n)
+	}
+}
+
+func TestReadRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "resolv.conf")
+	_ = os.WriteFile(good, []byte("nameserver 1.1.1.1\n"), 0o644)
+	if s, err := readRegularFile(good); err != nil || s != "nameserver 1.1.1.1\n" {
+		t.Fatalf("regular: %q %v", s, err)
+	}
+
+	// A symlink (even to a regular file) is refused: O_NOFOLLOW.
+	link := filepath.Join(dir, "link")
+	_ = os.Symlink(good, link)
+	if _, err := readRegularFile(link); err == nil {
+		t.Fatal("symlink accepted")
+	}
+
+	// A FIFO is refused without blocking (nobody ever writes to it).
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := readRegularFile(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("fifo: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("reading a FIFO blocked")
+	}
+
+	// A directory and a character device are refused too; an oversized file as well.
+	if _, err := readRegularFile(dir); err == nil {
+		t.Fatal("directory accepted")
+	}
+	if _, err := readRegularFile("/dev/null"); err == nil {
+		t.Fatal("character device accepted")
+	}
+	big := filepath.Join(dir, "big")
+	_ = os.WriteFile(big, make([]byte, maxHostFile+1), 0o644)
+	if _, err := readRegularFile(big); err == nil {
+		t.Fatal("oversized file accepted")
 	}
 }
 

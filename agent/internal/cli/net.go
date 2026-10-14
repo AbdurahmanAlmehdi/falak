@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/cli/api"
@@ -149,7 +150,7 @@ func (a *App) followNet(ctx context.Context, c netAPI, run api.NetToolRun) error
 				if a.jsonOut {
 					lines = append(lines, l)
 				} else {
-					fmt.Fprint(a.Stdout, l.Data)
+					fmt.Fprint(a.Stdout, stripControl(l.Data))
 				}
 			}
 			if r.Done() {
@@ -168,6 +169,17 @@ func (a *App) followNet(ctx context.Context, c netAPI, run api.NetToolRun) error
 		case <-time.After(a.Poll):
 		}
 	}
+}
+
+// stripControl drops C0 and C1 control characters (and DEL) except newline and tab from tool output before it reaches
+// the user's terminal: what a probed server answers must never move the cursor or retitle the window.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r < 0x20 && r != '\n' && r != '\t') || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func netExit(r api.NetToolRun) error {

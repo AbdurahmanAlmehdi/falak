@@ -54,10 +54,13 @@ type Spec struct {
 // HelperSpec is the helper's argument: the payload plus what only the agent sets (never accepted from a payload).
 type HelperSpec struct {
 	Spec
-	// The container's resolv.conf and hosts, read through /proc/<pid>/root: only the network namespace is switched,
-	// so the host's /etc/resolv.conf (127.0.0.53) would not answer inside the container.
-	ResolvConf string `json:"resolv_conf,omitempty"`
-	HostsFile  string `json:"hosts_file,omitempty"`
+	// InContainer: the helper runs in a container's network namespace, with the contents of the container's
+	// resolv.conf and hosts file (read by the agent from Docker's host-side files: only the network namespace is
+	// switched, so the host's /etc/resolv.conf, 127.0.0.53, would not answer there). Contents, never paths: the helper
+	// opens nothing the container controls.
+	InContainer bool   `json:"in_container,omitempty"`
+	ResolvConf  string `json:"resolv_conf,omitempty"`
+	Hosts       string `json:"hosts,omitempty"`
 }
 
 // Container selects the container whose network namespace the tool runs in: exactly one of Name and Labels (as for

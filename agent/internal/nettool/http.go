@@ -13,9 +13,11 @@ import (
 	"net/netip"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // maxBody bounds how much of the response body is read (counted, never printed).
@@ -140,7 +142,7 @@ func runHTTP(ctx context.Context, s HelperSpec, n *names, w io.Writer, roots *x5
 		return 1
 	}
 	defer resp.Body.Close()
-	say("< %s %s", resp.Proto, resp.Status)
+	say("< %s %d %s", resp.Proto, resp.StatusCode, printable(strings.TrimSpace(strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)))))
 	keys := make([]string, 0, len(resp.Header))
 	for k := range resp.Header {
 		keys = append(keys, k)
@@ -148,7 +150,7 @@ func runHTTP(ctx context.Context, s HelperSpec, n *names, w io.Writer, roots *x5
 	sort.Strings(keys)
 	for _, k := range keys {
 		for _, v := range resp.Header[k] {
-			say("< %s: %s", strings.ToLower(k), v)
+			say("< %s: %s", printable(strings.ToLower(k)), printable(v))
 		}
 	}
 	say("<")
@@ -163,7 +165,7 @@ func runHTTP(ctx context.Context, s HelperSpec, n *names, w io.Writer, roots *x5
 		say("* body: %d bytes", nBody)
 	}
 	if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		say("* redirect to %s (not followed)", loc)
+		say("* redirect to %s (not followed)", printable(loc))
 	}
 	parts := []string{}
 	if t.dns > 0 {
@@ -188,16 +190,29 @@ func certLine(i int, c *x509.Certificate) string {
 		label = "issuer cert"
 	}
 	days := int(time.Until(c.NotAfter).Hours() / 24)
-	line := fmt.Sprintf("%s: %s, issued by %s, expires %s (%d days)", label, c.Subject.CommonName, c.Issuer.CommonName, c.NotAfter.UTC().Format("2006-01-02"), days)
+	line := fmt.Sprintf("%s: %s, issued by %s, expires %s (%d days)", label, printable(c.Subject.CommonName), printable(c.Issuer.CommonName), c.NotAfter.UTC().Format("2006-01-02"), days)
 	if i == 0 && len(c.DNSNames) > 0 {
 		names := c.DNSNames
 		more := ""
 		if len(names) > 5 {
 			names, more = names[:5], fmt.Sprintf(" (+%d)", len(c.DNSNames)-5)
 		}
-		line += ", names " + strings.Join(names, ", ") + more
+		quoted := make([]string, len(names))
+		for i, n := range names {
+			quoted[i] = printable(n)
+		}
+		line += ", names " + strings.Join(quoted, ", ") + more
 	}
 	return line
+}
+
+// printable returns s as is when every rune is printable, else Go-quoted (%q): what a server sends (a reason
+// phrase, header values, certificate names) never reaches a terminal as control sequences.
+func printable(s string) string {
+	if strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) < 0 {
+		return s
+	}
+	return strconv.Quote(s)
 }
 
 // httpError explains certificate failures and hints at insecure.

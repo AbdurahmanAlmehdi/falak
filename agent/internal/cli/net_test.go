@@ -73,6 +73,13 @@ func TestNetTCPInDatabase(t *testing.T) {
 	}
 }
 
+func TestStripControl(t *testing.T) {
+	in := "ok\tline\n\x1b]0;pwned\x07\x1b[2Jdone\r\n\u009b31mx\x7f"
+	if got := stripControl(in); got != "ok\tline\n]0;pwned[2Jdone\n31mx" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestNetExitCodes(t *testing.T) {
 	h, _, _ := netHarness(t, "failed", 2)
 	if code := h.run("net", "ping", "example.com", "--server", "main-1"); code != 2 {

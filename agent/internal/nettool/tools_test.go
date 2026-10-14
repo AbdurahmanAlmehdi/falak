@@ -228,15 +228,25 @@ func TestArgvTemplates(t *testing.T) {
 
 func TestMainValidatesAgain(t *testing.T) {
 	var out bytes.Buffer
-	if code := Main(context.Background(), []string{`{"tool":"ping","target":"-oProxyCommand=x"}`}, &out); code != 2 || !strings.Contains(out.String(), "target") {
+	if code := Main(context.Background(), nil, strings.NewReader(`{"tool":"ping","target":"-oProxyCommand=x"}`), &out); code != 2 || !strings.Contains(out.String(), "target") {
 		t.Fatalf("%d %s", code, out.String())
 	}
 	out.Reset()
-	if code := Main(context.Background(), []string{`{"tool":"ping","target":"a","shell":"x"}`}, &out); code != 2 {
+	if code := Main(context.Background(), nil, strings.NewReader(`{"tool":"ping","target":"a","shell":"x"}`), &out); code != 2 {
 		t.Fatalf("unknown field: %d %s", code, out.String())
 	}
 	out.Reset()
-	if code := Main(context.Background(), nil, &out); code != 2 {
-		t.Fatal("no args")
+	if code := Main(context.Background(), []string{`{"tool":"ping","target":"a"}`}, strings.NewReader(""), &out); code != 2 {
+		t.Fatal("a spec in argv is refused")
+	}
+	out.Reset()
+	if code := Main(context.Background(), nil, strings.NewReader(strings.Repeat(" ", maxSpec+1)), &out); code != 2 {
+		t.Fatal("an oversized spec is refused")
+	}
+	// A valid spec on stdin runs (dns of a hosts-file name inside a "container").
+	out.Reset()
+	spec := `{"tool":"dns","target":"cache.internal","in_container":true,"resolv_conf":"nameserver 127.0.0.11\n","hosts":"10.1.2.3 cache.internal\n"}`
+	if code := Main(context.Background(), nil, strings.NewReader(spec), &out); code != 0 || !strings.Contains(out.String(), "10.1.2.3\t; hosts file") {
+		t.Fatalf("stdin spec: %d %s", code, out.String())
 	}
 }

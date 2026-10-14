@@ -12,18 +12,27 @@ import (
 // ExitTimeout is the exit code of a run stopped by its timeout (as timeout(1)).
 const ExitTimeout = 124
 
-// HelperCommand is the agent subcommand that runs one tool: `falak-agent nettool '<HelperSpec JSON>'`.
+// HelperCommand is the agent subcommand that runs one tool: `falak-agent nettool`, the HelperSpec JSON on stdin (not
+// argv: it would show in every process listing, the container's resolv.conf and hosts included).
 const HelperCommand = "nettool"
+
+// maxSpec bounds the spec read from stdin (two 64 KiB files and the arguments).
+const maxSpec = 256 << 10
 
 // Main is the helper: it decodes and validates the spec again (the helper is a separate entry point), then runs the
 // tool with its output on w. It returns the process exit code.
-func Main(ctx context.Context, args []string, w io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(w, "usage: falak-agent nettool '<spec json>'")
+func Main(ctx context.Context, args []string, stdin io.Reader, w io.Writer) int {
+	if len(args) != 0 {
+		fmt.Fprintln(w, "usage: falak-agent nettool < spec.json")
+		return 2
+	}
+	raw, err := io.ReadAll(io.LimitReader(stdin, maxSpec+1))
+	if err != nil || len(raw) > maxSpec {
+		fmt.Fprintln(w, "nettool: could not read the spec on stdin")
 		return 2
 	}
 	var s HelperSpec
-	dec := json.NewDecoder(bytes.NewReader([]byte(args[0])))
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&s); err != nil {
 		fmt.Fprintf(w, "nettool: invalid spec: %s\n", err)
@@ -35,7 +44,7 @@ func Main(ctx context.Context, args []string, w io.Writer) int {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.TimeoutS)*time.Second)
 	defer cancel()
-	n, err := newNames(s.Nameserver, s.ResolvConf, s.HostsFile)
+	n, err := newNames(s.Nameserver, s.InContainer, s.ResolvConf, s.Hosts)
 	if err != nil {
 		fmt.Fprintf(w, "nettool: %s\n", err)
 		return 2

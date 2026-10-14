@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/netip"
-	"os"
 	"strings"
 	"time"
 )
@@ -33,21 +31,16 @@ type names struct {
 	source  string                  // where the servers came from, for the output
 }
 
-// newNames builds the resolver for a run. nameserver (dns tool) overrides everything; a container's resolv.conf and
-// hosts file come from the agent (HelperSpec).
-func newNames(nameserver, resolvConf, hostsFile string) (*names, error) {
+// newNames builds the resolver for a run. nameserver (dns tool) overrides everything; in a container, the contents of
+// its resolv.conf and hosts file (HelperSpec, read by the agent) replace the host's.
+func newNames(nameserver string, inContainer bool, resolvConf, hosts string) (*names, error) {
 	n := &names{hosts: map[string][]netip.Addr{}}
 	switch {
 	case nameserver != "":
 		n.servers = []string{net.JoinHostPort(nameserver, "53")}
 		n.source = "requested"
-	case resolvConf != "":
-		f, err := os.Open(resolvConf)
-		if err != nil {
-			return nil, fmt.Errorf("read the container's resolv.conf: %w", err)
-		}
-		defer f.Close()
-		n.servers = parseResolvConf(f)
+	case inContainer:
+		n.servers = parseResolvConf(strings.NewReader(resolvConf))
 		if len(n.servers) == 0 {
 			return nil, errors.New("the container's resolv.conf names no nameserver")
 		}
@@ -55,11 +48,8 @@ func newNames(nameserver, resolvConf, hostsFile string) (*names, error) {
 	default:
 		n.source = "system resolver"
 	}
-	if hostsFile != "" && nameserver == "" {
-		if f, err := os.Open(hostsFile); err == nil {
-			n.hosts = parseHosts(f)
-			f.Close()
-		}
+	if inContainer && nameserver == "" {
+		n.hosts = parseHosts(strings.NewReader(hosts))
 	}
 	if len(n.servers) == 0 {
 		n.r = &net.Resolver{PreferGo: true}

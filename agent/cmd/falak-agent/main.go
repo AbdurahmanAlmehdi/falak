@@ -41,9 +41,9 @@ func main() {
 	}
 	sub := os.Args[1]
 	if sub == nettool.HelperCommand {
-		// The agent's own helper (docs/plans/network/tools.md): no flags, one JSON spec, output on the PTY it runs in.
+		// The agent's own helper (docs/plans/network/tools.md): no flags, the JSON spec on stdin, output on the PTY it runs in.
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-		code := nettool.Main(ctx, os.Args[2:], os.Stdout)
+		code := nettool.Main(ctx, os.Args[2:], os.Stdin, os.Stdout)
 		stop()
 		os.Exit(code)
 	}

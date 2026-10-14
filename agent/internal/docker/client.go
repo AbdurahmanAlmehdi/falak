@@ -259,7 +259,11 @@ type Container struct {
 	Image        string `json:"Image"`
 	Created      string `json:"Created"`
 	RestartCount int    `json:"RestartCount"`
-	State        struct {
+	// ResolvConfPath and HostsPath are the host-side files Docker bind-mounts as the container's /etc/resolv.conf and
+	// /etc/hosts (under its data root, out of the container's reach as paths): net.tool reads them there.
+	ResolvConfPath string `json:"ResolvConfPath"`
+	HostsPath      string `json:"HostsPath"`
+	State          struct {
 		Status  string `json:"Status"`
 		Running bool   `json:"Running"`
 		// Pid is the container's init process on the host (0 when not running): its /proc/<pid>/net/dev is the

@@ -95,6 +95,16 @@ func (m *Manager) Register(reg *commands.Registry) {
 	reg.Register("net.tool", commands.Typed(m.Run))
 }
 
+// End reasons of a run that didn't exit by itself.
+const (
+	endTimeout   = "timeout"
+	endOutput    = "output limit reached"
+	endCancelled = "cancelled"
+)
+
+// ExitCancelled is the exit code of a run the control plane (or the agent's shutdown) cancelled (as SIGINT).
+const ExitCancelled = 130
+
 // Run validates the spec, enters the namespace and streams the tool's output as stdout events.
 func (m *Manager) Run(ctx context.Context, p Spec, st commands.Stream) (any, error) {
 	if err := p.Validate(); err != nil {
@@ -106,60 +116,117 @@ func (m *Manager) Run(ctx context.Context, p Spec, st commands.Stream) (any, err
 	default:
 		return nil, fmt.Errorf("too many network tools running (max %d)", m.opts.MaxRunning)
 	}
-	argv, namespace, err := m.argv(ctx, p)
+	h, err := m.prepare(ctx, p)
 	if err != nil {
 		return nil, err
 	}
-	m.log.Info("net tool", "tool", p.Tool, "namespace", namespace)
-	code, timedOut, err := m.exec(ctx, argv, time.Duration(p.TimeoutS)*time.Second, st.Stdout())
+	defer h.close()
+	m.log.Info("net tool", "tool", p.Tool, "namespace", h.namespace)
+	code, end, err := m.exec(ctx, h, time.Duration(p.TimeoutS)*time.Second, st.Stdout())
 	if err != nil {
 		return nil, err
 	}
-	if code == ExitTimeout {
-		timedOut = true
+	if end == "" && code == ExitTimeout {
+		end = endTimeout
 	}
 	switch {
-	case timedOut:
+	case end == endTimeout:
 		return nil, &commands.ExitError{Code: ExitTimeout, Err: fmt.Errorf("%s stopped after %ds (timeout)", p.Tool, p.TimeoutS)}
+	case end == endOutput:
+		return nil, &commands.ExitError{Code: 1, Err: fmt.Errorf("%s stopped: output limit reached (%d KiB)", p.Tool, m.opts.MaxOutput>>10)}
+	case end == endCancelled:
+		return nil, &commands.ExitError{Code: ExitCancelled, Err: fmt.Errorf("%s cancelled", p.Tool)}
 	case code == ExitNotInstalled:
 		return nil, &commands.ExitError{Code: code, Err: fmt.Errorf("%s is not installed on this server", p.Tool)}
 	case code != 0:
 		return nil, &commands.ExitError{Code: code, Err: fmt.Errorf("%s exited with %d", p.Tool, code)}
 	}
-	return Result{ExitCode: 0, Namespace: namespace}, nil
+	return Result{ExitCode: 0, Namespace: h.namespace}, nil
 }
 
-// argv is the helper's command line: on the host, or under nsenter in a container's network namespace with the
-// container's resolv.conf and hosts file.
-func (m *Manager) argv(ctx context.Context, p Spec) ([]string, string, error) {
+// helper is how one run starts: argv, the spec for its stdin, and for a container the open network namespace it
+// enters (fd 3 in the child).
+type helper struct {
+	argv      []string
+	spec      []byte
+	netns     *os.File
+	namespace string
+}
+
+func (h *helper) close() {
+	if h.netns != nil {
+		h.netns.Close()
+	}
+}
+
+// prepare builds the helper: on the host, or under nsenter in a container's network namespace. The namespace is
+// opened first and pinned by its descriptor (nsenter enters /proc/self/fd/3, never a pid path); only then is the
+// process checked to be the container's (its cgroup names the container id, and a second inspect shows the same pid
+// and start), so a pid reused in between is refused instead of entering another process's network. The container's
+// resolv.conf and hosts come from Docker's host-side files, read safely, and go to the helper as contents.
+func (m *Manager) prepare(ctx context.Context, p Spec) (*helper, error) {
 	hs := HelperSpec{Spec: p}
 	hs.Container = nil
 	if p.Container == nil {
 		b, _ := json.Marshal(hs)
-		return []string{m.opts.Binary, HelperCommand, string(b)}, "host", nil
+		return &helper{argv: []string{m.opts.Binary, HelperCommand}, spec: b, namespace: "host"}, nil
 	}
 	if m.opts.Docker == nil {
-		return nil, "", errors.New("container targets need Docker on this server")
+		return nil, errors.New("container targets need Docker on this server")
 	}
 	nsenter, err := exec.LookPath(m.opts.NSEnter)
 	if err != nil {
-		return nil, "", errors.New("nsenter (util-linux) is not installed on this server")
+		return nil, errors.New("nsenter (util-linux) is not installed on this server")
 	}
 	lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	name, pid, err := containerPID(lctx, m.opts.Docker, p.Container)
+	ct, err := resolveContainer(lctx, m.opts.Docker, p.Container)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	root := filepath.Join(m.opts.ProcRoot, strconv.Itoa(pid))
-	hs.ResolvConf = filepath.Join(root, "root", "etc", "resolv.conf")
-	hs.HostsFile = filepath.Join(root, "root", "etc", "hosts")
+	pid := ct.State.Pid
+	proc := filepath.Join(m.opts.ProcRoot, strconv.Itoa(pid))
+	netns, err := os.Open(filepath.Join(proc, "ns", "net"))
+	if err != nil {
+		return nil, ErrNoContainer
+	}
+	refuse := func(err error) (*helper, error) {
+		netns.Close()
+		return nil, err
+	}
+	cg, err := os.ReadFile(filepath.Join(proc, "cgroup"))
+	if err != nil || ct.ID == "" || !strings.Contains(string(cg), ct.ID) {
+		return refuse(fmt.Errorf("pid %d is not container %s's process (it exited?)", pid, ct.name()))
+	}
+	again, ok, err := m.opts.Docker.ContainerInspect(lctx, ct.ID)
+	if err != nil || !ok || !again.State.Running || again.State.Pid != pid || again.State.StartedAt != ct.State.StartedAt {
+		return refuse(fmt.Errorf("container %s restarted while the tool started; run it again", ct.name()))
+	}
+	if ct.ResolvConfPath == "" {
+		return refuse(fmt.Errorf("container %s has no resolv.conf", ct.name()))
+	}
+	if hs.ResolvConf, err = readRegularFile(ct.ResolvConfPath); err != nil {
+		return refuse(fmt.Errorf("container %s's resolv.conf: %w", ct.name(), err))
+	}
+	if ct.HostsPath != "" {
+		if hs.Hosts, err = readRegularFile(ct.HostsPath); err != nil {
+			return refuse(fmt.Errorf("container %s's hosts file: %w", ct.name(), err))
+		}
+	}
+	hs.InContainer = true
 	b, _ := json.Marshal(hs)
-	return []string{nsenter, "--net=" + filepath.Join(root, "ns", "net"), "--", m.opts.Binary, HelperCommand, string(b)}, "container:" + name, nil
+	return &helper{
+		argv: []string{nsenter, "--net=/proc/self/fd/3", "--", m.opts.Binary, HelperCommand},
+		spec: b, netns: netns, namespace: "container:" + ct.name(),
+	}, nil
 }
 
-// containerPID resolves the container (by name, or the newest running one with all labels) to its name and init pid.
-func containerPID(ctx context.Context, d ContainerLookup, t *Container) (string, int, error) {
+type inspected struct{ *docker.Container }
+
+func (c inspected) name() string { return strings.TrimPrefix(c.Name, "/") }
+
+// resolveContainer inspects the container (by name, or the newest running one with all labels); it must run.
+func resolveContainer(ctx context.Context, d ContainerLookup, t *Container) (inspected, error) {
 	ref := t.Name
 	if ref == "" {
 		filters := make([]string, 0, len(t.Labels))
@@ -169,7 +236,7 @@ func containerPID(ctx context.Context, d ContainerLookup, t *Container) (string,
 		sort.Strings(filters)
 		list, err := d.ContainerList(ctx, false, filters)
 		if err != nil {
-			return "", 0, fmt.Errorf("list containers: %w", err)
+			return inspected{}, fmt.Errorf("list containers: %w", err)
 		}
 		var running []docker.ContainerSummary
 		for _, c := range list {
@@ -178,7 +245,7 @@ func containerPID(ctx context.Context, d ContainerLookup, t *Container) (string,
 			}
 		}
 		if len(running) == 0 {
-			return "", 0, ErrNoContainer
+			return inspected{}, ErrNoContainer
 		}
 		ref = slices.MaxFunc(running, func(a, b docker.ContainerSummary) int {
 			return cmp.Or(cmp.Compare(a.Created, b.Created), strings.Compare(a.ID, b.ID))
@@ -186,12 +253,12 @@ func containerPID(ctx context.Context, d ContainerLookup, t *Container) (string,
 	}
 	ct, ok, err := d.ContainerInspect(ctx, ref)
 	if err != nil {
-		return "", 0, fmt.Errorf("inspect container: %w", err)
+		return inspected{}, fmt.Errorf("inspect container: %w", err)
 	}
 	if !ok || !ct.State.Running || ct.State.Pid <= 0 {
-		return "", 0, ErrNoContainer
+		return inspected{}, ErrNoContainer
 	}
-	return strings.TrimPrefix(ct.Name, "/"), ct.State.Pid, nil
+	return inspected{ct}, nil
 }
 
 func hasLabels(have, want map[string]string) bool {
@@ -203,63 +270,78 @@ func hasLabels(have, want map[string]string) bool {
 	return true
 }
 
-// exec runs argv under a PTY (system tools line-buffer on a terminal), copies its output to w with CRLF folded to
-// LF, and kills the process group past the timeout (plus a grace for the helper's own timeout to report) or the
-// output cap.
-func (m *Manager) exec(ctx context.Context, argv []string, timeout time.Duration, w io.Writer) (code int, timedOut bool, err error) {
-	cmd := exec.Command(argv[0], argv[1:]...)
+// exec runs the helper under a PTY for its output (system tools line-buffer on a terminal; the spec goes on stdin),
+// copies the output to w with CRLF folded to LF, and kills the process group past the timeout (plus a grace for the
+// helper's own timeout to report), on cancellation or at the output cap. end says why it was killed ("" when it exited
+// by itself).
+func (m *Manager) exec(ctx context.Context, h *helper, timeout time.Duration, w io.Writer) (code int, end string, err error) {
+	cmd := exec.Command(h.argv[0], h.argv[1:]...)
 	cmd.Env = append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "TERM=dumb"}, m.opts.Env...)
 	cmd.Dir = "/"
-	f, err := cpty.StartWithSize(cmd, &cpty.Winsize{Cols: 160, Rows: 50})
+	cmd.Stdin = bytes.NewReader(h.spec)
+	if h.netns != nil {
+		cmd.ExtraFiles = []*os.File{h.netns} // fd 3
+	}
+	// Stdout (fd 1) is the PTY and becomes the controlling terminal; stdin is the spec.
+	f, err := cpty.StartWithAttrs(cmd, &cpty.Winsize{Cols: 160, Rows: 50}, &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1})
 	if err != nil {
-		return 0, false, fmt.Errorf("start the tool: %w", err)
+		return 0, "", fmt.Errorf("start the tool: %w", err)
 	}
 	defer f.Close()
 
-	var once sync.Once
-	kill := func() {
+	var (
+		once   sync.Once
+		mu     sync.Mutex
+		reason string
+	)
+	kill := func(why string) {
 		once.Do(func() {
+			mu.Lock()
+			reason = why
+			mu.Unlock()
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			_ = cmd.Process.Kill()
 		})
 	}
-	readDone := make(chan bool, 1) // true: output cap reached
+	readDone := make(chan struct{})
 	go func() {
-		readDone <- copyOutput(f, w, m.opts.MaxOutput, kill)
+		defer close(readDone)
+		copyOutput(f, w, m.opts.MaxOutput, func() { kill(endOutput) })
 	}()
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
 
 	timer := time.NewTimer(timeout + 5*time.Second)
 	defer timer.Stop()
-	var waitErr error
 	select {
-	case waitErr = <-exited:
+	case <-exited:
 	case <-timer.C:
-		timedOut = true
-		kill()
-		waitErr = <-exited
+		kill(endTimeout)
+		<-exited
 	case <-ctx.Done():
-		timedOut = true
-		kill()
-		waitErr = <-exited
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			kill(endTimeout)
+		} else {
+			kill(endCancelled)
+		}
+		<-exited
 	}
 	// The PTY reports EIO once every holder of the slave is gone; don't wait forever for a grandchild that kept it.
 	select {
 	case <-readDone:
 	case <-time.After(time.Second):
-		kill()
+		kill("")
 		f.Close()
 		<-readDone
 	}
-	if cmd.ProcessState == nil {
-		return 0, timedOut, waitErr
-	}
+	mu.Lock()
+	end = reason
+	mu.Unlock()
 	code = cmd.ProcessState.ExitCode()
 	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
 		code = 128 + int(ws.Signal())
 	}
-	return code, timedOut, nil
+	return code, end, nil
 }
 
 // crlf matches a line end as the PTY renders it: "\n" becomes "\r\n" (onlcr), so a tool's own "\r\n" arrives as
@@ -267,8 +349,8 @@ func (m *Manager) exec(ctx context.Context, argv []string, timeout time.Duration
 var crlf = regexp.MustCompile("\r+\n")
 
 // copyOutput copies r to w with CRs before a newline dropped until EOF/EIO; past limit bytes it notes the
-// truncation, calls stop and returns true.
-func copyOutput(r io.Reader, w io.Writer, limit int, stop func()) bool {
+// truncation and calls stop.
+func copyOutput(r io.Reader, w io.Writer, limit int, stop func()) {
 	buf := make([]byte, 16<<10)
 	total := 0
 	var pending []byte // trailing CRs of the last read: the "\n" they belong to may come with the next
@@ -288,13 +370,13 @@ func copyOutput(r io.Reader, w io.Writer, limit int, stop func()) bool {
 				_, _ = io.WriteString(w, "\n… output truncated\n")
 				stop()
 				_, _ = io.Copy(io.Discard, r)
-				return true
+				return
 			}
 			total += len(chunk)
 			_, _ = w.Write(chunk)
 		}
 		if err != nil {
-			return false
+			return
 		}
 	}
 }
