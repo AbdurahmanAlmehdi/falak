@@ -176,7 +176,9 @@ final class CloudflareAnalytics
     {
         $now = Carbon::now()->utc();
         $bucket = intdiv($now->getTimestamp(), self::CACHE_TTL);
-        $key = 'edge:cf-analytics:'.$zone->zone_id.':'.sha1(implode(',', $hosts)).':'.$bucket;
+        // Per organization and connection: two organizations may manage the same Cloudflare zone with different tokens
+        // (and permissions); one never reads the other's figures or errors.
+        $key = 'edge:cf-analytics:'.$zone->organization_id.':'.$zone->dns_credential_id.':'.$zone->zone_id.':'.sha1(implode(',', $hosts)).':'.$bucket;
 
         if (! $refresh && is_array($cached = Cache::get($key))) {
             return $cached;

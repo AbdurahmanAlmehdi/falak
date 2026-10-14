@@ -26,7 +26,7 @@ export interface NetToolRun {
     server_name: string;
     container: string | null;
     command_id: string | null;
-    status: 'running' | 'succeeded' | 'failed' | 'timed_out';
+    status: 'running' | 'succeeded' | 'failed' | 'timed_out' | 'cancelled';
     exit_code: number | null;
     error: string | null;
     created_at: string;

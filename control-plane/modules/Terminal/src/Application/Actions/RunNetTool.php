@@ -10,6 +10,8 @@ use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Terminal\Domain\Data\ConsoleTarget;
 use Falak\Terminal\Domain\Data\NetToolSpec;
 use Falak\Terminal\Domain\Models\NetToolRun;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -29,6 +31,11 @@ final class RunNetTool
     public const MAX_RUNNING = 2;
 
     public const STALE_SECONDS = 120;
+
+    public static function lockKey(string $userId): string
+    {
+        return "terminal:net-tools:{$userId}";
+    }
 
     public function __construct(
         private readonly ServerDirectory $servers,
@@ -59,31 +66,35 @@ final class RunNetTool
             throw ValidationException::withMessages(['server' => self::AGENT_TOO_OLD]);
         }
 
-        $running = NetToolRun::query()->where('user_id', $userId)->where('status', NetToolRun::RUNNING)
-            ->where('created_at', '>=', now()->subSeconds(self::STALE_SECONDS))->count();
-        abort_if($running >= self::MAX_RUNNING, 429, self::BUSY);
-
-        $container = null;
-
         if ($target->container !== null) {
             // net.tool's selector: name or labels, never a user or workdir.
-            $container = array_intersect_key($target->container, ['name' => true, 'labels' => true]);
-            $payload['container'] = $container;
+            $payload['container'] = array_intersect_key($target->container, ['name' => true, 'labels' => true]);
         }
 
-        $run = NetToolRun::query()->create([
-            'organization_id' => $organizationId,
-            'user_id' => $userId,
-            'server_id' => $server->id,
-            'server_name' => $server->name,
-            'target_type' => $target->type,
-            'target_id' => $target->id,
-            'target_name' => $target->name ?? $server->name,
-            'container' => $target->containerLabel,
-            'tool' => $payload['tool'],
-            'input' => array_diff_key($payload, ['tool' => true, 'container' => true]),
-            'status' => NetToolRun::RUNNING,
-        ]);
+        // Count and insert under one lock per user: two requests at once can't both pass the cap.
+        try {
+            $run = Cache::lock(self::lockKey($userId), 10)->block(3, function () use ($organizationId, $userId, $server, $target, $payload) {
+                $running = NetToolRun::query()->where('user_id', $userId)->where('status', NetToolRun::RUNNING)
+                    ->where('created_at', '>=', now()->subSeconds(self::STALE_SECONDS))->count();
+                abort_if($running >= self::MAX_RUNNING, 429, self::BUSY);
+
+                return NetToolRun::query()->create([
+                    'organization_id' => $organizationId,
+                    'user_id' => $userId,
+                    'server_id' => $server->id,
+                    'server_name' => $server->name,
+                    'target_type' => $target->type,
+                    'target_id' => $target->id,
+                    'target_name' => $target->name ?? $server->name,
+                    'container' => $target->containerLabel,
+                    'tool' => $payload['tool'],
+                    'input' => array_diff_key($payload, ['tool' => true, 'container' => true]),
+                    'status' => NetToolRun::RUNNING,
+                ]);
+            });
+        } catch (LockTimeoutException) {
+            abort(429, self::BUSY);
+        }
 
         try {
             $handle = $this->agents->dispatch($server->id, 'net.tool', $payload, (int) $payload['timeout_s'] + 15, "net.tool:{$run->id}");

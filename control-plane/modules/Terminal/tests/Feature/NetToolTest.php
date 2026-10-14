@@ -14,9 +14,11 @@ use Falak\Sites\Contracts\TargetRole;
 use Falak\Sites\Contracts\TargetStatus;
 use Falak\Sites\Domain\Models\Site;
 use Falak\Sites\Domain\Models\SiteTarget;
+use Falak\Terminal\Application\Actions\RunNetTool;
 use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Domain\Data\NetToolSpec;
 use Falak\Terminal\Domain\Models\NetToolRun;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\ValidationException;
 use Tests\Support\FakeAgentGateway;
 
@@ -117,7 +119,7 @@ it('refuses functions, old agents and other organizations', function () {
     expect(NetToolRun::query()->count())->toBe(0);
 });
 
-it('needs network.tools: admins and developers yes, viewers no', function (Role $role, int $status) {
+it('needs network.tools: admins yes, developers and viewers no (like terminal.open)', function (Role $role, int $status) {
     [, $organization] = actingAsMember($role);
     $server = terminal_server($organization, ['name' => 'x-1']);
     nettool_agent($server);
@@ -126,7 +128,7 @@ it('needs network.tools: admins and developers yes, viewers no', function (Role 
     $this->postJson("/api/v1/servers/{$server->id}/net-tools", ['tool' => 'ping', 'target' => 'example.com'])->assertStatus($status === 201 ? 201 : 403);
 })->with([
     'admin' => [Role::Admin, 201],
-    'developer' => [Role::Developer, 201],
+    'developer' => [Role::Developer, 403],
     'viewer' => [Role::Viewer, 403],
 ]);
 
@@ -177,6 +179,28 @@ it('caps concurrent runs per user and rate limits', function () {
     }
     // 11th request in the minute (the refused one above counted too).
     $this->postJson("/servers/{$this->server->id}/net-tools", ['tool' => 'ping', 'target' => 'a'])->assertStatus(429);
+});
+
+it('refuses a run while another request of the user holds the cap lock', function () {
+    $lock = Cache::lock(RunNetTool::lockKey($this->user->id), 10);
+    expect($lock->get())->toBeTrue();
+
+    $this->postJson("/servers/{$this->server->id}/net-tools", ['tool' => 'ping', 'target' => 'a'])->assertStatus(429);
+    $lock->release();
+    $this->postJson("/servers/{$this->server->id}/net-tools", ['tool' => 'ping', 'target' => 'a'])->assertCreated();
+    expect(NetToolRun::query()->count())->toBe(1);
+});
+
+it('settles a cancelled command as cancelled, not as a timeout', function () {
+    $this->postJson("/servers/{$this->server->id}/net-tools", ['tool' => 'ping', 'target' => 'a'])->assertCreated();
+    $this->postJson("/servers/{$this->server->id}/net-tools", ['tool' => 'http', 'url' => 'https://a/'])->assertCreated();
+    [$cancelled, $capped] = NetToolRun::query()->orderBy('created_at')->orderBy('id')->get()->all();
+
+    $this->agents->fail($cancelled->command_id, 'cancelled', null, 'cancelled');
+    $this->agents->fail($capped->command_id, 'http stopped: output limit reached (256 KiB)', 1);
+
+    expect($cancelled->fresh()->status)->toBe('cancelled')
+        ->and($capped->fresh()->only(['status', 'exit_code', 'error']))->toBe(['status' => 'failed', 'exit_code' => 1, 'error' => 'http stopped: output limit reached (256 KiB)']);
 });
 
 it('settles runs from the command outcome and shows their output', function () {

@@ -52,7 +52,8 @@ class TerminalServiceProvider extends ModuleServiceProvider
         $registry->register('terminal.control', [Role::Admin], 'Type into and close terminal sessions opened by others', 'terminal');
         $registry->register('terminal.recordings.view', [Role::Admin], "Replay other members' terminal recordings", 'terminal');
         // Network tools (docs/plans/network/tools.md): read-only probes from servers and containers, audited.
-        $registry->register('network.tools', [Role::Admin, Role::Developer], 'Run network tools (ping, traceroute, DNS, HTTP, TCP) from servers and containers', 'network');
+        // Admins only by default, like terminal.open: a probe from inside a site's or database's network.
+        $registry->register('network.tools', [Role::Admin], 'Run network tools (ping, traceroute, DNS, HTTP, TCP) from servers and containers', 'network');
 
         RateLimiter::for('net-tools', fn (Request $request) => Limit::perMinute(10)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
 

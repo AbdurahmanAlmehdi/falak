@@ -21,7 +21,7 @@ use Illuminate\Support\Carbon;
  * @property string $tool ping|traceroute|dns|http|tcp
  * @property array<string, mixed> $input the validated arguments
  * @property ?string $command_id
- * @property string $status running|succeeded|failed|timed_out
+ * @property string $status running|succeeded|failed|timed_out|cancelled
  * @property ?int $exit_code
  * @property ?string $error
  * @property ?Carbon $finished_at
@@ -38,6 +38,8 @@ class NetToolRun extends Model
     public const FAILED = 'failed';
 
     public const TIMED_OUT = 'timed_out';
+
+    public const CANCELLED = 'cancelled';
 
     protected $table = 'terminal_net_tool_runs';
 

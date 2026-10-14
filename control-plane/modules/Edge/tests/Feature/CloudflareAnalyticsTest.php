@@ -20,6 +20,8 @@ require_once __DIR__.'/../Support/helpers.php';
 
 const CF_ANALYTICS_TOKEN = 'cf-analytics-secret-token-0123456789';
 
+const CF_OTHER_TOKEN = 'cf-other-organization-token-987654321';
+
 beforeEach(function () {
     ['sites' => $this->sites, 'servers' => $this->servers] = edge_fakes();
     [$this->user, $this->organization] = actingAsMember(Role::Developer);
@@ -83,7 +85,7 @@ beforeEach(function () {
 
     Http::fake(['api.cloudflare.com/*' => function (Request $request) {
         expect($request->url())->toBe('https://api.cloudflare.com/client/v4/graphql')
-            ->and($request->header('Authorization')[0])->toBe('Bearer '.CF_ANALYTICS_TOKEN);
+            ->and($request->header('Authorization')[0])->toBeIn(['Bearer '.CF_ANALYTICS_TOKEN, 'Bearer '.CF_OTHER_TOKEN]);
         preg_match('/query (\w+)/', (string) $request['query'], $m);
         $this->graphql[] = ['op' => $m[1], 'variables' => $request['variables']];
 
@@ -254,3 +256,28 @@ it('lets viewers see it and hides other organizations’ sites', function () {
 });
 
 afterEach(fn () => Cache::flush());
+
+it('keeps two organizations managing the same zone apart (cache per organization and connection)', function () {
+    [, $other] = memberOf(null, Role::Owner);
+    $credential = DnsCredential::query()->create([
+        'organization_id' => $other->id, 'provider' => 'cloudflare', 'name' => 'Their account', 'api_token' => CF_OTHER_TOKEN, 'account_id' => 'acc-2', 'verified_at' => now(),
+    ]);
+    $theirs = CloudflareZone::query()->create([
+        'organization_id' => $other->id, 'dns_credential_id' => $credential->id, 'zone_id' => 'zone-abc', 'name' => 'example.com', 'proxied' => true,
+    ]);
+    // Their token lacks Analytics:Read; ours works.
+    $settings = $this->answers['FalakAnalyticsSettings'];
+    $this->answers['FalakAnalyticsSettings'] = fn (Request $request) => $request->header('Authorization')[0] === 'Bearer '.CF_OTHER_TOKEN
+        ? Http::response(['data' => null, 'errors' => [['message' => 'not authorized', 'path' => ['viewer', 'zones', 0, 'settings'], 'extensions' => ['code' => 'authz']]]])
+        : $settings();
+
+    $this->getJson($this->url)->assertOk()->assertJsonPath('data.zones.0.traffic.requests', 1000);
+
+    $report = app(CloudflareAnalytics::class)->forZone($theirs, ['shop.example.com']);
+    expect($report['traffic'])->toBeNull()
+        ->and($report['permission_missing'])->toBeTrue()
+        ->and($report['connection'])->toBe('Their account');
+
+    // And our cached figures still are ours, not their error.
+    $this->getJson($this->url)->assertOk()->assertJsonPath('data.zones.0.traffic.requests', 1000)->assertJsonPath('data.error', null);
+});

@@ -16,7 +16,13 @@ final class SettleNetToolRun
 
     public function handleFailed(CommandFailed $event): void
     {
-        $status = $event->status === 'timed_out' || $event->exitCode === 124 ? NetToolRun::TIMED_OUT : NetToolRun::FAILED;
+        // A cancelled command (or a tool the agent reports cancelled, exit 130) is not a timeout; an output-cap kill is a
+        // failure with its own message ("output limit reached").
+        $status = match (true) {
+            $event->status === 'cancelled' || $event->exitCode === 130 => NetToolRun::CANCELLED,
+            $event->status === 'timed_out' || $event->exitCode === 124 => NetToolRun::TIMED_OUT,
+            default => NetToolRun::FAILED,
+        };
         $this->settle($event->type, $event->commandId, $status, $event->exitCode, $event->error);
     }
 
