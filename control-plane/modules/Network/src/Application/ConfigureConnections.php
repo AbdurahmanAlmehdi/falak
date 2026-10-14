@@ -9,14 +9,15 @@ use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Network\Domain\Models\NetworkObservation;
 use Falak\Network\Domain\Models\PrivateNetworkMember;
 use Falak\Servers\Contracts\ServerDirectory;
-use Falak\Servers\Contracts\ServerSshKeys;
 use Illuminate\Support\Str;
 
 /**
  * Sends net.connections.configure (docs/plans/network/connections.md): what only the control plane knows, whom the
- * agent probes (its private-network peers, the databases it hosts and those on its peers) and what to call the
- * addresses it sees (server:<id>, db:<id>). Only to agents with `net.connections` (the whole command is gated), and
- * only when the payload changed since the last one sent (unless forced: the agent was upgraded).
+ * agent probes (its private-network peers, on a closed port of their private address: the peer's kernel answers with a
+ * RST, so no service sees a connection; database ports are never probed, MySQL / MariaDB count a connection closed
+ * before its handshake as an aborted connect) and what to call the addresses it sees (server:<id>, db:<id>). Only to
+ * agents with `net.connections` (the whole command is gated), and only when the payload differs from the last one the
+ * agent applied (`config_hash`, set when the command succeeds) or is waiting for (`config_pending_hash`), unless forced.
  */
 final class ConfigureConnections
 {
@@ -26,7 +27,6 @@ final class ConfigureConnections
         private readonly AgentGateway $agents,
         private readonly AgentDirectory $directory,
         private readonly ServerDirectory $servers,
-        private readonly ServerSshKeys $keys,
         private readonly DatabaseDirectory $databases,
     ) {}
 
@@ -43,7 +43,7 @@ final class ConfigureConnections
         $hash = hash('sha256', (string) json_encode($payload));
         $observation = NetworkObservation::query()->firstOrNew(['server_id' => $server->id], ['organization_id' => $server->organizationId]);
 
-        if (! $force && $observation->config_hash === $hash) {
+        if (! $force && in_array($hash, [$observation->config_hash, $observation->config_pending_hash], true)) {
             return null;
         }
 
@@ -53,9 +53,25 @@ final class ConfigureConnections
             return null;
         }
 
-        $observation->forceFill(['config_hash' => $hash])->save();
+        $observation->forceFill(['config_pending_hash' => $hash, 'config_command_id' => $id])->save();
 
         return $id;
+    }
+
+    /** The command finished: what it carried is applied (only the latest command counts). */
+    public function applied(string $commandId, bool $succeeded): void
+    {
+        $observation = NetworkObservation::query()->where('config_command_id', $commandId)->first();
+
+        if ($observation === null) {
+            return;
+        }
+
+        $observation->forceFill([
+            'config_hash' => $succeeded ? $observation->config_pending_hash : $observation->config_hash,
+            'config_pending_hash' => null,
+            'config_command_id' => null,
+        ])->save();
     }
 
     /**
@@ -64,7 +80,6 @@ final class ConfigureConnections
     public function payload(string $serverId, string $organizationId): array
     {
         $probes = $names = $wireguard = [];
-        $peerAddress = [];
         $networks = PrivateNetworkMember::query()->where('server_id', $serverId)->pluck('network_id');
         $peers = PrivateNetworkMember::query()->whereIn('network_id', $networks)->where('server_id', '!=', $serverId)
             ->orderBy('created_at')->orderBy('id')->get();
@@ -72,8 +87,7 @@ final class ConfigureConnections
         foreach ($peers as $member) {
             $name = "server:{$member->server_id}";
             $peer = $this->servers->find($member->server_id);
-            $peerAddress[$member->server_id] ??= $member->address;
-            $probes[$name] ??= ['name' => $name, 'kind' => 'server', 'host' => $member->address, 'port' => $this->keys->sshPort($member->server_id)];
+            $probes[$name] ??= ['name' => $name, 'kind' => 'server', 'host' => $member->address, 'port' => (int) config('network.connections.probe_port', 1)];
 
             foreach (array_filter([$member->address, $peer?->ipv4, $peer?->privateIpv4, $peer?->ipv6]) as $address) {
                 $names["{$address}|0"] = ['address' => $address, 'port' => 0, 'name' => $name];
@@ -92,11 +106,9 @@ final class ConfigureConnections
             $name = "db:{$instance->id}";
             $port = $instance->hostPort;
 
+            // The agent matches loopback names in the host's namespace only.
             if ($instance->serverId === $serverId) {
-                $probes[$name] = ['name' => $name, 'kind' => 'database', 'host' => '127.0.0.1', 'port' => $port];
                 $names["127.0.0.1|{$port}"] = ['address' => '127.0.0.1', 'port' => $port, 'name' => $name];
-            } elseif (isset($peerAddress[$instance->serverId]) && in_array($peerAddress[$instance->serverId], $instance->publishedAddresses, true)) {
-                $probes[$name] = ['name' => $name, 'kind' => 'database', 'host' => $peerAddress[$instance->serverId], 'port' => $port];
             }
 
             foreach ($instance->publishedAddresses as $address) {

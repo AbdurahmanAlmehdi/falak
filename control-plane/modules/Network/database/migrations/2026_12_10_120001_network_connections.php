@@ -20,6 +20,8 @@ return new class extends Migration
             $table->timestamp('observed_at')->nullable();
             $table->json('baselines')->nullable();
             $table->string('config_hash', 64)->nullable();
+            $table->string('config_pending_hash', 64)->nullable();
+            $table->string('config_command_id', 26)->nullable()->index();
             $table->timestamps();
         });
 

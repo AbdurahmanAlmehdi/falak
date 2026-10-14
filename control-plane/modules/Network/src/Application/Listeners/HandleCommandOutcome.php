@@ -4,6 +4,7 @@ namespace Falak\Network\Application\Listeners;
 
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
+use Falak\Network\Application\ConfigureConnections;
 use Falak\Network\Application\ConvergePrivateNetwork;
 use Falak\Network\Domain\Enums\ApplyStatus;
 use Falak\Network\Domain\Enums\KeyStatus;
@@ -21,7 +22,10 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
-    public function __construct(private readonly ConvergePrivateNetwork $converge) {}
+    public function __construct(
+        private readonly ConvergePrivateNetwork $converge,
+        private readonly ConfigureConnections $connections,
+    ) {}
 
     public function handleFinished(CommandFinished $event): void
     {
@@ -29,6 +33,7 @@ final class HandleCommandOutcome implements ShouldQueue
             'net.firewall.apply' => $this->firewallApplied($event),
             'net.wireguard.apply' => $this->wireguardApplied($event),
             'system.write_file' => $this->keyInstalled($event),
+            'net.connections.configure' => $this->connections->applied($event->commandId, true),
             default => null,
         };
     }
@@ -47,6 +52,7 @@ final class HandleCommandOutcome implements ShouldQueue
                 ->where('key_command_id', $event->commandId)
                 ->where('organization_id', $event->organizationId)
                 ->update(['key_status' => KeyStatus::Failed, 'status' => ApplyStatus::Failed, 'error' => "Installing the WireGuard key failed: {$reason}", 'updated_at' => now()]),
+            'net.connections.configure' => $this->connections->applied($event->commandId, false),
             default => null,
         };
     }

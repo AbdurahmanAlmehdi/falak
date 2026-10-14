@@ -62,7 +62,7 @@ export interface WireGuardRow {
 
 export interface ProbeRow {
     name: string;
-    kind: 'server' | 'database';
+    kind: 'server';
     host: string;
     port: number;
     ok: boolean;
@@ -165,11 +165,35 @@ export function bucketLabel(name: string): string {
     }
 }
 
-/** Whether an address can be acted on (blocked): a remote IP, never a folded row or a loopback. */
+/**
+ * Whether an address can be acted on (blocked): a public remote IP. Never a folded row, a Falak peer (a server, a
+ * database, a site), loopback, private (RFC 1918, ULA), CGNAT or link-local addresses.
+ */
 export function actionableIp(row: PeerRow): string | null {
-    if (row.other || !row.address || row.address.startsWith('127.') || row.address === '::1') return null;
+    if (row.other || !row.address || row.peer || isPrivateAddress(row.address)) return null;
 
     return row.address;
+}
+
+/** Loopback, RFC 1918, CGNAT, link-local, unspecified (IPv4); loopback, ULA, link-local, unspecified (IPv6). */
+export function isPrivateAddress(address: string): boolean {
+    const v4 = address.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+    if (v4) {
+        const [a, b] = [Number(v4[1]), Number(v4[2])];
+
+        return (
+            a === 0 ||
+            a === 10 ||
+            a === 127 ||
+            (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 168) ||
+            (a === 100 && b >= 64 && b <= 127) ||
+            (a === 169 && b === 254)
+        );
+    }
+    const v6 = address.toLowerCase();
+
+    return v6 === '::' || v6 === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6);
 }
 
 /** Conntrack fill as a percentage (null without a limit). */

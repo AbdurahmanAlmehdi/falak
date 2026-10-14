@@ -64,6 +64,15 @@ describe('actionableIp', () => {
         expect(actionableIp(row({}))).toBe('203.0.113.9');
         expect(actionableIp(row({ address: '127.0.0.1' }))).toBeNull();
         expect(actionableIp(row({ other: true }))).toBeNull();
+        expect(actionableIp(row({ address: '10.90.0.2' }))).toBeNull();
+        expect(actionableIp(row({ address: '172.18.0.3' }))).toBeNull();
+        expect(actionableIp(row({ address: '192.168.1.4' }))).toBeNull();
+        expect(actionableIp(row({ address: '100.64.0.1' }))).toBeNull();
+        expect(actionableIp(row({ address: 'fd00::1' }))).toBeNull();
+        expect(actionableIp(row({ address: 'fe80::1' }))).toBeNull();
+        expect(actionableIp(row({ address: '172.32.0.1' }))).toBe('172.32.0.1');
+        expect(actionableIp(row({ address: '2001:db8::1' }))).toBe('2001:db8::1');
+        expect(actionableIp(row({ address: '203.0.113.11', peer: { label: 'app-2', url: '/servers/x' } }))).toBeNull();
     });
 });
 

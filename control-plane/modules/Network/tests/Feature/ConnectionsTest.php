@@ -109,13 +109,17 @@ it('keeps the latest report and ignores reports of other servers and invalid one
     net_observed($this, [...net_report(), 'password' => 'x'])->assertStatus(422);
     net_observed($this, net_report(['conntrack' => ['accounting' => 'maybe']]))->assertStatus(422);
 
-    // External peers get a reverse DNS lookup, private ones never.
-    Bus::assertDispatched(ResolvePeerNames::class, fn (ResolvePeerNames $job) => $job->addresses === ['198.51.100.7', '8.8.8.8']);
+    // External peers get a reverse DNS lookup, private ones never; placeholders keep the next reports from asking again.
+    Bus::assertDispatched(ResolvePeerNames::class, fn (ResolvePeerNames $job) => $job->addresses === ['198.51.100.7', '8.8.8.8'] && $job->serverId === $this->server->id);
+    expect(DB::table('network_peer_names')->whereNull('name')->count())->toBe(2);
+    Bus::fake([ResolvePeerNames::class]);
+    net_observed($this, net_report(['at' => now()->addMinute()->toIso8601String()]))->assertOk();
+    Bus::assertNotDispatched(ResolvePeerNames::class);
 });
 
 it('caches reverse DNS of external peers for a day', function () {
     ResolvePeerNames::$resolver = fn (string $address) => $address === '8.8.8.8' ? 'dns.google' : null;
-    (new ResolvePeerNames(['8.8.8.8', '198.51.100.7', 'not-an-ip']))->handle();
+    (new ResolvePeerNames($this->server->id, ['8.8.8.8', '198.51.100.7', 'not-an-ip']))->handle();
     ResolvePeerNames::$resolver = null;
 
     expect(DB::table('network_peer_names')->orderBy('address')->pluck('name', 'address')->all())->toEqual(['198.51.100.7' => null, '8.8.8.8' => 'dns.google']);
@@ -160,6 +164,32 @@ it('raises a security issue and an alert for a port reachable from the internet,
         ->and($issues[0]->refresh()->status)->toBe(IssueStatus::Open);
 });
 
+it('audits native sites\' listeners too, and resolves nothing from a cut listener list', function () {
+    Bus::fake([ResolvePeerNames::class]);
+    FirewallRule::query()->create(['server_id' => $this->server->id, 'organization_id' => $this->organization->id, 'name' => 'node', 'action' => 'allow',
+        'protocol' => 'tcp', 'port' => '3000-3100', 'position' => 1]);
+    $report = net_report();
+    $report['workloads'][1]['listeners'] = [net_listener('tcp', '0.0.0.0', 3000, ['owner' => 'site:blog']), net_listener('tcp', '0.0.0.0', 3001, ['owner' => 'site:blog'])];
+    net_observed($this, $report)->assertOk();
+
+    $issues = Issue::query()->where('kind', IssueKind::Security)->orderBy('title')->get();
+    expect($issues->pluck('title')->all())->toBe(['Port tcp/3000 reachable from the internet on app-1', 'Port tcp/3001 reachable from the internet on app-1'])
+        ->and($issues[0]->culprit)->toBe('site blog');
+
+    // The next report cut the list (3001 left out): 3001 is not resolved.
+    $report['at'] = now()->addMinute()->toIso8601String();
+    $report['workloads'][1]['listeners'] = [net_listener('tcp', '0.0.0.0', 3000, ['owner' => 'site:blog'])];
+    $report['workloads'][1]['listeners_truncated'] = true;
+    net_observed($this, $report)->assertOk();
+    expect($issues[1]->refresh()->status)->toBe(IssueStatus::Open);
+
+    // A complete list without it: resolved.
+    $report['at'] = now()->addMinutes(2)->toIso8601String();
+    unset($report['workloads'][1]['listeners_truncated']);
+    net_observed($this, $report)->assertOk();
+    expect($issues[1]->refresh()->status)->toBe(IssueStatus::Resolved)->and($issues[0]->refresh()->status)->toBe(IssueStatus::Open);
+});
+
 it('treats every public port as reachable while the firewall is not applied, except the ones Falak exposes', function () {
     Bus::fake([ResolvePeerNames::class]);
     FirewallState::query()->whereKey($this->server->id)->update(['status' => ApplyStatus::Failed->value]);
@@ -201,7 +231,7 @@ it('alerts on conntrack near full, stale WireGuard peers and latency spikes once
         'conntrack' => ['entries' => 900, 'limit' => 1000, 'accounting' => 'on'],
         'wireguard' => [['interface' => 'falak0', 'public_key' => 'TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0=', 'name' => $peerName, 'allowed_ips' => ['10.90.0.2/32'],
             'handshake_age_s' => $handshake, 'rx_bytes' => 1, 'tx_bytes' => 2]],
-        'probes' => [['name' => $peerName, 'kind' => 'server', 'host' => '10.90.0.2', 'port' => 22, 'ok' => $ok, 'connect_ms' => $ok ? $ms : null, ...($ok ? [] : ['error' => 'timeout'])]],
+        'probes' => [['name' => $peerName, 'kind' => 'server', 'host' => '10.90.0.2', 'port' => 1, 'ok' => $ok, 'connect_ms' => $ok ? $ms : null, ...($ok ? [] : ['error' => 'timeout'])]],
     ]);
 
     foreach (range(0, 4) as $minute) {
@@ -292,16 +322,26 @@ it('sends net.connections.configure with peers, databases and names, only when i
     $remote = databases_instance($this->organization, 'mysql', $peer, ['host_port' => 20002, 'published_addresses' => ['10.90.0.2']]);
     fleet_enroll($this->organization->id, $this->server->id, ['features' => ['net.connections']]);
 
-    expect(app(ConfigureConnections::class)($this->server->id))->not->toBeNull();
+    $first = app(ConfigureConnections::class)($this->server->id);
+    expect($first)->not->toBeNull();
     $payload = $gateway->last('net.connections.configure', $this->server->id)['payload'];
+    // Peers only, on a closed port: database ports are never probed (an aborted connect for MySQL / MariaDB).
     expect(network_schema_errors('net.connections.configure', $payload))->toBe([])
-        ->and(collect($payload['probes'])->pluck('host', 'name')->sortKeys()->all())->toEqualCanonicalizing([
-            "server:{$peer->id}" => '10.90.0.2', "db:{$local->id}" => '127.0.0.1', "db:{$remote->id}" => '10.90.0.2',
-        ])
+        ->and($payload['probes'])->toBe([['name' => "server:{$peer->id}", 'kind' => 'server', 'host' => '10.90.0.2', 'port' => 1]])
         ->and(collect($payload['names'])->where('name', "server:{$peer->id}")->pluck('address')->all())->toContain('10.90.0.2', '203.0.113.11')
+        ->and(collect($payload['names'])->where('name', "db:{$local->id}")->pluck('address')->all())->toBe(['127.0.0.1'])
+        ->and(collect($payload['names'])->where('name', "db:{$remote->id}")->pluck('address')->all())->toBe(['10.90.0.2'])
         ->and($payload['wireguard'])->toBe([['public_key' => 'TrMvSoP4jYQlY6RIzBgbssQqY3vxI2Pi+y71lOWWXX0=', 'name' => "server:{$peer->id}"]]);
 
+    // In flight: not sent again; failed: sent again; succeeded: applied, and not sent again.
     expect(app(ConfigureConnections::class)($this->server->id))->toBeNull();
+    $gateway->fail($first);
+    expect(NetworkObservation::query()->find($this->server->id)->config_hash)->toBeNull();
+    $second = app(ConfigureConnections::class)($this->server->id);
+    expect($second)->not->toBeNull();
+    $gateway->succeed($second);
+    expect(NetworkObservation::query()->find($this->server->id)->config_hash)->not->toBeNull()
+        ->and(app(ConfigureConnections::class)($this->server->id))->toBeNull();
 
     // Agents without the feature never get the command.
     expect(app(ConfigureConnections::class)($peer->id))->toBeNull();

@@ -30,5 +30,8 @@ return [
         'rdns_ttl_hours' => 24,
         'rdns_per_report' => 20,
         'long_lived_after_s' => 60,
+        // Latency probes connect to this port of a peer's private address: nothing listens on it, the peer's kernel
+        // answers with a RST (the round trip) and no service logs a connection.
+        'probe_port' => (int) env('FALAK_NETWORK_PROBE_PORT', 1),
     ],
 ];

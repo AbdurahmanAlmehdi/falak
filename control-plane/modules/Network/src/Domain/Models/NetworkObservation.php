@@ -13,7 +13,9 @@ use Illuminate\Support\Carbon;
  * @property ?array<string, mixed> $report
  * @property ?Carbon $observed_at
  * @property ?array<string, float> $baselines probe name => connect time baseline (ms, exponentially weighted)
- * @property ?string $config_hash the last net.connections.configure sent
+ * @property ?string $config_hash what the last successful net.connections.configure carried
+ * @property ?string $config_pending_hash what the command in flight carries
+ * @property ?string $config_command_id that command
  */
 final class NetworkObservation extends Model
 {

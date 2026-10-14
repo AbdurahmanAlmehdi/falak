@@ -40,8 +40,16 @@ final class ExposedPorts
      */
     public function find(string $serverId, array $report): array
     {
-        $host = collect((array) ($report['workloads'] ?? []))->first(fn ($w) => is_array($w) && ($w['kind'] ?? null) === 'host');
-        $listeners = array_filter((array) ($host['listeners'] ?? []), fn ($l) => is_array($l) && ($l['public'] ?? false) === true);
+        $listeners = [];
+
+        // The host namespace: the host's own sockets and those of native sites (a Node app on 0.0.0.0:3000).
+        foreach (self::hostWorkloads($report) as $w) {
+            foreach ((array) ($w['listeners'] ?? []) as $l) {
+                if (is_array($l) && ($l['public'] ?? false) === true) {
+                    $listeners[] = $l;
+                }
+            }
+        }
 
         if ($listeners === []) {
             return [];
@@ -69,7 +77,12 @@ final class ExposedPorts
                 continue;
             }
 
-            $owner = ($l['container'] ?? '') !== '' ? "container {$l['container']}" : ($l['process'] ?? null);
+            $owner = match (true) {
+                ($l['container'] ?? '') !== '' => "container {$l['container']}",
+                ($l['process'] ?? '') !== '' => $l['process'],
+                str_starts_with((string) ($l['owner'] ?? ''), 'site:') => 'site '.substr((string) $l['owner'], 5),
+                default => null,
+            };
             $found[$key] = [
                 'key' => $key,
                 'proto' => $proto,
@@ -83,6 +96,32 @@ final class ExposedPorts
         ksort($found, SORT_NATURAL);
 
         return array_values($found);
+    }
+
+    /**
+     * Whether the agent cut a host-namespace listener list (more than it sends): ports missing from the report may still
+     * be open, so nothing is resolved from it.
+     *
+     * @param  array<string, mixed>  $report
+     */
+    public static function truncated(array $report): bool
+    {
+        foreach (self::hostWorkloads($report) as $w) {
+            if (($w['listeners_truncated'] ?? false) === true) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $report
+     * @return list<array<string, mixed>>
+     */
+    private static function hostWorkloads(array $report): array
+    {
+        return array_values(array_filter((array) ($report['workloads'] ?? []), fn ($w) => is_array($w) && in_array($w['kind'] ?? null, ['host', 'processes'], true)));
     }
 
     /**

@@ -68,7 +68,7 @@ final class RecordNetworkObservation
 
         $this->conntrack($server, (array) $report['conntrack']);
         $this->wireguard($server, (array) $report['wireguard']);
-        $this->resolveNames($report);
+        $this->resolveNames($server, $report);
     }
 
     /**
@@ -89,6 +89,11 @@ final class RecordNetworkObservation
                 ($port['owner'] ?? 'A process')." listens on {$port['address']}:{$port['port']} and the firewall lets it through. Bind it to 127.0.0.1 or a private address, or close the port in the firewall.",
                 "/servers/{$server->id}/network", context: ['server_id' => $server->id, 'port' => $port['key']], action: 'Review open ports',
             ));
+        }
+
+        // A cut listener list says nothing about the ports it left out: they stay as they are.
+        if (ExposedPorts::truncated($report)) {
+            return;
         }
 
         $this->issues->resolveExcept($server->organizationId, $server->id, self::ISSUE_SOURCE, $keys);
@@ -191,7 +196,7 @@ final class RecordNetworkObservation
      *
      * @param  array<string, mixed>  $report
      */
-    private function resolveNames(array $report): void
+    private function resolveNames(ServerData $server, array $report): void
     {
         $addresses = [];
 
@@ -215,7 +220,13 @@ final class RecordNetworkObservation
         $todo = array_slice(array_values(array_diff(array_keys($addresses), $known)), 0, (int) config('network.connections.rdns_per_report', 20));
 
         if ($todo !== []) {
-            ResolvePeerNames::dispatch($todo);
+            // Placeholders first: the next reports see these addresses as asked, whatever the job's fate.
+            DB::table('network_peer_names')->upsert(
+                array_map(fn (string $address) => ['address' => $address, 'name' => null, 'resolved_at' => now()], $todo),
+                ['address'],
+                ['resolved_at'],
+            );
+            ResolvePeerNames::dispatch($server->id, $todo);
         }
     }
 }
