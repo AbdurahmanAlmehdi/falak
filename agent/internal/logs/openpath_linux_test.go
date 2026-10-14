@@ -3,6 +3,7 @@
 package logs
 
 import (
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func TestOpenLogRefusesFIFOsAndDevicesBeforeOpeningThem(t *testing.T) {
 	dev := filepath.Join(dir, "dev.log")
 	if err := syscall.Mknod(dev, syscall.S_IFCHR|0o644, 1<<8|3); err == nil {
 		if _, err := openLog(func(flag int) (*os.File, error) {
-			if flag&syscall.O_PATH == 0 {
+			if flag&unix.O_PATH == 0 {
 				t.Fatal("a device node opened without O_PATH")
 			}
 			return os.OpenFile(dev, flag, 0)
@@ -63,7 +64,7 @@ func TestOpenLogRefusesFIFOsAndDevicesBeforeOpeningThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if b, _ := io.ReadAll(f); string(b) != "hello\n" || len(flags) != 1 || flags[0]&syscall.O_PATH == 0 {
+	if b, _ := io.ReadAll(f); string(b) != "hello\n" || len(flags) != 1 || flags[0]&unix.O_PATH == 0 {
 		t.Fatalf("read %q, opens %v", b, flags)
 	}
 

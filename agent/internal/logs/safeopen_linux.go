@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"golang.org/x/sys/unix"
 	"os"
 	"strconv"
 	"syscall"
@@ -14,7 +15,7 @@ import (
 // /proc/self/fd/<n>, which names that same inode: nothing can be swapped in between. The reopened descriptor is checked
 // again.
 func openLog(open func(flag int) (*os.File, error), want os.FileInfo) (*os.File, error) {
-	handle, err := open(syscall.O_PATH)
+	handle, err := open(unix.O_PATH)
 	if err != nil {
 		return nil, err
 	}
