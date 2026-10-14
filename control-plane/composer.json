@@ -67,6 +67,7 @@
             "Falak\\Security\\": "modules/Security/src/",
             "Falak\\Previews\\": "modules/Previews/src/",
             "Falak\\Config\\": "modules/Config/src/",
+            "Falak\\Uptime\\": "modules/Uptime/src/",
             "Falak\\Identity\\Database\\Factories\\": "modules/Identity/database/factories/",
             "Falak\\Providers\\Database\\Factories\\": "modules/Providers/database/factories/",
             "Falak\\Fleet\\Database\\Factories\\": "modules/Fleet/database/factories/",
@@ -103,7 +104,8 @@
             "Falak\\Limits\\Tests\\": "modules/Limits/tests/",
             "Falak\\Security\\Tests\\": "modules/Security/tests/",
             "Falak\\Previews\\Tests\\": "modules/Previews/tests/",
-            "Falak\\Config\\Tests\\": "modules/Config/tests/"
+            "Falak\\Config\\Tests\\": "modules/Config/tests/",
+            "Falak\\Uptime\\Tests\\": "modules/Uptime/tests/"
         }
     },
     "scripts": {

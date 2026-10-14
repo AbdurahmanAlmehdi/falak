@@ -6,6 +6,7 @@ import { Tag } from '@/components/falak/tag';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNowStrict } from 'date-fns';
 import {
+    Activity,
     ChevronDown,
     ChevronRight,
     Database,
@@ -65,6 +66,7 @@ export const KIND: Record<IssueKind, { label: string; icon: typeof Zap }> = {
     heartbeat: { label: 'Scheduled task', icon: HeartPulse },
     database: { label: 'Database', icon: Database },
     security: { label: 'Security', icon: ShieldAlert },
+    uptime: { label: 'Uptime', icon: Activity },
 };
 
 export function IssueKindTag({ kind }: { kind: IssueKind }) {

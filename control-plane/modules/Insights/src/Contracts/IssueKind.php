@@ -14,6 +14,8 @@ enum IssueKind: string
      * (scanners and probes: {@see SecurityFindings}). One kind, each source writes it through its own contract.
      */
     case Security = 'security';
+    /** An uptime monitor down, or its certificate chain broken ({@see UptimeIssues}). */
+    case Uptime = 'uptime';
 
     public function label(): string
     {
@@ -23,6 +25,7 @@ enum IssueKind: string
             self::Heartbeat => 'Scheduled task',
             self::Database => 'Database',
             self::Security => 'Security',
+            self::Uptime => 'Uptime',
         };
     }
 }

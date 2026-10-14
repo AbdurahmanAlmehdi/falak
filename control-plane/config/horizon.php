@@ -210,6 +210,19 @@ return [
             'timeout' => 60,
             'nice' => 0,
         ],
+        // Uptime checks (modules/Uptime): their own workers, so slow targets never delay deploys on `default`.
+        'supervisor-uptime' => [
+            'connection' => 'redis',
+            'queue' => [env('FALAK_UPTIME_QUEUE', 'uptime')],
+            'balance' => 'simple',
+            'maxProcesses' => (int) env('FALAK_UPTIME_WORKERS', 2),
+            'maxTime' => 0,
+            'maxJobs' => 0,
+            'memory' => 128,
+            'tries' => 1,
+            'timeout' => 85,
+            'nice' => 0,
+        ],
     ],
 
     'environments' => [

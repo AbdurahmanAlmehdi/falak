@@ -18,6 +18,7 @@ use Falak\Insights\Contracts\PerformanceFindings;
 use Falak\Insights\Contracts\SecurityFindings;
 use Falak\Insights\Contracts\SecurityIssues;
 use Falak\Insights\Contracts\SiteNameResolver;
+use Falak\Insights\Contracts\UptimeIssues;
 use Falak\Insights\Domain\Models\HeartbeatMonitor;
 use Falak\Insights\Domain\Models\Issue;
 use Falak\Insights\Domain\Models\Threshold;
@@ -27,6 +28,7 @@ use Falak\Insights\Infrastructure\IdSiteNameResolver;
 use Falak\Insights\Infrastructure\TrackedDatabaseIssues;
 use Falak\Insights\Infrastructure\TrackedSecurityIssues;
 use Falak\Insights\Infrastructure\TrackedTrafficFindings;
+use Falak\Insights\Infrastructure\TrackedUptimeIssues;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Processes\Events\SchedulesApplied;
 use Illuminate\Console\Scheduling\Schedule;
@@ -46,6 +48,7 @@ class InsightsServiceProvider extends ModuleServiceProvider
         SecurityIssues::class => TrackedSecurityIssues::class,
         PerformanceFindings::class => TrackedTrafficFindings::class,
         SecurityFindings::class => TrackedTrafficFindings::class,
+        UptimeIssues::class => TrackedUptimeIssues::class,
     ];
 
     public function register(): void

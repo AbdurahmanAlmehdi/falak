@@ -14,17 +14,18 @@ interface ObservabilityTab {
     permission: string;
 }
 
-/** The /observability sections (docs/UI_DESIGN.md §3). Insights owns Overview/Issues/Heartbeats, Telemetry Traces/Logs, Alerting Alerts. */
+/** The /observability sections (docs/UI_DESIGN.md §3). Insights owns Overview/Issues/Heartbeats, Telemetry Traces/Logs, Uptime Uptime, Alerting Alerts. */
 const TABS: ObservabilityTab[] = [
     { id: 'overview', title: 'Overview', href: '/observability', permission: 'insights.view' },
     { id: 'issues', title: 'Issues', href: '/observability/issues', permission: 'insights.view' },
     { id: 'traces', title: 'Traces', href: '/observability/traces', permission: 'telemetry.view' },
     { id: 'logs', title: 'Logs', href: '/observability/logs', permission: 'telemetry.view' },
     { id: 'heartbeats', title: 'Heartbeats', href: '/observability/heartbeats', permission: 'insights.view' },
+    { id: 'uptime', title: 'Uptime', href: '/observability/uptime', permission: 'uptime.view' },
     { id: 'alerts', title: 'Alerts', href: '/observability/alerts', permission: 'alerting.view' },
 ];
 
-export type ObservabilityTabId = 'overview' | 'issues' | 'traces' | 'logs' | 'heartbeats' | 'alerts';
+export type ObservabilityTabId = 'overview' | 'issues' | 'traces' | 'logs' | 'heartbeats' | 'uptime' | 'alerts';
 
 interface ObservabilityLayoutProps {
     /** Active tab. */

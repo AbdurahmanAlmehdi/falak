@@ -41,6 +41,9 @@ final class MapModuleEvents
         'servers.attention_cleared' => ['Server no longer needs attention', 'Servers', Severity::Info],
     ];
 
+    /** Issue kinds whose module announces them with its own alerts (uptime.monitor_down, …): no insights.issue_* alert. */
+    public const SILENT_KINDS = ['uptime'];
+
     public function __construct(
         private readonly Alerts $alerts,
         private readonly ServerDirectory $servers,
@@ -55,6 +58,10 @@ final class MapModuleEvents
 
     public function issueOpened(IssueOpened $event): void
     {
+        if (in_array($event->kind, self::SILENT_KINDS, true)) {
+            return;
+        }
+
         $severity = in_array($event->priority, ['urgent', 'high'], true) ? Severity::Critical : Severity::Warning;
 
         $this->raise(new AlertData($event->organizationId, 'insights.issue_opened', $severity, "New issue: {$event->title}", (string) $event->culprit, $event->url,
@@ -63,6 +70,10 @@ final class MapModuleEvents
 
     public function issueRegressed(IssueRegressed $event): void
     {
+        if (in_array($event->kind, self::SILENT_KINDS, true)) {
+            return;
+        }
+
         $severity = in_array($event->priority, ['urgent', 'high'], true) ? Severity::Critical : Severity::Warning;
 
         $this->raise(new AlertData($event->organizationId, 'insights.issue_regressed', $severity, "Regression: {$event->title}", (string) $event->culprit, $event->url,
@@ -71,6 +82,10 @@ final class MapModuleEvents
 
     public function issueResolved(IssueResolved $event): void
     {
+        if (in_array($event->kind, self::SILENT_KINDS, true)) {
+            return;
+        }
+
         $this->raise(new AlertData($event->organizationId, 'insights.issue_resolved', Severity::Info, $event->title, (string) $event->culprit, $event->url,
             "insights.issue:{$event->issueId}", resolves: true, context: $this->issueContext($event)));
     }
