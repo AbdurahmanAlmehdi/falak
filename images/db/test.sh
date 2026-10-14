@@ -175,6 +175,13 @@ postgres)
 	echo "$obs" | jq -e '.query_insights.status == "on" and (.databases | length) > 0 and .settings.shared_buffers_bytes > 0' >/dev/null ||
 		fail "postgres observe: $obs"
 	expect "pg_stat_statements" "$(sql "$c" postgres "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")" 1
+	# Several distinct statements: psql prints a json_agg one element per line, which once lost them all (v0.16.0).
+	for n in 1 2 3; do sql "$c" postgres "SELECT $n AS probe_$n, 'secret-literal'" >/dev/null; done
+	obs=$(docker exec "$c" falak-db observe --detail --cursor "$cursor") || fail "falak-db observe --detail failed"
+	echo "$obs" | jq -e '(.warnings // []) | map(select(startswith("pg_stat_statements"))) | length == 0' >/dev/null ||
+		fail "pg_stat_statements warnings: $(echo "$obs" | jq -c .warnings)"
+	echo "$obs" | jq -e '(.statements | length) >= 3' >/dev/null || fail "postgres statements: $(echo "$obs" | jq -c .statements)"
+	echo "$obs" | grep -q secret-literal && fail "a literal reached the observation"
 	;;
 mysql | mariadb)
 	sql "$c" mysql "SELECT SLEEP(1.2), 'secret-literal'" >/dev/null

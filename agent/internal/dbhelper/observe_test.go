@@ -45,10 +45,11 @@ func TestObservePostgres(t *testing.T) {
 		sql := th.run.stdins["psql"]
 		db := c.Args[7]
 		switch {
-		case strings.Contains(sql, "json_build_object(\n 'version'"):
+		case strings.Contains(sql, "jsonb_build_object(\n 'version'"):
 			return pgObserved + "\n", nil
 		case strings.Contains(sql, "pg_stat_statements s"):
-			return `[{"id":"-123","database":"shop","calls":10,"total_ms":2500.5,"max_ms":900,"rows":10,"query":"SELECT * FROM orders WHERE id = $1"},` +
+			// As psql prints a json_agg (one element per line, as seen live): the result is taken whole all the same.
+			return `[{"id":"-123","database":"shop","calls":10,"total_ms":2500.5,"max_ms":900,"rows":10,"query":"SELECT * FROM orders WHERE id = $1"}, ` + "\n " +
 				`{"id":"77","database":"shop","calls":1,"total_ms":3,"max_ms":3,"rows":0,"query":"ALTER ROLE app PASSWORD 'hunter2'"}]`, nil
 		case strings.Contains(sql, "pg_database_size"):
 			return `[{"name":"shop","size_bytes":2000000},{"name":"bad=name","size_bytes":10},{"name":"postgres","size_bytes":800}]`, nil

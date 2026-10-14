@@ -222,9 +222,9 @@ var pgObserveEnv = []string{"PGOPTIONS=-c default_transaction_read_only=off -c s
 	"-c client_connection_check_interval=5s -c application_name=falak-db"}
 
 // pgObserveSQL is one round trip for the cluster-wide figures, as one JSON object.
-const pgObserveSQL = observeMarker + `SELECT json_build_object(
+const pgObserveSQL = observeMarker + `SELECT jsonb_build_object(
  'version', current_setting('server_version'),
- 'counters', (SELECT json_build_object('xact_commit', sum(xact_commit), 'xact_rollback', sum(xact_rollback),
+ 'counters', (SELECT jsonb_build_object('xact_commit', sum(xact_commit), 'xact_rollback', sum(xact_rollback),
    'cache_hits', sum(blks_hit), 'cache_misses', sum(blks_read), 'rows_returned', sum(tup_returned),
    'rows_fetched', sum(tup_fetched), 'rows_inserted', sum(tup_inserted), 'rows_updated', sum(tup_updated),
    'rows_deleted', sum(tup_deleted), 'deadlocks', sum(deadlocks), 'temp_bytes', sum(temp_bytes)) FROM pg_stat_database),
@@ -371,22 +371,22 @@ func applyPostgres(o *Observation, p pgObservation) {
 
 // pgStatementsSQL: the statements by total time, falak-db's own (they start with observeMarker: pg_stat_statements
 // keeps a leading comment) left out. Apps may well use the superuser: its statements count.
-var pgStatementsSQL = observeMarker + fmt.Sprintf(`SELECT coalesce(json_agg(s), '[]') FROM (SELECT s.queryid::text AS id, d.datname AS database,
+var pgStatementsSQL = observeMarker + fmt.Sprintf(`SELECT coalesce(jsonb_agg(s), '[]') FROM (SELECT s.queryid::text AS id, d.datname AS database,
  s.calls, s.total_exec_time AS total_ms, s.max_exec_time AS max_ms, s.rows, s.query
  FROM pg_stat_statements s JOIN pg_database d ON d.oid = s.dbid
  WHERE s.queryid IS NOT NULL AND s.query NOT LIKE '%s%%'
  ORDER BY s.total_exec_time DESC LIMIT %d) s;`, observeMarker, maxStatements)
 
-var pgDatabasesSQL = observeMarker + fmt.Sprintf(`SELECT coalesce(json_agg(d), '[]') FROM (SELECT datname AS name, pg_database_size(oid) AS size_bytes
+var pgDatabasesSQL = observeMarker + fmt.Sprintf(`SELECT coalesce(jsonb_agg(d), '[]') FROM (SELECT datname AS name, pg_database_size(oid) AS size_bytes
  FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 2 DESC LIMIT %d) d;`, maxDatabases)
 
 // pgTablesSQL runs in each database: its largest tables and its largest indexes nothing has scanned.
-var pgTablesSQL = observeMarker + fmt.Sprintf(`SELECT json_build_object(
- 'tables', (SELECT coalesce(json_agg(t), '[]') FROM (SELECT schemaname AS schema, relname AS name,
+var pgTablesSQL = observeMarker + fmt.Sprintf(`SELECT jsonb_build_object(
+ 'tables', (SELECT coalesce(jsonb_agg(t), '[]') FROM (SELECT schemaname AS schema, relname AS name,
    pg_total_relation_size(relid) AS size_bytes, n_live_tup AS rows, coalesce(seq_scan, 0) AS seq_scan,
    coalesce(seq_tup_read, 0) AS seq_tup_read, coalesce(idx_scan, 0) AS idx_scan
    FROM pg_stat_user_tables ORDER BY 3 DESC LIMIT %d) t),
- 'indexes', (SELECT coalesce(json_agg(i), '[]') FROM (SELECT s.schemaname AS schema, s.relname AS "table",
+ 'indexes', (SELECT coalesce(jsonb_agg(i), '[]') FROM (SELECT s.schemaname AS schema, s.relname AS "table",
    s.indexrelname AS name, pg_relation_size(s.indexrelid) AS size_bytes, s.idx_scan AS scans
    FROM pg_stat_user_indexes s JOIN pg_index x ON x.indexrelid = s.indexrelid
    WHERE s.idx_scan = 0 AND NOT x.indisunique AND NOT x.indisprimary ORDER BY 4 DESC LIMIT %d) i));`, maxTables, maxIndexes)
@@ -444,12 +444,18 @@ func sortTables(o *Observation) {
 	}
 }
 
+// lastLine is psql's result: the JSON a query printed after any notices. The queries build jsonb, whose text is one
+// line; a document spread over several lines (json_agg puts each array element on its own) is still taken whole: the
+// shortest tail of the output that is valid JSON.
 func lastLine(s string) string {
 	s = strings.TrimSpace(s)
-	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
-		return s[i+1:]
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if tail := strings.Join(lines[i:], "\n"); json.Valid([]byte(tail)) {
+			return tail
+		}
 	}
-	return s
+	return lines[len(lines)-1]
 }
 
 // ---- MySQL / MariaDB ----
