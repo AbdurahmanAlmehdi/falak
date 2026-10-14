@@ -45,17 +45,16 @@ return [
         ],
     ],
 
-    'http' => [
-        'timeout' => (int) env('FALAK_TELEMETRY_HTTP_TIMEOUT', 15),
-        'connect_timeout' => (int) env('FALAK_TELEMETRY_HTTP_CONNECT_TIMEOUT', 3),
-    ],
-
     // telemetry.configure is sent this long after an agent enrolls (or right after provisioning).
     'configure_delay_seconds' => 30,
 
-    // HTTP analytics from the edge access logs (docs/plans/network/http.md). Per-site settings override slow_ms,
-    // slow_min_requests and the bandwidth alert.
     'http' => [
+        // Client timeouts of the control plane's queries to the backends (VictoriaMetrics, Loki, Tempo, Grafana).
+        'timeout' => (int) env('FALAK_TELEMETRY_HTTP_TIMEOUT', 15),
+        'connect_timeout' => (int) env('FALAK_TELEMETRY_HTTP_CONNECT_TIMEOUT', 3),
+
+        // HTTP analytics from the edge access logs (docs/plans/network/http.md). Per-site settings override slow_ms,
+        // slow_min_requests and the bandwidth alert.
         'slow_ms' => (int) env('FALAK_HTTP_SLOW_MS', 1000),
         'slow_min_requests' => 20,
         'max_slow_routes' => 25,

@@ -46,6 +46,12 @@ final class IssueTimeline
             return array_values($buckets);
         }
 
+        // A slow endpoint found in the edge's access log: its hourly p95 lives in Loki, not in the Insights aggregates.
+        // No data is null, never a p95 of 0.
+        if ($issue->kind === IssueKind::Performance && ($issue->meta['source'] ?? null) === 'edge') {
+            return array_map(fn (array $bucket) => [...$bucket, 'value' => null], array_values($buckets));
+        }
+
         if ($issue->kind === IssueKind::Performance && $issue->site_id && $issue->event_type !== null && isset($issue->meta['name'])) {
             $rows = DB::table('insights_aggregates')
                 ->where('organization_id', $issue->organization_id)

@@ -14,7 +14,7 @@ import {
 } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { errorMessage, requestJson } from '@/lib/http';
-import { ipActionsFor, type IpAction } from '@/lib/registry';
+import { ipActionsFor, type IpAction, type IpActionProps } from '@/lib/registry';
 import { format } from 'date-fns';
 import { RotateCw, Search } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -257,11 +257,11 @@ function ShareBar({ title, items, label }: { title: string; items: Share[]; labe
     );
 }
 
-function IpActions({ ip, siteId, actions }: { ip: string; siteId: string; actions: IpAction[] }) {
+function IpActions({ ip, siteId, context, actions }: { ip: string; siteId: string; context: IpActionProps['context']; actions: IpAction[] }) {
     return (
         <span className="flex justify-end gap-1">
             {actions.map(({ id, component: Action }) => (
-                <Action key={id} ip={ip} siteId={siteId} source="http" />
+                <Action key={id} ip={ip} siteId={siteId} serverId={null} context={context} />
             ))}
         </span>
     );
@@ -305,7 +305,13 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
             { head: 'Network', cell: (r: Row) => (r.as_org ? `${String(r.as_org)} (AS${String(r.asn)})` : '—') },
             { head: 'Requests', cell: (r: Row) => Number(r.requests).toLocaleString(), right: true },
             ...(actions.length > 0
-                ? [{ head: '', cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} actions={actions} />, right: true }]
+                ? [
+                      {
+                          head: '',
+                          cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} context="http_clients" actions={actions} />,
+                          right: true,
+                      },
+                  ]
                 : []),
         ],
         agents: [
@@ -327,7 +333,13 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
             { head: 'Tried', cell: (r: Row) => describeRules((r.rules as Record<string, number>) ?? {}, Number(r.not_found ?? 0)) },
             { head: 'Requests', cell: (r: Row) => (Number(r.requests) + Number(r.not_found ?? 0)).toLocaleString(), right: true },
             ...(actions.length > 0
-                ? [{ head: '', cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} actions={actions} />, right: true }]
+                ? [
+                      {
+                          head: '',
+                          cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} context="http_threats" actions={actions} />,
+                          right: true,
+                      },
+                  ]
                 : []),
         ],
     }[table];

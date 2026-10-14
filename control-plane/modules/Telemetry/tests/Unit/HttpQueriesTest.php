@@ -63,3 +63,10 @@ it('bounds the organization-wide evaluation queries', function () {
     expect($slow['p95'])->toStartWith('topk(1000, quantile_over_time(0.95,')->toEndWith(' >= 800)')
         ->and($slow['count'])->toStartWith('topk(1000, sum by (service_name, url_route)')->toEndWith(' >= 20)');
 });
+
+it('keeps the backend client timeouts and the HTTP analytics settings under one telemetry.http key', function () {
+    expect(config('telemetry.http.timeout'))->toBe(15)
+        ->and(config('telemetry.http.connect_timeout'))->toBe(3)
+        ->and(config('telemetry.http.slow_ms'))->toBe(1000)
+        ->and(config('telemetry.http.recover_ratio'))->toBe(0.8);
+});
