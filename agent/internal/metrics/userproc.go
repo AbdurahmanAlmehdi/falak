@@ -255,18 +255,19 @@ type procOrigin struct {
 // "/docker/<id>", systemd "docker-<id>.scope"), containerd, Kubernetes and Podman.
 var containerCgroups = []string{"/docker/", "docker-", "containerd", "kubepods", "libpod"}
 
-// inContainer reports whether /proc/<pid>/cgroup places the process in a container (false when unreadable).
-func inContainer(fs hostfs.FS, dir string) bool {
+// inContainer reports whether /proc/<pid>/cgroup places the process in a container; ok is false when it cannot be read
+// (the process is exiting, or a transient error): unknown, not "on the host".
+func inContainer(fs hostfs.FS, dir string) (in, ok bool) {
 	b, err := fs.ReadFile(dir + "/cgroup")
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, m := range containerCgroups {
 		if bytes.Contains(b, []byte(m)) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return false, true
 }
 
 // readOrigin reads where a process comes from: its container, its PHP-FPM pool from its title (argv[0] of
@@ -275,7 +276,13 @@ func inContainer(fs hostfs.FS, dir string) bool {
 func readOrigin(fs hostfs.FS, sitesRoots []string, pid int, start uint64) procOrigin {
 	o := procOrigin{start: start}
 	dir := "/proc/" + strconv.Itoa(pid)
-	if o.container = inContainer(fs, dir); o.container {
+	in, ok := inContainer(fs, dir)
+	if !ok {
+		// Unknown: counted for no site this pass and read again next pass (never cached as a host process).
+		o.container, o.retry = true, true
+		return o
+	}
+	if o.container = in; o.container {
 		return o
 	}
 	if b, err := fs.ReadFile(dir + "/cmdline"); err == nil {

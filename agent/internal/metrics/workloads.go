@@ -262,18 +262,22 @@ func nativeUsers(sites []otlp.Site) (own map[string]string, shared map[string][]
 
 // sitesRoots is SitesRoot as configured and, when it differs, the host path its symlinks resolve to (a /srv linked to
 // /data/srv: a process's cwd reads the resolved path). The resolution is kept, and tried again each pass until it
-// succeeds. Called with c.mu held.
+// succeeds. Either change clears the cached origins. Called with c.mu held.
 func (c *WorkloadCollector) sitesRoots() []string {
 	if c.SitesRoot == "" {
 		return nil
 	}
 	clean := path.Clean(c.SitesRoot)
 	if c.rootOf != clean {
+		// Origins read against the old root are wrong now: read every process again.
 		c.rootOf, c.rootResolved = clean, ""
+		clear(c.origins)
 	}
 	if c.rootResolved == "" {
 		if r, err := c.fs.EvalSymlinks(clean); err == nil {
 			c.rootResolved = path.Clean(r)
+			// A root resolved only now (the link appeared): misses cached against the configured path alone go too.
+			clear(c.origins)
 		}
 	}
 	if c.rootResolved == "" || c.rootResolved == clean {

@@ -75,6 +75,10 @@ func writeProc(t *testing.T, root string, pid, uid int, rssKB int64, utime, stim
 		fmt.Sprintf("proc/%d/stat", pid):   procStat(pid, "php-fpm: pool (x) y", utime, stime, start),
 		fmt.Sprintf("proc/%d/io", pid):     fmt.Sprintf("rchar: 1\nwchar: 2\nread_bytes: %d\nwrite_bytes: %d\ncancelled_write_bytes: 0\n", read, write),
 	})
+	// Every process has a cgroup; a host one unless the test gave it another (kept across updates).
+	if _, err := os.Stat(filepath.Join(root, fmt.Sprintf("proc/%d/cgroup", pid))); err != nil {
+		writeTree(t, root, map[string]string{fmt.Sprintf("proc/%d/cgroup", pid): "0::/system.slice/php8.4-fpm.service\n"})
+	}
 }
 
 func TestParseProcFiles(t *testing.T) {
@@ -444,7 +448,8 @@ func TestWorkloadUsersLoneSharedSiteAndLinkedRoot(t *testing.T) {
 	if got := pids(); got != 1 {
 		t.Fatalf("pids %d", got)
 	}
-	// /srv -> /data/srv: the resolution failed before, so it is tried again; new processes match the resolved root.
+	// /srv -> /data/srv: the resolution failed before, so it is tried again. Resolving it clears the cached misses: the
+	// queue worker (cwd under /data/srv) is read again and matches, as do new processes.
 	if err := os.MkdirAll(filepath.Join(root, "data/srv/falak/sites"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -453,8 +458,8 @@ func TestWorkloadUsersLoneSharedSiteAndLinkedRoot(t *testing.T) {
 	}
 	writeProc(t, root, 15, 1000, 100, 100, 0, 115, 0, 0)
 	writeOrigin(t, root, 15, "php\x00artisan\x00schedule:work\x00", "/data/srv/falak/sites/blog/current")
-	if got := pids(); got != 2 {
-		t.Fatalf("pids %d (pool worker, scheduler)", got)
+	if got := pids(); got != 3 {
+		t.Fatalf("pids %d (pool worker, queue worker, scheduler)", got)
 	}
 	if c.rootResolved != "/data/srv/falak/sites" {
 		t.Fatalf("resolved %q", c.rootResolved)
@@ -462,8 +467,40 @@ func TestWorkloadUsersLoneSharedSiteAndLinkedRoot(t *testing.T) {
 	// A process working under the configured (unresolved) path still matches.
 	writeProc(t, root, 16, 1000, 100, 100, 0, 116, 0, 0)
 	writeOrigin(t, root, 16, "node\x00x\x00", "/srv/falak/sites/blog/current")
-	if got := pids(); got != 3 {
+	if got := pids(); got != 4 {
 		t.Fatalf("pids %d", got)
+	}
+	// Another sites root: every origin is read again against it (none is under /opt/sites).
+	c.mu.Lock()
+	c.SitesRoot = "/opt/sites"
+	c.mu.Unlock()
+	if got := pids(); got != 1 {
+		t.Fatalf("pids %d (only the pool worker, by its title)", got)
+	}
+}
+
+func TestWorkloadUsersUnreadableCgroup(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{"etc/passwd": "falak:x:1000:1000::/home/falak:/bin/bash\n"})
+	writeProc(t, root, 10, 1000, 100, 100, 0, 110, 0, 0)
+	writeOrigin(t, root, 10, "php-fpm: pool falak-blog\x00", "/")
+	os.Remove(filepath.Join(root, "proc/10/cgroup")) // the process is exiting, or the read failed
+	c := NewWorkloadCollector(hostfs.FS{Root: root}, nil, nil)
+	c.SitesRoot = "/srv/falak/sites"
+	c.SetSites([]otlp.Site{{Slug: "blog", SiteID: "S1", UnixUser: "falak", Runtime: "php-fpm"}})
+	pids := func() int64 {
+		rm := resourceBy(c.Collect(context.Background()), "service.name", "blog")
+		return pointWith(rm, "falak.workload.pids", "falak.workload.kind", "processes").GetAsInt()
+	}
+	if got := pids(); got != 0 {
+		t.Fatalf("an unknown cgroup counts for no site; pids %d", got)
+	}
+	if _, cached := c.origins[10]; cached {
+		t.Fatal("an unknown cgroup is not cached")
+	}
+	writeTree(t, root, map[string]string{"proc/10/cgroup": "0::/system.slice/php8.4-fpm.service\n"})
+	if got := pids(); got != 1 {
+		t.Fatalf("read again next pass; pids %d", got)
 	}
 }
 
