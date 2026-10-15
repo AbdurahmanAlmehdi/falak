@@ -165,7 +165,11 @@ export function ConnectionsView({ url, scope, serverId = null, siteId = null }: 
                             format={formatMs}
                             loading={initial}
                             timeFormat={timeFormat}
-                            emptyText={empty('probes')}
+                            emptyText={
+                                data?.observed_at && (data.probes ?? []).length === 0 && !charts.probes?.length
+                                    ? 'No private-network peers to probe'
+                                    : empty('probes')
+                            }
                         />
                     </>
                 ) : (
