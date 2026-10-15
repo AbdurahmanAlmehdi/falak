@@ -112,8 +112,38 @@ final class ProtectionGuards
      */
     public function neverBlock(string $organizationId): array
     {
-        // The control plane, the servers and the private networks are never cut; members' recent addresses fill the
-        // rest of the list (most recent first) up to its limit.
+        [$core, $members] = $this->protectedLists($organizationId);
+        $max = self::max();
+
+        // The control plane, the servers and the private networks first (an organization with more than the limit is
+        // refused before anything is sent: overflow()); members' recent addresses fill the rest, most recent first.
+        return [...array_slice($core, 0, $max), ...array_slice($members, 0, max(0, $max - count($core)))];
+    }
+
+    /**
+     * Why the organization's protected addresses (control plane, servers, private networks) do not fit in what the agent
+     * accepts, or null. Protection is not sent while they do not: a cut list would leave a server blockable.
+     */
+    public function overflow(string $organizationId): ?string
+    {
+        [$core] = $this->protectedLists($organizationId);
+        $max = self::max();
+
+        return count($core) > $max
+            ? 'The organization has '.count($core)." protected addresses (control plane, servers, private networks); the agent accepts {$max}. Protection is not applied."
+            : null;
+    }
+
+    public static function max(): int
+    {
+        return min(self::NEVER_BLOCK_MAX, max(1, (int) config('network.protection.never_block_max', self::NEVER_BLOCK_MAX)));
+    }
+
+    /**
+     * @return array{0: list<string>, 1: list<string>} the core list (sorted) and members' addresses
+     */
+    private function protectedLists(string $organizationId): array
+    {
         $core = array_map(fn (Cidr $cidr) => (string) $cidr, $this->controlPlane());
         $members = [];
 
@@ -127,9 +157,8 @@ final class ProtectionGuards
 
         $core = array_values(array_unique($core));
         sort($core);
-        $members = array_values(array_diff(array_unique($members), $core));
 
-        return [...$core, ...array_slice($members, 0, max(0, self::NEVER_BLOCK_MAX - count($core)))];
+        return [$core, array_values(array_diff(array_unique($members), $core))];
     }
 
     /**

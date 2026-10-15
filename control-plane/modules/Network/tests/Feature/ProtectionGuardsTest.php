@@ -223,3 +223,19 @@ it('never cuts the control plane or the servers from never_block: members\' addr
         ->and(array_slice($list, -1))->toBe(['1.1.1.1'])
         ->and(array_slice($list, 0, -1))->toBe(collect(array_slice($list, 0, -1))->sort()->values()->all());
 });
+
+it('refuses to send protection when the protected addresses do not fit, and says so', function () {
+    config(['network.protection.never_block_max' => 2]);
+    network_server($this->organization, ['name' => 'web-2', 'ipv4' => '192.0.2.11', 'ipv6' => null, 'private_ipv4' => null]);
+
+    guards_block()->assertCreated();
+
+    $state = ProtectionState::query()->find($this->server->id);
+    expect($state->status)->toBe('failed')
+        ->and($state->error)->toContain('protected addresses')
+        ->and($this->agents->dispatched('net.protection.apply', $this->server->id))->toHaveCount(0);
+    $this->get('/network/blocked')->assertInertia(fn ($page) => $page->where('servers', fn ($servers) => str_contains((string) collect($servers)->firstWhere('id', $this->server->id)['error'], 'agent accepts 2')));
+
+    config(['network.protection.never_block_max' => 5000]);
+    expect(count(app(ProtectionGuards::class)->neverBlock($this->organization->id)))->toBeLessThanOrEqual(5000);
+});

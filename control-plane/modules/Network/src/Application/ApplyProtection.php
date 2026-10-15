@@ -112,6 +112,12 @@ final class ApplyProtection
                 return $state;
             }
 
+            if (($overflow = $this->guards->overflow($server->organizationId)) !== null) {
+                $state->forceFill(['status' => 'failed', 'error' => $overflow, 'command_id' => null])->save();
+
+                return $state;
+            }
+
             $payload = $this->compile($state);
             $hash = CanonicalJson::hash($payload);
             $stale = $state->status === 'applying' && $state->updated_at !== null && $state->updated_at->lt(now()->subSeconds(self::STALE_SECONDS));

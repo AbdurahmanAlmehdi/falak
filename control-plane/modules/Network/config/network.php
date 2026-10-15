@@ -43,6 +43,8 @@ return [
         'max_blocks' => 5000,
         // A brute-force Issue occurrence: at least this many failed SSH logins in one report (a minute).
         'ssh_issue_min_failures' => 20,
+        // never_block's size: the agent accepts 5,000.
+        'never_block_max' => 5000,
         // Addresses members used the panel from in this many days are never blocked (sessions and audited actions).
         'member_address_days' => 30,
         // Expired blocks are kept this long (listed as history in the audit log only).

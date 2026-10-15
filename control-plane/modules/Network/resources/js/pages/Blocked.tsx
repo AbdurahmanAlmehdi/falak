@@ -320,9 +320,7 @@ export default function Blocked({ blocks, servers, yourIp, can }: Props) {
                                 !server.supported ? (
                                     <Tag tone="faint">update the agent</Tag>
                                 ) : server.status === 'failed' ? (
-                                    <span className="text-danger text-xs" title={server.error ?? undefined}>
-                                        failed
-                                    </span>
+                                    <span className="text-danger text-xs">failed{server.error ? `: ${server.error}` : ''}</span>
                                 ) : (
                                     <span className="text-fg-muted text-xs">
                                         {server.status ?? 'nothing to apply'}

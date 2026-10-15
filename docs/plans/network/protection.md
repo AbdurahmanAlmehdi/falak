@@ -75,8 +75,10 @@ revision, desired / applied hash, status, command id, error). Idempotency key `n
 - `release`: auto-bans a user lifted (or a manual block replaced, or a guard suspended): the agent forgets them from its
   local state too (it would re-add them otherwise); cleared once an apply succeeds.
 - `never_block`: the guard list (below), so the agent can refuse auto-bans the control plane would refuse. At most
-  5,000 entries: the control plane, the servers and the private networks always (never cut), then members' recent
-  panel addresses, most recent first, up to the limit.
+  5,000 entries: the control plane, the servers and the private networks first, then members' recent panel addresses,
+  most recent first, up to the limit. An organization whose protected addresses alone exceed it gets no
+  `net.protection.apply` at all (a cut list would leave a server blockable): the server's protection is marked failed
+  with the reason, shown on Network → Blocked IPs.
 - Result: `{changed, added, removed, failed: [{cidr, error}], set_counters}`.
 
 The agent diffs against the live sets (`nft -j list set`): elements no longer wanted are deleted, missing ones added
@@ -164,14 +166,17 @@ block, unblock, auto-ban, suspension and settings change is audited (`network.ip
 
 ## SSH brute force
 
-The agent reads sshd's messages every minute: `journalctl _COMM=sshd _COMM=sshd-session _COMM=sshd-auth -o json
---after-cursor` — `_COMM` is the process name journald takes from the kernel, so `logger -t sshd` from any local user
-cannot forge an entry (`-t`, the syslog identifier, could be); entries of another process are skipped again on read
+The agent reads sshd's messages every minute: `journalctl _UID=0 _COMM=sshd _COMM=sshd-session _COMM=sshd-auth -o json
+--after-cursor` — `_UID` and `_COMM` are the user and process name journald takes from the kernel, so neither `logger -t
+sshd` nor a copy of logger named `sshd` run by a local user (not root) can forge an entry (`-t`, the syslog identifier,
+could be); entries of another process or user are skipped again on read
 (Ubuntu ≥ 24.04 and Debian 12 log sshd to the journal only; OpenSSH ≥ 9.8 logs authentication from `sshd-session`),
 falling back to `/var/log/auth.log` (offset + inode, rotation-safe) when journalctl is missing or the journal has no
 storage ("No journal files were found"). In auth.log only the syslog program field decides that a line is sshd's (a
-message of another program that mentions `sshd[1]:` is not). auth.log has no trusted field: a local user's `logger -t
-sshd` lines are counted there (a reason to keep journald storage on). At most 5,000 lines a pass; the first pass only
+message of another program that mentions `sshd[1]:` is not). auth.log has no trusted field: any local user can write
+lines there through syslog. Its events are therefore **reported only** (they count for the brute-force Issue) and
+**never auto-ban** anyone or mark an address as trusted: on a server without journald storage, auto-ban does nothing
+(keep journald storage on to use it). At most 5,000 lines a pass; the first pass only
 sets the cursor.
 
 **The user name is the attacker's text.** Every pattern is anchored at both ends and takes the user name greedily, so the
@@ -275,7 +280,8 @@ for the server, a FrankenPHP edge, a build that lacks a module, rejects the conf
 the config **without the rate-limit handlers** and reports why in the result (`rate_limits_refused`); the panel shows
 "Rate limits not applied on <server>: <reason>" on Network → Rate limits. A build that failed (checks, validation,
 restart) is remembered by its checksum (`/etc/falak/caddy/ratelimit.json`) and never tried again on that server; a new
-build (another checksum) is. A failed download is not remembered (it may be transient).
+build (another checksum) is. Only failures that are the build's are remembered: a validation that could not run (an
+exec error), a config the edge's current Caddy rejects too, and a failed download are reported and tried again later.
 
 **One answer to "which Caddy".** `runtime.CaddyBinary` decides it for provisioning, the agent's unit refresh and the
 rate-limit installer: a unit already running a Falak build (that still exists) keeps it, else `/usr/bin/caddy`. So a
@@ -298,6 +304,23 @@ lacks `edge.rate_limit` are refused with "update the agent"; PayloadCompatibilit
 
 Not covered: an nftables meter (per source, per port) is no substitute — it would limit every path of every site on
 the port.
+
+## Known limits
+
+- **A crash between the unit write and the restart.** The swap marker is written before `falak-edge.service` is
+  rewritten and restarted. If the agent (or the host) dies after the unit file was written but before the restart, the
+  edge keeps running the old binary until something restarts it; the next agent start finds the marker and, since the
+  edge answers, only removes it — the unit then names the new build, which the next restart (a reboot, a provisioning)
+  starts without the swap's health check. The build was validated against the config beforehand, so this is a
+  restart without a watcher, not an unchecked binary.
+- **FrankenPHP ordering.** A server that switches to FrankenPHP while it runs Falak's Caddy build is refused when its
+  edge config carries rate limits (FrankenPHP's binary lacks the module and the switch validates the config first);
+  the rules must be removed first, then FrankenPHP installed. The panel refuses new rules on FrankenPHP servers, but
+  the order of an existing server's runtime change and its rules' removal is up to the user.
+- **Unlocked unit changes in provisioning.** Provisioning, FrankenPHP installs and the rate-limit installer write
+  `falak-edge.service` without a lock shared between them (the edge manager serializes its own applies only). They
+  run as separate commands, which the control plane does not send concurrently for one server in practice; two
+  overlapping ones could still race on the unit file, the last writer winning (each validates its own target binary).
 
 ## What needs a reload
 
