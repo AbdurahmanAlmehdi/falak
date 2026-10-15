@@ -1,15 +1,32 @@
 import { ComposeProject, composeProjectPayload, emptyComposeProject, type ComposeProjectValue } from '@/components/compose-project';
 import { domainPayload, DomainPicker, type DomainChoice } from '@/components/domain-picker';
-import { Button, Checkbox, Combobox, Field, IconButton, Input, Segmented, Select, ServiceIcon, Skeleton, Tag, toast } from '@/components/falak';
+import {
+    Button,
+    Checkbox,
+    Combobox,
+    Field,
+    IconButton,
+    Input,
+    PickItem,
+    PickList,
+    Segmented,
+    Select,
+    ServiceIcon,
+    Skeleton,
+    StepBackProvider,
+    Tag,
+    toast,
+    useStepBack,
+} from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { errorMessage, HttpError, requestJson } from '@/lib/http';
 import { createOptionsFor, shellContext, type CreateOption } from '@/lib/registry';
 import { cn } from '@/lib/utils';
 import { type CanvasService, type SharedData } from '@/types';
 import { Link, usePage } from '@inertiajs/react';
-import { Command } from 'cmdk';
-import { ArrowLeft, Box, ChevronRight, Database, GitBranch, LayoutTemplate, Lock, Rocket, Search, X } from 'lucide-react';
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { ArrowLeft, Box, ChevronRight, Database, GitBranch, LayoutTemplate, Lock, Rocket, X } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { type ProjectAbilities } from '../types';
 
 /** Sites' GET /sites/create JSON (the create form options). */
@@ -45,14 +62,20 @@ type BuiltinStep = 'root' | 'git' | 'docker' | 'empty' | 'database';
 /** Built-in kinds, or `option:<id>` for a kind another module registered (registerCreateOptions). */
 type Step = BuiltinStep | `option:${string}`;
 
+const TITLES: Record<BuiltinStep, string> = {
+    root: 'Create',
+    git: 'Deploy a Git repository',
+    docker: 'Deploy a Docker image',
+    empty: 'Empty service',
+    database: 'Add a database',
+};
+
 export interface CreatePickerProps {
     projectId: string;
     environmentSlug: string;
     can: ProjectAbilities;
     /** Canvas coordinates for the new card (right-click position); auto-placed when null. */
     position: { x: number; y: number } | null;
-    /** Screen position to open at (right-click); top-right of the canvas when null. */
-    anchor: { x: number; y: number } | null;
     onClose: () => void;
     /** The new card, and the first deployment when one was started. */
     onCreated: (service: CanvasService, deploymentId: string | null) => void;
@@ -212,38 +235,30 @@ function DomainField({
  * service is created through the Projects create-service endpoint; sites deploy right away and open on their
  * Deploy view.
  */
-export function CreatePicker({ projectId, environmentSlug, can, position, anchor, onClose, onCreated, initialOption = null }: CreatePickerProps) {
+export function CreatePicker({ projectId, environmentSlug, can, position, onClose, onCreated, initialOption = null }: CreatePickerProps) {
     const { props } = usePage<SharedData>();
     const options = useMemo(() => (can.create_sites ? createOptionsFor(shellContext(props)) : []), [can.create_sites, props]);
     const [step, setStep] = useState<Step>(() =>
         initialOption && options.some((option) => option.id === initialOption) ? `option:${initialOption}` : 'root',
     );
     const option = step.startsWith('option:') ? (options.find((item) => `option:${item.id}` === step) ?? null) : null;
-    const ref = useRef<HTMLDivElement>(null);
+    // A sub-step's way back (useStepBack), e.g. from a picked repository to the repository list.
+    const [inner, setInner] = useState<(() => void) | null>(null);
+    const setInnerBack = useCallback((back: (() => void) | null) => setInner(() => back), []);
+    // Radix restores focus to what was focused when its focus scope mounted, which is already the autofocused search
+    // box; give it back to the opener (the Create button) instead.
+    const [opener] = useState(() => document.activeElement);
+    useEffect(
+        () => () => {
+            window.setTimeout(() => opener instanceof HTMLElement && opener.isConnected && opener.focus());
+        },
+        [opener],
+    );
     const needsSites = step === 'git' || step === 'docker' || step === 'empty';
     const sites = useJson<SiteOptions>(needsSites && can.create_sites ? '/sites/create' : null);
     const engines = useJson<{ options: DatabaseCreateOptions }>(step === 'database' && can.create_databases ? '/databases' : null, { unwrap: false });
     const [submitting, setSubmitting] = useState(false);
     const [errors, setErrors] = useState<Record<string, string>>({});
-
-    // Esc / click outside closes (clicks inside Radix popovers opened from the picker don't count).
-    useEffect(() => {
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape' && !document.querySelector('[data-radix-popper-content-wrapper]')) onClose();
-        };
-        const onPointerDown = (event: PointerEvent) => {
-            const target = event.target as HTMLElement | null;
-            if (!target || ref.current?.contains(target) || target.closest('[data-radix-popper-content-wrapper]')) return;
-            onClose();
-        };
-        window.addEventListener('keydown', onKeyDown);
-        window.addEventListener('pointerdown', onPointerDown);
-
-        return () => {
-            window.removeEventListener('keydown', onKeyDown);
-            window.removeEventListener('pointerdown', onPointerDown);
-        };
-    }, [onClose]);
 
     const go = (next: Step) => {
         setErrors({});
@@ -285,88 +300,99 @@ export function CreatePicker({ projectId, environmentSlug, can, position, anchor
     };
 
     const wide = option?.wide ?? false;
-    const style = anchor
-        ? {
-              left: Math.max(8, Math.min(anchor.x, window.innerWidth - (wide ? 568 : 408))),
-              top: Math.max(56, Math.min(anchor.y, window.innerHeight - (wide ? 640 : 480))),
-          }
-        : undefined;
-
-    const titles: Record<BuiltinStep, string> = {
-        root: 'Create',
-        git: 'Deploy a Git repository',
-        docker: 'Deploy a Docker image',
-        empty: 'Empty service',
-        database: 'Add a database',
-    };
+    const title = option ? (option.stepTitle ?? option.title) : TITLES[step as BuiltinStep];
+    // Esc and Back leave the innermost sub-step first (template form → gallery), then the step, then the picker.
+    const back = inner ?? (step !== 'root' ? () => go('root') : null);
 
     return (
-        <div
-            ref={ref}
-            role="dialog"
-            aria-label={option ? (option.stepTitle ?? option.title) : titles[step as BuiltinStep]}
-            style={style}
-            className={cn(
-                'animate-fade-in border-border bg-surface-1 shadow-panel z-30 flex flex-col overflow-hidden rounded-xl border',
-                wide
-                    ? 'max-h-[min(760px,calc(100svh-7rem))] w-[min(560px,calc(100vw-2rem))]'
-                    : 'max-h-[min(640px,calc(100svh-7rem))] w-[min(400px,calc(100vw-2rem))]',
-                anchor ? 'fixed' : 'absolute top-14 right-3 md:right-4',
-            )}
-        >
-            <div className="border-border flex items-center gap-1 border-b px-2 py-2">
-                {step !== 'root' && <IconButton size="sm" label="Back" icon={<ArrowLeft />} onClick={() => go('root')} />}
-                <span className="text-fg flex-1 px-1 text-sm font-medium">
-                    {option ? (option.stepTitle ?? option.title) : titles[step as BuiltinStep]}
-                </span>
-                <IconButton size="sm" label="Close" shortcut="Esc" icon={<X />} onClick={onClose} />
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
-                {step === 'root' && <RootStep can={can} options={options} onPick={go} />}
-                {option && (
-                    <Suspense
-                        fallback={
-                            <div className="grid gap-2 p-4">
-                                {[0, 1, 2].map((i) => (
-                                    <Skeleton key={i} className="h-8" />
-                                ))}
-                            </div>
-                        }
-                    >
-                        <option.component
-                            projectId={projectId}
-                            environmentSlug={environmentSlug}
-                            position={position}
-                            onCreated={onCreated}
-                            onClose={onClose}
-                        />
-                    </Suspense>
-                )}
-                {needsSites && !sites.data && (
-                    <div className="grid gap-2 p-4">
-                        {sites.error ? <Errors errors={[sites.error]} /> : [0, 1, 2].map((i) => <Skeleton key={i} className="h-8" />)}
+        <DialogPrimitive.Root open onOpenChange={(open) => !open && onClose()}>
+            <DialogPrimitive.Portal>
+                <DialogPrimitive.Overlay className="animate-fade-in bg-overlay fixed inset-0 z-50" />
+                <DialogPrimitive.Content
+                    aria-describedby={undefined}
+                    onEscapeKeyDown={(event) => {
+                        if (!back) return;
+                        event.preventDefault();
+                        back();
+                    }}
+                    className={cn(
+                        'animate-picker-in border-border bg-surface-1 shadow-panel fixed left-1/2 z-50 flex -translate-x-1/2 flex-col overflow-hidden rounded-xl border outline-none',
+                        // Centered when full height; shorter steps keep the same top edge so filtering never makes it jump.
+                        wide
+                            ? 'top-[max(1rem,calc(50svh-380px))] max-h-[min(760px,calc(100svh-2rem))] w-[min(560px,calc(100vw-2rem))]'
+                            : 'top-[max(1rem,calc(50svh-320px))] max-h-[min(640px,calc(100svh-2rem))] w-[min(440px,calc(100vw-2rem))]',
+                    )}
+                >
+                    <div className="border-border flex items-center gap-1 border-b px-2 py-2">
+                        {back && <IconButton size="sm" label="Back" icon={<ArrowLeft />} onClick={back} />}
+                        <DialogPrimitive.Title className="text-fg flex-1 px-1 text-sm font-medium">{title}</DialogPrimitive.Title>
+                        <IconButton size="sm" label="Close" shortcut="Esc" icon={<X />} onClick={onClose} />
                     </div>
-                )}
-                {step === 'git' && sites.data && (
-                    <GitStep options={sites.data} submitting={submitting} errors={errors} onSubmit={(payload) => void create(payload, true)} />
-                )}
-                {step === 'docker' && sites.data && (
-                    <DockerStep options={sites.data} submitting={submitting} errors={errors} onSubmit={(payload) => void create(payload, true)} />
-                )}
-                {step === 'empty' && sites.data && (
-                    <EmptyStep options={sites.data} submitting={submitting} errors={errors} onSubmit={(payload) => void create(payload, false)} />
-                )}
-                {step === 'database' && (
-                    <DatabaseStep
-                        options={engines.data?.options ?? null}
-                        loadError={engines.error}
-                        submitting={submitting}
-                        errors={errors}
-                        onSubmit={(payload) => void create(payload, false)}
-                    />
-                )}
-            </div>
-        </div>
+                    <StepBackProvider value={setInnerBack}>
+                        <div key={step} className="animate-fade-in flex min-h-0 flex-1 flex-col overflow-y-auto">
+                            {step === 'root' && <RootStep can={can} options={options} onPick={go} />}
+                            {option && (
+                                <Suspense
+                                    fallback={
+                                        <div className="grid gap-2 p-4">
+                                            {[0, 1, 2].map((i) => (
+                                                <Skeleton key={i} className="h-8" />
+                                            ))}
+                                        </div>
+                                    }
+                                >
+                                    <option.component
+                                        projectId={projectId}
+                                        environmentSlug={environmentSlug}
+                                        position={position}
+                                        onCreated={onCreated}
+                                        onClose={onClose}
+                                    />
+                                </Suspense>
+                            )}
+                            {needsSites && !sites.data && (
+                                <div className="grid gap-2 p-4">
+                                    {sites.error ? <Errors errors={[sites.error]} /> : [0, 1, 2].map((i) => <Skeleton key={i} className="h-8" />)}
+                                </div>
+                            )}
+                            {step === 'git' && sites.data && (
+                                <GitStep
+                                    options={sites.data}
+                                    submitting={submitting}
+                                    errors={errors}
+                                    onSubmit={(payload) => void create(payload, true)}
+                                />
+                            )}
+                            {step === 'docker' && sites.data && (
+                                <DockerStep
+                                    options={sites.data}
+                                    submitting={submitting}
+                                    errors={errors}
+                                    onSubmit={(payload) => void create(payload, true)}
+                                />
+                            )}
+                            {step === 'empty' && sites.data && (
+                                <EmptyStep
+                                    options={sites.data}
+                                    submitting={submitting}
+                                    errors={errors}
+                                    onSubmit={(payload) => void create(payload, false)}
+                                />
+                            )}
+                            {step === 'database' && (
+                                <DatabaseStep
+                                    options={engines.data?.options ?? null}
+                                    loadError={engines.error}
+                                    submitting={submitting}
+                                    errors={errors}
+                                    onSubmit={(payload) => void create(payload, false)}
+                                />
+                            )}
+                        </div>
+                    </StepBackProvider>
+                </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
     );
 }
 
@@ -416,37 +442,20 @@ function RootStep({ can, options, onPick }: { can: ProjectAbilities; options: Cr
     ];
 
     return (
-        <Command loop className="flex flex-col" label="Create a service">
-            <div className="border-border flex items-center gap-2 border-b px-3">
-                <Search className="text-fg-faint size-4" aria-hidden />
-                <Command.Input
-                    autoFocus
-                    placeholder="What do you want to create?"
-                    className="text-fg placeholder:text-fg-faint h-10 w-full bg-transparent text-sm outline-none"
+        <PickList label="Create a service" placeholder="What do you want to create?">
+            {items.map((item) => (
+                <PickItem
+                    key={item.id}
+                    value={`${item.title} ${item.description}`}
+                    disabled={item.disabled}
+                    onSelect={() => item.id !== 'template' && onPick(item.id)}
+                    icon={item.icon}
+                    title={item.title}
+                    description={item.description}
+                    trailing={item.soon ? <Tag>Coming soon</Tag> : <ChevronRight className="text-fg-faint size-4" aria-hidden />}
                 />
-            </div>
-            <Command.List className="p-1.5">
-                <Command.Empty className="text-fg-faint px-3 py-6 text-center text-sm">Nothing matches.</Command.Empty>
-                {items.map((item) => (
-                    <Command.Item
-                        key={item.id}
-                        value={`${item.title} ${item.description}`}
-                        disabled={item.disabled}
-                        onSelect={() => item.id !== 'template' && onPick(item.id)}
-                        className="data-[selected=true]:bg-surface-2 flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 data-[disabled=true]:cursor-default data-[disabled=true]:opacity-50"
-                    >
-                        <span className="border-border bg-surface-2 text-fg-muted flex size-8 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">
-                            {item.icon}
-                        </span>
-                        <span className="grid min-w-0 flex-1">
-                            <span className="text-fg text-sm font-medium">{item.title}</span>
-                            <span className="text-fg-faint truncate text-xs">{item.description}</span>
-                        </span>
-                        {item.soon ? <Tag>Coming soon</Tag> : <ChevronRight className="text-fg-faint size-4" aria-hidden />}
-                    </Command.Item>
-                ))}
-            </Command.List>
-        </Command>
+            ))}
+        </PickList>
     );
 }
 
@@ -542,6 +551,7 @@ function GitStep({ options, submitting, errors, onSubmit }: StepProps) {
         setFramework(detectPreset(item.full_name, frameworkValues));
         setName(slugName(item.full_name));
     };
+    useStepBack(repository !== '', () => setRepository(''));
 
     if (connections.length === 0) {
         return (
@@ -565,6 +575,53 @@ function GitStep({ options, submitting, errors, onSubmit }: StepProps) {
                     <p className="text-fg-faint text-xs">Ask an organization admin to connect one.</p>
                 )}
             </div>
+        );
+    }
+
+    const connectionSelect = (
+        <Select
+            aria-label="Connection"
+            value={connectionId}
+            onValueChange={(value) => {
+                setConnectionId(value);
+                setRepository('');
+                setBranch('');
+            }}
+            options={connections.map((item) => ({ value: item.id, label: `${item.name} · ${item.provider_label}` }))}
+        />
+    );
+
+    if (!repository && connection?.has_api) {
+        return (
+            <PickList
+                label="Repositories"
+                placeholder="Search repositories"
+                search={search}
+                onSearchChange={setSearch}
+                filter={false}
+                toolbar={<div className="border-border border-b px-3 py-2">{connectionSelect}</div>}
+                empty={
+                    loadError ? (
+                        <span className="text-danger">{loadError}</span>
+                    ) : repositories === null ? (
+                        'Loading repositories…'
+                    ) : (
+                        'No repositories match.'
+                    )
+                }
+            >
+                {repositories?.map((item) => (
+                    <PickItem
+                        key={item.full_name}
+                        value={item.full_name}
+                        onSelect={() => pick(item)}
+                        icon={<GitBranch />}
+                        title={item.full_name}
+                        description={item.default_branch}
+                        trailing={item.private && <Lock className="text-fg-faint size-3.5" aria-label="private" />}
+                    />
+                ))}
+            </PickList>
         );
     }
 
@@ -592,46 +649,10 @@ function GitStep({ options, submitting, errors, onSubmit }: StepProps) {
                 );
             }}
         >
-            <Field label="Connection">
-                <Select
-                    value={connectionId}
-                    onValueChange={(value) => {
-                        setConnectionId(value);
-                        setRepository('');
-                        setBranch('');
-                    }}
-                    options={connections.map((item) => ({ value: item.id, label: `${item.name} · ${item.provider_label}` }))}
-                />
-            </Field>
+            <Field label="Connection">{connectionSelect}</Field>
 
             {!repository ? (
-                connection?.has_api ? (
-                    <div className="grid gap-1.5">
-                        <span className="text-fg text-xs font-medium">Repository</span>
-                        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search repositories" autoFocus />
-                        <div className="border-border max-h-52 overflow-y-auto rounded-md border" role="listbox" aria-label="Repositories">
-                            {loadError && <p className="text-danger p-3 text-xs">{loadError}</p>}
-                            {!loadError && repositories === null && <Skeleton className="m-2 h-6" />}
-                            {repositories?.length === 0 && <p className="text-fg-faint p-3 text-xs">No repositories match.</p>}
-                            {repositories?.map((item) => (
-                                <button
-                                    key={item.full_name}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={false}
-                                    onClick={() => pick(item)}
-                                    className="hover:bg-surface-2 focus-visible:bg-surface-2 flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm outline-none"
-                                >
-                                    <GitBranch className="text-fg-faint size-3.5 shrink-0" aria-hidden />
-                                    <span className="text-fg min-w-0 flex-1 truncate">{item.full_name}</span>
-                                    {item.private && <Lock className="text-fg-faint size-3" aria-label="private" />}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                ) : (
-                    <CustomRepository onPick={pick} />
-                )
+                <CustomRepository onPick={pick} />
             ) : (
                 <>
                     <div className="border-border bg-surface-2 flex items-center gap-2 rounded-md border px-2.5 py-2">
@@ -675,7 +696,7 @@ function GitStep({ options, submitting, errors, onSubmit }: StepProps) {
                         )}
                     </div>
                     <Field label="Service name" error={errors.name}>
-                        <Input value={name} onChange={(event) => setName(event.target.value)} />
+                        <Input value={name} onChange={(event) => setName(event.target.value)} autoFocus />
                     </Field>
                     <ServersField
                         servers={servers}
@@ -879,6 +900,39 @@ function DatabaseStep({
         setDisk(next ? String(next.default_disk_gb) : '');
         if (name === 'app' || name === 'cache') setName(KEY_VALUE_ENGINES.includes(value) ? 'cache' : 'app');
     };
+    useStepBack(engine !== null, () => setEngine(null));
+
+    if (!engine) {
+        return (
+            <PickList
+                label="Engines"
+                placeholder="Search engines"
+                toolbar={
+                    loadError && (
+                        <div className="px-3 pt-3">
+                            <Errors errors={[loadError]} />
+                        </div>
+                    )
+                }
+            >
+                {ENGINES.map((item) => {
+                    const versions = options?.engines.find((option) => option.value === item.value)?.versions.join(', ');
+
+                    return (
+                        <PickItem
+                            key={item.value}
+                            value={`${item.label} ${item.value}`}
+                            onSelect={() => pick(item.value)}
+                            icon={<ServiceIcon name={item.value} size={16} />}
+                            title={item.label}
+                            description={options === null ? '…' : versions}
+                            trailing={<ChevronRight className="text-fg-faint size-4" aria-hidden />}
+                        />
+                    );
+                })}
+            </PickList>
+        );
+    }
 
     return (
         <form
@@ -897,116 +951,77 @@ function DatabaseStep({
                 });
             }}
         >
-            <div className="grid gap-1.5">
-                <span className="text-fg text-xs font-medium">Engine</span>
-                <div className="grid grid-cols-2 gap-2">
-                    {ENGINES.map((item) => (
-                        <button
-                            key={item.value}
-                            type="button"
-                            aria-pressed={engine === item.value}
-                            onClick={() => pick(item.value)}
-                            className={cn(
-                                'border-border hover:border-border-strong flex items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50',
-                                engine === item.value && 'border-primary bg-primary-soft',
-                            )}
-                        >
-                            <ServiceIcon name={item.value} size={16} />
-                            <span className="grid min-w-0">
-                                <span className="text-fg text-sm">{item.label}</span>
-                                <span className="text-fg-faint text-2xs">
-                                    {options === null
-                                        ? '…'
-                                        : (options.engines.find((option) => option.value === item.value)?.versions.join(', ') ?? '')}
-                                </span>
-                            </span>
-                        </button>
-                    ))}
-                </div>
+            <div className="border-border bg-surface-2 flex items-center gap-2 rounded-md border px-2.5 py-2">
+                <ServiceIcon name={engine} size={16} />
+                <span className="text-fg min-w-0 flex-1 truncate text-sm">{label}</span>
+                <Button size="sm" variant="ghost" onClick={() => setEngine(null)}>
+                    Change
+                </Button>
             </div>
-            {loadError && <Errors errors={[loadError]} />}
-            {engine && (
-                <>
-                    <Field label="Server" hint="The database runs there as a container, on its own data volume." error={errors.server_id}>
-                        {servers.length > 0 ? (
+            <Field label="Server" hint="The database runs there as a container, on its own data volume." error={errors.server_id}>
+                {servers.length > 0 ? (
+                    <Select
+                        value={serverId}
+                        onValueChange={setServerId}
+                        options={servers.map((server) => ({ value: server.id, label: server.name }))}
+                    />
+                ) : (
+                    <p className="text-fg-muted text-xs">
+                        No active server yet.{' '}
+                        <Link href="/servers/create" className="text-primary hover:underline">
+                            Provision a server
+                        </Link>
+                    </p>
+                )}
+            </Field>
+            <Field
+                label="Name"
+                hint={
+                    keyValue
+                        ? `Its own ${label} container with a password (user default). Lower-case letters, digits, - and _.`
+                        : 'A database and a user with this name and a generated password are created in it.'
+                }
+                error={errors.name}
+            >
+                <Input value={name} onChange={(event) => setName(event.target.value)} mono autoFocus />
+            </Field>
+            <div className="grid gap-3">
+                <button
+                    type="button"
+                    aria-expanded={advanced}
+                    onClick={() => setAdvanced(!advanced)}
+                    className="text-fg-muted hover:text-fg flex items-center gap-1 text-xs font-medium"
+                >
+                    <ChevronRight size={12} className={cn('transition-transform duration-150', advanced && 'rotate-90')} />
+                    Advanced
+                </button>
+                {advanced && (
+                    <div className="grid grid-cols-2 gap-3">
+                        <Field label="Version" error={errors.version}>
                             <Select
-                                value={serverId}
-                                onValueChange={setServerId}
-                                options={servers.map((server) => ({ value: server.id, label: server.name }))}
+                                value={version}
+                                onValueChange={setVersion}
+                                options={(choice?.versions ?? []).map((item) => ({ value: item, label: item }))}
                             />
-                        ) : (
-                            <p className="text-fg-muted text-xs">
-                                No active server yet.{' '}
-                                <Link href="/servers/create" className="text-primary hover:underline">
-                                    Provision a server
-                                </Link>
-                            </p>
-                        )}
-                    </Field>
-                    <Field
-                        label="Name"
-                        hint={
-                            keyValue
-                                ? `Its own ${label} container with a password (user default). Lower-case letters, digits, - and _.`
-                                : 'A database and a user with this name and a generated password are created in it.'
-                        }
-                        error={errors.name}
-                    >
-                        <Input value={name} onChange={(event) => setName(event.target.value)} mono />
-                    </Field>
-                    <div className="grid gap-3">
-                        <button
-                            type="button"
-                            aria-expanded={advanced}
-                            onClick={() => setAdvanced(!advanced)}
-                            className="text-fg-muted hover:text-fg flex items-center gap-1 text-xs font-medium"
-                        >
-                            <ChevronRight size={12} className={cn('transition-transform duration-150', advanced && 'rotate-90')} />
-                            Advanced
-                        </button>
-                        {advanced && (
-                            <div className="grid grid-cols-2 gap-3">
-                                <Field label="Version" error={errors.version}>
-                                    <Select
-                                        value={version}
-                                        onValueChange={setVersion}
-                                        options={(choice?.versions ?? []).map((item) => ({ value: item, label: item }))}
-                                    />
-                                </Field>
-                                <Field
-                                    label="Memory limit (MB)"
-                                    hint={choice ? `At least ${choice.min_memory_mb} MB.` : undefined}
-                                    error={errors.memory_mb}
-                                >
-                                    <Input
-                                        value={memory}
-                                        onChange={(event) => setMemory(event.target.value.replace(/\D/g, ''))}
-                                        inputMode="numeric"
-                                        mono
-                                    />
-                                </Field>
-                                <Field label="Disk (GB)" error={errors.disk_gb}>
-                                    <Input
-                                        value={disk}
-                                        onChange={(event) => setDisk(event.target.value.replace(/\D/g, ''))}
-                                        inputMode="numeric"
-                                        mono
-                                    />
-                                </Field>
-                                {keyValue && (
-                                    <Field label="Eviction" error={errors['settings.eviction'] ?? errors.eviction}>
-                                        <Select value={eviction} onValueChange={setEviction} options={EVICTIONS} />
-                                    </Field>
-                                )}
-                            </div>
+                        </Field>
+                        <Field label="Memory limit (MB)" hint={choice ? `At least ${choice.min_memory_mb} MB.` : undefined} error={errors.memory_mb}>
+                            <Input value={memory} onChange={(event) => setMemory(event.target.value.replace(/\D/g, ''))} inputMode="numeric" mono />
+                        </Field>
+                        <Field label="Disk (GB)" error={errors.disk_gb}>
+                            <Input value={disk} onChange={(event) => setDisk(event.target.value.replace(/\D/g, ''))} inputMode="numeric" mono />
+                        </Field>
+                        {keyValue && (
+                            <Field label="Eviction" error={errors['settings.eviction'] ?? errors.eviction}>
+                                <Select value={eviction} onValueChange={setEviction} options={EVICTIONS} />
+                            </Field>
                         )}
                     </div>
-                    <Errors errors={otherErrors(errors, ['server_id', 'name', 'version', 'memory_mb', 'disk_gb', 'eviction', 'settings.eviction'])} />
-                    <Button variant="primary" type="submit" loading={submitting} disabled={!serverId || !name}>
-                        Create {label}
-                    </Button>
-                </>
-            )}
+                )}
+            </div>
+            <Errors errors={otherErrors(errors, ['server_id', 'name', 'version', 'memory_mb', 'disk_gb', 'eviction', 'settings.eviction'])} />
+            <Button variant="primary" type="submit" loading={submitting} disabled={!serverId || !name}>
+                Create {label}
+            </Button>
         </form>
     );
 }

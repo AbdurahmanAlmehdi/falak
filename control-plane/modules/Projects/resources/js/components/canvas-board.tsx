@@ -35,6 +35,7 @@ import {
     type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { absoluteOf, cardHeight, composeMembers, contains, frame, type Box, type Point } from './canvas-geometry';
+import { CanvasSpace } from './canvas-space';
 import { roundedPath, routeEdge, type Rect } from './edge-routing';
 
 const SIDES = [
@@ -392,7 +393,7 @@ export interface CanvasBoardProps {
     /** Bump to clear the multi-selection. */
     selectionReset: number;
     /** Right-click on empty canvas, with the flow coordinates of the click. */
-    onContextMenu?: (flow: { x: number; y: number }, screen: { x: number; y: number }) => void;
+    onContextMenu?: (flow: { x: number; y: number }) => void;
 }
 
 interface Layout {
@@ -794,7 +795,7 @@ export function CanvasBoard({
                 onPaneContextMenu={(event: ReactMouseEvent | MouseEvent) => {
                     if (!onContextMenu) return;
                     event.preventDefault();
-                    onContextMenu(flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), { x: event.clientX, y: event.clientY });
+                    onContextMenu(flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }));
                 }}
                 onMoveEnd={(_event, viewport) => {
                     try {
@@ -822,6 +823,7 @@ export function CanvasBoard({
                 proOptions={{ hideAttribution: true }}
                 deleteKeyCode={null}
             >
+                <CanvasSpace />
                 <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
                 {minimap && (
                     <MiniMap

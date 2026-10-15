@@ -272,6 +272,7 @@
     --animate-rise-in: rise-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
     --animate-fade-in: fade-in 150ms ease-out;
     --animate-dialog-in: dialog-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    --animate-picker-in: picker-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
 
     @keyframes pulse-dot {
         0%,
@@ -320,6 +321,18 @@
         }
         to {
             opacity: 1;
+        }
+    }
+    @keyframes picker-in {
+        from {
+            transform: translateY(4px) scale(0.96);
+            opacity: 0;
+            filter: blur(4px);
+        }
+        to {
+            transform: none;
+            opacity: 1;
+            filter: none;
         }
     }
     @keyframes dialog-in {
@@ -402,6 +415,142 @@
     --xy-background-color: var(--bg-canvas);
     --xy-background-pattern-dots-color: var(--grid);
 }
+/*
+ * Canvas backdrop (canvas-space.tsx): the space image sized like `cover` (40px bleed for the parallax), a breathing
+ * nebula glow, floating moons and twinkling stars. Transform and opacity animations only; [data-paused] while the tab
+ * is hidden. The image carries its own dot grid, so the flow's dots stay off in dark; light mode shows a pale ink
+ * version (filters, no second asset) under the regular dots.
+ */
+.falak-space {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    container-type: size;
+    background: var(--bg-canvas);
+}
+.falak-space-stage {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100cqw + 80px, (100cqh + 80px) * 1.5356);
+    translate: calc(-50% + var(--space-x, 0px)) calc(-50% + var(--space-y, 0px));
+    scale: calc(var(--space-zoom, 1) * 1.03);
+    animation: space-breathe 96s ease-in-out infinite alternate;
+    will-change: transform;
+}
+.falak-space-stage img {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+/* Upscaled past 1554px the image softens: a fixed, very faint grain keeps it reading as texture. */
+.falak-space::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.4 -.3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.falak-space-glow {
+    position: absolute;
+    width: 34%;
+    aspect-ratio: 1.6;
+    translate: -50% -50%;
+    rotate: -32deg;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgb(94 234 212 / 0.16), transparent);
+    opacity: 0.2;
+    animation: space-glow 21s ease-in-out infinite alternate;
+}
+.falak-space-glow + .falak-space-glow {
+    rotate: 38deg;
+}
+.falak-space-moon {
+    position: absolute;
+    width: 2.574%;
+    aspect-ratio: 1;
+    background: url('/images/canvas/moons.webp') 0 0 / 400% 100% no-repeat;
+    animation: space-orbit 46s linear infinite;
+}
+.falak-space-stars {
+    position: absolute;
+    inset: 0;
+    translate: calc(var(--space-x, 0px) * 1.6) calc(var(--space-y, 0px) * 1.6);
+}
+.falak-space-stars > span {
+    position: absolute;
+    border-radius: 50%;
+    background: #d9fff4;
+    box-shadow: 0 0 4px 1px rgb(110 231 200 / 0.45);
+    opacity: 0.15;
+    animation: space-twinkle 5s ease-in-out infinite;
+}
+.falak-space[data-paused] *,
+.falak-space[data-paused] *::after {
+    animation-play-state: paused;
+}
+@keyframes space-breathe {
+    to {
+        transform: translate(-0.6%, 0.4%) scale(1.035);
+    }
+}
+@keyframes space-glow {
+    to {
+        opacity: 1;
+    }
+}
+/* A small ellipse (about 4 x 3 px) so each moon drifts around its spot. */
+@keyframes space-orbit {
+    0% {
+        transform: translate(0, 0);
+    }
+    25% {
+        transform: translate(2px, -1.5px);
+    }
+    50% {
+        transform: translate(0, -3px);
+    }
+    75% {
+        transform: translate(-2px, -1.5px);
+    }
+    100% {
+        transform: translate(0, 0);
+    }
+}
+@keyframes space-twinkle {
+    50% {
+        opacity: 0.95;
+    }
+}
+.falak-canvas .react-flow__background {
+    background-color: transparent;
+}
+.falak-canvas:not(.light) .react-flow__background {
+    display: none;
+}
+.falak-canvas.light .falak-space-stage {
+    opacity: 0.55;
+}
+/* On the image and each moon, not the animated stage, so the filter isn't re-run as the moons move. */
+.falak-canvas.light .falak-space-stage img,
+.falak-canvas.light .falak-space-moon {
+    filter: invert(1) hue-rotate(180deg) saturate(0.6) contrast(1.4);
+}
+.falak-canvas.light .falak-space-glow,
+.falak-canvas.light .falak-space-stars,
+.falak-canvas.light .falak-space::after {
+    display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .falak-space *,
+    .falak-space *::after {
+        animation: none !important;
+    }
+}
+
 .falak-canvas .falak-edge .react-flow__edge-path {
     stroke: var(--text-faint);
     stroke-opacity: 0.55;
@@ -476,6 +625,20 @@
     transition:
         transform 260ms var(--ease-spring),
         opacity 150ms ease-out;
+    pointer-events: none;
+}
+
+/* Sliding highlight of pick lists (pick-list.tsx): one plate moved with a transform under the selected option. */
+.falak-pick-highlight {
+    position: absolute;
+    top: 0;
+    left: 0;
+    border-radius: var(--radius-md);
+    background: var(--surface-2);
+    opacity: 0;
+    transition:
+        transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+        opacity 120ms ease-out;
     pointer-events: none;
 }
 

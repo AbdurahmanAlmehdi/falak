@@ -47,6 +47,7 @@ export { OrgSwitcher } from './org-switcher';
 export { Panel, type PanelProps, type PanelTab, type PanelUrlSync } from './panel';
 export { PanelHeader, PanelStack, type PanelHeaderProps, type PanelLayer, type PanelStackProps } from './panel-stack';
 export { PhaseTimeline, Stepper, formatDuration, type PhaseCell, type PhaseRow, type Step } from './phase-timeline';
+export { PickItem, PickList, StepBackProvider, useStepBack, type PickItemProps, type PickListProps } from './pick-list';
 export { ProjectSwitcher } from './project-switcher';
 export { RelativeTime, formatRelative } from './relative-time';
 export { SecretInput, type SecretInputProps } from './secret-input';

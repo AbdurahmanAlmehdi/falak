@@ -163,7 +163,6 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
     routeRef.current = route;
     const [picker, setPicker] = useState<{
         position: { x: number; y: number } | null;
-        anchor: { x: number; y: number } | null;
         option?: string | null;
     } | null>(null);
     const [activity, setActivity] = useState(false);
@@ -226,8 +225,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
     // registered create option directly (⌘K → Deploy template…).
     useEffect(() => {
         const open = (event: Event) =>
-            canCreate &&
-            setPicker({ position: null, anchor: null, option: (event as CustomEvent<{ option?: string } | null>).detail?.option ?? null });
+            canCreate && setPicker({ position: null, option: (event as CustomEvent<{ option?: string } | null>).detail?.option ?? null });
         window.addEventListener(CREATE_SERVICE_EVENT, open);
 
         return () => window.removeEventListener(CREATE_SERVICE_EVENT, open);
@@ -584,7 +582,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         onCompose={(service, action) => void onCompose(service, action)}
                         onSelectionChange={(ids) => setSelection((current) => (current.join() === ids.join() ? current : ids))}
                         selectionReset={selectionReset}
-                        onContextMenu={canCreate ? (position, anchor) => setPicker({ position, anchor }) : undefined}
+                        onContextMenu={canCreate ? (position) => setPicker({ position }) : undefined}
                     />
                 </div>
 
@@ -609,7 +607,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         <Button
                             variant="primary"
                             icon={<Plus />}
-                            onClick={() => setPicker(picker ? null : { position: null, anchor: null })}
+                            onClick={() => setPicker(picker ? null : { position: null })}
                             aria-expanded={picker !== null}
                         >
                             Create
@@ -621,7 +619,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                     <ConfigDriftBanner projectId={project.id} environment={environment.slug} />
                 </div>
 
-                {canvas.services.length === 0 && <EmptyCanvas onCreate={canCreate ? () => setPicker({ position: null, anchor: null }) : undefined} />}
+                {canvas.services.length === 0 && <EmptyCanvas onCreate={canCreate ? () => setPicker({ position: null }) : undefined} />}
 
                 <Toolbar
                     snap={snap}
@@ -673,7 +671,6 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         environmentSlug={environment.slug}
                         can={can}
                         position={picker.position}
-                        anchor={picker.anchor}
                         initialOption={picker.option}
                         onClose={() => setPicker(null)}
                         onCreated={(service, deploymentId) => {

@@ -132,7 +132,7 @@ test('creates a Docker Compose app from a repository: files, services, variables
     await page.waitForURL(/\/projects\/[0-9a-z]{26}\/production$/i);
     await page.getByRole('button', { name: 'Create', exact: true }).click();
     await page.getByRole('option', { name: /Git repository/ }).click();
-    const connection = page.getByRole('combobox').first();
+    const connection = page.getByRole('combobox', { name: 'Connection' });
     if (!(await connection.textContent())?.includes('GitHub')) {
         await connection.click();
         await page.getByRole('option', { name: /Acme on GitHub/ }).click();

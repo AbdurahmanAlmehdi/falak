@@ -151,6 +151,10 @@ links and API `url` fields keep working.
 
 - Full-bleed below the top bar; `@xyflow/react` with dotted background, pan (drag / space+drag), zoom
   (⌘ scroll, `+`/`-`, *fit* button), minimap off by default. Positions persist per environment (Projects module).
+- **Backdrop** (`canvas-space.tsx`): a space image (`public/images/canvas/space.{avif,webp,jpg}`, its own faint dot
+  grid replaces the flow's dots in dark) with twinkling stars, a breathing nebula glow, floating moons and a light
+  parallax on pan / zoom (±26px, eased). Transform and opacity only, paused while the tab is hidden, static under
+  reduced motion; light mode shows a pale ink version (CSS filters) under the regular dots.
 - **Service card** (fixed 240×112 so frames can be sized before measuring): icon + name (+ runtime badges), the domain
   (sites) or engine · server (databases) underneath, and the live status at the bottom (`● Online`, `● Deploying 64%`,
   coloured by tone) with the first server chip (+N). Services with persistent storage get a **volume strip** docked
@@ -173,7 +177,9 @@ links and API `url` fields keep working.
   - *Database* → engine (PostgreSQL / MySQL / MariaDB / Redis) → server → create.
   - *Template* (placeholder "Coming soon" — compose templates land in roadmap step 4).
   Creation happens **inline in the picker** (no separate page); the new card appears on the canvas and its panel
-  opens on the Deployments tab with the first deploy streaming.
+  opens on the Deployments tab with the first deploy streaming. The picker is a centered modal (command-palette
+  style); every pick step (kind, repository, engine, template) is the same keyboard list (`PickList`): type to
+  filter, ↑/↓ Home/End move a sliding highlight, ↵ picks, Esc / Back go back one level and close from the first.
 - Environment switcher: `production`, `staging`, … + *New environment* (empty, or *duplicate from* an existing
   environment: copies service configs and variables, not servers/targets — user picks servers per service).
 - Top-right: *Activity* toggle (right rail: recent deploys/events of this env), project settings, **+ Create**.

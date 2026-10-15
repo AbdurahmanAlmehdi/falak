@@ -54,13 +54,17 @@ for (const theme of ['dark', 'light'] as const) {
         await expect(page.getByRole('dialog', { name: 'Create' })).toBeVisible();
         await shot(page, theme, 'create-picker');
         await page.getByRole('option', { name: /Database/ }).click();
-        await page.getByRole('button', { name: /PostgreSQL/ }).click();
-        await expect(page.getByRole('button', { name: 'Create database' })).toBeVisible();
+        await page.getByRole('option', { name: /PostgreSQL/ }).click();
+        await expect(page.getByRole('button', { name: 'Create PostgreSQL' })).toBeVisible();
         await shot(page, theme, 'create-database');
+        // Back steps out one level at a time: the form → engines → Create.
+        await page.getByRole('button', { name: 'Back' }).click();
         await page.getByRole('button', { name: 'Back' }).click();
         await page.getByRole('option', { name: /Git repository/ }).click();
         await page.waitForLoadState('networkidle');
         await shot(page, theme, 'create-git');
+        // Esc steps back (repository list → Create), then closes.
+        await page.keyboard.press('Escape');
         await page.keyboard.press('Escape');
 
         // Site panel: Deployments tab
