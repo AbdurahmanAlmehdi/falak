@@ -500,6 +500,14 @@ func TestEnvPullPush(t *testing.T) {
 	}
 }
 
+func TestLogsLevelWarningAlias(t *testing.T) {
+	cp := newFakeCP(t)
+	h := newHarness(t, cp)
+	if code := h.run("logs", "acme", "--level", "warning"); code != 0 || cp.lastQuery["level"] != "warn" {
+		t.Fatalf("warning alias: %d query %v", code, cp.lastQuery)
+	}
+}
+
 func TestLogsAndFollow(t *testing.T) {
 	cp := newFakeCP(t)
 	h := newHarness(t, cp)

@@ -571,7 +571,7 @@ func cmdLogs(ctx context.Context, a *App, args []string) error {
 	fs.BoolVar(followF, "f", false, "shorthand for --follow")
 	since := fs.Duration("since", time.Hour, "how far back to start")
 	limit := fs.Int("limit", 200, "max lines per request")
-	level := fs.String("level", "", "minimum level (debug|info|warning|error)")
+	level := fs.String("level", "", "minimum level (trace|debug|info|warn|error|fatal)")
 	pos, err := a.parse(fs, args, 1, 1, "<site> [--follow] [--since 1h] [--limit N] [--level LEVEL]")
 	if err != nil {
 		return err
@@ -579,6 +579,9 @@ func cmdLogs(ctx context.Context, a *App, args []string) error {
 	c, err := a.api()
 	if err != nil {
 		return err
+	}
+	if *level == "warning" {
+		*level = "warn" // the API only knows warn
 	}
 	q := api.LogQuery{Since: *since, Limit: *limit, Level: *level}
 	for {
