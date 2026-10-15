@@ -23,10 +23,14 @@ type Config struct {
 }
 
 // persisted is ebpf.json: the setting and an over-budget stop, which survives restarts.
+// Version 2 added the version field; records written by older agents have version 0.
+const persistedVersion = 2
+
 type persisted struct {
 	Enabled      bool   `json:"enabled"`
 	FullDNSNames bool   `json:"full_dns_names,omitempty"`
 	AutoDisabled string `json:"auto_disabled,omitempty"`
+	Version      int    `json:"version,omitempty"`
 }
 
 // Register adds net.ebpf.configure.
@@ -47,7 +51,7 @@ func (c *Collector) saveLocked() error {
 	if c.opts.EtcDir == "" {
 		return nil
 	}
-	b, _ := json.Marshal(persisted{Enabled: c.enabled, FullDNSNames: c.fullNames, AutoDisabled: c.autoDisabled})
+	b, _ := json.Marshal(persisted{Enabled: c.enabled, FullDNSNames: c.fullNames, AutoDisabled: c.autoDisabled, Version: persistedVersion})
 	if err := c.opts.FS.MkdirAll(c.opts.EtcDir, 0o755); err != nil {
 		return err
 	}
@@ -67,8 +71,14 @@ func (c *Collector) loadConfig() {
 		return
 	}
 	c.enabled, c.fullNames, c.autoDisabled = p.Enabled, p.FullDNSNames, p.AutoDisabled
+	if p.Version < persistedVersion {
+		// Records written by an older agent may have auto_disabled set from the bogus first-pass burst
+		// check (wall near-zero). Clear it so the probe is not left stuck after upgrade; a probe that is
+		// genuinely over budget will trip again within the first budgetWindow of operation.
+		c.autoDisabled = ""
+	}
 	c.status.Enabled = p.Enabled
-	if p.AutoDisabled != "" {
-		c.status.State, c.status.Detail = StateOverBudget, p.AutoDisabled
+	if c.autoDisabled != "" {
+		c.status.State, c.status.Detail = StateOverBudget, c.autoDisabled
 	}
 }

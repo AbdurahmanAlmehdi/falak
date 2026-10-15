@@ -759,7 +759,11 @@ func histMetric(kind uint32) string {
 // budget records the pass's cost and enforces the budget over budgetWindow: the run-queue programs go first, then
 // the whole probe (until the setting is turned on again or the agent restarts).
 func (c *Collector) budget(spent, wall time.Duration) {
-	if wall <= 0 {
+	if wall < time.Second {
+		// A sub-second wall means the probe just started: reconcileLocked set lastPass moments before
+		// collectLocked ran in the same tick, so wall is only the overhead between those two calls.
+		// BPF_STATS_RUN_TIME counters have not accumulated a real interval; the per-pass ratio is
+		// meaningless and would trip the burst check on an innocent first read. Skip.
 		return
 	}
 	c.costs = append(c.costs, cost{spent, wall})

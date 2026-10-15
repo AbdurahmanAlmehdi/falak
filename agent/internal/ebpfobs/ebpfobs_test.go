@@ -541,6 +541,46 @@ func TestNameRankingIsSticky(t *testing.T) {
 	}
 }
 
+func TestBudgetBurstFirstPassSkipped(t *testing.T) {
+	// Reproduce the live bug: the probe opens in reconcileLocked, which sets lastPass = now(), then
+	// collectLocked runs immediately in the same tick. In production wall is near-zero (microseconds);
+	// dividing spent by (wall * cpus) explodes and falsely trips the burst check.
+	src := newFake()
+	c, _, _ := testCollector(t, src, Options{})
+	// Call budget() directly with a near-zero wall (1 ms) and a large spent (500 ms).
+	// 500 ms / (1 ms * 2 CPUs) = 250, far above the 5× budget burst threshold.
+	// The fixed code must return early; the old code would shed runq and report StateDegraded.
+	c.mu.Lock()
+	c.budget(500*time.Millisecond, 1*time.Millisecond)
+	c.mu.Unlock()
+	if s := c.Status(); s.State != StateRunning {
+		t.Errorf("first-pass near-zero wall incorrectly tripped the budget: %+v", s)
+	}
+}
+
+func TestStickyAutoDisabledClearedOnUpgrade(t *testing.T) {
+	// A server stuck after the old buggy check set auto_disabled must be unblocked when the agent
+	// upgrades: a persisted record with version < 2 has its auto_disabled cleared on load.
+	fs := hostfs.FS{Root: t.TempDir()}
+	old, _ := json.Marshal(persisted{Enabled: true, AutoDisabled: "9.84 % of CPU in one pass (budget 1 %)"})
+	if err := fs.MkdirAll("/etc/falak", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fs.WriteFile("/etc/falak/ebpf.json", append(old, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := New(Options{FS: fs, EtcDir: "/etc/falak"})
+	if c.autoDisabled != "" {
+		t.Errorf("old auto_disabled not cleared on upgrade: %q", c.autoDisabled)
+	}
+	if s := c.Status(); s.State == StateOverBudget {
+		t.Errorf("probe stuck in over-budget state after upgrade: %+v", s)
+	}
+	if !c.enabled {
+		t.Error("enabled flag must still be loaded from the file")
+	}
+}
+
 func TestUnderBudgetKeepsRunning(t *testing.T) {
 	src := newFake()
 	c, out, now := testCollector(t, src, Options{})
