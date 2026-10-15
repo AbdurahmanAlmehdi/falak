@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/requests/net.capture.progress.schema.json",
+  "title": "POST /agent/v1/requests/net.capture.progress — a running packet capture's counters, every 5 s (docs/plans/network/capture.md). Feature net.capture.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_id",
+    "bytes",
+    "packets"
+  ],
+  "properties": {
+    "capture_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$"
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 104857600
+    },
+    "packets": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cancel"
+      ],
+      "properties": {
+        "cancel": {
+          "type": "boolean",
+          "description": "stop now and upload nothing (the user cancelled, or the capture is gone)"
+        }
+      }
+    }
+  }
+}

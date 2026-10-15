@@ -1,0 +1,17 @@
+{
+  "capture_id": "01JA2B3C4D5E6F7G8H9J0K1M2N",
+  "container": {
+    "labels": {
+      "falak.site": "shop"
+    }
+  },
+  "filter": {
+    "host": "10.0.0.0/24",
+    "port": 5432,
+    "protocol": "tcp",
+    "direction": "both"
+  },
+  "snaplen": 128,
+  "duration_s": 30,
+  "max_bytes": 20971520
+}

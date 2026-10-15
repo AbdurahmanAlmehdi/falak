@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/net.capture.schema.json",
+  "title": "net.capture — capture packets with tcpdump on a host interface or in a container's network namespace, then upload the pcap (feature net.capture, docs/plans/network/capture.md)",
+  "description": "The agent runs tcpdump (fixed argv, the BPF expression built from `filter`), reports progress with the net.capture.progress request (whose reply may cancel it), then uploads the file in chunks to POST /agent/v1/uploads/net.capture/<capture_id>?offset=N and deletes it. A cancelled capture fails with exit 130 and uploads nothing; 127 when tcpdump is missing and can't be installed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capture_id"
+  ],
+  "properties": {
+    "capture_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$",
+      "description": "the control plane's capture (a ULID); only used in the upload URL"
+    },
+    "interface": {
+      "enum": [
+        "default",
+        "wireguard",
+        "docker"
+      ],
+      "description": "host captures (default when no container): the default route's interface, the first WireGuard interface, or docker0. Containers capture on all of their interfaces (any)"
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "capture in this container's network namespace (as net.tool's selector)",
+      "oneOf": [
+        {
+          "required": [
+            "name"
+          ]
+        },
+        {
+          "required": [
+            "labels"
+          ]
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{1,127}$"
+        },
+        "labels": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 8,
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:/@+-]{1,255}$"
+          }
+        }
+      }
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "structured filter; the agent builds the BPF expression (never free-form)",
+      "properties": {
+        "host": {
+          "type": "string",
+          "maxLength": 49,
+          "pattern": "^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$",
+          "description": "an IP address or a CIDR (no names)"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "protocol": {
+          "enum": [
+            "tcp",
+            "udp",
+            "icmp"
+          ]
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out",
+            "both"
+          ]
+        }
+      }
+    },
+    "snaplen": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 262144,
+      "description": "bytes kept per packet (default 128: headers only; 262144: full packets)"
+    },
+    "duration_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "description": "default 30"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 1048576,
+      "maximum": 104857600,
+      "description": "pcap file size cap (default 20 MiB); the capture ends at the last whole packet below it"
+    }
+  },
+  "not": {
+    "required": [
+      "interface",
+      "container"
+    ]
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_id",
+        "bytes",
+        "packets",
+        "sha256",
+        "ended",
+        "interface",
+        "namespace",
+        "expression"
+      ],
+      "properties": {
+        "capture_id": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        },
+        "packets": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "ended": {
+          "enum": [
+            "duration",
+            "size_limit",
+            "exited"
+          ]
+        },
+        "interface": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string",
+          "description": "host | container:<name>"
+        },
+        "expression": {
+          "type": "string",
+          "description": "the BPF expression used (\"\" = everything)"
+        }
+      }
+    }
+  }
+}

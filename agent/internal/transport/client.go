@@ -151,6 +151,17 @@ func Retryable(err error) bool {
 }
 
 func (c *Client) do(ctx context.Context, method, path, ctype string, body []byte, timeout time.Duration) ([]byte, error) {
+	return c.doWith(ctx, method, path, ctype, body, timeout, nil)
+}
+
+// Upload posts one raw chunk (application/octet-stream) to path, e.g. "/uploads/net.capture/<id>?offset=0", with the
+// given headers (checksums). Fleet hands it to the module that registered the upload type.
+func (c *Client) Upload(ctx context.Context, path string, body []byte, headers map[string]string) error {
+	_, err := c.doWith(ctx, http.MethodPost, path, "application/octet-stream", body, 2*time.Minute, headers)
+	return err
+}
+
+func (c *Client) doWith(ctx context.Context, method, path, ctype string, body []byte, timeout time.Duration, headers map[string]string) ([]byte, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -169,6 +180,9 @@ func (c *Client) do(ctx context.Context, method, path, ctype string, body []byte
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", c.UserAgent)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	if c.Session != "" {
 		req.Header.Set(SessionHeader, c.Session)
 	}

@@ -64,6 +64,8 @@ type Deps struct {
 	Telemetry *telemetry.Service
 	// Requests is the control plane's request channel (net.observed); nil = no reports.
 	Requests netobs.Requester
+	// Captures reports packet captures' progress and uploads them (net.capture); nil = captures fail.
+	Captures nettool.CaptureControlPlane
 	Logger   *slog.Logger
 	// RestartAgent restarts the service after system.upgrade_agent.
 	RestartAgent func() error
@@ -175,7 +177,15 @@ func Build(d Deps) *Components {
 	d.Telemetry.Register(reg)
 	terms.Register(reg)
 	// net.tool (docs/plans/network/tools.md): the helper is this binary, re-run as `falak-agent nettool`.
-	nettool.New(nettool.Options{Logger: log, Docker: docker.NewClient(cfg.DockerSock), Binary: installedBinary(d.FS)}).Register(reg)
+	// net.capture (docs/plans/network/capture.md): tcpdump on the host or under nsenter, uploaded to the control plane.
+	nt := nettool.New(nettool.Options{Logger: log, Docker: docker.NewClient(cfg.DockerSock), Binary: installedBinary(d.FS),
+		CP: d.Captures, CaptureDir: d.FS.P(filepath.Join(cfg.StateDir, "captures")),
+		InstallTcpdump: func(ctx context.Context, st commands.Stream) error {
+			_, err := system.AptFor(d.Runner, d.FS, st).Ensure(ctx, []string{"tcpdump"}, true)
+			return err
+		}})
+	nt.Register(reg)
+	nt.RegisterCapture(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
 		Protection: prot, Events: &resources.Queue{}, Network: network}
@@ -262,7 +272,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	comps := Build(Deps{
-		Config: cfg, FS: fs, Runner: r, Insights: client, Requests: client, Telemetry: tel, Logger: log,
+		Config: cfg, FS: fs, Runner: r, Insights: client, Requests: client, Captures: client, Telemetry: tel, Logger: log,
 		RelayBase: id.State.Endpoints.API, RelayHTTP: transport.NewHTTP1Client(id.TLSConfig()),
 		ControlPlane: protect.ResolveHosts(id.State.Endpoints.API, id.State.Endpoints.OTLP, cfg.PanelURL),
 		RestartAgent: func() error {

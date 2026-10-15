@@ -36,7 +36,7 @@ var Catalogue = []string{
 	"cron.apply",
 	"db.instance.create", "db.instance.update", "db.instance.restart", "db.instance.stop", "db.instance.delete", "db.instance.password", "db.instance.secrets", "db.instance.upgrade",
 	"db.create", "db.drop", "db.user.apply", "db.backup", "db.restore", "db.drill", "db.pitr.base", "db.pitr.restore", "db.pitr.promote",
-	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply", "net.connections.configure", "net.tool", "net.protection.apply",
+	"net.firewall.apply", "net.wireguard.apply", "net.tunnel.apply", "net.connections.configure", "net.tool", "net.protection.apply", "net.capture",
 	"fn.release.apply", "fn.release.remove", "fn.run", "fn.status",
 	"docker.pull", "docker.run", "docker.stop", "docker.compose.up", "docker.compose.down", "docker.compose.pull", "docker.compose.ps", "docker.compose.restart", "docker.prune", "docker.update",
 	"telemetry.configure",
@@ -189,6 +189,7 @@ func TestSchemasRejectInvalidPayloads(t *testing.T) {
 		"security.audit":         `{"expected_ports":["tcp/http"]}`,
 		"security.fix":           `{"fix_id":"sh -c reboot"}`,
 		"net.tool":               `{"tool":"ping","target":"-oProxyCommand=x"}`,
+		"net.capture":            `{"capture_id":"01JA2B3C4D5E6F7G8H9J0K1M2N","filter":{"host":"-w /etc/x"}}`,
 		"security.undo":          `{"fix_id":"ssh.harden","backup_id":"../../../etc"}`,
 	}
 	for typ, payload := range bad {

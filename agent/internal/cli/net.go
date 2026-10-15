@@ -23,6 +23,7 @@ func netCommands() *command {
 		{name: "dns", args: "<name> [--type A|AAAA|CNAME|MX|TXT|NS|SRV|PTR] [--nameserver IP] " + netWhere, summary: "look a name up with the resolver there", run: cmdNet("dns")},
 		{name: "http", args: "<url> [--method GET|HEAD] [--connect-to IP] [--insecure] " + netWhere, summary: "request a URL with a timing breakdown (curl -v)", run: cmdNet("http")},
 		{name: "tcp", args: "<host> <port> [--count N] " + netWhere, summary: "test TCP connections to host:port", run: cmdNet("tcp")},
+		{name: "capture", args: "--yes [--interface default|wireguard|docker] [--duration S] [--max-size MiB] [--full] [--host IP|CIDR] [--port N] [--protocol tcp|udp|icmp] [--direction in|out|both] [-o FILE] " + strings.TrimSuffix(netWhere, " [--timeout S]"), summary: "capture packets for up to 60 s and download the pcap (Admin, audited)", run: cmdNetCapture},
 	}}
 }
 

@@ -26,6 +26,7 @@ Both sides validate against these schemas in their test suites.
 | POST | `/agent/v1/commands/{id}/events` | NDJSON of `event` | `204` (idempotent on `(command_id, seq)`) |
 | POST | `/agent/v1/insights` | NDJSON of insight events | `204` |
 | POST | `/agent/v1/requests/{type}` | `requests/<type>.schema.json` | the type's `$defs/reply` (`404 unknown_request`, `409 {error: <reason>}` when refused, `422` when invalid) |
+| POST | `/agent/v1/uploads/{type}/{id}?offset=N` | raw chunk (`application/octet-stream`, `Content-Length` required, at most 8 MiB), `X-Falak-Chunk-Sha256`, plus the type's `X-Falak-Upload-*` headers | the type's JSON reply (`404 unknown_upload`, `411`, `413`, `422 chunk_checksum`, `409 {error: <reason>}` when refused); `net.capture` (docs/plans/network/capture.md) |
 
 ## Command payloads
 `commands/<type>.schema.json` — one schema per command type in the catalogue in `ARCHITECTURE.md` §3.
@@ -50,6 +51,9 @@ HTTP analytics (docs/plans/network/http.md): `edge.request_id` (edge.caddy.apply
 the edge; stripped for older agents, whose rendered config is then unchanged).
 Network tools (docs/plans/network/tools.md): `net.tools` gates the whole `net.tool` command (ping, traceroute, DNS,
 HTTP, TCP from the host or, with `container`, inside a container's network namespace; output as stdout events).
+Packet capture (docs/plans/network/capture.md): `net.capture` gates the whole `net.capture` command (tcpdump on a host
+interface or in a container's namespace), its `net.capture.progress` request (whose reply can cancel it) and the
+chunk uploads to `/agent/v1/uploads/net.capture/<capture_id>`.
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`

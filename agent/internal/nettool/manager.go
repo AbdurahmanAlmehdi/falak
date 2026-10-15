@@ -51,13 +51,30 @@ type Options struct {
 	MaxOutput  int
 	// Env is added to the helper's environment (tests).
 	Env []string
+
+	// Packet capture (net.capture, docs/plans/network/capture.md). CP reports progress and takes the upload.
+	CP CaptureControlPlane
+	// CaptureDir holds one root-only temp directory per capture (default /var/lib/falak/captures).
+	CaptureDir string
+	// SysClassNet is /sys/class/net (WireGuard and docker0 lookups).
+	SysClassNet string
+	// Tcpdump overrides the tcpdump binary (tests); InstallTcpdump installs it when it's missing.
+	Tcpdump        string
+	InstallTcpdump func(ctx context.Context, st commands.Stream) error
+	// ProgressEvery (5 s), MinFreeBytes (256 MiB beyond max_bytes), MaxCaptures (2), ChunkBytes (4 MiB), RetryUnit (1 s).
+	ProgressEvery time.Duration
+	MinFreeBytes  int64
+	MaxCaptures   int
+	ChunkBytes    int
+	RetryUnit     time.Duration
 }
 
-// Manager runs net.tool commands.
+// Manager runs net.tool and net.capture commands.
 type Manager struct {
-	opts Options
-	log  *slog.Logger
-	sem  chan struct{}
+	opts   Options
+	log    *slog.Logger
+	sem    chan struct{}
+	capSem chan struct{}
 }
 
 // New creates a Manager.
@@ -80,7 +97,9 @@ func New(o Options) *Manager {
 	if o.Binary == "" {
 		o.Binary, _ = os.Executable()
 	}
-	return &Manager{opts: o, log: o.Logger.With("component", "nettool"), sem: make(chan struct{}, o.MaxRunning)}
+	m := &Manager{opts: o, log: o.Logger.With("component", "nettool"), sem: make(chan struct{}, o.MaxRunning)}
+	m.captureDefaults()
+	return m
 }
 
 // Result is net.tool's result for a tool that exited 0 (others fail the command with their exit code).
@@ -171,36 +190,14 @@ func (m *Manager) prepare(ctx context.Context, p Spec) (*helper, error) {
 		b, _ := json.Marshal(hs)
 		return &helper{argv: []string{m.opts.Binary, HelperCommand}, spec: b, namespace: "host"}, nil
 	}
-	if m.opts.Docker == nil {
-		return nil, errors.New("container targets need Docker on this server")
-	}
-	nsenter, err := exec.LookPath(m.opts.NSEnter)
-	if err != nil {
-		return nil, errors.New("nsenter (util-linux) is not installed on this server")
-	}
-	lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	ct, err := resolveContainer(lctx, m.opts.Docker, p.Container)
+	pin, err := m.pin(ctx, p.Container)
 	if err != nil {
 		return nil, err
 	}
-	pid := ct.State.Pid
-	proc := filepath.Join(m.opts.ProcRoot, strconv.Itoa(pid))
-	netns, err := os.Open(filepath.Join(proc, "ns", "net"))
-	if err != nil {
-		return nil, ErrNoContainer
-	}
+	netns, ct := pin.netns, pin.ct
 	refuse := func(err error) (*helper, error) {
 		netns.Close()
 		return nil, err
-	}
-	cg, err := os.ReadFile(filepath.Join(proc, "cgroup"))
-	if err != nil || ct.ID == "" || !strings.Contains(string(cg), ct.ID) {
-		return refuse(fmt.Errorf("pid %d is not container %s's process (it exited?)", pid, ct.name()))
-	}
-	again, ok, err := m.opts.Docker.ContainerInspect(lctx, ct.ID)
-	if err != nil || !ok || !again.State.Running || again.State.Pid != pid || again.State.StartedAt != ct.State.StartedAt {
-		return refuse(fmt.Errorf("container %s restarted while the tool started; run it again", ct.name()))
 	}
 	if ct.ResolvConfPath == "" {
 		return refuse(fmt.Errorf("container %s has no resolv.conf", ct.name()))
@@ -216,9 +213,53 @@ func (m *Manager) prepare(ctx context.Context, p Spec) (*helper, error) {
 	hs.InContainer = true
 	b, _ := json.Marshal(hs)
 	return &helper{
-		argv: []string{nsenter, "--net=/proc/self/fd/3", "--", m.opts.Binary, HelperCommand},
+		argv: []string{pin.nsenter, "--net=/proc/self/fd/3", "--", m.opts.Binary, HelperCommand},
 		spec: b, netns: netns, namespace: "container:" + ct.name(),
 	}, nil
+}
+
+// pinned is a container's network namespace, open (enter it as /proc/self/fd/3 under nsenter) and checked to be the
+// container's.
+type pinned struct {
+	netns   *os.File
+	nsenter string
+	ct      inspected
+}
+
+// pin opens the container's network namespace first and keeps the descriptor; only then is the process checked to be
+// the container's (its cgroup names the container id, and a second inspect shows the same pid and start), so a pid
+// reused in between is refused instead of entering another process's network. The caller closes netns.
+func (m *Manager) pin(ctx context.Context, c *Container) (*pinned, error) {
+	if m.opts.Docker == nil {
+		return nil, errors.New("container targets need Docker on this server")
+	}
+	nsenter, err := exec.LookPath(m.opts.NSEnter)
+	if err != nil {
+		return nil, errors.New("nsenter (util-linux) is not installed on this server")
+	}
+	lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ct, err := resolveContainer(lctx, m.opts.Docker, c)
+	if err != nil {
+		return nil, err
+	}
+	pid := ct.State.Pid
+	proc := filepath.Join(m.opts.ProcRoot, strconv.Itoa(pid))
+	netns, err := os.Open(filepath.Join(proc, "ns", "net"))
+	if err != nil {
+		return nil, ErrNoContainer
+	}
+	cg, err := os.ReadFile(filepath.Join(proc, "cgroup"))
+	if err != nil || ct.ID == "" || !strings.Contains(string(cg), ct.ID) {
+		netns.Close()
+		return nil, fmt.Errorf("pid %d is not container %s's process (it exited?)", pid, ct.name())
+	}
+	again, ok, err := m.opts.Docker.ContainerInspect(lctx, ct.ID)
+	if err != nil || !ok || !again.State.Running || again.State.Pid != pid || again.State.StartedAt != ct.State.StartedAt {
+		netns.Close()
+		return nil, fmt.Errorf("container %s restarted while the tool started; run it again", ct.name())
+	}
+	return &pinned{netns: netns, nsenter: nsenter, ct: ct}, nil
 }
 
 type inspected struct{ *docker.Container }

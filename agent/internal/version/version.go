@@ -78,6 +78,9 @@ var Features = []string{
 	// edge.caddy.apply sites[].rate_limits and caddy_build: path rate limits at the edge (the rate_limit module of
 	// Falak's Caddy build, installed on first use).
 	"edge.rate_limit",
+	// Packet capture (docs/plans/network/capture.md): the net.capture command (tcpdump on an interface or in a
+	// container's network namespace), the net.capture.progress request and chunk uploads to /uploads/net.capture/<id>.
+	"net.capture",
 }
 
 var (
