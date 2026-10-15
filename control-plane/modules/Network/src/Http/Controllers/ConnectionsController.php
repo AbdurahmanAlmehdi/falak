@@ -37,6 +37,9 @@ final class ConnectionsController extends Controller
 {
     use ResolvesServers;
 
+    /** The agent sends the eBPF probe's connects with talks-to (agent/internal/version.Features). */
+    private const EBPF_CONNECTS = 'net.ebpf.connects';
+
     /** @var array<string, array{label: string, url: ?string}> */
     private array $names = [];
 
@@ -174,8 +177,9 @@ final class ConnectionsController extends Controller
 
     /**
      * Why the tables may be empty: `agent_outdated` (no net.connections on one of the servers), `waiting` (no report
-     * yet), `stale` (the latest is old), `ok`. `ebpf`: the eBPF probe runs on every one of the servers, so talks-to
-     * also counts short-lived connections (their connects) that the socket snapshots miss.
+     * yet), `stale` (the latest is old), `ok`. `ebpf`: the eBPF probe runs on every one of the servers and their agents
+     * send its connects (net.ebpf.connects, v0.18.1), so talks-to also counts short-lived connections that the socket
+     * snapshots miss.
      *
      * @param  list<string>  $serverIds
      * @return array<string, mixed>
@@ -196,7 +200,8 @@ final class ConnectionsController extends Controller
                 $observation->observed_at->lt(now()->subSeconds($stale)) => 'stale',
                 default => 'ok',
             },
-            'ebpf' => $agents->isNotEmpty() && $agents->every(fn ($agent) => in_array($agent->facts['ebpf']['state'] ?? null, ['running', 'degraded'], true)),
+            'ebpf' => $agents->isNotEmpty() && $agents->every(fn ($agent) => $agent->supports(self::EBPF_CONNECTS)
+                && in_array($agent->facts['ebpf']['state'] ?? null, ['running', 'degraded'], true)),
         ];
     }
 

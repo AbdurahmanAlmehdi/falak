@@ -120,7 +120,8 @@ runs on the server ([ebpf.md](ebpf.md)), its successful outbound connects of the
 (at most 4,096 destinations between two reports, from the existing `peers` map: no extra kernel work), join the same
 grouping as `connects` (a peer with 0 open connections and connects is kept); ranking uses connections + connects.
 The server and site Network tabs show them as "Opened / min" and, while the probe is off, a note under
-Talks to that such connections may not appear (`ebpf` in the connections JSON).
+Talks to that such connections may not appear (`ebpf` in the connections JSON: true only when every agent lists the
+feature `net.ebpf.connects`, as a v0.18.0 agent runs the probe without sending them).
 
 ### Bytes per peer (conntrack)
 

@@ -84,6 +84,9 @@ var Features = []string{
 	// The eBPF probe (docs/plans/network/ebpf.md): the net.ebpf.configure command (opt-in per server), facts.ebpf, and
 	// falak.net.tcp.*, falak.net.dns.*, falak.workload.runqueue.delay metrics.
 	"net.ebpf",
+	// net.observed workloads[].talks_to[].connects: the eBPF probe's outbound connects of the minute (a connection
+	// per request shows up although it is rarely open at a snapshot).
+	"net.ebpf.connects",
 }
 
 var (

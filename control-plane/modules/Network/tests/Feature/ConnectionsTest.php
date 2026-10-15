@@ -285,6 +285,10 @@ it('says whether talks-to includes short-lived connections (the eBPF probe runs)
     $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('ebpf', false);
 
     $enrolled['agent']->forceFill(['facts' => [...$enrolled['agent']->facts, 'ebpf' => ['state' => 'running']]])->save();
+    // A v0.18.0 agent runs the probe but does not send its connects.
+    $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('ebpf', false);
+
+    $enrolled['agent']->forceFill(['facts' => [...$enrolled['agent']->facts, 'features' => ['net.connections', 'net.ebpf.connects']]])->save();
     $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('ebpf', true);
 });
 
