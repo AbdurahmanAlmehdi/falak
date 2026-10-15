@@ -31,6 +31,12 @@ final class EbpfController extends Controller
 {
     use ResolvesServers;
 
+    /** Turning the probe on or off (and its options): Admin only. */
+    private const MANAGE = 'network.ebpf';
+
+    /** The server workload's DNS names (every process outside a site): the network managers only. */
+    private const HOST_NAMES = 'network.manage';
+
     public function __construct(
         private readonly CurrentOrganization $organization,
         private readonly OrganizationAccess $access,
@@ -39,17 +45,23 @@ final class EbpfController extends Controller
         private readonly ServerDirectory $servers,
     ) {}
 
-    /** PUT /network/servers/{server}/ebpf {enabled} */
+    /**
+     * PUT /network/servers/{server}/ebpf {enabled, full_dns_names?, reenable?}: Admin only (`network.ebpf`). `reenable`
+     * restarts a probe the agent stopped over its CPU budget; nothing else does.
+     */
     public function settings(Request $request, string $server, ConfigureEbpf $configure, AuditLog $audit): JsonResponse
     {
         $organizationId = $this->organization->requireId();
-        $data = $this->server($request->user(), $server, 'network.manage');
+        $data = $this->server($request->user(), $server, self::MANAGE);
         abort_if($data->organizationId !== $organizationId, 404);
-        $enabled = (bool) $request->validate(['enabled' => ['required', 'boolean']])['enabled'];
+        $input = $request->validate(['enabled' => ['required', 'boolean'], 'full_dns_names' => ['sometimes', 'boolean'], 'reenable' => ['sometimes', 'boolean']]);
 
         $setting = EbpfSetting::query()->find($data->id) ?? new EbpfSetting(['server_id' => $data->id, 'organization_id' => $data->organizationId]);
-        $setting->forceFill(['enabled' => $enabled, 'status' => 'pending', 'error' => null])->save();
-        $audit->record('network.ebpf_updated', 'server', $data->id, ['enabled' => $enabled], $data->organizationId);
+        $changes = ['enabled' => (bool) $input['enabled'], 'full_dns_names' => (bool) ($input['full_dns_names'] ?? $setting->full_dns_names),
+            'reenable' => (bool) $input['enabled'] && (bool) ($input['reenable'] ?? false)];
+        // A new intent supersedes whatever is in flight (its late outcome no longer matches the command id).
+        $setting->forceFill([...$changes, 'status' => 'pending', 'command_id' => null, 'error' => null])->save();
+        $audit->record('network.ebpf_updated', 'server', $data->id, $changes, $data->organizationId);
         $configure($data->id);
 
         return response()->json(['servers' => $this->status([$data->id], $request)]);
@@ -62,7 +74,8 @@ final class EbpfController extends Controller
         $data = $this->server($request->user(), $server);
         abort_if($data->organizationId !== $organizationId, 404);
 
-        return $this->respond($request, [], [$data->id], server: true);
+        return $this->respond($request, [], [$data->id], server: true,
+            hostNames: $this->access->can($request->user(), $data->organizationId, self::HOST_NAMES));
     }
 
     /** GET /network/sites/{site}/ebpf?range=&server=&service= */
@@ -101,7 +114,7 @@ final class EbpfController extends Controller
      * @param  array<string, string>  $workload
      * @param  list<string>  $serverIds
      */
-    private function respond(Request $request, array $workload, array $serverIds, bool $server = false): JsonResponse
+    private function respond(Request $request, array $workload, array $serverIds, bool $server = false, bool $hostNames = true): JsonResponse
     {
         $range = (string) ($request->validate(['range' => ['nullable', Rule::in(array_keys(ConnectionQueries::RANGES))]])['range'] ?? '1h');
         [$seconds, $step] = ConnectionQueries::RANGES[$range];
@@ -127,7 +140,7 @@ final class EbpfController extends Controller
                         }
                     }
 
-                    foreach ($this->metrics->query(EbpfQueries::topNames($workload, $serverIds, $seconds)['names'], $end) as $s) {
+                    foreach ($this->metrics->query(EbpfQueries::topNames($workload, $serverIds, $seconds, $hostNames)['names'], $end) as $s) {
                         $names[] = ['name' => $s->labels['falak_net_dns_name'] ?? '', 'queries' => (int) round($s->last() ?? 0)];
                     }
 
@@ -146,6 +159,7 @@ final class EbpfController extends Controller
             'servers' => $status,
             'charts' => (object) $charts,
             'names' => $names,
+            'names_scope' => $hostNames ? 'all' : 'workloads',
             'errors' => (object) $errors,
         ]);
     }
@@ -171,11 +185,12 @@ final class EbpfController extends Controller
                 'server_id' => $id,
                 'name' => $server?->name,
                 'enabled' => (bool) $setting?->enabled,
+                'full_dns_names' => (bool) $setting?->full_dns_names,
                 'delivery' => $setting?->status,
                 'error' => $setting?->error,
                 'agent_outdated' => ! ($agent?->supports(ConfigureEbpf::FEATURE) ?? false),
                 'probe' => is_array($probe) ? $probe : null,
-                'can_manage' => $server !== null && $this->access->can($request->user(), $server->organizationId, 'network.manage'),
+                'can_manage' => $server !== null && $this->access->can($request->user(), $server->organizationId, self::MANAGE),
             ];
         }, $serverIds));
     }

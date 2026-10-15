@@ -11,11 +11,15 @@ use Illuminate\Support\Carbon;
  * @property string $server_id
  * @property string $organization_id
  * @property bool $enabled
+ * @property bool $full_dns_names
+ * @property bool $reenable
  * @property string $status pending | applied | failed
  * @property ?string $command_id
- * @property ?bool $applied_enabled
+ * @property ?string $pending_hash
+ * @property ?string $applied_hash
  * @property ?string $error
  * @property ?Carbon $applied_at
+ * @property ?Carbon $updated_at
  */
 class EbpfSetting extends Model
 {
@@ -31,7 +35,7 @@ class EbpfSetting extends Model
     protected $guarded = [];
 
     /** @var array<string, mixed> */
-    protected $attributes = ['enabled' => false, 'status' => 'pending'];
+    protected $attributes = ['enabled' => false, 'full_dns_names' => false, 'reenable' => false, 'status' => 'pending'];
 
     /**
      * @return array<string, string>
@@ -40,7 +44,8 @@ class EbpfSetting extends Model
     {
         return [
             'enabled' => 'boolean',
-            'applied_enabled' => 'boolean',
+            'full_dns_names' => 'boolean',
+            'reenable' => 'boolean',
             'applied_at' => 'datetime',
         ];
     }

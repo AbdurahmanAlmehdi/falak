@@ -2,6 +2,7 @@
 
 namespace Falak\Network\Application\Listeners;
 
+use Falak\Fleet\Events\AgentCameOnline;
 use Falak\Fleet\Events\AgentVersionChanged;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
@@ -9,8 +10,8 @@ use Falak\Network\Application\ConfigureEbpf;
 use Illuminate\Contracts\Queue\ShouldQueue;
 
 /**
- * Settles the eBPF setting's delivery (docs/plans/network/ebpf.md) and re-sends it to an upgraded agent (which may
- * only now list `net.ebpf`).
+ * Settles the eBPF setting's delivery (docs/plans/network/ebpf.md), re-sends it to an upgraded agent (which may only now
+ * list `net.ebpf`) and to an agent back online that has not applied it (turned off while it was offline).
  */
 final class HandleEbpfOutcome implements ShouldQueue
 {
@@ -19,7 +20,7 @@ final class HandleEbpfOutcome implements ShouldQueue
     public function handleFinished(CommandFinished $event): void
     {
         if ($event->type === 'net.ebpf.configure') {
-            $this->configure->settled($event->commandId, true, result: $event->result);
+            $this->configure->settled($event->commandId, true);
         }
     }
 
@@ -27,6 +28,13 @@ final class HandleEbpfOutcome implements ShouldQueue
     {
         if ($event->type === 'net.ebpf.configure') {
             $this->configure->settled($event->commandId, false, $event->error ?: "Command {$event->status}");
+        }
+    }
+
+    public function handleOnline(AgentCameOnline $event): void
+    {
+        if ($event->serverId !== null) {
+            $this->configure->converge($event->serverId);
         }
     }
 

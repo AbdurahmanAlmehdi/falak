@@ -43,15 +43,16 @@ final class EbpfQueries
     }
 
     /**
-     * The most queried names over the range, with their failures (an instant query at the range's end).
+     * The most queried names over the range (an instant query at the range's end); without $hostNames, the server
+     * workload's (processes outside every site) are left out.
      *
      * @param  array<string, string>  $workload
      * @param  list<string>  $serverIds
      * @return array{names: string}
      */
-    public static function topNames(array $workload, array $serverIds, int $rangeSeconds): array
+    public static function topNames(array $workload, array $serverIds, int $rangeSeconds, bool $hostNames = true): array
     {
-        $sel = self::selector($workload, $serverIds);
+        $sel = self::selector($workload, $serverIds).($hostNames ? '' : ',falak_workload_kind!="host"');
 
         return [
             'names' => "topk(10, sum by (falak_net_dns_name) (increase(falak_net_dns_name_queries_total{{$sel},falak_net_dns_name!=\"other\"}[{$rangeSeconds}s])))",
@@ -68,7 +69,9 @@ final class EbpfQueries
         $by = 'falak_server_id, service_name, falak_workload_name';
 
         return [
-            'dns_failures' => "sum by ({$by}) (increase(falak_net_dns_failures_total{falak_net_dns_error!=\"nxdomain\"}[5m]))",
+            // NXDOMAIN (search domains, probes) and unanswered queries (also answers the probe could not match) are
+            // not failures of the resolver here; they are charted apart.
+            'dns_failures' => "sum by ({$by}) (increase(falak_net_dns_failures_total{falak_net_dns_error!~\"nxdomain|timeout\"}[5m]))",
             'dns_queries' => "sum by ({$by}) (increase(falak_net_dns_queries_total[5m]))",
             'retransmits' => "sum by ({$by}) (increase(falak_net_tcp_retransmits_total[5m]))",
         ];

@@ -1,10 +1,10 @@
-import { Callout, DataTable, MetricChart, Section, Switch, toast, type DataTableColumn } from '@/components/falak';
+import { Button, Callout, DataTable, MetricChart, Section, Switch, toast, type DataTableColumn } from '@/components/falak';
 import { useJson } from '@/hooks/use-json';
 import { errorMessage } from '@/lib/http';
 import { format } from 'date-fns';
 import { useMemo, useState } from 'react';
 import { bucketLabel, latest, pointsBy } from '../connections';
-import { formatRate, formatSeconds, mergeCharts, serverNotice, setEbpf, type EbpfResponse, type EbpfServer } from '../ebpf';
+import { formatRate, formatSeconds, mergeCharts, serverNotice, setEbpf, type EbpfResponse, type EbpfServer, type EbpfSettings } from '../ebpf';
 
 export interface EbpfViewProps {
     /** Endpoint without the query string, e.g. /network/servers/{id}/ebpf. */
@@ -65,7 +65,16 @@ export function EbpfView({ url, scope, range, service }: EbpfViewProps) {
                     </Callout>
                 )}
                 {notices.map(({ server, notice }) => (
-                    <Callout key={server.server_id} tone={notice!.tone} title={notice!.title}>
+                    <Callout
+                        key={server.server_id}
+                        tone={notice!.tone}
+                        title={notice!.title}
+                        action={
+                            server.probe?.state === 'over_budget' && server.enabled && server.can_manage ? (
+                                <ReenableButton server={server} onChanged={() => void reload()} />
+                            ) : undefined
+                        }
+                    >
                         {notice!.body}
                     </Callout>
                 ))}
@@ -175,6 +184,11 @@ export function EbpfView({ url, scope, range, service }: EbpfViewProps) {
                                 />
                             )}
                         </div>
+                        <p className="text-fg-muted text-xs">
+                            DNS names are kept 30 days
+                            {servers.some((server) => server.full_dns_names) ? '' : ', folded to their domain (api.stripe.com → stripe.com)'}
+                            {data?.names_scope === 'workloads' ? "; the server's own processes' names are shown to network managers only" : ''}.
+                        </p>
                         <DataTable
                             label="Most queried names"
                             rows={data?.names ?? []}
@@ -189,13 +203,13 @@ export function EbpfView({ url, scope, range, service }: EbpfViewProps) {
     );
 }
 
-function EbpfSwitch({ server, onChanged }: { server: EbpfServer; onChanged: () => void }) {
+function useSave(server: EbpfServer, onChanged: () => void) {
     const [busy, setBusy] = useState(false);
-    const toggle = async (enabled: boolean) => {
+    const save = async (settings: EbpfSettings, done: string) => {
         setBusy(true);
         try {
-            await setEbpf(server.server_id, enabled);
-            toast.success(enabled ? 'eBPF turned on' : 'eBPF turned off', enabled ? 'The agent attaches the probe within a minute.' : undefined);
+            await setEbpf(server.server_id, settings);
+            toast.success(done, settings.enabled ? 'The agent applies it within a minute.' : undefined);
             onChanged();
         } catch (e) {
             toast.error('Could not change eBPF', errorMessage(e));
@@ -204,15 +218,48 @@ function EbpfSwitch({ server, onChanged }: { server: EbpfServer; onChanged: () =
         }
     };
 
+    return { busy, save };
+}
+
+/** The server's switches (Admin only): the probe, and whole DNS names instead of their domain. */
+function EbpfSwitch({ server, onChanged }: { server: EbpfServer; onChanged: () => void }) {
+    const { busy, save } = useSave(server, onChanged);
+    const disabled = busy || !server.can_manage;
+
     return (
-        <label className="text-fg-muted flex items-center gap-2 text-sm">
-            eBPF
-            <Switch
-                checked={server.enabled}
-                disabled={busy || !server.can_manage}
-                onCheckedChange={(checked) => void toggle(checked)}
-                aria-label="eBPF probe on this server"
-            />
-        </label>
+        <div className="text-fg-muted flex flex-wrap items-center gap-4 text-sm">
+            {server.enabled && (
+                <label className="flex items-center gap-2">
+                    Full DNS names
+                    <Switch
+                        checked={server.full_dns_names}
+                        disabled={disabled}
+                        onCheckedChange={(checked) =>
+                            void save({ enabled: true, full_dns_names: checked }, checked ? 'Full DNS names on' : 'DNS names folded to domains')
+                        }
+                        aria-label="Collect full DNS names"
+                    />
+                </label>
+            )}
+            <label className="flex items-center gap-2">
+                eBPF
+                <Switch
+                    checked={server.enabled}
+                    disabled={disabled}
+                    onCheckedChange={(checked) => void save({ enabled: checked }, checked ? 'eBPF turned on' : 'eBPF turned off')}
+                    aria-label="eBPF probe on this server"
+                />
+            </label>
+        </div>
+    );
+}
+
+function ReenableButton({ server, onChanged }: { server: EbpfServer; onChanged: () => void }) {
+    const { busy, save } = useSave(server, onChanged);
+
+    return (
+        <Button size="sm" loading={busy} onClick={() => void save({ enabled: true, reenable: true }, 'eBPF re-enabled')}>
+            Re-enable
+        </Button>
     );
 }

@@ -13,6 +13,7 @@ use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Network\Application\Actions\RecordNetworkObservation;
+use Falak\Network\Application\ConfigureEbpf;
 use Falak\Network\Application\Jobs\CheckEbpfAlerts;
 use Falak\Network\Application\Jobs\ConvergeProtection;
 use Falak\Network\Application\Listeners\ForgetDeletedServer;
@@ -74,6 +75,7 @@ class NetworkServiceProvider extends ModuleServiceProvider
         $registry->register('network.view', [Role::Admin, Role::Developer, Role::Viewer], 'View firewalls, private networks and load balancers', 'network');
         $registry->register('network.manage', [Role::Admin, Role::Developer], 'Manage firewall rules and private networks', 'network');
         $registry->register('network.protect', [Role::Admin], 'Block IP addresses and configure SSH auto-ban', 'network');
+        $registry->register('network.ebpf', [Role::Admin], 'Turn the eBPF probe (TCP and DNS insights) on or off on servers', 'network');
 
         $types = $this->app->make(AlertTypes::class);
         $types->register(FirewallApplyFailed::ALERT_TYPE, 'Firewall apply failed', 'Network', Severity::Critical);
@@ -110,12 +112,14 @@ class NetworkServiceProvider extends ModuleServiceProvider
         Event::listen(CommandFinished::class, [HandleEbpfOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleEbpfOutcome::class, 'handleFailed']);
         Event::listen(AgentVersionChanged::class, [HandleEbpfOutcome::class, 'handleUpgrade']);
+        Event::listen(AgentCameOnline::class, [HandleEbpfOutcome::class, 'handleOnline']);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->call(fn () => IpBlock::query()->where('expires_at', '<', now()->subDays((int) config('network.protection.retention_days', 7)))->delete())
                 ->dailyAt('03:40')->name('network:prune-blocks')->withoutOverlapping();
             $schedule->job(new ConvergeProtection)->everyTenMinutes()->name('network:converge-protection')->withoutOverlapping();
             $schedule->job(new CheckEbpfAlerts)->everyMinute()->name('network:ebpf-alerts')->withoutOverlapping();
+            $schedule->call(fn () => app(ConfigureEbpf::class)->converge())->everyTenMinutes()->name('network:converge-ebpf')->withoutOverlapping();
         });
     }
 }

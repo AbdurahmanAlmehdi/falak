@@ -17,6 +17,7 @@ export interface EbpfServer {
     server_id: string;
     name: string | null;
     enabled: boolean;
+    full_dns_names: boolean;
     delivery: 'pending' | 'applied' | 'failed' | null;
     error: string | null;
     agent_outdated: boolean;
@@ -31,6 +32,8 @@ export interface EbpfResponse {
     servers: EbpfServer[];
     charts: Record<string, MetricSeriesDto[]>;
     names: { name: string; queries: number }[];
+    /** `workloads`: the server's own processes' names are left out (they need network.manage). */
+    names_scope: 'all' | 'workloads';
     errors: Record<string, string>;
 }
 
@@ -74,7 +77,7 @@ export function serverNotice(server: EbpfServer): Notice | null {
             return {
                 tone: 'warning',
                 title: 'Turned off: over its CPU budget',
-                body: `${probe.detail ?? 'The probe cost more than 1% of the CPU.'} Turn it off and on again to retry.`,
+                body: `${probe.detail ?? 'The probe cost more than 1% of the CPU.'} It stays off (also across agent restarts and updates) until an admin re-enables it.`,
             };
         case 'failed':
             return { tone: 'danger', title: 'The probe did not start', body: probe.detail ?? 'Loading the eBPF programs failed.' };
@@ -119,7 +122,14 @@ export function mergeCharts(charts: Record<string, MetricSeriesDto[] | undefined
     return [...byTime.values()].sort((a, b) => Number(a.t) - Number(b.t));
 }
 
-/** PUT /network/servers/{id}/ebpf */
-export function setEbpf(serverId: string, enabled: boolean): Promise<{ servers: EbpfServer[] }> {
-    return requestJson(`/network/servers/${encodeURIComponent(serverId)}/ebpf`, 'PUT', { enabled });
+export interface EbpfSettings {
+    enabled: boolean;
+    full_dns_names?: boolean;
+    /** Restart a probe the agent stopped over its CPU budget. */
+    reenable?: boolean;
+}
+
+/** PUT /network/servers/{id}/ebpf (Admin only, `network.ebpf`). */
+export function setEbpf(serverId: string, settings: EbpfSettings): Promise<{ servers: EbpfServer[] }> {
+    return requestJson(`/network/servers/${encodeURIComponent(serverId)}/ebpf`, 'PUT', settings);
 }

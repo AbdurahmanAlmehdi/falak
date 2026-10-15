@@ -2,6 +2,7 @@
 
 use Falak\Alerting\Domain\Models\Alert;
 use Falak\Fleet\Domain\Models\Certificate;
+use Falak\Fleet\Events\AgentCameOnline;
 use Falak\Fleet\Events\AgentVersionChanged;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
@@ -70,11 +71,11 @@ it('turns eBPF on: audited, net.ebpf.configure to an agent with net.ebpf, settle
     $command = $gateway->last('net.ebpf.configure', $this->server->id);
     expect($command['payload'])->toBe(['enabled' => true])
         ->and(network_schema_errors('net.ebpf.configure', $command['payload']))->toBe([])
-        ->and(AuditEntry::query()->where('action', 'network.ebpf_updated')->sole()->context)->toBe(['enabled' => true]);
+        ->and(AuditEntry::query()->where('action', 'network.ebpf_updated')->sole()->context)->toBe(['enabled' => true, 'full_dns_names' => false, 'reenable' => false]);
 
     $gateway->succeed($command['handle'], ['supported' => true, 'enabled' => true, 'state' => 'running', 'programs' => ['dns', 'runq', 'tcp']]);
     $setting = EbpfSetting::query()->findOrFail($this->server->id);
-    expect($setting->status)->toBe('applied')->and($setting->applied_enabled)->toBeTrue();
+    expect($setting->status)->toBe('applied')->and($setting->applied_hash)->not->toBeNull();
     // Applied: not sent again unless forced (an agent upgrade, which may have just brought the feature).
     expect(app(ConfigureEbpf::class)($this->server->id))->toBeNull();
     AgentVersionChanged::dispatch($enrolled['agent']->id, $this->organization->id, $this->server->id, 'v0.17.0', 'v0.18.0', ['net.ebpf']);
@@ -84,6 +85,57 @@ it('turns eBPF on: audited, net.ebpf.configure to an agent with net.ebpf, settle
     $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => false])->assertOk();
     $gateway->fail($gateway->last('net.ebpf.configure', $this->server->id)['handle'], 'agent busy');
     expect(EbpfSetting::query()->findOrFail($this->server->id))->status->toBe('failed')->error->toBe('agent busy');
+});
+
+it('reaches an agent that was offline: re-sent when it comes back and by the periodic converge, never twice in flight', function () {
+    $gateway = FakeAgentGateway::install();
+    $enrolled = ebpf_agent($this);
+    // Turned off while the agent could not take the command.
+    EbpfSetting::query()->create(['server_id' => $this->server->id, 'organization_id' => $this->organization->id, 'enabled' => false, 'status' => 'pending',
+        'applied_hash' => hash('sha256', json_encode([true, false]))]);
+
+    AgentCameOnline::dispatch($enrolled['agent']->id, $this->organization->id, $this->server->id, null);
+    $command = $gateway->last('net.ebpf.configure', $this->server->id);
+    expect($command['payload'])->toBe(['enabled' => false]);
+    // In flight: neither the converge nor another reconnect sends it again.
+    app(ConfigureEbpf::class)->converge();
+    AgentCameOnline::dispatch($enrolled['agent']->id, $this->organization->id, $this->server->id, null);
+    expect($gateway->dispatched('net.ebpf.configure', $this->server->id))->toHaveCount(1);
+
+    // Failed: the converge retries; applied: nothing more.
+    $gateway->fail($command['handle'], 'agent restarting');
+    app(ConfigureEbpf::class)->converge();
+    expect($gateway->dispatched('net.ebpf.configure', $this->server->id))->toHaveCount(2);
+    $gateway->succeed($gateway->last('net.ebpf.configure', $this->server->id)['handle']);
+    app(ConfigureEbpf::class)->converge();
+    AgentCameOnline::dispatch($enrolled['agent']->id, $this->organization->id, $this->server->id, null);
+    expect($gateway->dispatched('net.ebpf.configure', $this->server->id))->toHaveCount(2);
+
+    // A command lost in flight for half an hour is sent again.
+    $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => true])->assertOk();
+    Carbon::setTestNow(now()->addMinutes(31));
+    app(ConfigureEbpf::class)->converge();
+    expect($gateway->dispatched('net.ebpf.configure', $this->server->id))->toHaveCount(4);
+});
+
+it('sends a re-enable only after the explicit action, never with a re-sent setting; full DNS names on request', function () {
+    $gateway = FakeAgentGateway::install();
+    $enrolled = ebpf_agent($this, ['net.ebpf'], ['supported' => true, 'enabled' => true, 'state' => 'over_budget', 'detail' => '6.67 % of CPU in one pass (budget 1 %)', 'programs' => []]);
+    $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => true])->assertOk()->assertJsonPath('servers.0.probe.state', 'over_budget');
+    expect($gateway->last('net.ebpf.configure', $this->server->id)['payload'])->toBe(['enabled' => true]);
+    $gateway->succeed($gateway->last('net.ebpf.configure', $this->server->id)['handle']);
+
+    $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => true, 'reenable' => true, 'full_dns_names' => true])->assertOk()
+        ->assertJsonPath('servers.0.full_dns_names', true);
+    $payload = $gateway->last('net.ebpf.configure', $this->server->id)['payload'];
+    expect($payload)->toBe(['enabled' => true, 'full_dns_names' => true, 'reenable' => true])
+        ->and(network_schema_errors('net.ebpf.configure', $payload))->toBe([]);
+    $gateway->succeed($gateway->last('net.ebpf.configure', $this->server->id)['handle']);
+    expect(EbpfSetting::query()->findOrFail($this->server->id)->reenable)->toBeFalse();
+
+    // The upgrade's forced re-send carries the setting, not the re-enable.
+    AgentVersionChanged::dispatch($enrolled['agent']->id, $this->organization->id, $this->server->id, 'v0.18.0', 'v0.18.1', ['net.ebpf']);
+    expect($gateway->last('net.ebpf.configure', $this->server->id)['payload'])->toBe(['enabled' => true, 'full_dns_names' => true]);
 });
 
 it('keeps the setting for an agent without net.ebpf and sends it nothing', function () {
@@ -97,9 +149,14 @@ it('keeps the setting for an agent without net.ebpf and sends it nothing', funct
     $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => 'maybe'])->assertStatus(422);
 });
 
-it('needs network.manage to change it; viewers see it; other organizations get 404', function () {
+it('is Admin only (network.ebpf) to change; viewers see it; other organizations get 404', function () {
     FakeAgentGateway::install();
     ebpf_agent($this, ['net.ebpf'], ['supported' => false, 'reason' => 'no kernel BTF (/sys/kernel/btf/vmlinux)', 'enabled' => false, 'state' => 'off', 'programs' => []]);
+
+    // Developers manage the network (network.manage) but not the probe.
+    actingAsMember(Role::Developer, $this->organization);
+    $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => true])->assertForbidden();
+    $this->getJson("/network/servers/{$this->server->id}/ebpf")->assertOk()->assertJsonPath('servers.0.can_manage', false);
 
     actingAsMember(Role::Viewer, $this->organization);
     $this->putJson("/network/servers/{$this->server->id}/ebpf", ['enabled' => true])->assertForbidden();
@@ -169,14 +226,15 @@ it('alerts on DNS failures and retransmit spikes once they hold, and clears them
             [['falak_server_id' => strtoupper($other->id), 'service_name' => 'x', 'falak_workload_name' => 'x'], 500]],
         'falak_net_dns_queries_total' => [[['falak_server_id' => $server, 'service_name' => 'shop', 'falak_workload_name' => 'shop-web-1'], 200],
             [['falak_server_id' => $server, 'service_name' => 'api', 'falak_workload_name' => 'api'], 1000]],
-        'falak_net_tcp_retransmits_total' => [[['falak_server_id' => $server, 'service_name' => 'falak-host', 'falak_workload_name' => 'host'], 1500],
-            [['falak_server_id' => $server, 'service_name' => 'shop', 'falak_workload_name' => 'shop-web-1'], 12]],
+        // The server's own processes: 7000 (over its 6000); shop: 2500 (under the 3000 of a site).
+        'falak_net_tcp_retransmits_total' => [[['falak_server_id' => $server, 'service_name' => 'falak-host', 'falak_workload_name' => 'host'], 7000],
+            [['falak_server_id' => $server, 'service_name' => 'shop', 'falak_workload_name' => 'shop-web-1'], 2500]],
     ];
     $live = true;
     ebpf_vm([], function (string $q) use (&$values, &$live) {
         expect($q)->toContain('[5m]');
         if (str_contains($q, 'falak_net_dns_failures_total')) {
-            expect($q)->toContain('falak_net_dns_error!="nxdomain"');
+            expect($q)->toContain('falak_net_dns_error!~"nxdomain|timeout"');
         }
         foreach ($values as $metric => $rows) {
             if ($live && str_contains($q, $metric)) {
@@ -203,4 +261,18 @@ it('alerts on DNS failures and retransmit spikes once they hold, and clears them
     dispatch_sync(new CheckEbpfAlerts);
     expect(Alert::query()->where('type', CheckEbpfAlerts::ALERT_DNS)->where('recovery', true)->count())->toBe(1)
         ->and(Alert::query()->where('type', CheckEbpfAlerts::ALERT_RETRANSMITS)->where('recovery', true)->count())->toBe(1);
+});
+
+it('shows the server workload\'s DNS names to network managers only', function () {
+    ebpf_agent($this, ['net.ebpf'], ['supported' => true, 'enabled' => true, 'state' => 'running', 'programs' => ['dns']]);
+    EbpfSetting::query()->create(['server_id' => $this->server->id, 'organization_id' => $this->organization->id, 'enabled' => true, 'status' => 'applied']);
+    ebpf_vm();
+    $names = fn () => collect(Http::recorded())->map(fn ($pair) => (string) $pair[0]['query'])->filter(fn ($q) => str_contains($q, 'falak_net_dns_name_queries_total'))->values();
+
+    $this->getJson("/network/servers/{$this->server->id}/ebpf")->assertOk()->assertJsonPath('names_scope', 'all');
+    expect($names()->last())->not->toContain('falak_workload_kind!="host"');
+
+    actingAsMember(Role::Viewer, $this->organization);
+    $this->getJson("/network/servers/{$this->server->id}/ebpf")->assertOk()->assertJsonPath('names_scope', 'workloads');
+    expect($names()->last())->toContain('falak_workload_kind!="host"');
 });

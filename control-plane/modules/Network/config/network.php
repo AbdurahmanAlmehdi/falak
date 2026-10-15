@@ -37,11 +37,15 @@ return [
 
     // eBPF (docs/plans/network/ebpf.md): alert thresholds over a 5-minute window, per server and workload.
     'ebpf' => [
-        // DNS failures other than NXDOMAIN (SERVFAIL, REFUSED, timeouts...), and their share of the queries.
+        // DNS answers with an error code other than NXDOMAIN (SERVFAIL, REFUSED, ...), and their share of the queries.
+        // Unanswered queries are charted, never alerted on (an answer the probe could not match looks the same).
         'dns_failures_min' => 60,
         'dns_failure_ratio' => 0.2,
-        // TCP segments retransmitted (~2 per second).
-        'retransmits_min' => 600,
+        // TCP segments retransmitted in 5 minutes by a site or database (~10 per second), by the server's own
+        // processes (~20 per second: the edge carries every site's traffic). The probe counts no segments sent, so
+        // there is no ratio.
+        'retransmits_min' => 3000,
+        'retransmits_min_host' => 6000,
         'alert_seconds' => 300,
     ],
 

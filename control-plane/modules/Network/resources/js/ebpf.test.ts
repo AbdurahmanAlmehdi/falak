@@ -5,6 +5,7 @@ const server = (overrides: Partial<EbpfServer>): EbpfServer => ({
     server_id: '01j',
     name: 'app-1',
     enabled: true,
+    full_dns_names: false,
     delivery: 'applied',
     error: null,
     agent_outdated: false,
@@ -44,7 +45,7 @@ describe('serverNotice', () => {
         ).toBe('warning');
         expect(
             serverNotice(server({ probe: { supported: true, enabled: true, state: 'over_budget', detail: '1.40 % of CPU', programs: [] } }))?.body,
-        ).toBe('1.40 % of CPU Turn it off and on again to retry.');
+        ).toBe('1.40 % of CPU It stays off (also across agent restarts and updates) until an admin re-enables it.');
         expect(serverNotice(server({ probe: null }))?.title).toBe('Starting');
     });
 });

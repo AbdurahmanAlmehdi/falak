@@ -52,7 +52,8 @@ final class CheckEbpfAlerts implements ShouldQueue
         $forSeconds = (int) config('network.ebpf.alert_seconds', 300);
         $dnsMin = (float) config('network.ebpf.dns_failures_min', 60);
         $dnsRatio = (float) config('network.ebpf.dns_failure_ratio', 0.2);
-        $retransmitsMin = (float) config('network.ebpf.retransmits_min', 600);
+        $retransmitsMin = (float) config('network.ebpf.retransmits_min', 3000);
+        $retransmitsMinHost = (float) config('network.ebpf.retransmits_min_host', 6000);
 
         foreach ($settings as $serverId => $setting) {
             $server = $setting->enabled ? $servers->find($serverId) : null;
@@ -70,7 +71,7 @@ final class CheckEbpfAlerts implements ShouldQueue
                     $conditions->observe($setting->organization_id, $key, $failures >= $dnsMin && ($queries <= 0 || $failures / $queries >= $dnsRatio), fn () => new AlertData(
                         $setting->organization_id, self::ALERT_DNS, Severity::Warning,
                         "{$server->name}: DNS lookups failing for {$label} ({$percent}% of queries)",
-                        sprintf('%d of %d DNS queries in 5 minutes failed (SERVFAIL, REFUSED or no answer). Check the resolver (/etc/resolv.conf, systemd-resolved) and the names in the Network tab.', (int) $failures, (int) $queries),
+                        sprintf('%d of %d DNS queries in 5 minutes failed (SERVFAIL, REFUSED or another error code). Check the resolver (/etc/resolv.conf, systemd-resolved) and the names in the Network tab.', (int) $failures, (int) $queries),
                         "/servers/{$serverId}/network", context: ['server_id' => $serverId, 'workload' => $workload, 'failures' => (int) $failures, 'queries' => (int) $queries],
                         action: 'Review DNS',
                     ), forSeconds: $forSeconds);
@@ -80,7 +81,8 @@ final class CheckEbpfAlerts implements ShouldQueue
                     $key = self::ALERT_RETRANSMITS.":{$serverId}:{$workload}";
                     $keys['tcp'][] = $key;
                     $retransmits = (int) $v['retransmits'];
-                    $conditions->observe($setting->organization_id, $key, $v['retransmits'] >= $retransmitsMin, fn () => new AlertData(
+                    $min = str_starts_with($workload, 'falak-host/') ? $retransmitsMinHost : $retransmitsMin;
+                    $conditions->observe($setting->organization_id, $key, $v['retransmits'] >= $min, fn () => new AlertData(
                         $setting->organization_id, self::ALERT_RETRANSMITS, Severity::Warning,
                         "{$server->name}: TCP retransmits spiking for {$label}",
                         "{$retransmits} TCP segments were retransmitted in 5 minutes: packet loss or congestion on the path to the peers shown in the Network tab.",
