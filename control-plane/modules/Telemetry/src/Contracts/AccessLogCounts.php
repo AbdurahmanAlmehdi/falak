@@ -19,4 +19,12 @@ interface AccessLogCounts
      * @throws TelemetryQueryFailed
      */
     public function forRelease(string $organizationId, string $siteId, string $releaseId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts;
+
+    /**
+     * Requests served by the site from $from up to $to, every release (the control plane's own health checks left out).
+     *
+     * @throws TelemetryUnavailable
+     * @throws TelemetryQueryFailed
+     */
+    public function forSite(string $organizationId, string $siteId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts;
 }

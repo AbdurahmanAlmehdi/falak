@@ -23,6 +23,19 @@ final class LokiAccessLogCounts implements AccessLogCounts
 
     public function forRelease(string $organizationId, string $siteId, string $releaseId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
     {
+        return $this->counts($organizationId, $siteId, ['release_id' => $releaseId], $from, $to);
+    }
+
+    public function forSite(string $organizationId, string $siteId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
+    {
+        return $this->counts($organizationId, $siteId, [], $from, $to);
+    }
+
+    /**
+     * @param  array<string, string>  $filters
+     */
+    private function counts(string $organizationId, string $siteId, array $filters, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
+    {
         $site = $this->sites->find(strtolower($siteId));
 
         if ($site === null || $site->organizationId !== strtolower($organizationId)) {
@@ -45,10 +58,7 @@ final class LokiAccessLogCounts implements AccessLogCounts
             return (int) round((float) ($body['data']['result'][0]['value'][1] ?? 0));
         };
 
-        return new RequestCounts(
-            $count(['release_id' => $releaseId]),
-            $count(['release_id' => $releaseId, 'status' => '5xx']),
-        );
+        return new RequestCounts($count($filters), $count([...$filters, 'status' => '5xx']));
     }
 
     private static function client(): HttpClient

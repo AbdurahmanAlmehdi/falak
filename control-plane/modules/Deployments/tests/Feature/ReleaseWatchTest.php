@@ -58,6 +58,11 @@ final class FakeAccessLogCounts implements AccessLogCounts
 
         return $this->byRelease[$releaseId] ?? new RequestCounts(0, 0);
     }
+
+    public function forSite(string $organizationId, string $siteId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
+    {
+        return new RequestCounts(0, 0);
+    }
 }
 
 function watch_settings(DeployWorld $world, array $attributes = []): void

@@ -8,6 +8,8 @@ use Falak\Insights\Contracts\SiteNameResolver;
 use Falak\Insights\Domain\Models\Issue;
 use Falak\Insights\Domain\Models\IssueComment;
 use Falak\Projects\Application\Actions\CreateProject;
+use Falak\Telemetry\Contracts\AccessLogCounts;
+use Falak\Telemetry\Contracts\Data\RequestCounts;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -86,6 +88,28 @@ it('returns the site summary for the service panel', function () {
         ->assertJsonPath('links.issues', '/observability/issues?site='.INSIGHTS_SITE);
 
     $this->getJson('/insights/sites/'.INSIGHTS_SITE.'/summary?range=5y')->assertUnprocessable();
+});
+
+it("falls back to the edge's request counts in the site summary when the app reports none", function () {
+    config(['telemetry.loki.url' => 'http://loki:3100']);
+    app()->instance(AccessLogCounts::class, new class implements AccessLogCounts
+    {
+        public function forRelease(string $organizationId, string $siteId, string $releaseId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
+        {
+            return new RequestCounts(0, 0);
+        }
+
+        public function forSite(string $organizationId, string $siteId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
+        {
+            return new RequestCounts(400, 8);
+        }
+    });
+
+    $this->getJson('/insights/sites/'.INSIGHTS_OTHER_SITE.'/summary')->assertOk()
+        ->assertJsonPath('overview.totals.requests', 0)
+        ->assertJsonPath('edge', ['requests' => 400, 'errors' => 8]);
+    // The app's own numbers win.
+    $this->getJson('/insights/sites/'.INSIGHTS_SITE.'/summary')->assertOk()->assertJsonPath('edge', null);
 });
 
 it('redirects the legacy insights pages', function () {

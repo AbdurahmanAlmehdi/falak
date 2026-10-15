@@ -26,6 +26,8 @@ interface SiteSummary {
     range: string;
     ranges: string[];
     overview: OverviewData;
+    /** Requests and 5xx answers from the edge's access log when the app reports none (no APM package). */
+    edge: { requests: number; errors: number } | null;
     open_issues: number;
     heartbeats: HeartbeatMonitor[];
     links: { overview: string; issues: string; heartbeats: string; thresholds: string; traces: string; slowTraces: string };
@@ -104,9 +106,13 @@ export default function SiteObservability({ siteId }: SiteObservabilityProps) {
     }
 
     const { totals } = data.overview;
-    const errorRate = totals.requests > 0 ? totals.request_errors / totals.requests : null;
+    // No requests from the app (no APM package): the edge's numbers, labelled, as the Metrics tab does.
+    const edge = totals.requests === 0 ? data.edge : null;
+    const requests = edge?.requests ?? totals.requests;
+    const failed = edge?.errors ?? totals.request_errors;
+    const errorRate = requests > 0 ? failed / requests : null;
     const exceptions = totals.exceptions_handled + totals.exceptions_unhandled;
-    const quiet = totals.requests + totals.jobs + exceptions === 0 && data.open_issues === 0 && data.heartbeats.length === 0;
+    const quiet = requests + totals.jobs + exceptions === 0 && data.open_issues === 0 && data.heartbeats.length === 0;
 
     return (
         <div className="grid min-w-0 gap-4">
@@ -134,12 +140,16 @@ export default function SiteObservability({ siteId }: SiteObservabilityProps) {
             ) : (
                 <>
                     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        <Stat label="Requests" value={formatCount(totals.requests)} hint={`p95 ${formatMs(totals.request_p95_ms)}`} />
+                        <Stat
+                            label="Requests"
+                            value={formatCount(requests)}
+                            hint={edge ? 'from the edge' : `p95 ${formatMs(totals.request_p95_ms)}`}
+                        />
                         <Stat
                             label="Error rate"
                             value={formatPercent(errorRate)}
                             tone={errorRate !== null && errorRate >= 0.01 ? 'danger' : undefined}
-                            hint={`${formatCount(totals.request_errors)} failed`}
+                            hint={`${formatCount(failed)} ${edge ? '5xx from the edge' : 'failed'}`}
                         />
                         <Stat
                             label="Exceptions"

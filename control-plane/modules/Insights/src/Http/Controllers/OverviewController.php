@@ -13,6 +13,9 @@ use Falak\Kernel\Http\Controller;
 use Falak\Projects\Contracts\Data\ProjectData;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
+use Falak\Telemetry\Contracts\AccessLogCounts;
+use Falak\Telemetry\Contracts\Exceptions\TelemetryQueryFailed;
+use Falak\Telemetry\Contracts\Exceptions\TelemetryUnavailable;
 use Falak\Telemetry\Contracts\TelemetryLinks;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -95,7 +98,7 @@ final class OverviewController extends Controller
      * GET /insights/sites/{siteId}/summary — the service panel's Observability tab (issues, slow routes/jobs/queries,
      * heartbeats) as JSON.
      */
-    public function summary(Request $request, string $siteId, SiteOverview $overview, TelemetryLinks $links): JsonResponse
+    public function summary(Request $request, string $siteId, SiteOverview $overview, TelemetryLinks $links, AccessLogCounts $edge): JsonResponse
     {
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, 'insights.view');
@@ -112,6 +115,7 @@ final class OverviewController extends Controller
             'range' => $range,
             'ranges' => array_keys(SiteOverview::RANGES),
             'overview' => $data,
+            'edge' => $this->edgeRequests($edge, $organizationId, $siteId, $data['totals']['requests'] ?? 0, $from, $to),
             'open_issues' => DB::table('insights_issues')->where('organization_id', $organizationId)->where('site_id', $siteId)->where('status', IssueStatus::Open->value)->count(),
             'heartbeats' => HeartbeatMonitor::query()->where('organization_id', $organizationId)->where('site_id', $siteId)->orderBy('job')->get()
                 ->map(fn (HeartbeatMonitor $m) => HeartbeatController::present($m))->values(),
@@ -124,6 +128,27 @@ final class OverviewController extends Controller
                 'slowTraces' => $links->traceSearch(['site_id' => $siteId, 'min_duration_ms' => 1000], $from, $to),
             ],
         ]);
+    }
+
+    /**
+     * Requests and 5xx answers from the edge's access log when the app reports none (no APM package): the Metrics tab's
+     * fallback ("from the edge"). null when the app reports requests, or Loki is off or failing.
+     *
+     * @return array{requests: int, errors: int}|null
+     */
+    private function edgeRequests(AccessLogCounts $edge, string $organizationId, string $siteId, int $apmRequests, CarbonImmutable $from, CarbonImmutable $to): ?array
+    {
+        if ($apmRequests > 0 || (string) config('telemetry.loki.url') === '') {
+            return null;
+        }
+
+        try {
+            $counts = $edge->forSite($organizationId, $siteId, $from, $to);
+        } catch (TelemetryUnavailable|TelemetryQueryFailed) {
+            return null;
+        }
+
+        return $counts->total > 0 ? ['requests' => $counts->total, 'errors' => $counts->errors] : null;
     }
 
     /**
