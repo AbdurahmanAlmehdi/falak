@@ -156,6 +156,15 @@ export default function Firewall({ server, rules, networkRules, state, sshPort, 
     );
 
     const deletingSsh = deleting?.port === String(sshPort) && deleting.action === 'allow';
+    // Falak's always-allow SSH accept runs before the rules and takes their hits: shown on the rule that allows the
+    // same traffic (SSH's port from anywhere), or in the header when there is none.
+    const sshRuleId = rules.find((rule) => rule.action === 'allow' && rule.port === String(sshPort) && rule.protocol !== 'udp' && !rule.source)?.id;
+    const hits = (row: Row) => {
+        const own = counters?.[row.rule.id];
+        const ssh = row.kind === 'rule' && row.rule.id === sshRuleId ? counters?.ssh : undefined;
+
+        return own || ssh ? { packets: (own?.packets ?? 0) + (ssh?.packets ?? 0), bytes: (own?.bytes ?? 0) + (ssh?.bytes ?? 0), ssh: !!ssh } : null;
+    };
 
     return (
         <ServerLayout
@@ -189,7 +198,7 @@ export default function Firewall({ server, rules, networkRules, state, sshPort, 
                         )}
                         {state && !state.in_sync && state.status === 'applied' ? ' · changes pending' : ''} · deny rules run before allow rules · ICMP
                         is always allowed
-                        {counters?.ssh && ` · SSH ${formatCount(counters.ssh.packets)} pkts`}
+                        {counters?.ssh && !sshRuleId && ` · SSH (always allowed) ${formatCount(counters.ssh.packets)} pkts`}
                         {countersAt && (
                             <>
                                 {' '}
@@ -279,10 +288,13 @@ export default function Firewall({ server, rules, networkRules, state, sshPort, 
                                   header: 'Hits',
                                   hideOnMobile: true,
                                   cell: (row: Row) => {
-                                      const c = counters[row.rule.id];
+                                      const c = hits(row);
 
                                       return c ? (
-                                          <span className="tabular text-fg-muted text-xs" title={`${c.packets} packets, ${c.bytes} bytes`}>
+                                          <span
+                                              className="tabular text-fg-muted text-xs"
+                                              title={`${c.packets} packets, ${c.bytes} bytes${c.ssh ? ", including Falak's always-allow SSH rule, which runs first" : ''}`}
+                                          >
                                               {formatCount(c.packets)} pkts · {formatCount(c.bytes, 'B')}
                                           </span>
                                       ) : (
