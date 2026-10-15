@@ -298,7 +298,8 @@ func TestUploadCaptureChunksAndRetries(t *testing.T) {
 func fakeTcpdump(t *testing.T, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "tcpdump")
-	write(t, p, "#!/bin/sh\necho \"$@\" > \"$FAKE_ARGS\"\n"+body)
+	// printf, not echo: dash's echo takes the leading -n as its own option.
+	write(t, p, "#!/bin/sh\nprintf '%s ' \"$@\" > \"$FAKE_ARGS\"\n"+body)
 	if err := os.Chmod(p, 0o755); err != nil {
 		t.Fatal(err)
 	}
