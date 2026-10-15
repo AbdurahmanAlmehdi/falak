@@ -10,10 +10,11 @@ interface BlockableAddresses
 {
     /**
      * A short label per address that cannot be blocked from a row ("Control plane", "Your server", "Cloudflare",
-     * "Private range", …); blockable addresses are left out.
+     * "Private range", …); blockable addresses are left out. A member's recent address reads "Team member" only with
+     * `$namesMembers` (the viewer has network.manage), else "Protected".
      *
      * @param  list<string>  $addresses
      * @return array<string, string>
      */
-    public function unblockable(array $addresses, string $organizationId, ?string $requesterIp = null): array;
+    public function unblockable(array $addresses, string $organizationId, ?string $requesterIp = null, bool $namesMembers = false): array;
 }

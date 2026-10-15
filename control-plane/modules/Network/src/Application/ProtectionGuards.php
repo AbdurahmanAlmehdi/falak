@@ -34,6 +34,9 @@ final class ProtectionGuards implements BlockableAddresses
     /** @var array<string, list<array{0: Cidr, 1: string}>> per organization, for one request / job */
     private array $memo = [];
 
+    /** @var array<string, list<Cidr>> the constant ranges above (and Cloudflare's), parsed once per process */
+    private static array $parsed = [];
+
     public function __construct(
         private readonly ServerDirectory $servers,
         private readonly OrganizationDirectory $organizations,
@@ -50,8 +53,8 @@ final class ProtectionGuards implements BlockableAddresses
             return "{$cidr} is too broad to block (at least /{$min}).";
         }
 
-        foreach (self::RESERVED as $reserved) {
-            if ($cidr->overlaps(Cidr::parse($reserved))) {
+        foreach (self::parsed('reserved', self::RESERVED) as $reserved) {
+            if ($cidr->overlaps($reserved)) {
                 return "{$cidr} overlaps the reserved range {$reserved}.";
             }
         }
@@ -60,7 +63,18 @@ final class ProtectionGuards implements BlockableAddresses
             return "{$cidr} contains your own address ({$own}): you would lock yourself out.";
         }
 
-        return $this->protectedBy($cidr, $organizationId);
+        if (($reason = $this->protectedBy($cidr, $organizationId)) !== null) {
+            return $reason;
+        }
+
+        // New blocks only: an existing block over Cloudflare is not suspended (protectedBy() decides that).
+        foreach (self::parsed('cloudflare', CloudflareRanges::RANGES) as $range) {
+            if ($cidr->overlaps($range)) {
+                return "{$cidr} overlaps Cloudflare's proxy range {$range}: every site proxied through Cloudflare would stop loading.";
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -81,23 +95,22 @@ final class ProtectionGuards implements BlockableAddresses
             }
         }
 
-        foreach (CloudflareRanges::RANGES as $range) {
-            if ($cidr->overlaps(Cidr::parse($range))) {
-                return "{$cidr} overlaps Cloudflare's proxy range {$range}: every site proxied through Cloudflare would stop loading.";
-            }
-        }
-
         return null;
     }
 
-    public function unblockable(array $addresses, string $organizationId, ?string $requesterIp = null): array
+    public function unblockable(array $addresses, string $organizationId, ?string $requesterIp = null, bool $namesMembers = false): array
     {
+        if ($addresses === []) {
+            return [];
+        }
+
         $out = [];
         $own = Cidr::fromAddress($requesterIp);
-        $controlPlane = $addresses === [] ? [] : $this->controlPlane();
+        $controlPlane = $this->controlPlane();
+        $organization = $this->organization($organizationId);
 
         foreach (array_unique($addresses) as $address) {
-            if (($cidr = Cidr::fromAddress($address)) !== null && ($label = $this->label($cidr, $organizationId, $own, $controlPlane)) !== null) {
+            if (($cidr = Cidr::fromAddress($address)) !== null && ($label = $this->label($cidr, $organization, $own, $controlPlane, $namesMembers)) !== null) {
                 $out[$address] = $label;
             }
         }
@@ -108,28 +121,33 @@ final class ProtectionGuards implements BlockableAddresses
     /**
      * The same checks as refusal() and confirmation(), as a row label.
      *
+     * @param  list<array{0: Cidr, 1: string}>  $organization
      * @param  list<Cidr>  $controlPlane
      */
-    private function label(Cidr $address, string $organizationId, ?Cidr $own, array $controlPlane): ?string
+    private function label(Cidr $address, array $organization, ?Cidr $own, array $controlPlane, bool $namesMembers): ?string
     {
-        $in = fn (array $ranges) => array_any($ranges, fn (string $range) => $address->overlaps(Cidr::parse($range)));
+        $in = fn (array $ranges) => array_any($ranges, fn (Cidr $range) => $address->overlaps($range));
 
         return match (true) {
-            $in(self::RESERVED) => 'Reserved',
+            $in(self::parsed('reserved', self::RESERVED)) => 'Reserved',
             $own !== null && $address->overlaps($own) => 'Your address',
-            array_any($controlPlane, fn (Cidr $cp) => $address->overlaps($cp)) => 'Control plane',
-            default => $this->organizationLabel($address, $organizationId)
-                ?? ($in(CloudflareRanges::RANGES) ? 'Cloudflare' : ($in(self::PRIVATE) ? 'Private range' : null)),
+            $in($controlPlane) => 'Control plane',
+            default => $this->organizationLabel($address, $organization, $namesMembers)
+                ?? ($in(self::parsed('cloudflare', CloudflareRanges::RANGES)) ? 'Cloudflare' : ($in(self::parsed('private', self::PRIVATE)) ? 'Private range' : null)),
         };
     }
 
-    private function organizationLabel(Cidr $address, string $organizationId): ?string
+    /**
+     * @param  list<array{0: Cidr, 1: string}>  $organization
+     */
+    private function organizationLabel(Cidr $address, array $organization, bool $namesMembers): ?string
     {
-        foreach ($this->organization($organizationId) as [$protected, $what]) {
+        foreach ($organization as [$protected, $what]) {
             if ($address->overlaps($protected)) {
                 return match (true) {
                     str_starts_with($what, 'the server ') => 'Your server',
-                    $what === self::MEMBER => 'Team member',
+                    // Who used the panel from where is for network.manage only.
+                    $what === self::MEMBER => $namesMembers ? 'Team member' : 'Protected',
                     default => 'Private network',
                 };
             }
@@ -147,8 +165,8 @@ final class ProtectionGuards implements BlockableAddresses
             return "{$cidr} is a peer your server connects to (an API, a database, a mirror): blocking it also cuts those connections.";
         }
 
-        foreach (self::PRIVATE as $private) {
-            if ($cidr->overlaps(Cidr::parse($private))) {
+        foreach (self::parsed('private', self::PRIVATE) as $private) {
+            if ($cidr->overlaps($private)) {
                 return "{$cidr} is in the private range {$private} (Docker networks, load balancers and private peers use it).";
             }
         }
@@ -188,6 +206,15 @@ final class ProtectionGuards implements BlockableAddresses
         return count($core) > $max
             ? 'The organization has '.count($core)." protected addresses (control plane, servers, private networks); the agent accepts {$max}. Protection is not applied."
             : null;
+    }
+
+    /**
+     * @param  list<string>  $ranges
+     * @return list<Cidr>
+     */
+    private static function parsed(string $key, array $ranges): array
+    {
+        return self::$parsed[$key] ??= array_map(fn (string $range) => Cidr::parse($range), $ranges);
     }
 
     public static function max(): int

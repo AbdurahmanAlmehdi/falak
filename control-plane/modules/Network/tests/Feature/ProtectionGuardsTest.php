@@ -277,6 +277,24 @@ it("refuses Cloudflare's proxy ranges", function () {
     guards_block(['address' => '2606:4700::/48'])->assertUnprocessable()->assertJsonValidationErrors(['address' => "Cloudflare's proxy range"]);
 });
 
+it('keeps an existing block over Cloudflare active: only new ones are refused', function () {
+    $block = IpBlock::query()->forceCreate(['id' => (string) Str::ulid(), 'organization_id' => $this->organization->id, 'server_id' => $this->server->id,
+        'cidr' => '172.70.1.2', 'family' => 'ipv4', 'source' => 'manual']);
+
+    app(ApplyProtection::class)->suspendProtected($this->organization->id);
+
+    expect($block->fresh()->suspended_at)->toBeNull();
+});
+
+it('names a member address Team member for network.manage only', function () {
+    [$teammate] = memberOf($this->organization, Role::Viewer);
+    DB::table('sessions')->insert(['id' => Str::random(40), 'user_id' => $teammate->id, 'ip_address' => '203.0.113.44', 'user_agent' => 'x', 'payload' => '', 'last_activity' => now()->getTimestamp()]);
+    $guards = app(ProtectionGuards::class);
+
+    expect($guards->unblockable(['203.0.113.44'], $this->organization->id))->toBe(['203.0.113.44' => 'Protected'])
+        ->and($guards->unblockable(['203.0.113.44'], $this->organization->id, null, true))->toBe(['203.0.113.44' => 'Team member']);
+});
+
 it('labels the addresses a row must not offer Block on', function () {
     $labels = app(ProtectionGuards::class)->unblockable(
         ['198.51.100.200', '192.0.2.10', '162.158.4.5', '10.0.0.3', '127.0.0.1', '203.0.113.250', '203.0.113.9', 'not-an-ip'],

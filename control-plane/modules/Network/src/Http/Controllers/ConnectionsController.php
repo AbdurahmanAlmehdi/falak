@@ -225,7 +225,9 @@ final class ConnectionsController extends Controller
 
         $unnamed = array_values(array_unique(array_filter(array_map(fn ($r) => $r['peer'] === null ? $r['address'] : null, $rows))));
         $rdns = $unnamed === [] ? [] : DB::table('network_peer_names')->whereIn('address', $unnamed)->whereNotNull('name')->pluck('name', 'address')->all();
-        $unblockable = $this->blockable->unblockable(array_values(array_filter(array_column($rows, 'address'))), $this->organization->requireId(), request()->ip());
+        $organizationId = $this->organization->requireId();
+        $unblockable = $this->blockable->unblockable(array_values(array_filter(array_column($rows, 'address'))), $organizationId, request()->ip(),
+            $this->access->can(request()->user(), $organizationId, 'network.manage'));
         usort($rows, fn ($a, $b) => [isset($a['other']), -$a['connections']] <=> [isset($b['other']), -$b['connections']]);
 
         return array_map(fn ($r) => [...$r, 'rdns' => $r['address'] !== null ? ($rdns[$r['address']] ?? null) : null,

@@ -127,7 +127,8 @@ final class HttpTrafficController extends Controller
 
         if ($table === 'clients' || $table === 'threats') {
             // No "Block" on Cloudflare's edges, the control plane, the organization's servers, …: a label instead.
-            $unblockable = $blockable->unblockable(array_column($result['rows'], 'ip'), $site->organizationId, $request->ip());
+            $unblockable = $blockable->unblockable(array_column($result['rows'], 'ip'), $site->organizationId, $request->ip(),
+                $this->access->can($request->user(), $site->organizationId, 'network.manage'));
             $result['rows'] = array_map(fn (array $row) => [...$row, 'unblockable' => $unblockable[$row['ip']] ?? null], $result['rows']);
         }
 
