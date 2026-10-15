@@ -58,6 +58,8 @@ export default function Session({ session: initial, isOwner, can }: Props) {
     const canType = can.type && live;
     const canTypeRef = useRef(canType);
     canTypeRef.current = canType;
+    const statusRef = useRef(session.status);
+    statusRef.current = session.status;
 
     const label = targetLabel(session);
     const title = session.target_type === 'server' ? label : `Console · ${label}`;
@@ -85,18 +87,26 @@ export default function Session({ session: initial, isOwner, can }: Props) {
     const buffered = useRef<OutputPart[]>([]);
     const cursor = useRef(0);
 
-    const writePart = useCallback((part: OutputPart) => {
-        if (part.seq < lastSeq.current || (part.seq === lastSeq.current && part.part <= lastPart.current)) {
-            return;
-        }
+    // Output (or the relay's `ready`) means the shell is open: the `open` broadcast may have gone out before this page
+    // joined the channel, and the PTY is synced to the fitted size only once the page sees `open`.
+    const markOpen = useCallback(() => setSession((current) => (current.status === 'opening' ? { ...current, status: 'open' } : current)), []);
 
-        lastSeq.current = part.seq;
-        lastPart.current = part.parts - 1 === part.part ? Number.MAX_SAFE_INTEGER : part.part;
+    const writePart = useCallback(
+        (part: OutputPart) => {
+            if (part.seq < lastSeq.current || (part.seq === lastSeq.current && part.part <= lastPart.current)) {
+                return;
+            }
 
-        if (!relayLive.current) {
-            terminal.current?.write(base64ToBytes(part.data));
-        }
-    }, []);
+            lastSeq.current = part.seq;
+            lastPart.current = part.parts - 1 === part.part ? Number.MAX_SAFE_INTEGER : part.part;
+            markOpen();
+
+            if (!relayLive.current) {
+                terminal.current?.write(base64ToBytes(part.data));
+            }
+        },
+        [markOpen],
+    );
 
     const catchUp = useCallback(async () => {
         const generation = catchUpGeneration.current;
@@ -114,6 +124,7 @@ export default function Session({ session: initial, isOwner, can }: Props) {
                 body.frames.forEach((frame) => writePart({ seq: frame.seq ?? lastSeq.current + 1, part: 0, parts: 1, data: frame.data }));
                 cursor.current = body.last_id;
 
+                if (body.status === 'open') markOpen();
                 if (!body.more && !isLive(body.status)) {
                     setSession((current) => (isLive(current.status) ? { ...current, status: body.status } : current));
                 }
@@ -124,7 +135,7 @@ export default function Session({ session: initial, isOwner, can }: Props) {
             caughtUp.current = true;
             buffered.current.splice(0).forEach(writePart);
         }
-    }, [initial.id, writePart]);
+    }, [initial.id, writePart, markOpen]);
 
     // ---- terminal setup -----------------------------------------------------------------------------
     const sendResize = useRef<(cols: number, rows: number) => void>(() => undefined);
@@ -246,9 +257,13 @@ export default function Session({ session: initial, isOwner, can }: Props) {
                 return ((await response.json()) as { url: string }).url;
             },
             reset: () => terminal.current?.reset(),
-            write: (bytes) => terminal.current?.write(bytes),
+            write: (bytes) => {
+                markOpen();
+                terminal.current?.write(bytes);
+            },
             live: (live) => {
                 relayLive.current = live;
+                if (live) markOpen();
             },
             state: setTransport,
             notice: setRelayNotice,
@@ -271,7 +286,7 @@ export default function Session({ session: initial, isOwner, can }: Props) {
                 void catchUp();
             },
         });
-    }, [initial.id, catchUp]);
+    }, [initial.id, catchUp, markOpen]);
 
     /** Send on the relay socket when it's open (false: use the POST path). */
     const relaySend = (data: string | Uint8Array): boolean => {
@@ -364,7 +379,8 @@ export default function Session({ session: initial, isOwner, can }: Props) {
 
     const resizeTimer = useRef<number | undefined>(undefined);
     sendResize.current = (cols: number, rows: number) => {
-        if (!canTypeRef.current) return;
+        // While opening there is no PTY to resize yet (the recorded size would then match and skip the sync at open).
+        if (!canTypeRef.current || statusRef.current === 'opening') return;
 
         // The relay resizes the PTY at once; the POST below still records the size (recording, other viewers).
         relaySend(JSON.stringify({ t: 'resize', cols, rows }));
