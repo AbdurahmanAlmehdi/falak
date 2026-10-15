@@ -104,7 +104,7 @@ it('serves drill-down tables with countries and networks', function () {
     // Rarely called routes are left out of the slowest.
     $top('slow')->assertJsonCount(1, 'rows')->assertJsonPath('rows.0', ['route' => '/orders/:id', 'p95_ms' => 1500, 'requests' => 30]);
     $top('clients')->assertJsonPath('rows.0.ip', '192.0.2.1')->assertJsonPath('rows.0.country', null)
-        ->assertJsonPath('rows.1', ['ip' => '203.0.113.7', 'requests' => 90, 'country' => 'DE', 'country_name' => 'Germany', 'asn' => 64500, 'as_org' => 'Example Net'])
+        ->assertJsonPath('rows.1', ['ip' => '203.0.113.7', 'requests' => 90, 'country' => 'DE', 'country_name' => 'Germany', 'asn' => 64500, 'as_org' => 'Example Net', 'unblockable' => null])
         ->assertJsonPath('geo.attribution', 'IP geolocation by DB-IP');
     $top('countries')->assertJsonPath('rows.0', ['country' => 'DE', 'country_name' => 'Germany', 'requests' => 90, 'clients' => 1])
         ->assertJsonPath('networks.0.as_org', 'Example Net')
