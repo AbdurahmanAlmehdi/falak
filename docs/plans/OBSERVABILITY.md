@@ -685,6 +685,7 @@ the shared rules), gets its own independent review, and is checked live on cloud
 
 - eBPF probe in the agent: per-process latency, DNS lookups, retransmits (needs a recent kernel; optional feature).
 - On-demand capture: a 30 s `tcpdump` on one container or port, downloaded as pcap; its own permission, audited.
+- Packet capture plan (stream G): [network/capture.md](network/capture.md).
 
 ## Agent overhead budget
 
