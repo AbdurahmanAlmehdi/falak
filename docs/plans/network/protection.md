@@ -150,13 +150,13 @@ block, unblock, auto-ban, suspension and settings change is audited (`network.ip
 
 - **Network → Blocked IPs** (`/network/blocked`): active blocks (address, reach, reason, source, expires, hits, last
   hit, by whom) with Unblock; "Block an address"; per server: agent support, apply status and the auto-ban settings.
-- **`network.ip-actions` slot** (`registerIpActions` / `ipActionsFor` in `@/lib/registry`): streams A and B render the
-  registered actions on rows with a remote IP; this stream registers "Block" (`network.block`, permission
-  `network.protect`). The component takes `{ip, serverId?, siteId?}` plus whatever row context the stream passes — B's
-  `source` ("http.clients"), A's `context` ("talks_to" | "clients") and nullable `serverId`, or an explicit
-  `direction` — so either slot definition renders it. A peer the server connects to shows a warning and is sent with
-  `outbound: true` (the server asks for confirmation). With `siteId`, "the site's servers" blocks on each of the
-  site's servers (one block per server).
+- **`network.ip-actions` slot** (`registerIpActions` / `ipActionsFor` in `@/lib/registry`, defined by streams A and
+  B): the Network tab's connection rows and the HTTP tab's client rows render the registered actions with
+  `{ip, serverId: string | null, siteId?, context: "talks_to" | "clients" | "http_clients" | "http_threats"}`; this
+  stream registers "Block" (`network.block`, permission `network.protect`). Its component only adds optional props
+  (`source`, `direction`), so it fits the slot as defined. A `talks_to` row (a peer the server connects to) shows a
+  warning and is sent with `outbound: true` (the server asks for confirmation). With `serverId` the block can be for
+  that server; with `siteId`, for the site's servers (one block per server); always for every server.
 - The auto-ban dialog says that turning it off keeps existing bans until they expire (unblock them to lift them now).
 - **Firewall tab**: packets / bytes next to each rule, plus the block-set drops.
 
@@ -200,8 +200,8 @@ recreates one it released. Rule ids are bounded to the schema (`[A-Za-z0-9_-]{1,
 
 Control plane:
 
-- **Issue** (Insights kind `security`, shared with streams A and B; contract `HostSecurityIssues`): one per server,
-  fingerprint `sha256(host|<server>|ssh.bruteforce)`, an occurrence per report where the server saw ≥ `ssh_issue_min_failures` (20)
+- **Issue** (Insights kind `security`, written through stream A's `SecurityIssues` contract, source `protection.ssh_bruteforce`, key `sshd`): one per server,
+  fingerprint `sha256(<server>|protection.ssh_bruteforce|sshd)`, an occurrence per report where the server saw ≥ `ssh_issue_min_failures` (20)
   failures, title "SSH brute force on <server>", sample = the top sources. A resolved Issue regresses when it starts
   again.
 - **Auto-ban** (per server, off by default; defaults 10 failures in 10 minutes → 1 hour): the agent decides (it sees
@@ -251,9 +251,17 @@ has rate-limited sites, `edge.caddy.apply` carries `caddy_build: {url, sha256}` 
 such a config the agent checks `list-modules` of the binary `falak-edge.service` runs: with the module, nothing
 happens. Without it, it downloads the build over HTTPS (checksum verified) to
 `/usr/local/lib/falak/caddy/caddy-<sha>`, refuses it unless it has `http.handlers.rate_limit` **and every module the
-current Caddy has** (a newer apt Caddy with modules the build lacks keeps running, with an error), then points
-`falak-edge.service` at it and restarts the edge once (a second of downtime for that server's sites). Later applies
-find the module and do nothing. `deploy/edge/Dockerfile` (the panel's own edge) does not need it: it serves no sites.
+current Caddy has** (a newer apt Caddy with modules the build lacks keeps running, with an error), checks that it
+accepts the config the edge loads at start (`validate` of the persisted bootstrap config), then points
+`falak-edge.service` at it and restarts the edge once (a second of downtime for that server's sites). If the edge does
+not come back (the restart fails or the admin API does not answer within 30 s), the unit is put back on the Caddy it
+ran and restarted again, and the apply fails with the reason: rate limits are not applied, everything else keeps
+serving. Later applies find the module and do nothing. `/usr/bin/caddy` itself is never touched (apt keeps updating
+it; the build is a separate file). `deploy/edge/Dockerfile` (the panel's own edge) does not need it: it serves no sites.
+
+**Trust.** The build is not signed: its integrity rests on the SHA-256 the control plane computes from the file it
+ships and sends inside the `edge.caddy.apply` command (delivered over the agent's mTLS channel); the agent downloads
+only over HTTPS and refuses a file whose digest differs. The download URL is public (like the agent installer).
 
 **FrankenPHP edges are refused**: the panel refuses rules for sites on a server whose PHP runtime is FrankenPHP (its
 binary is FrankenPHP's own build) and the agent refuses them too; use a Cloudflare rate limit there. Servers whose agent

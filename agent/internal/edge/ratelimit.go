@@ -178,10 +178,29 @@ func (m *Manager) ensureRateLimit(ctx context.Context, p Payload, s commands.Str
 		sort.Strings(missing)
 		return fmt.Errorf("Falak's Caddy build lacks modules the edge needs (%s): keeping the current Caddy", strings.Join(missing, ", "))
 	}
+	// The config the edge loads at start (the last applied one) must be valid for the build before the swap.
+	if m.o.FS.Exists(m.bootstrapPath()) {
+		if _, err := runner.Check(ctx, m.o.Runner, runner.Cmd{Name: m.o.FS.P(dest), Args: []string{"validate", "--config", m.o.FS.P(m.bootstrapPath())}}); err != nil {
+			return fmt.Errorf("Falak's Caddy build rejects the edge's current config: keeping the current Caddy: %w", err)
+		}
+	}
+	previous := u
 	u.Binary = m.o.FS.P(dest)
 	fmt.Fprintf(s.Stdout(), "falak-edge now runs %s\n", u.Binary)
-	if _, err := runtime.EnsureEdgeUnit(ctx, m.o.Runner, m.o.FS, s, u, true); err != nil {
-		return err
+	_, err = runtime.EnsureEdgeUnit(ctx, m.o.Runner, m.o.FS, s, u, true)
+	if err == nil {
+		err = m.waitAdmin(ctx)
 	}
-	return m.waitAdmin(ctx)
+	if err != nil {
+		// Roll back: the edge goes back to the Caddy it ran, restarted, and the rate limits are not applied.
+		fmt.Fprintf(s.Stderr(), "falak-edge did not start with Falak's Caddy build (%v): rolling back to %s\n", err, previous.Binary)
+		if _, rerr := runtime.EnsureEdgeUnit(ctx, m.o.Runner, m.o.FS, s, previous, true); rerr != nil {
+			return fmt.Errorf("Falak's Caddy build failed (%v) and rolling back failed: %w", err, rerr)
+		}
+		if werr := m.waitAdmin(ctx); werr != nil {
+			return fmt.Errorf("Falak's Caddy build failed (%v); rolled back but the edge is not answering: %w", err, werr)
+		}
+		return fmt.Errorf("Falak's Caddy build did not start, rolled back to %s: %w", previous.Binary, err)
+	}
+	return nil
 }

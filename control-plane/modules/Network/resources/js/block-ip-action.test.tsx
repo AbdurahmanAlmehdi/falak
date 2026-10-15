@@ -53,7 +53,7 @@ describe('network.ip-actions: Block IP', () => {
             .mockReturnValueOnce(reply(201, { blocks: [{ id: 'b1', cidr: '10.1.2.3', server_id: 's1' }] }));
         vi.stubGlobal('fetch', fetch);
 
-        render(<BlockIpAction ip="10.1.2.3" serverId="s1" siteId="site1" source="http.clients" />);
+        render(<BlockIpAction ip="10.1.2.3" serverId="s1" siteId="site1" context="clients" />);
         fireEvent.click(screen.getByRole('button', { name: 'Block 10.1.2.3' }));
         fireEvent.change(await screen.findByPlaceholderText('e.g. credential stuffing'), { target: { value: 'stuffing' } });
         fireEvent.click(screen.getAllByRole('button', { name: 'Block' }).at(-1)!);
@@ -90,7 +90,7 @@ describe('network.ip-actions: Block IP', () => {
                 ),
         );
 
-        render(<BlockIpAction ip="203.0.113.7" source="http.threats" />);
+        render(<BlockIpAction ip="203.0.113.7" serverId={null} context="http_threats" />);
         fireEvent.click(screen.getByRole('button', { name: 'Block 203.0.113.7' }));
         fireEvent.click((await screen.findAllByRole('button', { name: 'Block' })).at(-1)!);
 

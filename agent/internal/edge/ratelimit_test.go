@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/OthmanHaba/falak/agent/internal/runner"
@@ -184,5 +185,39 @@ func TestRateLimitRefusals(t *testing.T) {
 	}
 	if u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath); strings.Contains(string(u), dest) {
 		t.Fatal("unit switched")
+	}
+}
+
+// The build is checked against the edge's current config before the swap, and an edge that does not come back with it
+// is rolled back to the Caddy it ran.
+func TestRateLimitSwapIsValidatedAndRolledBack(t *testing.T) {
+	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
+
+	// The current config (persisted by an earlier apply) is rejected by the build: no swap.
+	m, f, _, dest, build := rateLimitSetup(t, unit, stockModules)
+	if _, err := m.Apply(context.Background(), payload, stream()); err != nil {
+		t.Fatal(err)
+	}
+	f.On(dest+" validate", runner.Result{ExitCode: 1, Stderr: []byte("unknown module")})
+	if _, err := m.Apply(context.Background(), withRule(payload, build), stream()); err == nil || !strings.Contains(err.Error(), "rejects the edge's current config") || f.Ran("systemctl restart") {
+		t.Fatal(err, f.Lines())
+	}
+
+	// The edge does not restart with the build: back to /usr/bin/caddy, restarted, error reported.
+	m, f, _, dest, build = rateLimitSetup(t, unit, stockModules)
+	var restarts atomic.Int32
+	f.OnFunc("systemctl restart falak-edge.service", func(runnertest.Call) (runner.Result, error) {
+		if restarts.Add(1) == 1 {
+			return runner.Result{ExitCode: 1, Stderr: []byte("Job for falak-edge.service failed")}, nil
+		}
+		return runner.Result{}, nil
+	})
+	_, err := m.Apply(context.Background(), withRule(payload, build), stream())
+	if err == nil || !strings.Contains(err.Error(), "rolled back to /usr/bin/caddy") || restarts.Load() != 2 {
+		t.Fatal(err, restarts.Load())
+	}
+	u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath)
+	if !strings.Contains(string(u), "ExecStart=/usr/bin/caddy run") || strings.Contains(string(u), dest) {
+		t.Fatal(string(u))
 	}
 }

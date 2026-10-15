@@ -201,7 +201,7 @@ it('records the agent report: rule counters, block hits, brute-force Issue; refu
     $issue = Issue::query()->where('kind', IssueKind::Security)->sole();
     expect($issue->title)->toBe('SSH brute force on web-1')
         ->and($issue->server_id)->toBe($this->server->id)
-        ->and($issue->meta)->toMatchArray(['source' => 'host', 'finding' => 'ssh.bruteforce'])
+        ->and($issue->meta)->toMatchArray(['source' => 'protection.ssh_bruteforce', 'key' => 'sshd'])
         ->and($issue->sample['sources'][0])->toMatchArray(['ip' => '203.0.113.7', 'failures' => 15]);
 
     $this->get("/servers/{$this->server->id}/firewall")->assertInertia(fn ($page) => $page->where('counters.ssh.packets', 7));

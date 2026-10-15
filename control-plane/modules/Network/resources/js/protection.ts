@@ -27,9 +27,9 @@ export interface BlockRequest {
 }
 
 /**
- * What a `network.ip-actions` row passes. Stream B (HTTP) sends `source` ("http.clients", "http.threats"), stream A
- * (connections) sends `context` ("talks_to" for peers the workload connects to, "clients") and a nullable serverId;
- * `direction` is the explicit form. Everything but `ip` is optional, so either slot shape renders this action.
+ * What a `network.ip-actions` row passes: the slot's IpActionProps (`ip`, a nullable `serverId`, `siteId`, `context`:
+ * "talks_to" for peers the server connects to, "clients", "http_clients", "http_threats"), plus two optional additions
+ * of this action: `source` and an explicit `direction`. Everything but `ip` is optional, so it fits the slot as is.
  */
 export interface BlockIpProps {
     ip: string;

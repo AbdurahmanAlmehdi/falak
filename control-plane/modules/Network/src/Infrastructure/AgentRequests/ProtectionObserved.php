@@ -6,7 +6,7 @@ use Carbon\CarbonImmutable;
 use Falak\Fleet\Contracts\AgentRequestHandler;
 use Falak\Fleet\Contracts\Data\AgentCaller;
 use Falak\Identity\Contracts\AuditLog;
-use Falak\Insights\Contracts\HostSecurityIssues;
+use Falak\Insights\Contracts\SecurityIssues;
 use Falak\Network\Application\ApplyProtection;
 use Falak\Network\Application\ProtectionGuards;
 use Falak\Network\Domain\Models\FirewallState;
@@ -23,8 +23,11 @@ use Illuminate\Support\Facades\DB;
  */
 final class ProtectionObserved implements AgentRequestHandler
 {
+    /** SecurityIssues source of SSH brute force (key: "sshd"). */
+    public const ISSUE_SOURCE = 'protection.ssh_bruteforce';
+
     public function __construct(
-        private readonly HostSecurityIssues $issues,
+        private readonly SecurityIssues $issues,
         private readonly ServerDirectory $servers,
         private readonly AuditLog $audit,
         private readonly ProtectionGuards $guards,
@@ -166,7 +169,9 @@ final class ProtectionObserved implements AgentRequestHandler
             return;
         }
 
-        $this->issues->record($organizationId, $serverId, 'ssh.bruteforce', "SSH brute force on {$serverName}", $failures, $at,
+        // One Issue per server through the shared security contract (kind security, docs/plans/network/connections.md):
+        // source protection.ssh_bruteforce, key the service.
+        $this->issues->record($organizationId, $serverId, self::ISSUE_SOURCE, 'sshd', "SSH brute force on {$serverName}", 'sshd', $at, $failures,
             ['failures' => $failures, 'log' => (string) $auth['source'], 'sources' => array_slice(array_map(fn (array $s) => [
                 'ip' => (string) $s['ip'], 'failures' => (int) $s['failures'], 'users' => array_slice((array) ($s['users'] ?? []), 0, 5),
             ], $sources), 0, 10)]);
