@@ -30,6 +30,24 @@
       },
       "description": "Certificates the edge obtained over ACME (its storage under /var/lib/caddy), the latest expiry per name. Renewals start 30 days before expiry, so one closer than that means renewal is failing. Omitted when there are none"
     },
-    "features": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "Protocol additions the agent understands (e.g. edge.access_log, telemetry.log_kind, system.upgrade_agent.v2). Agents reject unknown payload fields, so the control plane sends optional fields only to agents that list the feature. Absent = none" }
+    "features": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "Protocol additions the agent understands (e.g. edge.access_log, telemetry.log_kind, system.upgrade_agent.v2). Agents reject unknown payload fields, so the control plane sends optional fields only to agents that list the feature. Absent = none" },
+    "ebpf": { "$ref": "#/$defs/ebpf" }
+  },
+  "$defs": {
+    "ebpf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "enabled", "state", "programs"],
+      "description": "The eBPF probe (docs/plans/network/ebpf.md, feature net.ebpf): whether this kernel can run it, the setting as the agent applied it, and what runs",
+      "properties": {
+        "supported": { "type": "boolean" },
+        "reason": { "type": "string", "maxLength": 300, "description": "why the kernel cannot run it" },
+        "enabled": { "type": "boolean" },
+        "state": { "enum": ["off", "running", "degraded", "over_budget", "failed", "unsupported"] },
+        "detail": { "type": "string", "maxLength": 2000, "description": "the load error, the program groups not attached, or the overhead that tripped the budget" },
+        "programs": { "type": "array", "items": { "enum": ["tcp", "dns", "runq"] }, "uniqueItems": true },
+        "overhead_percent": { "type": "number", "minimum": 0, "description": "the probe's CPU over the last 5 minutes, percent of the machine's capacity (all CPUs)" }
+      }
+    }
   }
 }

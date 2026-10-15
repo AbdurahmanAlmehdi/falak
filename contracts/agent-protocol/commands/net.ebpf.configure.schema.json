@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/net.ebpf.configure.schema.json",
+  "title": "net.ebpf.configure — turns the eBPF probe on or off (docs/plans/network/ebpf.md): TCP health, DNS and run-queue delay per workload. Persisted in /etc/falak/ebpf.json; feature net.ebpf. A kernel that cannot run the probe is a status in the result, not a failed command.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["enabled"],
+  "properties": {
+    "enabled": { "type": "boolean" }
+  },
+  "$defs": {
+    "result": { "$ref": "../facts.schema.json#/$defs/ebpf" }
+  }
+}

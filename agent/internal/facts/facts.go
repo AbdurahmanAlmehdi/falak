@@ -45,6 +45,8 @@ type Facts struct {
 	RebootRequired bool `json:"reboot_required"`
 	// TLSCertificates are the edge's ACME certificates and their expiry.
 	TLSCertificates []TLSCertificate `json:"tls_certificates,omitempty"`
+	// EBPF is the eBPF probe's status (ebpfobs.Status, docs/plans/network/ebpf.md), set by the agent's heartbeat.
+	EBPF any `json:"ebpf,omitempty"`
 }
 
 // Interface is one network interface that is up, with its addresses.

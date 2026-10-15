@@ -23,6 +23,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/db"
 	"github.com/OthmanHaba/falak/agent/internal/deploy"
 	"github.com/OthmanHaba/falak/agent/internal/docker"
+	"github.com/OthmanHaba/falak/agent/internal/ebpfobs"
 	"github.com/OthmanHaba/falak/agent/internal/edge"
 	"github.com/OthmanHaba/falak/agent/internal/enroll"
 	"github.com/OthmanHaba/falak/agent/internal/envlinks"
@@ -95,6 +96,8 @@ type Components struct {
 	Events *resources.Queue
 	// Network is the network collector (docs/plans/network/connections.md).
 	Network *netobs.Collector
+	// EBPF is the opt-in eBPF collector (docs/plans/network/ebpf.md).
+	EBPF *ebpfobs.Collector
 }
 
 // Build constructs every executor and registers the full v1 catalogue.
@@ -163,6 +166,10 @@ func Build(d Deps) *Components {
 		Out: d.Telemetry.Relay(), Runner: d.Runner, Logger: log.With("component", "network")})
 	network.Register(reg)
 	d.Telemetry.Follow(network)
+	probe := ebpfobs.New(ebpfobs.Options{FS: d.FS, EtcDir: cfg.EtcDir, Workloads: d.Telemetry.Workloads(), Names: network.Namer,
+		Out: d.Telemetry.Relay(), Logger: log.With("component", "ebpf")})
+	probe.Register(reg)
+	d.Telemetry.Follow(probe)
 	prot := protect.New(protect.Deps{Runner: d.Runner, FS: d.FS, Logger: log.With("component", "protection"), StateDir: cfg.StateDir,
 		ControlPlane: d.ControlPlane})
 	prot.Register(reg)
@@ -188,7 +195,7 @@ func Build(d Deps) *Components {
 	nt.RegisterCapture(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
-		Protection: prot, Events: &resources.Queue{}, Network: network}
+		Protection: prot, Events: &resources.Queue{}, Network: network, EBPF: probe}
 }
 
 // ensureEnrolled enrolls only when there is no identity yet: `falak-agent run` never replaces one because
@@ -332,6 +339,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		},
 		Facts: func(ctx context.Context) (any, error) {
 			f, err := facts.Collect(ctx, r, fs, version.Version)
+			f.EBPF = comps.EBPF.Status()
 			// Facts are re-collected every few minutes: a renamed host shows up in telemetry without a restart.
 			tel.SetHostName(f.Hostname)
 			return f, err
@@ -376,6 +384,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	// Connections, listeners, peers, conntrack, WireGuard and probes (docs/plans/network/connections.md).
 	loops.Add(1)
 	go func() { defer loops.Done(); comps.Network.Run(runCtx) }()
+	// The opt-in eBPF probe (docs/plans/network/ebpf.md): detached when runCtx ends.
+	loops.Add(1)
+	go func() { defer loops.Done(); comps.EBPF.Run(runCtx) }()
 	// Protection (docs/plans/network/protection.md): block sets restored, sshd's auth failures, firewall counters.
 	protection := comps.Protection.NewObserver(client, tel.Relay())
 	loops.Add(1)

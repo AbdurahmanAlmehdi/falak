@@ -28,6 +28,10 @@ func TestWorkloadSlices(t *testing.T) {
 	if len(rms) != 3 {
 		t.Fatalf("my-shop, worker, daemon; got %d", len(rms))
 	}
+	// The eBPF collector attributes by the site slice's cgroup.
+	if s := c.NetSnapshot().Slices; len(s) != 1 || s["/sys/fs/cgroup/falak.slice/falak-site_my_shop.slice"] != "my-shop" {
+		t.Fatalf("slices %v", s)
+	}
 	for _, tc := range []struct {
 		name string
 		res  []string
@@ -147,6 +151,10 @@ func TestWorkloadUsers(t *testing.T) {
 	// The network collector gets the processes each measured site owns.
 	if n := c.NetSnapshot().Native; n[10] != "blog" || n[11] != "blog" || n[20] != "api" || n[1] != "" || n[30] != "" {
 		t.Fatalf("native %v", n)
+	}
+	// The eBPF collector attributes sockets of isolated sites by their own user's uid.
+	if u := c.NetSnapshot().UIDs; len(u) != 2 || u[1001] != "blog" || u[1002] != "api" {
+		t.Fatalf("uids %v", u)
 	}
 	blog := resourceBy(rms, "service.name", "blog")
 	// The counters start at zero: what the processes already running used before (150 + 250 ticks, 12288 bytes

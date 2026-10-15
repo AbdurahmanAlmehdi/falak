@@ -84,6 +84,7 @@ type NetContainer struct {
 	Pid        int    // init process: its /proc/<pid>/net is the container's network namespace
 	PidStart   uint64
 	IPs        []string // the container's addresses on its networks (from the inspect)
+	CgroupDir  string   // cgroup v2 directory ("" on cgroup v1): its inode is the cgroup id eBPF programs see
 }
 
 // NetSnapshot is what the network collector (docs/plans/network/connections.md) reuses from the last pass instead of
@@ -92,6 +93,10 @@ type NetContainer struct {
 type NetSnapshot struct {
 	Containers []NetContainer
 	Native     map[int]string
+	// Slices maps a native site's slice directory to its slug, and UIDs an isolated site's own user to its slug: what
+	// the eBPF collector (docs/plans/network/ebpf.md) attributes by cgroup id and by uid.
+	Slices map[string]string
+	UIDs   map[int]string
 }
 
 // NetSnapshot returns the last pass's containers and native site processes (empty before the first pass).
@@ -257,7 +262,7 @@ func (c *WorkloadCollector) Collect(ctx context.Context) []*metricspb.ResourceMe
 	sites := c.sites
 	c.mu.Unlock()
 	all := owners{}
-	snap := NetSnapshot{Native: map[int]string{}}
+	snap := NetSnapshot{Native: map[int]string{}, Slices: map[string]string{}, UIDs: map[int]string{}}
 	own, shared := nativeUsers(sites)
 	withContainers := c.collectContainers(ctx, all, &snap)
 	withSlice := c.collectSlices(sites, own, shared, withContainers, all, &snap)
@@ -370,7 +375,7 @@ func (c *WorkloadCollector) collectContainers(ctx context.Context, out owners, s
 		c.mu.Lock()
 		if cur := c.cts[ct.ID]; cur != nil && cur.pid > 0 {
 			snap.Containers = append(snap.Containers, NetContainer{ID: ct.ID, Name: name, Site: site, DBInstance: inst, Service: service,
-				Pid: cur.pid, PidStart: cur.pidStart, IPs: cur.ips})
+				Pid: cur.pid, PidStart: cur.pidStart, IPs: cur.ips, CgroupDir: cur.dir})
 		}
 		c.mu.Unlock()
 		if service != "" {
@@ -592,6 +597,7 @@ func (c *WorkloadCollector) collectSlices(sites []otlp.Site, own map[string]stri
 			}
 			withSlice[slug] = true
 			if !withContainers[slug] {
+				snap.Slices[path.Join(cgroup.CgroupRoot, e.Name())] = slug
 				for _, pid := range readCgroupProcs(c.fs, path.Join(cgroup.CgroupRoot, e.Name())) {
 					snap.Native[pid] = slug
 				}
@@ -697,6 +703,7 @@ func (c *WorkloadCollector) collectUsers(own map[string]string, shared map[strin
 	for _, w := range wantOwn {
 		if uid, ok := uidOf(w.user); ok {
 			slugOf[userKey(uid)] = w.slug
+			snap.UIDs[uid] = w.slug
 		}
 	}
 	for _, w := range wantShared {

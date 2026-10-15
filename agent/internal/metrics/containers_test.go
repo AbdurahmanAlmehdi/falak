@@ -175,7 +175,8 @@ func TestWorkloadContainers(t *testing.T) {
 	for _, ct := range c.NetSnapshot().Containers {
 		snap[ct.ID] = ct
 	}
-	if a := snap[idSystemd]; a.Pid != 100 || a.Site != "shop" || a.Service != "app" || a.Name != "shop-app-1" {
+	if a := snap[idSystemd]; a.Pid != 100 || a.Site != "shop" || a.Service != "app" || a.Name != "shop-app-1" ||
+		a.CgroupDir != "/sys/fs/cgroup/system.slice/docker-"+idSystemd+".scope" {
 		t.Fatalf("app %+v", a)
 	}
 	if d := snap[idDB]; d.DBInstance != dbInstance || d.Pid != 400 || len(snap) != 4 {

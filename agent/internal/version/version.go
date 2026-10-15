@@ -81,6 +81,9 @@ var Features = []string{
 	// Packet capture (docs/plans/network/capture.md): the net.capture command (tcpdump on an interface or in a
 	// container's network namespace), the net.capture.progress request and chunk uploads to /uploads/net.capture/<id>.
 	"net.capture",
+	// The eBPF probe (docs/plans/network/ebpf.md): the net.ebpf.configure command (opt-in per server), facts.ebpf, and
+	// falak.net.tcp.*, falak.net.dns.*, falak.workload.runqueue.delay metrics.
+	"net.ebpf",
 }
 
 var (

@@ -54,6 +54,9 @@ HTTP, TCP from the host or, with `container`, inside a container's network names
 Packet capture (docs/plans/network/capture.md): `net.capture` gates the whole `net.capture` command (tcpdump on a host
 interface or in a container's namespace), its `net.capture.progress` request (whose reply can cancel it) and the
 chunk uploads to `/agent/v1/uploads/net.capture/<capture_id>`.
+eBPF (docs/plans/network/ebpf.md): `net.ebpf` gates the whole `net.ebpf.configure` command (`{enabled}`, opt-in per
+server; persisted in `/etc/falak/ebpf.json`; its result is the probe's status) and the agent's `facts.ebpf`
+(`facts.schema.json#/$defs/ebpf`: supported / reason, state, programs, overhead).
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
 (older agents would fail it as an unknown type). `provision.v2` adds `provision.inspect` and `provision.apply`
