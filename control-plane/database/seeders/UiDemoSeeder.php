@@ -22,6 +22,7 @@ use Falak\Deployments\Domain\Models\DeploymentTarget;
 use Falak\Deployments\Domain\Models\OutputLine;
 use Falak\Deployments\Domain\Models\Release;
 use Falak\Edge\Application\ComposeServiceDomains;
+use Falak\Functions\Application\Actions\CreateFunction;
 use Falak\Identity\Application\Actions\CreateOrganization;
 use Falak\Identity\Application\Actions\RegisterUser;
 use Falak\Identity\Domain\Models\User;
@@ -37,6 +38,7 @@ use Falak\Projects\Application\Actions\CreateEnvironment;
 use Falak\Projects\Application\Actions\CreateProject;
 use Falak\Projects\Application\Actions\GroupServices;
 use Falak\Projects\Application\Actions\ToggleFavorite;
+use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Domain\Models\Project;
 use Falak\Projects\Domain\Models\Service;
 use Falak\Servers\Contracts\ServerStatus;
@@ -47,6 +49,7 @@ use Falak\Sites\Contracts\BuildMode;
 use Falak\Sites\Contracts\ComposeSites;
 use Falak\Sites\Contracts\ComposeSource;
 use Falak\Sites\Contracts\Data\LaravelSettings;
+use Falak\Sites\Contracts\Data\SharedPath;
 use Falak\Sites\Contracts\Framework;
 use Falak\Sites\Contracts\OctaneServer;
 use Falak\Sites\Contracts\SiteRuntime;
@@ -58,6 +61,7 @@ use Falak\Sites\Domain\Models\Site;
 use Falak\Sites\Domain\Models\SiteTarget;
 use Falak\SourceControl\Domain\Models\Connection;
 use Falak\Templates\Application\Actions\SaveCustomTemplate;
+use Falak\Volumes\Contracts\ServiceVolumes;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -153,6 +157,11 @@ class UiDemoSeeder extends Seeder
 
         $this->callWith(InfrastructureDemoSeeder::class, ['organizationId' => $organization->id, 'userId' => $admin->id]);
 
+        // A draft function beside Marketing (needs app-1's agent, created just above): its Code tab, never deployed.
+        $default = Project::query()->where('organization_id', $organization->id)->where('is_default', true)->firstOrFail();
+        $environment = collect(app(ProjectDirectory::class)->environments($default->id))->firstWhere('isProduction', true);
+        app(CreateFunction::class)($environment, $admin->id, $admin->name, 'hooks', $servers[0]->id, 'hello', null, 1560, 20, false);
+
         // Organization settings: git connections, clouds, buckets, builders, alerting, recipes.
         $this->callWith(SettingsDemoSeeder::class, ['organizationId' => $organization->id, 'userId' => $admin->id]);
 
@@ -182,6 +191,9 @@ class UiDemoSeeder extends Seeder
         $place('sessions', 1140, 240);
         $place('Marketing', 1140, 20);
         app(GroupServices::class)($production, 'Commerce', [$services['Storefront']->id, $services['storefront_db']->id]);
+
+        // A shared storage/ directory on Storefront: a volume chip on its card.
+        app(ServiceVolumes::class)->syncSharedPaths($organizationId, $services['Storefront']->ref_id, [new SharedPath('storage')], $userId);
 
         $content = app(CreateProject::class)($organizationId, $userId, ['name' => 'Content', 'description' => 'Docs and the company blog.']);
         $contentProduction = $content->production() ?? throw new \RuntimeException('Content project without production');
@@ -424,7 +436,7 @@ YAML;
         ]);
         $schedule = BackupSchedule::query()->create([
             'organization_id' => $organizationId, 'database_instance_id' => $engine->id, 'storage_provider_id' => $storage->id, 'name' => 'Nightly',
-            'cron' => '0 3 * * *', 'retention_count' => 14, 'compression' => 'gzip', 'enabled' => true, 'last_run_at' => now()->subDay()->setTime(3, 0), 'next_run_at' => now()->addDay()->setTime(3, 0),
+            'cron' => '0 3 * * *', 'retention_count' => 14, 'enabled' => true, 'last_run_at' => now()->subDay()->setTime(3, 0), 'next_run_at' => now()->addDay()->setTime(3, 0),
         ]);
         $schedule->databases()->attach($database->id);
 
@@ -432,7 +444,7 @@ YAML;
             Backup::query()->create([
                 'organization_id' => $organizationId, 'schedule_id' => $schedule->id, 'database_id' => $database->id, 'database_instance_id' => $engine->id, 'instance_name' => $engine->name, 'engine_version' => $engine->version,
                 'server_id' => $server->id, 'server_name' => $server->name, 'database_name' => $database->name, 'engine' => 'postgresql', 'storage_provider_id' => $storage->id,
-                'object_key' => "storefront_db/{$daysAgo}.sql.gz", 'compression' => 'gzip', 'trigger' => 'scheduled', 'status' => $status, 'size_bytes' => $size,
+                'object_key' => "storefront_db/{$daysAgo}.sql.zst.fkb", 'compression' => 'zstd', 'trigger' => 'scheduled', 'status' => $status, 'size_bytes' => $size,
                 'duration_ms' => $size ? 8200 + $daysAgo * 100 : null, 'error' => $size ? null : 'pg_dump: connection timed out', 'started_at' => now()->subDays($daysAgo),
                 'finished_at' => now()->subDays($daysAgo)->addSeconds(9), 'created_at' => now()->subDays($daysAgo),
             ]);

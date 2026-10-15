@@ -99,7 +99,7 @@ class InfrastructureDemoSeeder extends Seeder
                 'agent_version' => '1.4.2',
                 'facts' => [
                     // Every server runs Docker (sites, compose stacks and database containers).
-                    'kernel' => '6.8.0-45-generic', 'docker' => '27.3.1', 'runtimes' => ['php' => ['8.3', '8.4']],
+                    'kernel' => '6.8.0-45-generic', 'docker' => '27.3.1', 'runtimes' => ['php' => ['8.3', '8.4']], 'features' => ['fn.v1', 'fn.v2', 'fn.v3'],
                 ],
                 'metrics' => [
                     'at' => $lastHeartbeat->toIso8601String(),
