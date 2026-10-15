@@ -21,6 +21,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
@@ -115,7 +116,7 @@ final class OverviewController extends Controller
             'range' => $range,
             'ranges' => array_keys(SiteOverview::RANGES),
             'overview' => $data,
-            'edge' => $this->edgeRequests($edge, $organizationId, $siteId, $data['totals']['requests'] ?? 0, $from, $to),
+            'edge' => $this->edgeRequests($edge, $organizationId, $siteId, $range, $data['totals']['requests'] ?? 0, $from, $to),
             'open_issues' => DB::table('insights_issues')->where('organization_id', $organizationId)->where('site_id', $siteId)->where('status', IssueStatus::Open->value)->count(),
             'heartbeats' => HeartbeatMonitor::query()->where('organization_id', $organizationId)->where('site_id', $siteId)->orderBy('job')->get()
                 ->map(fn (HeartbeatMonitor $m) => HeartbeatController::present($m))->values(),
@@ -132,23 +133,30 @@ final class OverviewController extends Controller
 
     /**
      * Requests and 5xx answers from the edge's access log when the app reports none (no APM package): the Metrics tab's
-     * fallback ("from the edge"). null when the app reports requests, or Loki is off or failing.
+     * fallback ("from the edge"). null when the app reports requests, or Loki is off or failing. The counts are cached a
+     * minute (5 for 7d and 30d) per site and range: the tab polls every minute and each read is two Loki queries; a
+     * failure is not cached.
      *
      * @return array{requests: int, errors: int}|null
      */
-    private function edgeRequests(AccessLogCounts $edge, string $organizationId, string $siteId, int $apmRequests, CarbonImmutable $from, CarbonImmutable $to): ?array
+    private function edgeRequests(AccessLogCounts $edge, string $organizationId, string $siteId, string $range, int $apmRequests, CarbonImmutable $from, CarbonImmutable $to): ?array
     {
         if ($apmRequests > 0 || (string) config('telemetry.loki.url') === '') {
             return null;
         }
 
-        try {
-            $counts = $edge->forSite($organizationId, $siteId, $from, $to);
-        } catch (TelemetryUnavailable|TelemetryQueryFailed) {
-            return null;
-        }
+        $ttl = in_array($range, ['7d', '30d'], true) ? 300 : 60;
+        $counts = Cache::remember("insights:edge-requests:{$organizationId}:{$siteId}:{$range}", $ttl, function () use ($edge, $organizationId, $siteId, $from, $to) {
+            try {
+                $counts = $edge->forSite($organizationId, $siteId, $from, $to);
+            } catch (TelemetryUnavailable|TelemetryQueryFailed) {
+                return null; // not stored: Cache::remember skips null
+            }
 
-        return $counts->total > 0 ? ['requests' => $counts->total, 'errors' => $counts->errors] : null;
+            return ['requests' => $counts->total, 'errors' => $counts->errors];
+        });
+
+        return $counts !== null && $counts['requests'] > 0 ? $counts : null;
     }
 
     /**

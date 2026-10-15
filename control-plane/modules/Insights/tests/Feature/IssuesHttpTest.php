@@ -92,8 +92,10 @@ it('returns the site summary for the service panel', function () {
 
 it("falls back to the edge's request counts in the site summary when the app reports none", function () {
     config(['telemetry.loki.url' => 'http://loki:3100']);
-    app()->instance(AccessLogCounts::class, new class implements AccessLogCounts
+    $edge = new class implements AccessLogCounts
     {
+        public int $calls = 0;
+
         public function forRelease(string $organizationId, string $siteId, string $releaseId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
         {
             return new RequestCounts(0, 0);
@@ -101,13 +103,21 @@ it("falls back to the edge's request counts in the site summary when the app rep
 
         public function forSite(string $organizationId, string $siteId, DateTimeInterface $from, DateTimeInterface $to): RequestCounts
         {
+            $this->calls++;
+
             return new RequestCounts(400, 8);
         }
-    });
+    };
+    app()->instance(AccessLogCounts::class, $edge);
 
     $this->getJson('/insights/sites/'.INSIGHTS_OTHER_SITE.'/summary')->assertOk()
         ->assertJsonPath('overview.totals.requests', 0)
         ->assertJsonPath('edge', ['requests' => 400, 'errors' => 8]);
+    // The next poll reads the cached counts; another range queries Loki.
+    $this->getJson('/insights/sites/'.INSIGHTS_OTHER_SITE.'/summary')->assertOk()->assertJsonPath('edge.requests', 400);
+    expect($edge->calls)->toBe(1);
+    $this->getJson('/insights/sites/'.INSIGHTS_OTHER_SITE.'/summary?range=7d')->assertOk()->assertJsonPath('edge.requests', 400);
+    expect($edge->calls)->toBe(2);
     // The app's own numbers win.
     $this->getJson('/insights/sites/'.INSIGHTS_SITE.'/summary')->assertOk()->assertJsonPath('edge', null);
 });
