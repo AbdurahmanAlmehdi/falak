@@ -14,7 +14,9 @@ use Falak\Sites\Contracts\SiteRuntime;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Canvas → Create → Function: a function site on one server with the chosen starter as version 1, deployed right away.
+ * Canvas → Create → Function: a function site on one server with the chosen starter as version 1, deployed right away
+ * when $deploy. Without, it is a draft: no deployment, so the gateway never gets the function and its schedules stay
+ * off the server (Processes only runs jobs of sites with a live release) until the first Deploy.
  */
 final class CreateFunction
 {

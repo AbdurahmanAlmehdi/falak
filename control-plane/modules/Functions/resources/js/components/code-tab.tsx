@@ -269,6 +269,11 @@ export function CodeTab({ ctx }: ServiceTabProps) {
                 </span>
             </div>
 
+            {!live && data.can.deploy && (
+                <Callout tone="info" title="Not deployed yet">
+                    Nothing runs until you deploy: edit the code, variables, schedules and settings first, then Deploy.
+                </Callout>
+            )}
             {stale && (
                 <Callout tone="warning" title={`v${data.head!.number} was deployed after your draft started`}>
                     Deploying will show the differences first.
@@ -354,7 +359,7 @@ export function CodeTab({ ctx }: ServiceTabProps) {
                         </Button>
                     )}
                     <Button variant="primary" icon={<Rocket />} loading={deploying} disabled={!data.can.deploy || tooBig} onClick={() => deploy()}>
-                        {dirty ? 'Deploy' : 'Redeploy'} <span className="text-on-accent/70 ml-1 text-[11px]">⌘S</span>
+                        {dirty || !live ? 'Deploy' : 'Redeploy'} <span className="text-on-accent/70 ml-1 text-[11px]">⌘S</span>
                     </Button>
                 </div>
             )}

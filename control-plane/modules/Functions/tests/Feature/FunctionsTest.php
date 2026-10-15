@@ -99,6 +99,40 @@ it('creates a function from the canvas and deploys its starter through the gatew
         ->and(deploy_types($world->agents))->not->toContain('deploy.prune');
 });
 
+it('creates a draft function from the canvas: nothing deployed, routed in the gateway or scheduled until Deploy', function () {
+    $world = deploy_world(site: ['runtime' => 'static', 'framework' => 'static', 'php_version' => null]);
+    fn_agent($world->servers[0]->id, $world->organization->id);
+    $environment = projects_default_env($world->organization);
+    $jobsOf = fn (Site $site) => array_keys(array_filter(app(StateCompiler::class)->compile($world->servers[0]->id)->jobMeta, fn (array $meta) => $meta['site_id'] === $site->id));
+
+    $response = $this->postJson("/projects/{$environment->project_id}/{$environment->slug}/functions", [
+        'name' => 'Cron', 'server_id' => $world->servers[0]->id, 'starter' => 'scheduled', 'deploy' => false,
+    ])->assertCreated()->assertJsonPath('data.deployment_id', null)->assertJsonPath('warnings', []);
+
+    $site = Site::query()->findOrFail($response->json('data.site_id'));
+    $function = CloudFunction::query()->where('site_id', $site->id)->firstOrFail();
+
+    expect(Deployment::query()->where('site_id', $site->id)->count())->toBe(0)
+        ->and($world->agents->dispatched('fn.release.apply'))->toBe([])
+        // the starter's schedule is saved, but no cron job runs it before a release is live
+        ->and(FunctionSchedule::query()->where('function_id', $function->id)->count())->toBe(1)
+        ->and($jobsOf($site))->toBe([])
+        ->and($this->getJson(fn_url($site))->assertOk()->json('data.live'))->toBeNull();
+
+    // Deploy from the Code tab: the starter (v1) unchanged.
+    $head = $function->head();
+    $deploymentId = $this->postJson(fn_url($site, '/deploy'), ['files' => $head->files, 'base_version_id' => $head->id])
+        ->assertOk()->assertJsonPath('data.created', false)->json('data.deployment_id');
+
+    expect($deploymentId)->not->toBeNull()
+        ->and($world->agents->last('fn.release.apply')['payload']['site'])->toBe($site->slug);
+
+    deploy_run_all($world->agents);
+
+    expect(Deployment::query()->findOrFail($deploymentId)->status)->toBe(DeploymentStatus::Succeeded)
+        ->and($jobsOf($site))->toHaveCount(1);
+});
+
 it('refuses servers whose agent has no function gateway', function () {
     $world = deploy_world(site: ['runtime' => 'static', 'framework' => 'static', 'php_version' => null]);
     fn_agent($world->servers[0]->id, $world->organization->id, features: []);

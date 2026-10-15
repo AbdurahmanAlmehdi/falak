@@ -279,8 +279,8 @@ export interface CreateOptionProps {
     environmentSlug: string;
     /** Canvas coordinates for the new card; auto-placed when null. */
     position: { x: number; y: number } | null;
-    /** The new card (and the first deployment when one was started): the canvas adds it and opens its panel. */
-    onCreated: (service: CanvasService, deploymentId: string | null) => void;
+    /** The new card (and the first deployment when one was started): the canvas adds it and opens its panel (on `tab`). */
+    onCreated: (service: CanvasService, deploymentId: string | null, tab?: string) => void;
     onClose: () => void;
 }
 

@@ -673,13 +673,13 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         position={picker.position}
                         initialOption={picker.option}
                         onClose={() => setPicker(null)}
-                        onCreated={(service, deploymentId) => {
+                        onCreated={(service, deploymentId, tab) => {
                             setPicker(null);
                             setCanvas((current) => ({
                                 ...current,
                                 services: [...current.services.filter((item) => item.id !== service.id), service],
                             }));
-                            openService(service, service.kind === 'site' ? 'deployments' : 'overview', deploymentId);
+                            openService(service, tab ?? (service.kind === 'site' ? 'deployments' : 'overview'), deploymentId);
                             void refresh();
                         }}
                     />

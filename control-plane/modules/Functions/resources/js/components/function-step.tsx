@@ -6,7 +6,7 @@ import { type CreateOptionProps } from '@/lib/registry';
 import { cn } from '@/lib/utils';
 import { type Canvas } from '@/types';
 import { Link } from '@inertiajs/react';
-import { CalendarClock, KeyRound, Rocket } from 'lucide-react';
+import { CalendarClock, KeyRound, Plus } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import { type StarterCatalog } from '../types';
 
@@ -25,8 +25,9 @@ function slugify(value: string): string {
 }
 
 /**
- * Create picker → Function: name, server, starter and domain. The function is created with the starter as v1 and
- * deployed right away; its panel opens on the Code tab.
+ * Create picker → Function: name, server, starter and domain. The function is created as a draft with the starter as
+ * v1 (`deploy: false`); its panel opens on the Code tab to edit code, variables, schedules and settings, and nothing
+ * runs until Deploy there.
  */
 export function FunctionStep({ projectId, environmentSlug, position, onCreated }: CreateOptionProps) {
     const sites = useJson<SiteOptions>('/sites/create');
@@ -64,12 +65,13 @@ export function FunctionStep({ projectId, environmentSlug, position, onCreated }
                 runtime: chosenRuntime?.key,
                 domain: domainPayload(domain),
                 position,
+                deploy: false,
             });
             response.warnings.forEach((warning) => toast.warning(warning));
             const canvas = await requestJson<Canvas>(`/projects/${projectId}/${environmentSlug}/canvas`);
             const card = canvas.services.find((service) => service.kind === 'site' && service.ref_id === response.data.site_id);
-            toast.success(`${response.data.name} created`, response.data.deployment_id ? 'First deploy started.' : undefined);
-            if (card) onCreated(card, response.data.deployment_id);
+            toast.success(`${response.data.name} created`, 'Not deployed yet: edit it, then Deploy.');
+            if (card) onCreated(card, null, 'code');
             else if (response.data.panel_url) window.location.assign(response.data.panel_url);
         } catch (error) {
             setErrors(error instanceof HttpError && Object.keys(error.errors).length > 0 ? error.errors : { form: errorMessage(error) });
@@ -196,8 +198,8 @@ export function FunctionStep({ projectId, environmentSlug, position, onCreated }
             )}
 
             <div className="flex justify-end">
-                <Button type="submit" variant="primary" icon={<Rocket />} loading={submitting} disabled={!selected || !name.trim()}>
-                    Create and deploy
+                <Button type="submit" variant="primary" icon={<Plus />} loading={submitting} disabled={!selected || !name.trim()}>
+                    Create function
                 </Button>
             </div>
         </form>

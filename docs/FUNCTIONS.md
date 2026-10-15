@@ -26,8 +26,9 @@ On the canvas: **Create → Function**.
 
    A starter creates the **variables** it reads. Secrets it needs, such as webhook secrets and tokens, are
    generated; fill in the rest in Variables. Scheduled starters also create their **schedule**.
-3. Pick a **server** and a **domain**, then **Create and deploy**. The starter becomes version 1 and is live a few
-   seconds later.
+3. Pick a **server** and a **domain**, then **Create function**. The starter becomes version 1 of a draft: its panel
+   opens on the Code tab so you can change the code, variables, schedules and settings first. Nothing runs (no
+   deployment, no gateway release, no schedules) until you press **Deploy**; it is live a few seconds later.
 
 The server needs Docker and a Falak agent 0.4 or newer (it runs the *function gateway*).
 

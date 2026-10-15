@@ -78,7 +78,7 @@ export interface CreatePickerProps {
     position: { x: number; y: number } | null;
     onClose: () => void;
     /** The new card, and the first deployment when one was started. */
-    onCreated: (service: CanvasService, deploymentId: string | null) => void;
+    onCreated: (service: CanvasService, deploymentId: string | null, tab?: string) => void;
     /** Open a registered option right away (e.g. ⌘K → Deploy template…). */
     initialOption?: string | null;
 }

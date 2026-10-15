@@ -17,6 +17,7 @@ use Illuminate\Validation\Rule;
 
 /**
  * POST /projects/{project}/{environment}/functions — the Create picker's Function form. GET lists the starters.
+ * `deploy: false` (the canvas) creates a draft: nothing runs until Deploy in its panel.
  */
 final class CreateFunctionController extends Controller
 {
@@ -48,6 +49,8 @@ final class CreateFunctionController extends Controller
             'position' => ['nullable', 'array'],
             'position.x' => ['nullable', 'integer', 'between:-1000000,1000000'],
             'position.y' => ['nullable', 'integer', 'between:-1000000,1000000'],
+            // false: a draft, deployed later from its panel (the canvas). Omitted: deployed right away, as before.
+            'deploy' => ['sometimes', 'boolean'],
         ], ['name.regex' => 'Use letters, numbers, spaces, dots, dashes and underscores.']);
 
         $projectData = $projects->find(strtolower($project));
@@ -62,6 +65,7 @@ final class CreateFunctionController extends Controller
 
         abort_if($env === null, 404, 'Environment not found.');
         $canDeploy = $access->can($user, $organizationId, Permissions::DEPLOY) && $access->can($user, $organizationId, 'deployments.create');
+        $deploy = (bool) ($data['deploy'] ?? true);
 
         $result = $create(
             $env,
@@ -73,12 +77,12 @@ final class CreateFunctionController extends Controller
             $data['domain'] ?? null,
             isset($data['position']['x']) ? (int) $data['position']['x'] : null,
             isset($data['position']['y']) ? (int) $data['position']['y'] : null,
-            $canDeploy,
+            $deploy && $canDeploy,
             $data['runtime'] ?? (string) config('functions.default_runtime', 'bun'),
         );
 
         $warnings = $result['warnings'];
-        if (! $canDeploy) {
+        if ($deploy && ! $canDeploy) {
             $warnings[] = 'You cannot start deployments; ask a developer to deploy it.';
         }
 
