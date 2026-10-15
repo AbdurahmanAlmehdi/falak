@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Terminal\Http\Controllers\ConsoleController;
+use Falak\Terminal\Http\Controllers\NetCaptureController;
 use Falak\Terminal\Http\Controllers\NetToolController;
 use Falak\Terminal\Http\Controllers\RecordingController;
 use Falak\Terminal\Http\Controllers\SessionController;
@@ -44,5 +45,20 @@ Route::middleware(['auth', 'org'])->group(function () {
         Route::post('servers/{server}/net-tools', [NetToolController::class, 'server'])->name('terminal.net-tools.server');
         Route::post('sites/{site}/net-tools', [NetToolController::class, 'site'])->name('terminal.net-tools.site');
         Route::post('databases/instances/{instance}/net-tools', [NetToolController::class, 'database'])->name('terminal.net-tools.database');
+    });
+});
+
+// Packet capture (docs/plans/network/capture.md): Admin only, rate limited per organization by the action.
+Route::middleware(['auth', 'org'])->group(function () {
+    Route::get('sites/{site}/net-captures', [NetCaptureController::class, 'siteOptions'])->name('terminal.net-captures.site.options');
+    Route::get('net-captures', [NetCaptureController::class, 'index'])->name('terminal.net-captures.index');
+    Route::get('net-captures/{capture}', [NetCaptureController::class, 'show'])->name('terminal.net-captures.show');
+    Route::post('net-captures/{capture}/cancel', [NetCaptureController::class, 'cancel'])->name('terminal.net-captures.cancel');
+    Route::get('net-captures/{capture}/download', [NetCaptureController::class, 'download'])->name('terminal.net-captures.download');
+
+    Route::middleware('throttle:net-captures')->group(function () {
+        Route::post('servers/{server}/net-captures', [NetCaptureController::class, 'server'])->name('terminal.net-captures.server');
+        Route::post('sites/{site}/net-captures', [NetCaptureController::class, 'site'])->name('terminal.net-captures.site');
+        Route::post('databases/instances/{instance}/net-captures', [NetCaptureController::class, 'database'])->name('terminal.net-captures.database');
     });
 });

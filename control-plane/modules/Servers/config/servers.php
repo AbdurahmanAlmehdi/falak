@@ -42,7 +42,7 @@ return [
     // has no suite yet and that one is recent enough (provision.apply docker.min_version).
     'docker' => ['packages' => ['docker-ce', 'docker-ce-cli', 'containerd.io', 'docker-buildx-plugin', 'docker-compose-plugin'], 'service' => 'docker', 'min_version' => '28'],
 
-    'base_packages' => ['acl', 'ca-certificates', 'curl', 'fail2ban', 'git', 'htop', 'jq', 'rsync', 'sqlite3', 'unattended-upgrades', 'unzip', 'zip'],
+    'base_packages' => ['acl', 'ca-certificates', 'curl', 'fail2ban', 'git', 'htop', 'jq', 'rsync', 'sqlite3', 'tcpdump', 'unattended-upgrades', 'unzip', 'zip'],
 
     // Unix user owning sites and receiving synced SSH keys.
     'unix_user' => 'falak',

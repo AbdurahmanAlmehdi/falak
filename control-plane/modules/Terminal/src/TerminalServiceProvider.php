@@ -2,6 +2,8 @@
 
 namespace Falak\Terminal;
 
+use Falak\Fleet\Contracts\AgentRequests;
+use Falak\Fleet\Contracts\AgentUploads;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Fleet\Events\CommandOutputReceived;
@@ -15,11 +17,14 @@ use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Application\Listeners\CloseSessionsOfDeletedServer;
 use Falak\Terminal\Application\Listeners\DropRelayClientsOfMember;
 use Falak\Terminal\Application\Listeners\HandleTerminalCommandOutcome;
+use Falak\Terminal\Application\Listeners\SettleNetCapture;
 use Falak\Terminal\Application\Listeners\SettleNetToolRun;
 use Falak\Terminal\Application\Listeners\StreamTerminalOutput;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Falak\Terminal\Domain\Policies\TerminalSessionPolicy;
 use Falak\Terminal\Http\Channels\TerminalSessionChannel;
+use Falak\Terminal\Infrastructure\AgentRequests\NetCaptureProgress;
+use Falak\Terminal\Infrastructure\AgentRequests\NetCaptureUpload;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
@@ -55,6 +60,12 @@ class TerminalServiceProvider extends ModuleServiceProvider
         // Admins only by default, like terminal.open: a probe from inside a site's or database's network.
         $registry->register('network.tools', [Role::Admin], 'Run network tools (ping, traceroute, DNS, HTTP, TCP) from servers and containers', 'network');
 
+        // Packet capture (docs/plans/network/capture.md): pcaps can hold secrets, so Admin only, audited, kept 24 h.
+        $registry->register('network.capture', [Role::Admin], 'Capture network traffic on servers and containers (pcap downloads may contain sensitive data)', 'network');
+        RateLimiter::for('net-captures', fn (Request $request) => Limit::perMinute(10)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
+        $this->app->make(AgentRequests::class)->register('net.capture.progress', NetCaptureProgress::class);
+        $this->app->make(AgentUploads::class)->register('net.capture', NetCaptureUpload::class);
+
         RateLimiter::for('net-tools', fn (Request $request) => Limit::perMinute(10)->by((string) ($request->user()?->getAuthIdentifier() ?? $request->ip())));
 
         RateLimiter::for('terminal-input', function (Request $request) {
@@ -71,6 +82,8 @@ class TerminalServiceProvider extends ModuleServiceProvider
         Event::listen(CommandFailed::class, [HandleTerminalCommandOutcome::class, 'handleFailed']);
         Event::listen(CommandFinished::class, [SettleNetToolRun::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [SettleNetToolRun::class, 'handleFailed']);
+        Event::listen(CommandFinished::class, [SettleNetCapture::class, 'handleFinished']);
+        Event::listen(CommandFailed::class, [SettleNetCapture::class, 'handleFailed']);
         Event::listen(ServerDeleted::class, CloseSessionsOfDeletedServer::class);
         Event::listen(MemberRemoved::class, DropRelayClientsOfMember::class);
         Event::listen(MemberRoleChanged::class, DropRelayClientsOfMember::class);

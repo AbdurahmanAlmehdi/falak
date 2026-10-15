@@ -35,4 +35,13 @@ return [
         // Agent tokens outlive the session's maximum duration by this many seconds.
         'agent_token_grace' => 300,
     ],
+
+    // Packet captures (docs/plans/network/capture.md): encrypted chunks on this disk, downloadable this long.
+    'captures' => [
+        'disk' => env('FALAK_CAPTURES_DISK', 'local'),
+        'ttl_hours' => 24,
+        // Per organization: captures in progress at once, and started per hour.
+        'max_active' => 3,
+        'max_per_hour' => 10,
+    ],
 ];

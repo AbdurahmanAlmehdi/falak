@@ -19,6 +19,10 @@ return [
     // Agent requests (POST /agent/v1/requests/{type}) per agent and type and minute.
     'agent_requests_per_minute' => 120,
 
+    // Agent uploads (POST /agent/v1/uploads/{type}/{id}): the largest chunk and chunks per agent and minute.
+    'upload_chunk_bytes' => 8 * 1024 * 1024,
+    'agent_uploads_per_minute' => 300,
+
     // Public URLs handed to agents. Defaults derive from APP_URL.
     'panel_url' => env('FALAK_PANEL_URL'),
     'api_url' => env('FALAK_AGENT_API_URL'),

@@ -14,6 +14,7 @@ use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\AgentRequests;
 use Falak\Fleet\Contracts\AgentUpgrades;
+use Falak\Fleet\Contracts\AgentUploads;
 use Falak\Fleet\Contracts\Enrollment;
 use Falak\Fleet\Contracts\ServerCertificates;
 use Falak\Fleet\Events\AgentFactsReported;
@@ -26,6 +27,7 @@ use Falak\Fleet\Http\Channels\CommandChannel;
 use Falak\Fleet\Http\Middleware\AuthenticateAgent;
 use Falak\Fleet\Infrastructure\AgentBinaries;
 use Falak\Fleet\Infrastructure\AgentRequestRegistry;
+use Falak\Fleet\Infrastructure\AgentUploadRegistry;
 use Falak\Fleet\Infrastructure\CaServerCertificates;
 use Falak\Fleet\Infrastructure\EloquentAgentDirectory;
 use Falak\Fleet\Infrastructure\EloquentAgentUpgrades;
@@ -62,6 +64,7 @@ class FleetServiceProvider extends ModuleServiceProvider
         AgentDirectory::class => EloquentAgentDirectory::class,
         ServerCertificates::class => CaServerCertificates::class,
         AgentRequests::class => AgentRequestRegistry::class,
+        AgentUploads::class => AgentUploadRegistry::class,
     ];
 
     public function register(): void
@@ -127,6 +130,9 @@ class FleetServiceProvider extends ModuleServiceProvider
         // Agent requests (POST /agent/v1/requests/{type}): per authenticated agent and type.
         RateLimiter::for('fleet-agent-requests', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_requests_per_minute', 120))
             ->by($request->attributes->get(AuthenticateAgent::AGENT)?->id.':'.$request->route('type')));
+        // Agent uploads (POST /agent/v1/uploads/{type}/{id}): chunks per authenticated agent.
+        RateLimiter::for('fleet-agent-uploads', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_uploads_per_minute', 300))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
 
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register('fleet.commands.view', [Role::Admin, Role::Developer, Role::Viewer], 'View agent command output', 'fleet');

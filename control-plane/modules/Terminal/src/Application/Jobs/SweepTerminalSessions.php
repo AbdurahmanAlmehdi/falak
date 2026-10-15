@@ -4,9 +4,12 @@ namespace Falak\Terminal\Application\Jobs;
 
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Terminal\Application\Actions\CloseSession;
+use Falak\Terminal\Application\Actions\StartNetCapture;
 use Falak\Terminal\Domain\Enums\SessionStatus;
+use Falak\Terminal\Domain\Models\NetCapture;
 use Falak\Terminal\Domain\Models\NetToolRun;
 use Falak\Terminal\Domain\Models\TerminalSession;
+use Falak\Terminal\Infrastructure\NetCaptureStore;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -28,8 +31,10 @@ final class SweepTerminalSessions implements ShouldQueue
 
     public const OPEN_DEADLINE_SECONDS = 120;
 
-    public function handle(CloseSession $close, AgentGateway $agents): void
+    public function handle(CloseSession $close, AgentGateway $agents, NetCaptureStore $captures): void
     {
+        $this->sweepCaptures($captures);
+
         $maxDuration = (int) config('terminal.max_duration', 3600);
 
         // Network tool runs are kept 30 days (their output lives in Fleet's command output).
@@ -58,6 +63,26 @@ final class SweepTerminalSessions implements ShouldQueue
                     $close($session, 'idle');
                 }
             });
+    }
+
+    /**
+     * Packet captures (docs/plans/network/capture.md): files of expired captures are deleted (the row stays, expired, in
+     * the history), captures stuck in progress fail first, and rows go after 30 days.
+     */
+    private function sweepCaptures(NetCaptureStore $store): void
+    {
+        NetCapture::query()->whereIn('status', NetCapture::ACTIVE)->where('created_at', '<', now()->subMinutes(StartNetCapture::STALE_MINUTES))
+            ->each(function (NetCapture $capture) use ($store) {
+                $store->delete($capture->id);
+                $capture->forceFill(['status' => NetCapture::FAILED, 'error' => 'The capture did not finish in time.', 'finished_at' => now()])->save();
+            });
+
+        NetCapture::query()->where('status', NetCapture::READY)->where('expires_at', '<', now())->each(function (NetCapture $capture) use ($store) {
+            $store->delete($capture->id);
+            $capture->forceFill(['status' => NetCapture::EXPIRED])->save();
+        });
+
+        NetCapture::query()->where('created_at', '<', now()->subDays(30))->delete();
     }
 
     private function stillRunning(AgentGateway $agents, TerminalSession $session): bool

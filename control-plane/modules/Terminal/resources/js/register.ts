@@ -1,5 +1,5 @@
 import { registerCommands, registerNavigation, registerServerSections, registerServiceActions } from '@/lib/registry';
-import { Radar, SquareTerminal } from 'lucide-react';
+import { Cable, Radar, SquareTerminal } from 'lucide-react';
 import { lazy } from 'react';
 
 registerNavigation({ id: 'terminal', title: 'Terminal', url: '/terminal', icon: SquareTerminal, order: 600, permission: 'terminal.open' });
@@ -36,6 +36,27 @@ registerServerSections({
     order: 700,
     permission: 'network.tools',
     component: lazy(() => netTools().then((module) => ({ default: module.ServerNetTools }))),
+});
+
+// Packet capture (docs/plans/network/capture.md): Admin only (network.capture), under the network tools.
+const netCapture = () => import('./components/net-capture');
+
+registerServiceActions({
+    id: 'terminal.net-capture',
+    kinds: ['site'],
+    label: 'Packet capture',
+    icon: Cable,
+    order: 320,
+    permission: 'network.capture',
+    when: (ctx) => ctx.service.icon !== 'function',
+    dialog: lazy(() => netCapture().then((module) => ({ default: module.SiteNetCaptureDialog }))),
+});
+
+registerServerSections({
+    id: 'terminal.net-capture',
+    order: 710,
+    permission: 'network.capture',
+    component: lazy(() => netCapture().then((module) => ({ default: module.ServerNetCapture }))),
 });
 
 registerCommands({

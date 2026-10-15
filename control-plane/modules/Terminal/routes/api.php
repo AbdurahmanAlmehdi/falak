@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Terminal\Http\Controllers\Api\ConsoleApiController;
+use Falak\Terminal\Http\Controllers\NetCaptureController;
 use Falak\Terminal\Http\Controllers\NetToolController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,5 +23,19 @@ Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group
         Route::post('servers/{server}/net-tools', [NetToolController::class, 'server'])->name('servers.net-tools');
         Route::post('sites/{site}/net-tools', [NetToolController::class, 'site'])->name('sites.net-tools');
         Route::post('databases/instances/{instance}/net-tools', [NetToolController::class, 'database'])->name('databases.instances.net-tools');
+    });
+});
+
+// `falak net capture` (docs/plans/network/capture.md): start, follow, cancel, download.
+Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group(function () {
+    Route::get('net-captures', [NetCaptureController::class, 'index'])->name('net-captures.index');
+    Route::get('net-captures/{capture}', [NetCaptureController::class, 'show'])->name('net-captures.show');
+    Route::post('net-captures/{capture}/cancel', [NetCaptureController::class, 'cancel'])->name('net-captures.cancel');
+    Route::get('net-captures/{capture}/download', [NetCaptureController::class, 'download'])->name('net-captures.download');
+
+    Route::middleware('throttle:net-captures')->group(function () {
+        Route::post('servers/{server}/net-captures', [NetCaptureController::class, 'server'])->name('servers.net-captures');
+        Route::post('sites/{site}/net-captures', [NetCaptureController::class, 'site'])->name('sites.net-captures');
+        Route::post('databases/instances/{instance}/net-captures', [NetCaptureController::class, 'database'])->name('databases.instances.net-captures');
     });
 });
