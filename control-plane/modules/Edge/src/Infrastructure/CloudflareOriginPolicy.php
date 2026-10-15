@@ -2,9 +2,9 @@
 
 namespace Falak\Edge\Infrastructure;
 
+use Falak\Edge\Contracts\CloudflareRanges;
 use Falak\Edge\Domain\Models\CloudflareTunnel;
 use Falak\Edge\Domain\Models\OriginLock;
-use Falak\Edge\Infrastructure\Dns\CloudflareRanges;
 use Falak\Network\Contracts\WebOriginPolicy;
 
 /**

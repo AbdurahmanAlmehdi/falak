@@ -2,7 +2,9 @@
 
 namespace Falak\Network\Application;
 
+use Falak\Edge\Contracts\CloudflareRanges;
 use Falak\Identity\Contracts\OrganizationDirectory;
+use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Domain\Models\PrivateNetwork;
 use Falak\Network\Domain\Models\PrivateNetworkMember;
 use Falak\Network\Domain\Support\Cidr;
@@ -16,7 +18,7 @@ use Illuminate\Support\Facades\Log;
  * control plane, the organization's servers, its private networks and the addresses its members used the panel from
  * in the last 30 days. Private ranges, broad prefixes and peers the server connects to need an explicit confirmation.
  */
-final class ProtectionGuards
+final class ProtectionGuards implements BlockableAddresses
 {
     /** Never blocked: loopback, "this network", link-local, multicast, broadcast. */
     private const RESERVED = ['0.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16', '224.0.0.0/4', '255.255.255.255', '::', '::1', 'fe80::/10', 'ff00::/8'];
@@ -76,6 +78,60 @@ final class ProtectionGuards
         foreach ($this->organization($organizationId) as [$protected, $what]) {
             if ($cidr->overlaps($protected)) {
                 return "{$cidr} overlaps {$what} ({$protected}).";
+            }
+        }
+
+        foreach (CloudflareRanges::RANGES as $range) {
+            if ($cidr->overlaps(Cidr::parse($range))) {
+                return "{$cidr} overlaps Cloudflare's proxy range {$range}: every site proxied through Cloudflare would stop loading.";
+            }
+        }
+
+        return null;
+    }
+
+    public function unblockable(array $addresses, string $organizationId, ?string $requesterIp = null): array
+    {
+        $out = [];
+        $own = Cidr::fromAddress($requesterIp);
+        $controlPlane = $addresses === [] ? [] : $this->controlPlane();
+
+        foreach (array_unique($addresses) as $address) {
+            if (($cidr = Cidr::fromAddress($address)) !== null && ($label = $this->label($cidr, $organizationId, $own, $controlPlane)) !== null) {
+                $out[$address] = $label;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The same checks as refusal() and confirmation(), as a row label.
+     *
+     * @param  list<Cidr>  $controlPlane
+     */
+    private function label(Cidr $address, string $organizationId, ?Cidr $own, array $controlPlane): ?string
+    {
+        $in = fn (array $ranges) => array_any($ranges, fn (string $range) => $address->overlaps(Cidr::parse($range)));
+
+        return match (true) {
+            $in(self::RESERVED) => 'Reserved',
+            $own !== null && $address->overlaps($own) => 'Your address',
+            array_any($controlPlane, fn (Cidr $cp) => $address->overlaps($cp)) => 'Control plane',
+            default => $this->organizationLabel($address, $organizationId)
+                ?? ($in(CloudflareRanges::RANGES) ? 'Cloudflare' : ($in(self::PRIVATE) ? 'Private range' : null)),
+        };
+    }
+
+    private function organizationLabel(Cidr $address, string $organizationId): ?string
+    {
+        foreach ($this->organization($organizationId) as [$protected, $what]) {
+            if ($address->overlaps($protected)) {
+                return match (true) {
+                    str_starts_with($what, 'the server ') => 'Your server',
+                    $what === self::MEMBER => 'Team member',
+                    default => 'Private network',
+                };
             }
         }
 

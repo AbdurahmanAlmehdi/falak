@@ -17,7 +17,7 @@ use Illuminate\Support\Carbon;
  * @property int $revision
  * @property ?string $desired_hash
  * @property ?string $applied_hash
- * @property string $status pending | applying | applied | failed | unsupported
+ * @property string $status idle (nothing to send) | pending | applying | applied | failed | unsupported
  * @property ?string $command_id
  * @property ?string $error
  * @property ?list<array{cidr: string, error: string}> $failed elements the agent refused

@@ -10,6 +10,7 @@ use Falak\Insights\Contracts\Data\IssueData;
 use Falak\Insights\Contracts\PerformanceFindings;
 use Falak\Insights\Contracts\SecurityFindings;
 use Falak\Kernel\Http\Controller;
+use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Servers\Contracts\Data\ServerData;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\Data\SiteData;
@@ -94,7 +95,7 @@ final class HttpTrafficController extends Controller
     /**
      * GET /telemetry/sites/{siteId}/http/top?table=&range=&server=: one drill-down table over the range (LogQL).
      */
-    public function top(Request $request, string $siteId, LogMetrics $logs, GeoDatabases $geo): JsonResponse
+    public function top(Request $request, string $siteId, LogMetrics $logs, GeoDatabases $geo, BlockableAddresses $blockable): JsonResponse
     {
         $site = $this->site($request, $siteId);
         $table = $request->validate(['table' => ['required', Rule::in(HttpQueries::TABLES)]])['table'];
@@ -122,6 +123,12 @@ final class HttpTrafficController extends Controller
             return response()->json(['message' => $e->getMessage()], 503);
         } catch (TelemetryQueryFailed $e) {
             return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        if ($table === 'clients' || $table === 'threats') {
+            // No "Block" on Cloudflare's edges, the control plane, the organization's servers, …: a label instead.
+            $unblockable = $blockable->unblockable(array_column($result['rows'], 'ip'), $site->organizationId, $request->ip());
+            $result['rows'] = array_map(fn (array $row) => [...$row, 'unblockable' => $unblockable[$row['ip']] ?? null], $result['rows']);
         }
 
         return response()->json(['configured' => true, 'table' => $table, 'range' => $range, ...$result, 'geo' => $geo->status()]);

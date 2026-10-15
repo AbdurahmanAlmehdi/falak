@@ -47,6 +47,8 @@ export interface PeerRow {
     /** The folded peers past the top 20. */
     other?: boolean;
     peers?: number;
+    /** Why the address cannot be blocked ("Control plane", "Cloudflare", "Your server", "Private range", …), from the server's guards. */
+    unblockable?: string | null;
 }
 
 export interface WireGuardRow {
@@ -170,7 +172,7 @@ export function bucketLabel(name: string): string {
  * database, a site), loopback, private (RFC 1918, ULA), CGNAT or link-local addresses.
  */
 export function actionableIp(row: PeerRow): string | null {
-    if (row.other || !row.address || row.peer || isPrivateAddress(row.address)) return null;
+    if (row.other || !row.address || row.peer || row.unblockable || isPrivateAddress(row.address)) return null;
 
     return row.address;
 }

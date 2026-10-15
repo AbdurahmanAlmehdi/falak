@@ -3,6 +3,7 @@
 namespace Falak\Edge\Infrastructure;
 
 use Falak\Edge\Application\ComposeServiceDomains;
+use Falak\Edge\Contracts\CloudflareRanges;
 use Falak\Edge\Contracts\TlsMode;
 use Falak\Edge\Domain\Enums\InstallStatus;
 use Falak\Edge\Domain\Models\Certificate;
@@ -20,7 +21,6 @@ use Falak\Edge\Domain\Models\SecurityRule;
 use Falak\Edge\Domain\Models\ServiceSetting;
 use Falak\Edge\Domain\Models\SiteSetting;
 use Falak\Edge\Domain\Models\Upstream;
-use Falak\Edge\Infrastructure\Dns\CloudflareRanges;
 use Falak\Fleet\Contracts\AgentUpgrades;
 use Falak\Processes\Contracts\OctaneRouting;
 use Falak\Servers\Contracts\ServerDirectory;

@@ -257,11 +257,14 @@ function ShareBar({ title, items, label }: { title: string; items: Share[]; labe
     );
 }
 
-function IpActions({ ip, siteId, context, actions }: { ip: string; siteId: string; context: IpActionProps['context']; actions: IpAction[] }) {
+/** The `network.ip-actions` slot, or why the address cannot be blocked (`unblockable` from the server: "Cloudflare", …). */
+function IpActions({ row, siteId, context, actions }: { row: Row; siteId: string; context: IpActionProps['context']; actions: IpAction[] }) {
+    if (typeof row.unblockable === 'string') return <Tag>{row.unblockable}</Tag>;
+
     return (
         <span className="flex justify-end gap-1">
             {actions.map(({ id, component: Action }) => (
-                <Action key={id} ip={ip} siteId={siteId} serverId={null} context={context} />
+                <Action key={id} ip={String(row.ip)} siteId={siteId} serverId={null} context={context} />
             ))}
         </span>
     );
@@ -304,15 +307,11 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
             { head: 'Country', cell: (r: Row) => <Country row={r} /> },
             { head: 'Network', cell: (r: Row) => (r.as_org ? `${String(r.as_org)} (AS${String(r.asn)})` : '—') },
             { head: 'Requests', cell: (r: Row) => Number(r.requests).toLocaleString(), right: true },
-            ...(actions.length > 0
-                ? [
-                      {
-                          head: '',
-                          cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} context="http_clients" actions={actions} />,
-                          right: true,
-                      },
-                  ]
-                : []),
+            {
+                head: '',
+                cell: (r: Row) => <IpActions row={r} siteId={siteId} context="http_clients" actions={actions} />,
+                right: true,
+            },
         ],
         agents: [
             { head: 'User agent', cell: (r: Row) => <span className="font-mono break-all">{String(r.user_agent)}</span> },
@@ -332,15 +331,11 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
             { head: 'Country', cell: (r: Row) => <Country row={r} /> },
             { head: 'Tried', cell: (r: Row) => describeRules((r.rules as Record<string, number>) ?? {}, Number(r.not_found ?? 0)) },
             { head: 'Requests', cell: (r: Row) => (Number(r.requests) + Number(r.not_found ?? 0)).toLocaleString(), right: true },
-            ...(actions.length > 0
-                ? [
-                      {
-                          head: '',
-                          cell: (r: Row) => <IpActions ip={String(r.ip)} siteId={siteId} context="http_threats" actions={actions} />,
-                          right: true,
-                      },
-                  ]
-                : []),
+            {
+                head: '',
+                cell: (r: Row) => <IpActions row={r} siteId={siteId} context="http_threats" actions={actions} />,
+                right: true,
+            },
         ],
     }[table];
 

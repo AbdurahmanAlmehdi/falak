@@ -104,10 +104,11 @@ final class ApplyProtection
                 return $state;
             }
 
-            // Nothing to protect and never sent: no table is created on the host.
+            // Nothing to protect and never sent: no table is created on the host. `idle`, not `pending`: nothing is
+            // waiting (a block or SSH auto-ban sends it).
             if ($state->revision === 0 && ! $state->auto_ban && empty($state->released)
                 && ! IpBlock::query()->active()->forServer($server->organizationId, $server->id)->exists()) {
-                $state->forceFill(['status' => 'pending', 'error' => null])->save();
+                $state->forceFill(['status' => 'idle', 'error' => null])->save();
 
                 return $state;
             }
@@ -129,7 +130,7 @@ final class ApplyProtection
             $state->desired_hash = $hash;
 
             if (! $server->isActive()) {
-                $state->forceFill(['status' => 'pending', 'error' => null])->save();
+                $state->forceFill(['status' => 'pending', 'error' => "The server is {$server->status->value}: protection is sent once it is active."])->save();
 
                 return $state;
             }

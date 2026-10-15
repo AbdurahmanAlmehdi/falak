@@ -12,6 +12,7 @@ use Falak\Kernel\Http\Controller;
 use Falak\Network\Application\Actions\RecordNetworkObservation;
 use Falak\Network\Application\ConfigureConnections;
 use Falak\Network\Application\Queries\ConnectionQueries;
+use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Domain\Models\NetworkObservation;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Servers\Contracts\ServerHeaders;
@@ -46,6 +47,7 @@ final class ConnectionsController extends Controller
         private readonly DatabaseDirectory $databases,
         private readonly AgentDirectory $agents,
         private readonly MetricsBackend $metrics,
+        private readonly BlockableAddresses $blockable,
     ) {}
 
     /** GET /servers/{server}/network: the server's Network tab (its data comes from the JSON endpoints below). */
@@ -196,7 +198,8 @@ final class ConnectionsController extends Controller
     }
 
     /**
-     * Every workload's peers of one direction, named, with the reverse DNS of unnamed addresses; most connections first.
+     * Every workload's peers of one direction, named, with the reverse DNS of unnamed addresses and why an address cannot
+     * be blocked (`unblockable`: "Control plane", "Cloudflare", …); most connections first.
      *
      * @param  list<array<string, mixed>>  $workloads
      * @return list<array<string, mixed>>
@@ -219,9 +222,11 @@ final class ConnectionsController extends Controller
 
         $unnamed = array_values(array_unique(array_filter(array_map(fn ($r) => $r['peer'] === null ? $r['address'] : null, $rows))));
         $rdns = $unnamed === [] ? [] : DB::table('network_peer_names')->whereIn('address', $unnamed)->whereNotNull('name')->pluck('name', 'address')->all();
+        $unblockable = $this->blockable->unblockable(array_values(array_filter(array_column($rows, 'address'))), $this->organization->requireId(), request()->ip());
         usort($rows, fn ($a, $b) => [isset($a['other']), -$a['connections']] <=> [isset($b['other']), -$b['connections']]);
 
-        return array_map(fn ($r) => [...$r, 'rdns' => $r['address'] !== null ? ($rdns[$r['address']] ?? null) : null], $rows);
+        return array_map(fn ($r) => [...$r, 'rdns' => $r['address'] !== null ? ($rdns[$r['address']] ?? null) : null,
+            'unblockable' => $r['address'] !== null ? ($unblockable[$r['address']] ?? null) : null], $rows);
     }
 
     /**

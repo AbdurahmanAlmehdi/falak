@@ -23,6 +23,8 @@ use Falak\Network\Application\Listeners\HandleProtectionOutcome;
 use Falak\Network\Application\Listeners\ReconfigureConnections;
 use Falak\Network\Application\Listeners\ReconvergeProtection;
 use Falak\Network\Application\Listeners\SeedFirewallOnProvisioning;
+use Falak\Network\Application\ProtectionGuards;
+use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Contracts\Firewalls;
 use Falak\Network\Contracts\PrivateNetwork as PrivateNetworkContract;
 use Falak\Network\Contracts\WebOriginPolicy;
@@ -64,6 +66,8 @@ class NetworkServiceProvider extends ModuleServiceProvider
         $this->mergeConfigFrom($this->modulePath().'/config/network.php', 'network');
         // Edge replaces this for servers behind Cloudflare (origin lock-down).
         $this->app->singletonIf(WebOriginPolicy::class, NoWebOriginPolicy::class);
+        // Not a singleton: the guards memoize the organization's protected addresses for one request / job.
+        $this->app->bind(BlockableAddresses::class, ProtectionGuards::class);
     }
 
     protected function bootModule(): void

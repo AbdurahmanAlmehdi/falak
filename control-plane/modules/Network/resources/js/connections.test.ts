@@ -73,6 +73,7 @@ describe('actionableIp', () => {
         expect(actionableIp(row({ address: '172.32.0.1' }))).toBe('172.32.0.1');
         expect(actionableIp(row({ address: '2001:db8::1' }))).toBe('2001:db8::1');
         expect(actionableIp(row({ address: '203.0.113.11', peer: { label: 'app-2', url: '/servers/x' } }))).toBeNull();
+        expect(actionableIp(row({ address: '172.70.1.2', unblockable: 'Cloudflare' }))).toBeNull();
     });
 });
 

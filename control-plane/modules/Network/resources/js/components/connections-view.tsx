@@ -322,7 +322,7 @@ function PeerTable({
                   },
               ]
             : []),
-        ...(actions.length > 0
+        ...(actions.length > 0 || rows.some((row) => row.unblockable)
             ? [
                   {
                       id: 'actions',
@@ -331,7 +331,9 @@ function PeerTable({
                       cell: (row: PeerRow) => {
                           const ip = actionableIp(row);
 
-                          return ip ? (
+                          if (row.unblockable) return <Tag>{row.unblockable}</Tag>;
+
+                          return ip && actions.length > 0 ? (
                               <span className="flex justify-end gap-1">
                                   {actions.map(({ id, component: Action }) => (
                                       <Action key={id} ip={ip} serverId={serverId} siteId={siteId} context={context} />

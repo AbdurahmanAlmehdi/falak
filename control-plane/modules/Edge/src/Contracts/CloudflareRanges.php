@@ -1,6 +1,6 @@
 <?php
 
-namespace Falak\Edge\Infrastructure\Dns;
+namespace Falak\Edge\Contracts;
 
 use Symfony\Component\HttpFoundation\IpUtils;
 

@@ -260,3 +260,36 @@ it('never brings back a released auto-ban from a report built before the release
     guards_report(['at' => now()->toIso8601String(), 'bans' => [['cidr' => '203.0.113.66', 'until' => now()->addHour()->toIso8601String(), 'failures' => 30]]])->assertOk();
     expect(IpBlock::query()->sole()->source)->toBe('auto');
 });
+
+it('says nothing is waiting when a server has nothing to protect, and why when it waits', function () {
+    expect(app(ApplyProtection::class)($this->server->id)->status)->toBe('idle');
+
+    $this->server->update(['status' => 'provisioning']);
+    IpBlock::query()->forceCreate(['id' => (string) Str::ulid(), 'organization_id' => $this->organization->id, 'server_id' => $this->server->id,
+        'cidr' => '203.0.113.7', 'family' => 'ipv4', 'source' => 'manual']);
+
+    $state = app(ApplyProtection::class)($this->server->id);
+    expect($state->status)->toBe('pending')->and($state->error)->toContain('provisioning');
+});
+
+it("refuses Cloudflare's proxy ranges", function () {
+    guards_block(['address' => '172.70.1.2'])->assertUnprocessable()->assertJsonValidationErrors(['address' => "Cloudflare's proxy range"]);
+    guards_block(['address' => '2606:4700::/48'])->assertUnprocessable()->assertJsonValidationErrors(['address' => "Cloudflare's proxy range"]);
+});
+
+it('labels the addresses a row must not offer Block on', function () {
+    $labels = app(ProtectionGuards::class)->unblockable(
+        ['198.51.100.200', '192.0.2.10', '162.158.4.5', '10.0.0.3', '127.0.0.1', '203.0.113.250', '203.0.113.9', 'not-an-ip'],
+        $this->organization->id,
+        '203.0.113.250',
+    );
+
+    expect($labels)->toBe([
+        '198.51.100.200' => 'Control plane',
+        '192.0.2.10' => 'Your server',
+        '162.158.4.5' => 'Cloudflare',
+        '10.0.0.3' => 'Private range',
+        '127.0.0.1' => 'Reserved',
+        '203.0.113.250' => 'Your address',
+    ]);
+});

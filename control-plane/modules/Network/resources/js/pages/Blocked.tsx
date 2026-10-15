@@ -328,7 +328,11 @@ export default function Blocked({ blocks, servers, yourIp, can }: Props) {
                                     <span className="text-danger text-xs">failed{server.error ? `: ${server.error}` : ''}</span>
                                 ) : (
                                     <span className="text-fg-muted text-xs">
-                                        {server.status ?? 'nothing to apply'}
+                                        {server.status === null || server.status === 'idle'
+                                            ? 'nothing to apply'
+                                            : server.status === 'pending' && server.error
+                                              ? `waiting: ${server.error}`
+                                              : server.status}
                                         {server.failed.length > 0 && ` · ${server.failed.length} refused`}
                                     </span>
                                 ),
