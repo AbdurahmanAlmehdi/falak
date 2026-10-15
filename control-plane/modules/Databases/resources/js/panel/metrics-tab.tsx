@@ -88,7 +88,7 @@ export function DatabaseMetricsTab({ ctx }: ServiceTabProps) {
         keys.some((key) => hasValues(charts[key])) ? undefined : (data?.errors[keys[0]] ?? 'No data in this range');
     const connectionSeries: MetricSeries[] = [
         ...view.connections.keys.map((key) => ({ key, label: CONNECTION_STATES[key] ?? key, mark: 'area' as const, stack: 'c' })),
-        { key: 'max', label: 'Limit', color: LIMIT, dashed: true },
+        { key: 'max', label: 'Limit', color: LIMIT, reference: true },
     ];
 
     return (
@@ -166,8 +166,8 @@ export function DatabaseMetricsTab({ ctx }: ServiceTabProps) {
                     series={[
                         { key: 'db', label: 'This database', mark: 'area', stack: 'cpu' },
                         { key: 'rest', label: 'Rest of the server', mark: 'area', stack: 'cpu', color: REST },
-                        { key: 'limit', label: 'Limit', color: LIMIT, dashed: true },
-                        { key: 'server', label: 'Server cores', color: CAPACITY, dashed: true },
+                        { key: 'limit', label: 'Limit', color: LIMIT, reference: true },
+                        { key: 'server', label: 'Server cores', color: CAPACITY, reference: true },
                     ]}
                     value={latest(view.cpu, 'db') !== null ? cores(latest(view.cpu, 'db')!) : undefined}
                     format={cores}
@@ -183,8 +183,8 @@ export function DatabaseMetricsTab({ ctx }: ServiceTabProps) {
                         { key: 'used', label: 'Used', mark: 'area', stack: 'mem' },
                         { key: 'rest', label: 'Rest of the server', mark: 'area', stack: 'mem', color: REST },
                         { key: 'cache', label: 'Page cache', dashed: true },
-                        { key: 'limit', label: 'Limit', color: LIMIT, dashed: true },
-                        { key: 'server', label: 'Server memory', color: CAPACITY, dashed: true },
+                        { key: 'limit', label: 'Limit', color: LIMIT, reference: true },
+                        { key: 'server', label: 'Server memory', color: CAPACITY, reference: true },
                     ]}
                     value={latest(view.memory, 'used') !== null ? bytes(latest(view.memory, 'used')!) : undefined}
                     format={bytes}
@@ -199,7 +199,7 @@ export function DatabaseMetricsTab({ ctx }: ServiceTabProps) {
                             data={view.kvMemory}
                             series={[
                                 { key: 'used', label: 'used_memory' },
-                                { key: 'max', label: 'maxmemory', color: LIMIT, dashed: true },
+                                { key: 'max', label: 'maxmemory', color: LIMIT, reference: true },
                             ]}
                             format={bytes}
                             loading={initial}

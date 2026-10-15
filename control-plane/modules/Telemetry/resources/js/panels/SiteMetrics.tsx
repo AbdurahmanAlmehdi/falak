@@ -21,6 +21,7 @@ import {
     memorySeries,
     oomKills,
     peak,
+    quietAsZero,
     REST,
     serviceRows,
     SITE,
@@ -135,7 +136,7 @@ export default function SiteMetrics({ siteId }: SiteMetricsProps) {
     const several = servers.length > 1 && server === ALL_SERVERS;
 
     const requests = useMemo(() => combine({ value: data?.charts.requests }), [data]);
-    const errors = useMemo(() => combine({ value: data?.charts.errors }), [data]);
+    const errors = useMemo(() => quietAsZero(combine({ value: data?.charts.errors, seen: data?.charts.requests })), [data]);
     const p95 = useMemo(() => combine({ value: data?.charts.p95 }, { value: 'max' }), [data]);
     const cpu = useMemo(
         () =>
@@ -220,8 +221,8 @@ export default function SiteMetrics({ siteId }: SiteMetricsProps) {
     const cpuSeries: MetricSeries[] = [
         { key: 'site', label: 'Site', mark: 'area', stack: 'cpu', color: SITE },
         { key: 'rest', label: restLabel, mark: 'area', stack: 'cpu', color: REST },
-        { key: 'limit', label: limitLabel, color: LIMIT, dashed: true },
-        { key: 'capacity', label: several ? 'Servers’ cores' : 'Server cores', color: CAPACITY, dashed: true },
+        { key: 'limit', label: limitLabel, color: LIMIT, reference: true },
+        { key: 'capacity', label: several ? 'Servers’ cores' : 'Server cores', color: CAPACITY, reference: true },
     ];
     const memoryChartSeries = memorySeries({ rest: restLabel, limit: limitLabel, capacity: `${capacityLabel} memory` });
     const note = data ? unmeasuredNote(measured, data.shared_user === true, data.agent_outdated === true) : null;
@@ -382,7 +383,7 @@ export default function SiteMetrics({ siteId }: SiteMetricsProps) {
                                     data={pids}
                                     series={[
                                         { key: 'pids', label: 'Processes', color: SITE },
-                                        { key: 'limit', label: limitLabel, color: LIMIT, dashed: true },
+                                        { key: 'limit', label: limitLabel, color: LIMIT, reference: true },
                                     ]}
                                     value={latest(pids, 'pids') ?? undefined}
                                     format={(value) => value.toFixed(0)}

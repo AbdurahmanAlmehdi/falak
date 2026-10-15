@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { combine, formatCores, hasValues, latest, memorySeries, oomKills, peak, serviceRows, unmeasuredNote, withLabel } from './site-metrics';
+import {
+    combine,
+    formatCores,
+    hasValues,
+    latest,
+    memorySeries,
+    oomKills,
+    peak,
+    quietAsZero,
+    serviceRows,
+    unmeasuredNote,
+    withLabel,
+} from './site-metrics';
 import { type MetricSeriesDto } from './types';
 
 const series = (labels: Record<string, string>, points: [number, number | null][]): MetricSeriesDto => ({ labels, points });
@@ -128,6 +140,26 @@ describe('formatCores', () => {
         expect(formatCores(1.5)).toBe('1.5');
         expect(formatCores(2)).toBe('2');
         expect(formatCores(16)).toBe('16');
+    });
+});
+
+describe('quietAsZero', () => {
+    it('reads a missing counter as 0 where the requests have a value', () => {
+        const points = combine({
+            value: [series({}, [[2, 1]])],
+            seen: [
+                series({}, [
+                    [1, 5],
+                    [2, 6],
+                ]),
+            ],
+        });
+
+        expect(quietAsZero(points)).toEqual([
+            { t: 1, value: 0 },
+            { t: 2, value: 1 },
+        ]);
+        expect(quietAsZero(combine({ value: [], seen: [] }))).toEqual([]);
     });
 });
 

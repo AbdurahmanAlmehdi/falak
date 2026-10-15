@@ -16,6 +16,7 @@ import {
     YAxis,
     type TooltipContentProps,
 } from 'recharts';
+import { axisLabel, axisWidth, niceTicks, splitSeries } from './metric-scale';
 import { Skeleton } from './skeleton';
 
 export interface MetricSeries {
@@ -28,8 +29,10 @@ export interface MetricSeries {
     mark?: 'area' | 'line';
     /** `composed` charts: areas with the same stack id stack on each other. */
     stack?: string;
-    /** Dashed stroke (limits, capacity). */
+    /** Dashed stroke. */
     dashed?: boolean;
+    /** A limit or capacity: dashed, never sets the scale, drawn only within 2× of the largest usage (else named in the legend). */
+    reference?: boolean;
 }
 
 /** A point in time marked with a vertical line (e.g. an OOM kill). */
@@ -136,7 +139,28 @@ export function MetricChart({
 }: MetricChartProps) {
     const gradientId = useId().replace(/:/g, '');
     const [showTable, setShowTable] = useState(false);
-    const visible = useMemo(() => series.slice(0, SERIES_COLORS.length), [series]);
+    // Colors follow the declared order; series without points are left out (legend included).
+    const {
+        drawn: visible,
+        offScale,
+        max,
+    } = useMemo(
+        () =>
+            splitSeries(
+                data,
+                series
+                    .slice(0, SERIES_COLORS.length)
+                    .map((item, index) => ({ ...item, color: colorOf(series, index), dashed: item.dashed || item.reference })),
+                type === 'composed',
+            ),
+        [data, series, type],
+    );
+    const negative = useMemo(
+        () => visible.some((item) => data.some((point) => typeof point[item.key] === 'number' && (point[item.key] as number) < 0)),
+        [data, visible],
+    );
+    const ticks = negative ? undefined : niceTicks(Math.max(max ?? 0, minMax ?? 0), format);
+    const tableSeries = [...visible, ...offScale.map(({ item }) => item)];
 
     const common = {
         data,
@@ -148,12 +172,14 @@ export function MetricChart({
             <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="0" />
             <XAxis dataKey="t" tickFormatter={timeFormat} tick={tickStyle} axisLine={false} tickLine={false} minTickGap={32} />
             <YAxis
-                tickFormatter={format}
+                tickFormatter={(tick: number) => axisLabel(tick, format)}
                 tick={tickStyle}
                 axisLine={false}
                 tickLine={false}
-                width={44}
-                domain={minMax !== undefined ? [0, (dataMax: number) => Math.max(dataMax, minMax)] : undefined}
+                width={ticks ? axisWidth(ticks, format) : 56}
+                ticks={ticks}
+                interval={0}
+                domain={ticks ? [0, ticks[ticks.length - 1]] : undefined}
             />
             <Tooltip
                 cursor={type === 'bar' ? { fill: 'var(--surface-2)' } : { stroke: 'var(--border-strong)', strokeWidth: 1 }}
@@ -277,7 +303,7 @@ export function MetricChart({
             <figcaption className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="text-fg-muted text-xs font-medium">{title}</span>
                 {value !== undefined && <span className="text-fg tabular text-base font-semibold">{value}</span>}
-                {visible.length > 1 && (
+                {(visible.length > 1 || offScale.length > 0) && (
                     <ul className="text-fg-muted flex flex-wrap items-center gap-3 text-xs" aria-label="Legend">
                         {visible.map((item, index) => (
                             <li key={item.key} className="flex items-center gap-1.5">
@@ -289,11 +315,21 @@ export function MetricChart({
                                 {item.label}
                             </li>
                         ))}
+                        {offScale.map(({ item, max: itemMax }) => (
+                            <li
+                                key={item.key}
+                                className="text-fg-faint flex items-center gap-1.5"
+                                title="Not drawn: more than twice the largest value shown"
+                            >
+                                <span className="w-3 border-t-2 border-dashed" style={{ borderColor: item.color }} aria-hidden />
+                                {item.label} <span className="tabular">{format(itemMax)}</span>
+                            </li>
+                        ))}
                     </ul>
                 )}
                 <div className="ml-auto flex items-center gap-2">
                     {actions}
-                    {data.length > 0 && (
+                    {visible.length > 0 && (
                         <button
                             type="button"
                             className="text-2xs text-fg-faint hover:text-fg rounded-sm"
@@ -307,7 +343,7 @@ export function MetricChart({
             </figcaption>
             {loading ? (
                 <Skeleton style={{ height }} />
-            ) : data.length === 0 ? (
+            ) : visible.length === 0 ? (
                 <div className="text-fg-faint flex items-center justify-center text-sm" style={{ height }}>
                     {emptyText}
                 </div>
@@ -317,7 +353,7 @@ export function MetricChart({
                         <thead className="bg-surface-1 text-fg-faint sticky top-0">
                             <tr>
                                 <th className="py-1 text-left font-medium">Time</th>
-                                {visible.map((item) => (
+                                {tableSeries.map((item) => (
                                     <th key={item.key} className="py-1 text-right font-medium">
                                         {item.label}
                                     </th>
@@ -328,7 +364,7 @@ export function MetricChart({
                             {data.map((point, index) => (
                                 <tr key={index} className="border-border border-t">
                                     <td className="text-fg-muted py-1">{timeFormat(point.t)}</td>
-                                    {visible.map((item) => {
+                                    {tableSeries.map((item) => {
                                         const cell = point[item.key];
 
                                         return (

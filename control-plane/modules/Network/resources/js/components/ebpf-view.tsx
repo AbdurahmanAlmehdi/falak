@@ -172,7 +172,7 @@ export function EbpfView({ url, scope, range, service }: EbpfViewProps) {
                                         mark: 'area' as const,
                                         stack: 'o',
                                     }))}
-                                    format={(value) => `${(value * 100).toFixed(2)}% of a CPU`}
+                                    format={(value) => `${(value * 100).toFixed(2)}% CPU`}
                                     value={
                                         servers[0]?.probe?.overhead_percent !== undefined
                                             ? `${servers[0].probe.overhead_percent}% of capacity`

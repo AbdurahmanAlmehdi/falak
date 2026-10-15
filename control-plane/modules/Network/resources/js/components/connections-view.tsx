@@ -150,7 +150,7 @@ export function ConnectionsView({ url, scope, serverId = null, siteId = null }: 
                             data={view.conntrack}
                             series={[
                                 { key: 'value', label: 'Entries' },
-                                { key: 'limit', label: 'Limit', color: 'var(--danger)', dashed: true },
+                                { key: 'limit', label: 'Limit', color: 'var(--danger)', reference: true },
                             ]}
                             value={conntrackPercent(data?.conntrack) !== null ? `${conntrackPercent(data?.conntrack)}%` : undefined}
                             format={count}

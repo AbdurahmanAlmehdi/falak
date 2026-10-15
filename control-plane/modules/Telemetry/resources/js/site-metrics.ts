@@ -33,6 +33,14 @@ export function combine(sources: Record<string, MetricSeriesDto[] | undefined>, 
     return [...byTime.values()].sort((a, b) => Number(a.t) - Number(b.t));
 }
 
+/**
+ * A quiet counter (no 5xx at all) has no series: its value is 0 at each step where `seen` (the workload's requests)
+ * has one, so the chart shows 0 instead of "No data".
+ */
+export function quietAsZero(points: MetricPoint[]): MetricPoint[] {
+    return points.map(({ seen, ...point }) => (typeof point.value !== 'number' && typeof seen === 'number' ? { ...point, value: 0 } : point));
+}
+
 /** Whether any series carries a value. */
 export function hasValues(series: MetricSeriesDto[] | undefined): boolean {
     return (series ?? []).some((item) => item.points.some(([, value]) => value !== null));
@@ -75,8 +83,8 @@ export function memorySeries(labels: { rest: string; limit: string; capacity: st
         { key: 'used', label: 'Used', mark: 'area', stack: 'memory', color: SITE },
         { key: 'rest', label: labels.rest, mark: 'area', stack: 'memory', color: REST },
         { key: 'cache', label: 'Cache (reclaimable)', color: CACHE },
-        { key: 'limit', label: labels.limit, color: LIMIT, dashed: true },
-        { key: 'capacity', label: labels.capacity, color: CAPACITY, dashed: true },
+        { key: 'limit', label: labels.limit, color: LIMIT, reference: true },
+        { key: 'capacity', label: labels.capacity, color: CAPACITY, reference: true },
     ];
 }
 
