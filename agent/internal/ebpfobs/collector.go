@@ -205,18 +205,31 @@ func (c *Collector) stop() {
 
 // Tick reconciles the probe with the setting and, while it runs, reads it and emits the metrics.
 func (c *Collector) Tick() {
-	c.mu.Lock()
-	c.reconcileLocked()
-	var rms []*metricspb.ResourceMetrics
-	if c.src != nil {
-		rms = c.collectLocked()
-	}
-	c.mu.Unlock()
+	rms := c.tick()
 	if c.opts.Out != nil {
 		for _, rm := range rms {
 			c.opts.Out.EmitMetrics(rm)
 		}
 	}
+}
+
+// tick is one pass under the lock; a panic detaches the probe (state failed) instead of taking the agent down.
+func (c *Collector) tick() (rms []*metricspb.ResourceMetrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	defer func() {
+		if r := recover(); r != nil {
+			c.closeLocked()
+			c.status.State, c.status.Detail = StateFailed, fmt.Sprintf("probe read panicked: %v", r)
+			c.log.Error("eBPF probe detached after a panic", "panic", r)
+			rms = nil
+		}
+	}()
+	c.reconcileLocked()
+	if c.src != nil {
+		rms = c.collectLocked()
+	}
+	return rms
 }
 
 // reconcileLocked starts or stops the probe. Called with c.mu held.

@@ -37,15 +37,15 @@ It answers with its status (below) and also reports it in **facts** (`facts.ebpf
 
 ### Capability detection
 
-Checked once at start and again on every `enabled: true`: Linux on amd64 or arm64, kernel ≥ 5.8 (`uname -r`: BTF
-raw tracepoints, `BPF_ENABLE_STATS`, `bpf_sk_cgroup_id`), `/sys/kernel/btf/vmlinux` readable (CO-RE), cgroup v2 at
+Checked for the first facts report and again on every `enabled: true`: Linux on amd64 or arm64, kernel ≥ 5.8
+(`/proc/sys/kernel/osrelease`: BTF raw tracepoints, `BPF_ENABLE_STATS`, `bpf_skb_cgroup_id` in `cgroup_skb`), `/sys/kernel/btf/vmlinux` readable (CO-RE), cgroup v2 at
 `/sys/fs/cgroup` (`cgroup.controllers`), and a `bpf()` syscall that works (a tiny array map is created and closed: it
 fails with `EPERM` in an unprivileged container or under a seccomp profile that denies it). `RLIMIT_MEMLOCK` is lifted
 for kernels before 5.11 (`rlimit.RemoveMemlock`). A missing capability is reported, never retried in a loop.
 
 ### Never failing the agent
 
-Loading happens in the collector's goroutine with a recover; any error (verifier rejection, a missing tracepoint on an
+Loading and every read run under a recover; any error (verifier rejection, a missing tracepoint on an
 exotic kernel, attach failure) leaves the state `failed` with the error in `detail`, closes what was attached and
 loaded, and the agent goes on. Each program group attaches alone: a kernel without one tracepoint loses that group, not
 the others (`degraded`, `detail` says which). `enabled: false`, agent shutdown and an over-budget trip close every link
@@ -76,9 +76,9 @@ everything is counted in maps.
 | `hists` | LRU hash | 4,096 | owner + kind (connect, RTT, DNS, run queue) → 27 log2 µs buckets, sum, count |
 | `dns_names` | LRU hash | 4,096 | cgroup id + uid + query name (wire format, 64 bytes) → queries, responses, NXDOMAIN, SERVFAIL, REFUSED, other errors, latency sum |
 | `dns_pending` | LRU hash | 4,096 | socket cookie + DNS id → query time and its `dns_names` key |
-| `runq_start` | LRU hash | 16,384 | pid → wakeup time |
+| `runq_start` | hash | 16,384 | pid → wakeup time (a plain hash: an LRU update takes a lock on every wakeup; when full, new wakeups go unmeasured until entries are consumed) |
 
-≈ 4 MB of kernel memory in all at the caps. An evicted entry loses what it counted since the agent's last read
+About 4–6 MB of kernel memory in all at the caps. An evicted entry loses what it counted since the agent's last read
 (under-counting, never double counting); the user-space reader treats a counter that went down as a new key.
 
 ### TCP
@@ -172,15 +172,24 @@ Budget: **< 1 % of the machine's CPU capacity** (all CPUs), measured, not assume
 
 Over a 5-minute window (20 passes at 15 s): above budget with the run-queue programs on, they are detached first
 (`degraded`, `detail` "run-queue programs shed: 1.4 % of CPU"); still above budget, everything is detached
-(`over_budget`) until the setting is turned off and on again or the agent restarts. Measured costs (per event, from
-`run_time_ns / run_cnt` on the 6.10 arm64 test kernel): see "Measurements" below; estimate for a small web server
-(2 vCPU, ~2,000 packets/s, ~10,000 context switches/s): DNS hooks ~0.05 %, TCP ~0.01 %, run queue ~0.3 % of capacity.
+(`over_budget`) until the setting is turned on again (`net.ebpf.configure`) or the agent restarts.
 
 ### Measurements
 
-Linux 6.10.14 arm64 (Docker Desktop VM, 8 vCPU), privileged container, `go test -run TestLoadAttach` with a load
-generator: see the test's log line (ns per run per program group); figures are in the release notes of the version
-that ships it. The live servers (Ubuntu 24.04, kernels 6.8 and 6.17, x86_64) are to be checked with the setting on.
+Linux 6.10.14 arm64 (Docker Desktop's VM, 8 vCPU, BTF on), privileged container, `go test -run
+'TestLoadAttach|TestOverheadUnderLoad'` with `FALAK_EBPF_BENCH=1` (3 s of channel ping-pong, loopback TCP connections
+with data and DNS queries as fast as one goroutine goes; the counts include everything else the VM ran):
+
+| Group | Events/s under that load | Cost per event | CPU |
+|---|---|---|---|
+| `dns` (`cgroup_skb`, every packet) | 378,000 | 52 ns | 20 ms/s |
+| `tcp` (`inet_sock_set_state`, retransmits, resets) | 157,000 | 169 ns | 27 ms/s |
+| `runq` (wakeups and switches) | 112,000 | 249 ns | 28 ms/s |
+
+That synthetic load is ~0.9 % of the 8 CPUs, i.e. inside the budget even there. A small web server (2 vCPU, ~2,000
+packets/s, ~100 new connections/s, ~10,000 context switches/s) costs ≈ 0.1 ms/s (DNS hooks) + 0.1 ms/s (TCP) +
+5 ms/s (run queue) ≈ 0.27 % of its capacity; the run queue is most of it, which is why it is shed first. The numbers
+include `BPF_ENABLE_STATS` itself. Not yet measured on the live x86_64 servers (Ubuntu 24.04, kernels 6.8 and 6.17).
 
 ## Control plane
 
@@ -235,11 +244,12 @@ connects) and run-queue delay; the server's adds the switch and the probe's over
 | Type | Condition (5-minute window) | Severity |
 |---|---|---|
 | `network.dns_failures` | failures other than NXDOMAIN ≥ `dns_failures_min` (60) **and** ≥ `dns_failure_ratio` (20 %) of the queries, held `alert_seconds` (300) | Warning |
-| `network.tcp_retransmits` | retransmits ≥ `retransmits_min` (600, ~2/s) **and** ≥ `retransmit_ratio` (0.05) per connection seen, held 300 s | Warning |
+| `network.tcp_retransmits` | retransmits ≥ `retransmits_min` (600, ~2/s), held 300 s | Warning |
 
 Keys `network.dns_failures:<server>:<workload>` / `network.tcp_retransmits:<server>:<workload>`; conditions of workloads
 no longer reporting are cleared (`clearExcept`). NXDOMAIN is left out: search domains and probes make it common and
-harmless. Config `network.ebpf` (`dns_failures_min`, `dns_failure_ratio`, `retransmits_min`, `retransmit_ratio`,
+harmless. Retransmits have no ratio: the probe counts no segments sent, and a long-lived connection makes no new
+connects to divide by. Config `network.ebpf` (`dns_failures_min`, `dns_failure_ratio`, `retransmits_min`,
 `alert_seconds`).
 
 ## Security

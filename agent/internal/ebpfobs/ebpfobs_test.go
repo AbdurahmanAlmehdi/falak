@@ -524,6 +524,24 @@ func TestStatesAndConfigure(t *testing.T) {
 	}
 }
 
+type panicky struct{ *fakeSource }
+
+func (panicky) Peers(func(peerKey, peerVal)) error { panic("map gone") }
+
+func TestAPanickingReadDetachesInsteadOfCrashing(t *testing.T) {
+	src := newFake()
+	c, out, now := testCollector(t, src, Options{})
+	c.mu.Lock()
+	c.src = panicky{src}
+	c.mu.Unlock()
+	if p := pass(c, out, now, 15*time.Second); len(p) != 0 {
+		t.Errorf("points after a panic: %v", p)
+	}
+	if s := c.Status(); s.State != StateFailed || !strings.Contains(s.Detail, "map gone") || !src.closed {
+		t.Errorf("%+v closed %v", s, src.closed)
+	}
+}
+
 func TestMetricsOffDetaches(t *testing.T) {
 	src := newFake()
 	c, _, _ := testCollector(t, src, Options{})
