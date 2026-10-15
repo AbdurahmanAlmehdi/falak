@@ -29,7 +29,6 @@ use Falak\Insights\Infrastructure\TrackedDatabaseIssues;
 use Falak\Insights\Infrastructure\TrackedSecurityIssues;
 use Falak\Insights\Infrastructure\TrackedTrafficFindings;
 use Falak\Insights\Infrastructure\TrackedUptimeIssues;
-use Falak\Insights\Infrastructure\TrackedHostSecurityIssues;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Processes\Events\SchedulesApplied;
 use Illuminate\Console\Scheduling\Schedule;
