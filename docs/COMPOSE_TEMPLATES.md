@@ -225,7 +225,11 @@ routes per service, not per path, to the gevent port 8072) · ERPNext v16 (frapp
 websocket, two queues, scheduler, MariaDB, two Redis; 4 GB). One-time jobs (ERPNext's `configurator` and
 `create-site`) do their step and then stay up idle (`exec sleep infinity`, healthy once a marker exists) instead of
 exiting: a catalog service restarts unless stopped and has a healthcheck, and an exited container is reported as down
-(`ComposeServiceState::failing()`). Their step must be idempotent (it reruns on every start).
+(`ComposeServiceState::failing()`). Their step must be idempotent (it reruns on every start), and the health marker
+lives in `/tmp`, removed first, so it never outlives a restart. `create-site` migrates only a site that has
+`.falak-installed` (written once `bench new-site` returned); a site without it, an install cut short, is dropped and
+installed again. It sets Administrator's password from `ADMIN_PASSWORD` on every start. Odoo's database credentials are
+written to its config file (0600) rather than passed on `odoo`'s argv.
 
 ---
 

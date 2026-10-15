@@ -85,13 +85,17 @@ it('runs ERPNext\'s setup jobs once and keeps them up idle (an exited container 
 
     expect($services['create-site']['depends_on']['configurator']['condition'])->toBe('service_healthy')
         ->and($services['frontend']['depends_on']['create-site']['condition'])->toBe('service_healthy')
-        ->and($services['configurator']['command'][0])->toContain('touch /tmp/configured', 'exec sleep infinity')
-        ->and($services['create-site']['command'][0])->toContain('if [ -f sites/frontend/site_config.json ]', 'touch /tmp/site-ready', 'exec sleep infinity')
+        ->and($services['configurator']['command'][0])->toStartWith('rm -f /tmp/configured')->toContain('touch /tmp/configured', 'exec sleep infinity')
+        ->and($services['create-site']['command'][0])->toStartWith('rm -f /tmp/site-ready')
+        // Migrated only once installed; an install cut short is dropped and run again.
+        ->toContain('if [ -f sites/frontend/.falak-installed ]', 'set-admin-password "$$ADMIN_PASSWORD"', 'bench drop-site frontend --force --no-backup', 'touch sites/frontend/.falak-installed', 'touch /tmp/site-ready', 'exec sleep infinity')
         ->and($services['db']['command'])->toContain('--character-set-server=utf8mb4', '--collation-server=utf8mb4_unicode_ci');
 });
 
 it('runs Odoo threaded so /websocket is served on its public port', function () {
     $services = ComposeDocument::parse(catalog_files()['odoo']['compose'])->services();
 
-    expect($services['odoo']['command'][0])->toContain('workers = 0', 'proxy_mode = True', 'admin_passwd = %s');
+    expect($services['odoo']['command'][0])->toContain('workers = 0', 'proxy_mode = True', 'admin_passwd = %s')
+        // The database password is in the config file, not on odoo's argv.
+        ->toContain('db_password = %s', 'exec odoo -c /tmp/odoo.conf')->not->toContain('/entrypoint.sh');
 });

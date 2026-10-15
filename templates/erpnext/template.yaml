@@ -18,7 +18,7 @@ inputs:
     type: secret
     generate: password(24)
     label: Administrator password
-    description: Sign in as Administrator with this password.
+    description: Sign in as Administrator with this password. Applied on every start, so changing it here and redeploying changes the password.
   - key: DB_ROOT_PASSWORD
     type: secret
     generate: password(32)

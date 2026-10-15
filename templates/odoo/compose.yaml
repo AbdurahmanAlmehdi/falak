@@ -6,20 +6,23 @@ services:
     image: odoo:19.0-20260926
     restart: unless-stopped
     entrypoint: ["/bin/bash", "-c"]
+    # The database credentials go in the config file (0600), not on odoo's argv as the image's entrypoint would
+    # put them; wait-for-psql.py reads them from ODOO_RC, as the entrypoint's own wait does.
     command:
       - |
-        printf '[options]\naddons_path = /mnt/extra-addons\ndata_dir = /var/lib/odoo\nadmin_passwd = %s\nproxy_mode = True\nworkers = 0\n' "$$ODOO_MASTER_PASSWORD" > /tmp/odoo.conf
-        exec /entrypoint.sh odoo
+        set -e
+        umask 077
+        printf '[options]\naddons_path = /mnt/extra-addons\ndata_dir = /var/lib/odoo\nadmin_passwd = %s\ndb_host = db\ndb_port = 5432\ndb_user = odoo\ndb_password = %s\nproxy_mode = True\nworkers = 0\n' "$$ODOO_MASTER_PASSWORD" "$$DB_PASSWORD" > /tmp/odoo.conf
+        wait-for-psql.py --timeout=30
+        exec odoo -c /tmp/odoo.conf
     expose: ["8069"]
     depends_on:
       db:
         condition: service_healthy
     environment:
-      HOST: db
-      USER: odoo
-      PASSWORD: ${POSTGRES_PASSWORD}
       ODOO_RC: /tmp/odoo.conf
       ODOO_MASTER_PASSWORD: ${ODOO_MASTER_PASSWORD}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - odoo-data:/var/lib/odoo
     healthcheck:

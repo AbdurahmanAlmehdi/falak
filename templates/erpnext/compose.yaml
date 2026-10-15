@@ -1,7 +1,8 @@
 # Mirrors frappe/frappe_docker pwd.yml (ERPNext v16.51.1, MariaDB 11.8). Its one-shot jobs (configurator,
 # create-site) run their step and then stay up idle with a healthcheck on a marker: Falak deploys with
 # `docker compose up --wait`, keeps every service restarting unless stopped, and reports an exited container as down.
-# The first start creates the site (3 to 5 minutes); later starts migrate it, so a newer image upgrades it.
+# The first start creates the site (3 to 5 minutes); later starts migrate it, so a newer image upgrades it, and set
+# Administrator's password from ADMIN_PASSWORD. An install cut short is dropped and run again on the next start.
 services:
   configurator:
     image: frappe/erpnext:v16.51.1
@@ -9,6 +10,7 @@ services:
     entrypoint: ["bash", "-c"]
     command:
       - |
+        rm -f /tmp/configured
         set -e
         ls -1 apps > sites/apps.txt
         bench set-config -g db_host db
@@ -35,11 +37,20 @@ services:
     entrypoint: ["bash", "-c"]
     command:
       - |
+        rm -f /tmp/site-ready
         set -e
-        if [ -f sites/frontend/site_config.json ]; then
+        # .falak-installed is written only once new-site has returned: a site without it is a cut-short install
+        # (stopped or crashed mid-way), dropped and installed again instead of migrated half-made.
+        if [ -f sites/frontend/.falak-installed ]; then
           bench --site frontend migrate
+          # ADMIN_PASSWORD is applied on every start, so changing the variable changes Administrator's password.
+          bench --site frontend set-admin-password "$$ADMIN_PASSWORD"
         else
+          if [ -e sites/frontend ]; then
+            bench drop-site frontend --force --no-backup --db-root-username root --db-root-password "$$DB_ROOT_PASSWORD" || rm -rf sites/frontend
+          fi
           bench new-site --mariadb-user-host-login-scope='%' --admin-password="$$ADMIN_PASSWORD" --db-root-username=root --db-root-password="$$DB_ROOT_PASSWORD" --install-app erpnext --set-default frontend
+          touch sites/frontend/.falak-installed
         fi
         bench --site frontend set-config host_name "$$HOST_NAME"
         touch /tmp/site-ready
