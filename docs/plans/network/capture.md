@@ -86,7 +86,7 @@ nsenter --net=/proc/self/fd/3 -- tcpdump …          (containers; fd 3 the pinn
   (the capture id is only used in URLs), so there is no path traversal, and no other user can plant a symlink in a
   root-owned 0700 directory.
 - The directory is removed when the command ends, whatever the outcome (uploaded, failed, cancelled). Directories
-  left by a crash are removed on the next capture (anything older than 10 minutes).
+  left by a crash are removed on the next capture (anything older than 30 minutes).
 - **Disk:** the agent refuses a capture when the file system has less than `max_bytes` + 256 MiB free. At most 2
   captures run at once per agent (a third fails with "too many captures running"), so a server never holds more than
   2 × 100 MiB of captures.
@@ -214,7 +214,7 @@ created_at, started_at, finished_at, expires_at, download_url}`.
 ```
 falak net capture (--server NAME|ID | --site SITE [--on SERVER] [--service NAME] | --db INSTANCE)
     [--interface default|wireguard|docker] [--duration 30] [--max-size 20] (MiB) [--full]
-    [--host IP|CIDR] [--port N] [--protocol tcp|udp|icmp] [--direction in|out|both] [-o FILE]
+    [--host IP|CIDR] [--port N] [--protocol tcp|udp|icmp] [--direction in|out|both] [-o FILE] --yes
 ```
 
 It starts the capture, prints progress, waits for `ready` and downloads to `-o` (default
@@ -227,7 +227,7 @@ It starts the capture, prints progress, waits for `ready` and downloads to `-o` 
 | argv injection | fixed template; interface resolved by the agent (or a fixed kind); filter values are `netip` addresses/prefixes, integers and enums, joined with fixed keywords into one argv element after `--`; validated by the JSON schema, `NetCaptureSpec` (PHP) and `CaptureSpec` (Go) |
 | shell | none: `exec` with argv |
 | path traversal | file and directory names never come from the payload (`MkdirTemp` + a fixed name); the capture id only appears in URLs, validated as a ULID |
-| symlink attacks | parent `/var/lib/falak/captures` created 0700 and checked to be a root-owned directory (not a symlink, `Lstat`); file opened `O_EXCL|O_NOFOLLOW`; tcpdump writes no file |
+| symlink attacks | parent `/var/lib/falak/captures` created 0700 and checked to be a root-owned directory (not a symlink, `Lstat`); file opened `O_EXCL\|O_NOFOLLOW`; tcpdump writes no file |
 | namespace pinning | stream E's: the namespace fd is opened before the pid is checked (cgroup + second inspect), entered via `/proc/self/fd/3` |
 | disk exhaustion | `max_bytes` ≤ 100 MiB enforced by the agent record by record, free-space check before starting, 2 captures per agent, removal on every exit path and of crash leftovers |
 | upload authentication | mTLS agent identity; the capture must belong to the agent's server; bound to the capture id; per-chunk and whole-file SHA-256; only while `capturing`/`uploading`; strict offsets; declared size ≤ `max_bytes`; chunk ≤ 8 MiB |
