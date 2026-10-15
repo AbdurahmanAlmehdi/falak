@@ -11,7 +11,7 @@ export const controlClasses = [
 ].join(' ');
 
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'prefix'> {
-    /** Icon/text rendered inside the control on the left. */
+    /** Icon rendered inside the control on the left; text (e.g. `/status/`) is an addon attached to its left edge. */
     prefix?: ReactNode;
     suffix?: ReactNode;
     mono?: boolean;
@@ -19,6 +19,9 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(({ className, prefix, suffix, mono, type = 'text', ...props }, ref) => {
     const field = useFieldControl(props);
+    // Text has no fixed width: an addon beside the input instead of an overlay over its padding.
+    const addon = typeof prefix === 'string' ? prefix : null;
+    if (addon !== null) prefix = undefined;
     const input = (
         <input
             ref={ref}
@@ -31,11 +34,35 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(({ className, pref
                 mono && 'font-mono text-xs',
                 prefix && 'pl-8',
                 suffix && 'pr-8',
+                addon !== null && 'rounded-l-none',
                 'file:text-fg file:mr-2 file:border-0 file:bg-transparent file:text-xs file:font-medium',
                 className,
             )}
         />
     );
+
+    if (addon !== null) {
+        return (
+            <div className="flex w-full">
+                <span
+                    className={cn(
+                        'border-border bg-surface-1 text-fg-faint flex shrink-0 items-center rounded-l-md border border-r-0 px-2.5 text-sm',
+                        mono && 'font-mono text-xs',
+                    )}
+                >
+                    {addon}
+                </span>
+                {suffix ? (
+                    <div className="relative w-full">
+                        {input}
+                        <span className="text-fg-faint absolute inset-y-0 right-2 flex items-center [&_svg]:size-4">{suffix}</span>
+                    </div>
+                ) : (
+                    input
+                )}
+            </div>
+        );
+    }
 
     if (!prefix && !suffix) return input;
 
