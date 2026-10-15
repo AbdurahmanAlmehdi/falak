@@ -124,7 +124,7 @@ final class BlockAddress
                 if ($ban->server_id !== null) {
                     $state = ProtectionState::query()->whereKey($ban->server_id)->lockForUpdate()->first()
                         ?? new ProtectionState(['server_id' => $ban->server_id, 'organization_id' => $ban->organization_id]);
-                    $state->released = array_values(array_unique([...(array) $state->released, $ban->cidr]));
+                    $state->release($ban->cidr);
                     $state->save();
                 }
 

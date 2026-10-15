@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,16 +61,14 @@ func rateLimitHandler(s Site) (obj, error) {
 		return nil, fmt.Errorf("at most %d rate limits per site", maxRateLimitsPerSite)
 	}
 	zones := obj{}
-	for i, r := range s.RateLimits {
+	for _, r := range s.RateLimits {
 		if !rateLimitPath.MatchString(r.Path) {
 			return nil, fmt.Errorf("invalid rate limit path %q", r.Path)
 		}
 		if r.Events < 1 || r.Events > maxRateLimitEvents || r.WindowS < 1 || r.WindowS > maxRateLimitWindowS {
 			return nil, fmt.Errorf("rate limit %s: events 1-%d and window_s 1-%d", r.Path, maxRateLimitEvents, maxRateLimitWindowS)
 		}
-		// Zones are global in Caddy, by name: every route of one site (its domain groups, its compose services) shares
-		// them, so a client is counted once per site whichever of its hosts it uses.
-		zones[fmt.Sprintf("falak_%s_%d", strings.SplitN(s.ID, "-", 2)[0], i)] = obj{
+		zones[rateLimitZone(s.ID, r)] = obj{
 			"match":      []any{obj{"path": []any{r.Path}}},
 			"key":        "{http.vars.client_ip}",
 			"window":     fmt.Sprintf("%ds", r.WindowS),
@@ -76,6 +76,21 @@ func rateLimitHandler(s Site) (obj, error) {
 		}
 	}
 	return obj{"handler": "rate_limit", "rate_limits": zones}, nil
+}
+
+// rateLimitZone names a rule's zone. Zones are global in Caddy, by name, and a reloaded config reuses a zone's counters
+// when the name is the same: the name holds the route's full id (two routes never share a zone, whatever their ids
+// have in common) and a hash of the rule (a changed limit starts a fresh zone instead of reusing counters sized for
+// the old one).
+func rateLimitZone(routeID string, r RateLimit) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", r.Path, r.Events, r.WindowS)))
+	id := strings.Map(func(c rune) rune {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			return c
+		}
+		return '_'
+	}, routeID)
+	return "falak_" + id + "_" + hex.EncodeToString(sum[:4])
 }
 
 // modules lists the Caddy modules of a binary (`caddy list-modules`).

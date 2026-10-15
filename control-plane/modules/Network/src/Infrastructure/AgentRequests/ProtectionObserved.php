@@ -59,7 +59,7 @@ final class ProtectionObserved implements AgentRequestHandler
             ProtectionState::query()->whereKey($server->id)->update(['blocked_packets' => (int) $body['blocked']['packets'], 'observed_at' => $at]);
         }
 
-        $this->bans($server->id, $server->organizationId, (array) ($body['bans'] ?? []));
+        $this->bans($server->id, $server->organizationId, (array) ($body['bans'] ?? []), CarbonImmutable::parse((string) $body['at']));
         $this->hits($server->id, $server->organizationId, (array) ($body['blocks'] ?? []), $at);
         $this->bruteForce($server->id, $server->name, $server->organizationId, $body['auth'] ?? null, $at);
 
@@ -72,7 +72,7 @@ final class ProtectionObserved implements AgentRequestHandler
      *
      * @param  array<int, mixed>  $bans
      */
-    private function bans(string $serverId, string $organizationId, array $bans): void
+    private function bans(string $serverId, string $organizationId, array $bans, CarbonImmutable $reportAt): void
     {
         $release = false;
         $state = ProtectionState::query()->find($serverId);
@@ -84,14 +84,18 @@ final class ProtectionObserved implements AgentRequestHandler
             $cidr = Cidr::tryParse((string) ($ban['cidr'] ?? ''));
             $until = CarbonImmutable::parse((string) $ban['until']);
 
-            if ($cidr === null || $until->isPast() || $until->gt(now()->addDays(31)) || isset($released[(string) $cidr])) {
+            // Released and not yet confirmed, or released after this report was built (a delayed or retried report):
+            // the ban the user lifted is not brought back.
+            if ($cidr === null || $until->isPast() || $until->gt(now()->addDays(31)) || isset($released[(string) $cidr])
+                || ($state !== null && $state->releasedSince((string) $cidr, $reportAt))) {
                 continue;
             }
 
             // The agent guards its bans too; one the control plane would refuse (a server added since) is released.
             if ($this->guards->refusal($cidr, $organizationId, null) !== null || $this->guards->confirmation($cidr) !== null) {
                 $state ??= new ProtectionState(['server_id' => $serverId, 'organization_id' => $organizationId]);
-                $state->forceFill(['released' => array_values(array_unique([...(array) $state->released, (string) $cidr]))])->save();
+                $state->release((string) $cidr);
+                $state->save();
                 $released[(string) $cidr] = true;
                 $release = true;
 

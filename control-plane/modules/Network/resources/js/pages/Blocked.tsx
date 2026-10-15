@@ -85,7 +85,12 @@ function BlockDialog({ servers, open, onOpenChange }: { servers: ServerRow[]; op
                 <Field label="Address or CIDR" error={form.errors.address} required>
                     <Input
                         value={form.data.address}
-                        onChange={(event) => form.setData('address', event.target.value)}
+                        onChange={(event) => {
+                            // A confirmation is for one address: another one asks again.
+                            const address = event.target.value;
+                            form.setData((data) => ({ ...data, address, confirm: false }));
+                            form.clearErrors('confirm');
+                        }}
                         placeholder="203.0.113.7 or 2001:db8::/48"
                         autoFocus
                     />

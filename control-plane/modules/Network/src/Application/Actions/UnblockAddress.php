@@ -34,7 +34,7 @@ final class UnblockAddress
             if ($block->source === IpBlock::AUTO && $block->server_id !== null) {
                 $state = ProtectionState::query()->whereKey($block->server_id)->lockForUpdate()->first()
                     ?? new ProtectionState(['server_id' => $block->server_id, 'organization_id' => $block->organization_id]);
-                $state->released = array_values(array_unique([...(array) $state->released, $block->cidr]));
+                $state->release($block->cidr);
                 $state->save();
             }
 

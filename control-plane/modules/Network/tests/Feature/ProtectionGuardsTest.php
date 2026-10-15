@@ -239,3 +239,24 @@ it('refuses to send protection when the protected addresses do not fit, and says
     config(['network.protection.never_block_max' => 5000]);
     expect(count(app(ProtectionGuards::class)->neverBlock($this->organization->id)))->toBeLessThanOrEqual(5000);
 });
+
+it('never brings back a released auto-ban from a report built before the release', function () {
+    $until = now()->addHour()->toIso8601String();
+    guards_report(['bans' => [['cidr' => '203.0.113.66', 'until' => $until, 'failures' => 12]]])->assertOk();
+    $built = now()->subSecond()->toIso8601String();
+
+    $this->travel(5)->seconds();
+    $this->withServerVariables(['REMOTE_ADDR' => '203.0.113.250'])->deleteJson('/network/blocks/'.IpBlock::query()->sole()->id)->assertNoContent();
+    // The agent confirms the release: the pending list is cleared, the release time is kept.
+    $this->agents->succeed($this->agents->last('net.protection.apply', $this->server->id)['handle'], ['changed' => true]);
+    expect(ProtectionState::query()->find($this->server->id)->released)->toBeNull();
+
+    // A report built before the release arrives late (a retry): ignored.
+    guards_report(['at' => $built, 'bans' => [['cidr' => '203.0.113.66', 'until' => $until, 'failures' => 12]]])->assertOk();
+    expect(IpBlock::query()->count())->toBe(0);
+
+    // A later report with the address banned again (it attacked again): recorded.
+    $this->travel(5)->seconds();
+    guards_report(['at' => now()->toIso8601String(), 'bans' => [['cidr' => '203.0.113.66', 'until' => now()->addHour()->toIso8601String(), 'failures' => 30]]])->assertOk();
+    expect(IpBlock::query()->sole()->source)->toBe('auto');
+});

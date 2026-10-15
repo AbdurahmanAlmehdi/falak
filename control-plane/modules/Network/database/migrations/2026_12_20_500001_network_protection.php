@@ -56,6 +56,9 @@ return new class extends Migration
             $table->json('failed')->nullable();
             $table->boolean('set_counters')->default(true);
             $table->json('released')->nullable();
+            // When each auto-ban was released (cidr => time), kept a week: a report the agent built before then never
+            // brings the ban back.
+            $table->json('release_times')->nullable();
             $table->unsignedBigInteger('blocked_packets')->nullable();
             $table->timestamp('applied_at')->nullable();
             $table->timestamp('observed_at')->nullable();

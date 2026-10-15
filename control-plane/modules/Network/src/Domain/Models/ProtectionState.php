@@ -23,6 +23,7 @@ use Illuminate\Support\Carbon;
  * @property ?list<array{cidr: string, error: string}> $failed elements the agent refused
  * @property bool $set_counters
  * @property ?list<string> $released auto-bans lifted, until the agent confirmed
+ * @property ?array<string, string> $release_times cidr => when it was released (ISO 8601, kept a week)
  * @property ?int $blocked_packets
  * @property ?Carbon $applied_at
  * @property ?Carbon $observed_at
@@ -56,10 +57,31 @@ class ProtectionState extends Model
             'revision' => 'integer',
             'failed' => 'array',
             'released' => 'array',
+            'release_times' => 'array',
             'set_counters' => 'boolean',
             'blocked_packets' => 'integer',
             'applied_at' => 'datetime',
             'observed_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Releases an auto-ban on the server: sent to the agent until it confirms, and remembered with its time so a report
+     * built before the release never brings it back. Does not save.
+     */
+    public function release(string $cidr): void
+    {
+        $this->released = array_values(array_unique([...(array) $this->released, $cidr]));
+        $times = array_filter((array) $this->release_times, fn ($at) => is_string($at) && Carbon::parse($at)->gt(now()->subWeek()));
+        $times[$cidr] = now()->utc()->toIso8601ZuluString('microsecond');
+        $this->release_times = $times;
+    }
+
+    /** Whether the ban was released after (or when) the report it comes in was built. */
+    public function releasedSince(string $cidr, \DateTimeInterface $reportAt): bool
+    {
+        $at = ((array) $this->release_times)[$cidr] ?? null;
+
+        return is_string($at) && Carbon::parse($at)->gte($reportAt);
     }
 }

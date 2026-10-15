@@ -209,7 +209,10 @@ final class ApplyProtection
 
                 if ($block->source === IpBlock::AUTO && $block->server_id !== null) {
                     $state = ProtectionState::query()->whereKey($block->server_id)->lockForUpdate()->first();
-                    $state?->forceFill(['released' => array_values(array_unique([...(array) $state->released, $block->cidr]))])->save();
+                    if ($state !== null) {
+                        $state->release($block->cidr);
+                        $state->save();
+                    }
                 }
             });
 

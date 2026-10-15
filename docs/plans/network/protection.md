@@ -73,7 +73,8 @@ revision, desired / applied hash, status, command id, error). Idempotency key `n
 
 - `blocks`: the server's own blocks plus the organization-wide ones and the server's auto-bans, active only (≤ 10,000).
 - `release`: auto-bans a user lifted (or a manual block replaced, or a guard suspended): the agent forgets them from its
-  local state too (it would re-add them otherwise); cleared once an apply succeeds.
+  local state too (it would re-add them otherwise); cleared once an apply succeeds. Each release keeps its time for a
+  week (`release_times`): a report the agent built before the release (delayed, retried) never brings the ban back.
 - `never_block`: the guard list (below), so the agent can refuse auto-bans the control plane would refuse. At most
   5,000 entries: the control plane, the servers and the private networks first, then members' recent panel addresses,
   most recent first, up to the limit. An organization whose protected addresses alone exceed it gets no
@@ -191,13 +192,13 @@ counted (and banned) per /64; IPv4 per address. Counts live in ten buckets per w
 | Line | Counted |
 |---|---|
 | `Invalid user X from IP port N` | yes |
-| `Failed password|keyboard-interactive/pam|none for X from IP port N ssh2` | yes (an existing user) |
+| `Failed password\|keyboard-interactive/pam\|none for X from IP port N ssh2` | yes (an existing user) |
 | `Failed password for invalid user X …` | no (its `Invalid user` line counted the connection) |
 | `error: maximum authentication attempts exceeded for invalid user X from IP port N ssh2 [preauth]` | yes |
 | `error: maximum authentication attempts exceeded for X …` (an existing user) | no (its `Failed` lines did) |
 | `Connection closed by / Disconnected from authenticating user X IP port N [preauth]` | no (nothing failed) |
 | `message repeated N times: [ … ]` (rsyslog) | N times the inner line, once per connection when the PID is known |
-| `Accepted publickey|password|… for X from IP port N ssh2` | no: the address is trusted for 24 h (never auto-banned) |
+| `Accepted publickey\|password\|… for X from IP port N ssh2` | no: the address is trusted for 24 h (never auto-banned) |
 | PAM `authentication failure`, `Received disconnect`, `Did not receive identification`, `Unable to negotiate` | no |
 
 `net.protection.observed` (agent → control plane, once a minute when there is something to say):
@@ -249,8 +250,10 @@ more get **429** with `Retry-After`. Up to 20 rules a site; validated on both si
 backends behind a load balancer: the balancer enforces them); the agent renders one `rate_limit` handler
 (`github.com/mholt/caddy-ratelimit`) in the site's subroute, after its IP allow / deny lists (a denied client is not
 counted) and before authentication and the handler. One zone per rule, keyed by `{http.vars.client_ip}` (behind
-Cloudflare's trusted proxies, the visitor). Zones are global in Caddy by name (`falak_<site>_<n>`), so a site's
-domain groups and compose services share the count. **Every other route renders byte for byte as before**, and a
+Cloudflare's trusted proxies, the visitor). Zones are global in Caddy by name, and a reloaded config reuses a zone's
+counters when its name is unchanged: a zone is named `falak_<route id>_<hash of the rule>`, so no two routes (sites,
+or a site's domain groups and compose services) share one whatever their ids have in common, and a changed limit
+starts afresh. **Every other route renders byte for byte as before**, and a
 server without rate-limited sites gets the same payload as before (no `caddy_build`).
 
 **The binary.** The servers' Caddy is the apt package (or FrankenPHP); neither has the module. The control plane image

@@ -65,8 +65,9 @@ func TestRateLimitRenderLeavesOtherSitesUntouched(t *testing.T) {
 		}
 	}
 	api := a[RouteID("api")]
-	for _, w := range []string{`"handler":"rate_limit"`, `"falak_api_0":{"key":"{http.vars.client_ip}","match":[{"path":["/login"]}],"max_events":10,"window":"60s"}`,
-		`"falak_api_1":{"key":"{http.vars.client_ip}","match":[{"path":["/api/*"]}],"max_events":600,"window":"60s"}`} {
+	z0, z1 := rateLimitZone("api", RateLimit{Path: "/login", Events: 10, WindowS: 60}), rateLimitZone("api", RateLimit{Path: "/api/*", Events: 600, WindowS: 60})
+	for _, w := range []string{`"handler":"rate_limit"`, `"` + z0 + `":{"key":"{http.vars.client_ip}","match":[{"path":["/login"]}],"max_events":10,"window":"60s"}`,
+		`"` + z1 + `":{"key":"{http.vars.client_ip}","match":[{"path":["/api/*"]}],"max_events":600,"window":"60s"}`} {
 		if !strings.Contains(api, w) {
 			t.Fatalf("missing %s in %s", w, api)
 		}
@@ -364,5 +365,31 @@ func TestRateLimitValidationFailuresThatAreNotTheBuilds(t *testing.T) {
 	}
 	if _, failed := m.loadRLState().Failed[build.SHA256]; failed {
 		t.Fatal("a config the current Caddy rejects too is blamed on the build")
+	}
+}
+
+// Zone names never collide across routes, whatever their ids share, and change with the rule.
+func TestRateLimitZoneNamesAreUniquePerRoute(t *testing.T) {
+	rule := RateLimit{Path: "/login", Events: 10, WindowS: 60}
+	p := Payload{Sites: []Site{
+		{ID: "shop-a", Domains: []string{"a.example.com"}, Kind: "static", Root: "/srv/a", RateLimits: []RateLimit{rule}},
+		{ID: "shop-b", Domains: []string{"b.example.com"}, Kind: "static", Root: "/srv/b", RateLimits: []RateLimit{rule}},
+		{ID: "shop", Domains: []string{"c.example.com"}, Kind: "static", Root: "/srv/c", RateLimits: []RateLimit{rule}},
+	}}
+	cfg, err := Render(p, "/c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(cfg)
+	names := map[string]bool{}
+	for _, id := range []string{"shop-a", "shop-b", "shop"} {
+		z := rateLimitZone(id, rule)
+		if names[z] || !strings.Contains(string(b), `"`+z+`"`) {
+			t.Fatalf("zone %s duplicated or missing", z)
+		}
+		names[z] = true
+	}
+	if rateLimitZone("shop", rule) == rateLimitZone("shop", RateLimit{Path: "/login", Events: 20, WindowS: 60}) {
+		t.Fatal("a changed rule keeps its zone")
 	}
 }
