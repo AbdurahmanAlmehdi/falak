@@ -21,8 +21,11 @@ kernel (CO-RE programs, bounded LRU maps)                         agent ebpfobs.
 ## Agent feature and protocol
 
 Feature **`net.ebpf`** (`agent/internal/version.Features`) gates the whole command **`net.ebpf.configure`**
-(`{"enabled": bool}`): the control plane only queues it for agents that list the feature, so `PayloadCompatibility`
-has nothing to strip. The agent persists it in `/etc/falak/ebpf.json` (0600), so a restarted agent keeps its state.
+(`{"enabled": bool, "full_dns_names"?: bool, "reenable"?: bool}`): the control plane only queues it for agents that
+list the feature, so `PayloadCompatibility` has nothing to strip. `full_dns_names` ships whole query names (default off:
+names fold to their registrable domain, below); `reenable` clears an over-budget stop (see "Overhead") and is sent only
+after the panel's explicit "Re-enable". The agent persists the setting and an over-budget stop in
+`/etc/falak/ebpf.json` (0600), so a restarted agent keeps both.
 It answers with its status (below) and also reports it in **facts** (`facts.ebpf`, every facts refresh, a few minutes):
 
 | Field | Meaning |
@@ -31,7 +34,7 @@ It answers with its status (below) and also reports it in **facts** (`facts.ebpf
 | `reason` | why not (`kernel 5.4 < 5.8`, `no BTF (/sys/kernel/btf/vmlinux)`, `bpf() not permitted (unprivileged container?)`, `cgroup v2 not mounted`, `not linux/amd64 or linux/arm64`) |
 | `enabled` | the setting as the agent applied it |
 | `state` | `off` · `running` · `degraded` (the run-queue programs were shed to stay in budget) · `over_budget` (detached, see "Overhead") · `failed` (a load or attach error) · `unsupported` |
-| `detail` | the load error or the budget figure that tripped |
+| `detail` | the load error or the budget figure that tripped (cut to 2,000 characters; `reason` to 300) |
 | `programs` | the program groups attached: `tcp`, `dns`, `runq` |
 | `overhead_percent` | the probe's own CPU over the last 5 minutes, percent of the machine's capacity |
 
@@ -59,8 +62,13 @@ fields the programs read come from a hand-written `bpf/vmlinux.h` with `preserve
 by cilium/ebpf against `/sys/kernel/btf/vmlinux`. Regenerate after editing the C file:
 
 ```
-cd agent/internal/ebpfobs && go generate     # needs clang ≥ 17 with the BPF target; built with Homebrew clang 23.1.3
+cd agent && PATH="/opt/homebrew/opt/llvm/bin:$PATH" go generate ./internal/ebpfobs   # Homebrew clang 23.1.3
 ```
+
+The build is reproducible: the same clang gives the same bytes (both objects are identical, the programs use no
+architecture-specific code), so a review regenerates them and checks `git diff --exit-code agent/internal/ebpfobs`. CI
+does not regenerate them: it would need this exact clang build, and a different clang emits different (equally valid)
+bytes, so a diff check there would fail on the toolchain, not the source; the pinned version above is the contract.
 
 Tracepoints only, no kprobes: BTF-typed raw tracepoints (`tp_btf`, kernel 5.5+, no trampoline: also on arm64 kernels
 before 6.0) for TCP and the scheduler, and `cgroup_skb` programs attached to the cgroup v2 root (through a BPF link,
@@ -76,7 +84,7 @@ everything is counted in maps.
 | `hists` | LRU hash | 4,096 | owner + kind (connect, RTT, DNS, run queue) → 27 log2 µs buckets, sum, count |
 | `dns_names` | LRU hash | 4,096 | cgroup id + uid + query name (wire format, 64 bytes) → queries, responses, NXDOMAIN, SERVFAIL, REFUSED, other errors, latency sum |
 | `dns_pending` | LRU hash | 4,096 | socket cookie + DNS id → query time and its `dns_names` key |
-| `runq_start` | hash | 16,384 | pid → wakeup time (a plain hash: an LRU update takes a lock on every wakeup; when full, new wakeups go unmeasured until entries are consumed) |
+| `runq_start` | hash | 16,384 | pid → wakeup time (a plain hash: an LRU update takes a lock on every wakeup). A stamp goes when its task is switched in or exits (`sched_process_exit`); the agent sweeps stamps older than 10 s each pass, so the map cannot fill with gone tasks and a reused pid never inherits a stale one |
 
 About 4–6 MB of kernel memory in all at the caps. An evicted entry loses what it counted since the agent's last read
 (under-counting, never double counting); the user-space reader treats a counter that went down as a new key.
@@ -100,13 +108,15 @@ ports. Egress to port 53 with QR = 0 is a query, ingress from port 53 with QR = 
 cookie and the DNS id. The query name is copied in wire format (length-prefixed labels, at most 64 bytes, the bytes
 after its root label zeroed in the kernel so a name is one key whatever the query type). RCODE 3 is NXDOMAIN, 2 SERVFAIL,
 5 REFUSED, other non-zero `other`; a query unanswered after 5 s is a `timeout` (counted by the agent when it reads
-`dns_pending`, then deleted). UDP only: DNS over TCP, DoT and DoH are not seen. Through systemd-resolved a lookup is
+`dns_pending`, then deleted). A timeout may also be an answer the probe could not match (a reply to another socket):
+it is charted, never part of the failure alert. UDP only: DNS over TCP, DoT and DoH are not seen. Through systemd-resolved a lookup is
 seen twice: the app's query to `127.0.0.53` (the app's workload) and resolved's upstream query (the server's).
 
 ### Run-queue latency
 
 `sched_wakeup` / `sched_wakeup_new` stamp the woken task; `sched_switch` measures the delay of the task switched in
-(and stamps a preempted task that is still runnable). Kernel threads are folded into one key. This is the expensive
+(and stamps a preempted task that is still runnable); `sched_process_exit` drops the stamp of a task that exits
+before it runs again. Kernel threads are folded into one key. This is the expensive
 part (two events per context switch): it is the first thing shed when the probe goes over budget.
 
 ## Attribution
@@ -136,7 +146,9 @@ connections (database, APIs) are theirs.
 
 ## Metrics (agent → OTLP → VictoriaMetrics)
 
-Every interval (15 s). Counters are cumulative from the agent's start (deltas of the kernel maps added up), histograms
+Every interval (15 s). Counters are cumulative from the agent's start (deltas of the kernel maps added up); a new
+series is shipped at 0 in the pass that creates it and with its count from the next one (a counter's first sample is
+only a baseline to `rate()` / `increase()`, so a series appearing with its first events counted would lose them). Histograms
 are OTLP explicit-bucket histograms (bounds 4 µs … 16.8 s, powers of two), which VictoriaMetrics stores as
 `_bucket{le}`, `_sum`, `_count`.
 
@@ -151,7 +163,7 @@ are OTLP explicit-bucket histograms (bounds 4 µs … 16.8 s, powers of two), wh
 | `falak.net.dns.queries` | counter | {query} | | `falak_net_dns_queries_total` |
 | `falak.net.dns.failures` | counter | {query} | `falak.net.dns.error` (`nxdomain` \| `servfail` \| `refused` \| `other` \| `timeout`) | `falak_net_dns_failures_total` |
 | `falak.net.dns.duration` | histogram | s | | `falak_net_dns_duration_seconds_{bucket,sum,count}` |
-| `falak.net.dns.name.queries` | counter | {query} | `falak.net.dns.name` (top 10 per workload, the rest `other`) | `falak_net_dns_name_queries_total` |
+| `falak.net.dns.name.queries` | counter | {query} | `falak.net.dns.name` (top 10 per workload, ranked over about an hour, the rest `other`) | `falak_net_dns_name_queries_total` |
 | `falak.workload.runqueue.delay` | histogram | s | | `falak_workload_runqueue_delay_seconds_{bucket,sum,count}` |
 | `falak.ebpf.cpu.time` | counter | s | `falak.ebpf.component` (`tcp` \| `dns` \| `runq` \| `agent`) | `falak_ebpf_cpu_time_seconds_total` |
 | `falak.ebpf.active` | gauge | (none) | `falak.ebpf.component` | `falak_ebpf_active` |
@@ -161,18 +173,33 @@ Every data point also carries the workload's `falak.workload.kind` / `falak.work
 would become `_ratio`). Cardinality per workload: ≤ 2 × 21 peers × (retransmits + 2 resets + 2 connects + RTT), 4
 histograms × 24 buckets, ≤ 11 names; a peer or name label idle for 10 minutes is dropped.
 
+### DNS names
+
+Names are folded to their registrable domain by default (`api.eu.stripe.com` → `stripe.com`, `a.example.co.uk` →
+`example.co.uk`: the last two labels, three under a two-letter country code with a common second level such as `co`,
+`com`, `org`; a short rule, not the public suffix list, so `x.github.io` stays `github.io`; a name cut at 64 bytes is
+`(long name)`). The per-server option **Full DNS names** (Admin, default off) ships them whole. Each workload's top 10
+are ranked by queries decayed with a 30-minute half-life (about an hour), and sticky: a name joins only by beating the
+quietest of the ten by half again, so labels change rarely and the series count stays bounded (≤ 11 per workload).
+They are kept as long as every metric: 30 days in VictoriaMetrics. On the server's tab, the server workload's own names
+(processes outside every site: the host's resolver traffic, admin sessions) are shown to `network.manage` only.
+
 ## Overhead
 
 Budget: **< 1 % of the machine's CPU capacity** (all CPUs), measured, not assumed:
 
 - kernel time: `BPF_ENABLE_STATS` (`BPF_STATS_RUN_TIME`, kernel 5.8) is held while the probe runs, and each program's
   `run_time_ns` delta per interval is the probe's in-kernel cost (`falak.ebpf.cpu.time`, per program group). Holding
-  it adds two clock reads to every BPF program run on the host while the probe is on;
+  it is host-wide: it adds two clock reads to every BPF program run on the host (systemd's, Docker's, any other
+  tool's), tens of nanoseconds each, while the probe is on; it is released with the probe (off, over budget, agent
+  stopped);
 - user time: the agent's own read of the maps (`agent`), timed per pass.
 
-Over a 5-minute window (20 passes at 15 s): above budget with the run-queue programs on, they are detached first
-(`degraded`, `detail` "run-queue programs shed: 1.4 % of CPU"); still above budget, everything is detached
-(`over_budget`) until the setting is turned on again (`net.ebpf.configure`) or the agent restarts.
+Over a 5-minute window (20 passes at 15 s), or at once when a single pass costs more than 5 × the budget: above
+budget with the run-queue programs on, they are detached first (`degraded`, `detail` "run-queue programs shed: 1.4 % of
+CPU"); still above budget, everything is detached (`over_budget`). The stop is persisted in `ebpf.json`: neither an
+agent restart nor the control plane re-sending the setting (an upgrade, the agent back online, the periodic converge)
+starts the probe again; only the panel's **Re-enable** (`reenable: true`) or turning the setting off does.
 
 ### Measurements
 
@@ -195,14 +222,18 @@ include `BPF_ENABLE_STATS` itself. Not yet measured on the live x86_64 servers (
 
 ### Setting (Network module)
 
-`network_ebpf_settings` (server id, organization, `enabled` default false, `command_id`, `applied_at`, `error`).
-**Server → Network** shows the eBPF card: a switch (needs `network.manage`), audited as `network.ebpf_updated`
-(`{enabled}`), sends `net.ebpf.configure` when the agent has `net.ebpf` (else "needs a newer agent", applied when the
-agent reports the feature: `AgentVersionChanged` re-sends it, forced). The card shows the agent's `facts.ebpf`: "Not
-supported: <reason>", "Running" (programs, overhead), "Shed run-queue programs" / "Turned off: over budget" with the
-detail, "Failed: <error>".
+`network_ebpf_settings` (server id, organization, `enabled` and `full_dns_names` default false, `reenable`, `status`,
+`command_id`, `pending_hash` / `applied_hash` of `{enabled, full_dns_names}`, `applied_at`, `error`). **Server →
+Network** shows the switches (eBPF, and Full DNS names while it is on), **Admin only**: the new permission
+`network.ebpf` (`network.manage` is not enough). Audited as `network.ebpf_updated` (`{enabled, full_dns_names,
+reenable}`). A change is sent as `net.ebpf.configure` when the agent has `net.ebpf` (else "needs a newer agent"), and
+sent again until the agent applied it: `AgentVersionChanged` (forced), `AgentCameOnline` (an agent that was offline when
+it was turned off) and `network:converge-ebpf` every 10 minutes send it when it is not applied, failed, or lost in
+flight for 30 minutes; never while a command is in flight. The card shows the agent's `facts.ebpf`: "Not supported:
+<reason>", "Running" (programs, overhead), "Running in part" / "Turned off: over its CPU budget" with the detail and,
+for admins, **Re-enable**, "The probe did not start: <error>".
 
-`PUT /network/servers/{server}/ebpf {enabled}` (`network.manage`).
+`PUT /network/servers/{server}/ebpf {enabled, full_dns_names?, reenable?}` (`network.ebpf`).
 
 ### Queries and endpoints
 
@@ -243,22 +274,23 @@ connects) and run-queue delay; the server's adds the switch and the probe's over
 
 | Type | Condition (5-minute window) | Severity |
 |---|---|---|
-| `network.dns_failures` | failures other than NXDOMAIN ≥ `dns_failures_min` (60) **and** ≥ `dns_failure_ratio` (20 %) of the queries, held `alert_seconds` (300) | Warning |
-| `network.tcp_retransmits` | retransmits ≥ `retransmits_min` (600, ~2/s), held 300 s | Warning |
+| `network.dns_failures` | answers with an error other than NXDOMAIN (SERVFAIL, REFUSED, …; unanswered queries left out) ≥ `dns_failures_min` (60) **and** ≥ `dns_failure_ratio` (20 %) of the queries, held `alert_seconds` (300) | Warning |
+| `network.tcp_retransmits` | retransmits ≥ `retransmits_min` (3,000, ~10/s) for a site or database, `retransmits_min_host` (6,000, ~20/s: the edge carries every site's traffic) for the server's own processes, held 300 s | Warning |
 
 Keys `network.dns_failures:<server>:<workload>` / `network.tcp_retransmits:<server>:<workload>`; conditions of workloads
 no longer reporting are cleared (`clearExcept`). NXDOMAIN is left out: search domains and probes make it common and
 harmless. Retransmits have no ratio: the probe counts no segments sent, and a long-lived connection makes no new
-connects to divide by. Config `network.ebpf` (`dns_failures_min`, `dns_failure_ratio`, `retransmits_min`,
-`alert_seconds`).
+connects to divide by; the thresholds are high on purpose. Config `network.ebpf` (`dns_failures_min`,
+`dns_failure_ratio`, `retransmits_min`, `retransmits_min_host`, `alert_seconds`).
 
 ## Security
 
 - Read-only: no program changes, drops or redirects a packet (`cgroup_skb` programs always return 1), nothing is
   written to a socket.
-- DNS names are metric labels only as the top 10 per workload (names, not addresses); no payload beyond the query name
-  and RCODE is read; answers (addresses) are never parsed.
-- The probe runs only where the server's admin turned it on (default off); the panel action is audited.
+- DNS names are metric labels only as the top 10 per workload (names, not addresses), folded to their domain unless an
+  admin turned full names on, kept 30 days; the server workload's names need `network.manage`. No payload beyond the
+  query name and RCODE is read; answers (addresses) are never parsed.
+- The probe runs only where an organization admin turned it on (`network.ebpf`, default off); the action is audited.
 - Endpoints authorize the organization and the permission (`network.view` / `network.manage`, `telemetry.view`,
   `databases.view`); other organizations' servers, sites and instances are 404.
 

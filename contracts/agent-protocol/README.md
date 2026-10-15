@@ -56,6 +56,9 @@ interface or in a container's namespace), its `net.capture.progress` request (wh
 chunk uploads to `/agent/v1/uploads/net.capture/<capture_id>`.
 eBPF (docs/plans/network/ebpf.md): `net.ebpf` gates the whole `net.ebpf.configure` command (`{enabled}`, opt-in per
 server; persisted in `/etc/falak/ebpf.json`; its result is the probe's status) and the agent's `facts.ebpf`
+eBPF (docs/plans/network/ebpf.md): `net.ebpf` gates the whole `net.ebpf.configure` command (`{enabled, full_dns_names?,
+reenable?}`, opt-in per server; persisted in `/etc/falak/ebpf.json` with an over-budget stop that only `reenable`
+clears; its result is the probe's status) and the agent's `facts.ebpf`
 (`facts.schema.json#/$defs/ebpf`: supported / reason, state, programs, overhead).
 
 A feature can also gate a whole **command**: the control plane only queues it for agents that list the feature
