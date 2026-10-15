@@ -20,7 +20,7 @@ tables (30 days), alerts → Alerting events. No new service runs.
 | 2 | v0.15.0 | Logs: files inside containers, PHP-FPM error / slow logs, journald of a site's units, Laravel log exceptions → Issues |
 | 3 | v0.16.0 | Databases: Metrics tab, slow-query and engine logs, top queries, database Issues and recommendations, alerts |
 | 4 | v0.17.0 | Network: HTTP traffic from access logs, TCP/UDP connections per workload, "talks to" peers |
-| 5 | later | eBPF (per-process latency, DNS, retransmits), on-demand packet capture |
+| 5 | later | eBPF (TCP health, DNS, run-queue latency: `network/ebpf.md`), on-demand packet capture (`network/capture.md`) |
 
 ---
 
@@ -681,11 +681,18 @@ the shared rules), gets its own independent review, and is checked live on cloud
   and this index are touched additively only; each stream keeps its UI in its own panels/files.
 - **Order of merge:** A and B first (C hooks into both), then C, D, E.
 
-## Phase 5: later
+## Phase 5: eBPF and packet capture
 
 - eBPF probe in the agent: per-process latency, DNS lookups, retransmits (needs a recent kernel; optional feature).
 - On-demand capture: a 30 s `tcpdump` on one container or port, downloaded as pcap; its own permission, audited.
 - Packet capture plan (stream G): [network/capture.md](network/capture.md).
+Two streams, built in parallel on their own branches, each with its own plan under `docs/plans/network/`; phase 4's
+shared rules (bounded labels, one agent feature per stream, additive shared files, read-only by default) apply.
+
+| Stream | Plan | Scope |
+|---|---|---|
+| F. eBPF | [`network/ebpf.md`](network/ebpf.md) (feature `net.ebpf`; command `net.ebpf.configure`, `facts.ebpf`; `falak.net.tcp.*`, `falak.net.dns.*`, `falak.workload.runqueue.delay`, `falak.ebpf.*`) | Opt-in per server (default off) CO-RE probe (cilium/ebpf, bpf2go objects committed): TCP retransmits, resets, connect latency and RTT per workload and peer; DNS queries, latency, failures and top names per workload; run-queue delay; in-kernel aggregation in bounded LRU maps, attributed by cgroup id / pid / uid; self-measured, auto-disabled over 1 % of CPU; TCP & DNS section on the Network tabs; DNS failure and retransmit alerts |
+| G. Packet capture | [`network/capture.md`](network/capture.md) | On-demand capture: a short `tcpdump` on one container or port, downloaded as pcap; its own permission, audited |
 
 ## Agent overhead budget
 
