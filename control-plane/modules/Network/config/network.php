@@ -35,6 +35,16 @@ return [
         'probe_port' => (int) env('FALAK_NETWORK_PROBE_PORT', 1),
     ],
 
+    // eBPF (docs/plans/network/ebpf.md): alert thresholds over a 5-minute window, per server and workload.
+    'ebpf' => [
+        // DNS failures other than NXDOMAIN (SERVFAIL, REFUSED, timeouts...), and their share of the queries.
+        'dns_failures_min' => 60,
+        'dns_failure_ratio' => 0.2,
+        // TCP segments retransmitted (~2 per second).
+        'retransmits_min' => 600,
+        'alert_seconds' => 300,
+    ],
+
     // Blocking and auto-ban (docs/plans/network/protection.md).
     'protection' => [
         // Never blocked, on top of the resolved panel and agent API hosts (comma-separated IPs / CIDRs).

@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Network\Http\Controllers\ConnectionsController;
+use Falak\Network\Http\Controllers\EbpfController;
 use Falak\Network\Http\Controllers\FirewallController;
 use Falak\Network\Http\Controllers\NetworkController;
 use Falak\Network\Http\Controllers\PrivateNetworkController;
@@ -20,6 +21,12 @@ Route::middleware(['auth', 'org'])->prefix('network')->name('network.')->group(f
     Route::get('servers/{server}/connections', [ConnectionsController::class, 'forServer'])->name('connections.server');
     Route::get('sites/{site}/connections', [ConnectionsController::class, 'site'])->name('connections.site');
     Route::get('databases/{instance}/connections', [ConnectionsController::class, 'database'])->name('connections.database');
+
+    // eBPF (docs/plans/network/ebpf.md): the per-server setting and the TCP & DNS sections of the Network tabs.
+    Route::put('servers/{server}/ebpf', [EbpfController::class, 'settings'])->name('ebpf.settings');
+    Route::get('servers/{server}/ebpf', [EbpfController::class, 'forServer'])->name('ebpf.server');
+    Route::get('sites/{site}/ebpf', [EbpfController::class, 'site'])->name('ebpf.site');
+    Route::get('databases/{instance}/ebpf', [EbpfController::class, 'database'])->name('ebpf.database');
 
     // Legacy URL: the firewall is a tab of the server page now.
     Route::get('servers/{server}/firewall', fn (string $server) => redirect("/servers/{$server}/firewall", 301))->name('firewall.legacy');

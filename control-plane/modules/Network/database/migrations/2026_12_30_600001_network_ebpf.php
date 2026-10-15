@@ -1,0 +1,33 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+/**
+ * eBPF (docs/plans/network/ebpf.md): the per-server setting (default off) and the delivery of net.ebpf.configure. The
+ * probe's own status is the agent's facts.ebpf.
+ */
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('network_ebpf_settings', function (Blueprint $table) {
+            $table->string('server_id', 26)->primary();
+            $table->string('organization_id', 26)->index();
+            $table->boolean('enabled')->default(false);
+            // pending (to send or in flight) | applied | failed
+            $table->string('status', 16)->default('pending');
+            $table->string('command_id', 26)->nullable()->index();
+            $table->boolean('applied_enabled')->nullable();
+            $table->string('error', 1000)->nullable();
+            $table->timestamp('applied_at')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('network_ebpf_settings');
+    }
+};

@@ -35,6 +35,7 @@ import {
     type PeerRow,
     type WireGuardRow,
 } from '../connections';
+import { EbpfView } from './ebpf-view';
 
 const RANGES = ['1h', '6h', '24h', '7d'] as const;
 type Range = (typeof RANGES)[number];
@@ -222,6 +223,7 @@ export function ConnectionsView({ url, scope, serverId = null, siteId = null }: 
                     />
                 </Section>
             )}
+            <EbpfView url={url.replace(/\/connections$/, '/ebpf')} scope={scope} range={range} service={service || undefined} />
         </div>
     );
 }

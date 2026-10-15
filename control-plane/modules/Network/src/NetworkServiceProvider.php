@@ -13,9 +13,11 @@ use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Network\Application\Actions\RecordNetworkObservation;
+use Falak\Network\Application\Jobs\CheckEbpfAlerts;
 use Falak\Network\Application\Jobs\ConvergeProtection;
 use Falak\Network\Application\Listeners\ForgetDeletedServer;
 use Falak\Network\Application\Listeners\HandleCommandOutcome;
+use Falak\Network\Application\Listeners\HandleEbpfOutcome;
 use Falak\Network\Application\Listeners\HandleProtectionOutcome;
 use Falak\Network\Application\Listeners\ReconfigureConnections;
 use Falak\Network\Application\Listeners\ReconvergeProtection;
@@ -102,10 +104,18 @@ class NetworkServiceProvider extends ModuleServiceProvider
         Event::listen(ServerUpdated::class, [ReconvergeProtection::class, 'updated']);
         Event::listen(PrivateNetworkChanged::class, [ReconvergeProtection::class, 'network']);
         Event::listen(AgentCameOnline::class, [ReconvergeProtection::class, 'online']);
+        // eBPF (docs/plans/network/ebpf.md).
+        $types->register(CheckEbpfAlerts::ALERT_DNS, 'DNS failures spike', 'Network', Severity::Warning, 'Review DNS');
+        $types->register(CheckEbpfAlerts::ALERT_RETRANSMITS, 'TCP retransmit spike', 'Network', Severity::Warning, 'Review TCP health');
+        Event::listen(CommandFinished::class, [HandleEbpfOutcome::class, 'handleFinished']);
+        Event::listen(CommandFailed::class, [HandleEbpfOutcome::class, 'handleFailed']);
+        Event::listen(AgentVersionChanged::class, [HandleEbpfOutcome::class, 'handleUpgrade']);
+
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->call(fn () => IpBlock::query()->where('expires_at', '<', now()->subDays((int) config('network.protection.retention_days', 7)))->delete())
                 ->dailyAt('03:40')->name('network:prune-blocks')->withoutOverlapping();
             $schedule->job(new ConvergeProtection)->everyTenMinutes()->name('network:converge-protection')->withoutOverlapping();
+            $schedule->job(new CheckEbpfAlerts)->everyMinute()->name('network:ebpf-alerts')->withoutOverlapping();
         });
     }
 }
