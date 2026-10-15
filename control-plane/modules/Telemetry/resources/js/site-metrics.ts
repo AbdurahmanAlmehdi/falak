@@ -118,8 +118,10 @@ export function oomKills(series: MetricSeriesDto[] | undefined): { markers: Metr
 
 export interface ServiceRow {
     key: string;
-    /** Compose service, else the container / slice / unix user name. */
+    /** Compose service, else the site (its slug), else the container / slice / unix user name. */
     name: string;
+    /** The container / slice / unix user name when it is not the name. */
+    container: string | null;
     serverId: string | null;
     cpu: number | null;
     cpuLimit: number | null;
@@ -145,9 +147,11 @@ export function serviceRows(charts: {
     fields.forEach(([field, series]) => {
         (series ?? []).forEach((item) => {
             const serverId = item.labels.falak_server_id?.toLowerCase() ?? null;
-            const name = item.labels.falak_compose_service || item.labels.falak_workload_name || 'site';
+            const workload = item.labels.falak_workload_name || null;
+            const name = item.labels.falak_compose_service || item.labels.service_name || workload || 'site';
             const key = `${serverId ?? ''}/${item.labels.falak_compose_service ?? ''}/${item.labels.falak_workload_name ?? ''}`;
-            const row = rows.get(key) ?? { key, name, serverId, cpu: null, cpuLimit: null, memory: null, memoryLimit: null };
+            const container = workload !== name ? workload : null;
+            const row = rows.get(key) ?? { key, name, container, serverId, cpu: null, cpuLimit: null, memory: null, memoryLimit: null };
             row[field] = latest(item.points.map(([t, value]) => ({ t, value })));
             rows.set(key, row);
         });

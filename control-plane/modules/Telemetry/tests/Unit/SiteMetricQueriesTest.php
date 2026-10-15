@@ -28,7 +28,7 @@ it('reads the site\'s workload against its limits and its servers', function () 
         ->and($q['site_oom_kills'])->toBe("sum(increase(falak_workload_memory_oom_kills_total{$workload}[300s]))")
         ->and($q['site_disk_io'])->toBe("sum by (disk_io_direction) (rate(falak_workload_disk_io_bytes_total{$workload}[300s]))")
         ->and($q['site_pids_limit'])->toBe("sum by (falak_server_id) (falak_workload_pids_limit{$workload})")
-        ->and($q['services_memory'])->toBe('sum by (falak_server_id, falak_compose_service, falak_workload_name) (falak_workload_memory_usage_bytes'.substr($workload, 0, -1).',falak_memory_type="used"})');
+        ->and($q['services_memory'])->toBe('sum by (falak_server_id, service_name, falak_compose_service, falak_workload_name) (falak_workload_memory_usage_bytes'.substr($workload, 0, -1).',falak_memory_type="used"})');
 });
 
 it('widens rate windows to the step and counts OOM kills over windows that do not overlap', function () {

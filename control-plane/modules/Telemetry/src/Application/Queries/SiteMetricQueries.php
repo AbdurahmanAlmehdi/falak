@@ -58,7 +58,7 @@ final class SiteMetricQueries
         // the hypervisor gave to another guest: not this server's work).
         $hostCores = "sum(rate(system_cpu_time_seconds_total{{$servers},cpu_mode!~\"idle|iowait|steal\"}[{$w}]))";
         $hostUsed = "sum(system_memory_usage_bytes{{$servers},system_memory_state=\"used\"})";
-        $service = 'falak_server_id, falak_compose_service, falak_workload_name';
+        $service = 'falak_server_id, service_name, falak_compose_service, falak_workload_name';
 
         return $queries + [
             // Host utilisation (%) per server.

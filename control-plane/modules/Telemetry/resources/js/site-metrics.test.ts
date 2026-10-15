@@ -120,9 +120,23 @@ describe('serviceRows', () => {
         });
 
         expect(rows).toEqual([
-            { key: 's1/db/shop-db-1', name: 'db', serverId: 's1', cpu: 0.1, cpuLimit: null, memory: null, memoryLimit: null },
-            { key: 's1/web/shop-web-1', name: 'web', serverId: 's1', cpu: 0.4, cpuLimit: null, memory: 512, memoryLimit: 1024 },
+            { key: 's1/db/shop-db-1', name: 'db', container: 'shop-db-1', serverId: 's1', cpu: 0.1, cpuLimit: null, memory: null, memoryLimit: null },
+            {
+                key: 's1/web/shop-web-1',
+                name: 'web',
+                container: 'shop-web-1',
+                serverId: 's1',
+                cpu: 0.4,
+                cpuLimit: null,
+                memory: 512,
+                memoryLimit: 1024,
+            },
         ]);
+    });
+
+    it('names a site container after the site, the container kept apart', () => {
+        const [row] = serviceRows({ services_memory: [series({ service_name: 'pos', falak_workload_name: 'falak-pos-green' }, [[10, 1]])] });
+        expect([row.name, row.container]).toEqual(['pos', 'falak-pos-green']);
     });
 
     it('names a workload without a compose service after the workload', () => {

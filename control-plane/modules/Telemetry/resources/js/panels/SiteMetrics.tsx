@@ -424,7 +424,10 @@ function ServiceTable({ rows, serverName }: { rows: ServiceRow[]; serverName: ((
                     <tbody className="text-fg tabular">
                         {rows.map((row) => (
                             <tr key={row.key} className="border-border border-t">
-                                <td className="py-1.5 font-mono">{row.name}</td>
+                                <td className="py-1.5">
+                                    <span className="font-mono">{row.name}</span>
+                                    {row.container && <span className="text-fg-faint ml-2 font-mono">{row.container}</span>}
+                                </td>
                                 {serverName && <td className="text-fg-muted py-1.5">{serverName(row.serverId)}</td>}
                                 <td className="py-1.5 text-right">
                                     {row.cpu !== null ? formatCores(row.cpu) : '—'}
