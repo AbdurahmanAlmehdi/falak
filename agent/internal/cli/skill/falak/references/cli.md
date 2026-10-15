@@ -71,7 +71,7 @@ to include files new to the function, `init` accepts the defaults.
 
 | Command | What |
 |---|---|
-| `falak logs <site> [--follow\|-f] [--since 1h] [--limit N] [--level LEVEL]` | Site logs (app logs and edge access lines). `--since` is a Go duration (`30m`, `24h`; default `1h`; the API caps it at 30 days), `--limit` per request (default 200, max 1000). `--level` is a minimum level the API accepts: `trace`, `debug`, `info`, `warn`, `error`, `fatal`. `--follow` polls every 2 s. `--json`: NDJSON `{at, level, source, server, message, attributes}` per line |
+| `falak logs <site> [--follow\|-f] [--since 1h] [--limit N] [--level LEVEL]` | Site logs (app logs and edge access lines). `--since` is a Go duration (`30m`, `24h`; default `1h`; the API caps it at 30 days), `--limit` per request (default 200, max 1000). `--level` is a minimum level the API accepts: `trace`, `debug`, `info`, `warn`, `error`, `fatal` (`warning` is taken as `warn`). `--follow` polls every 2 s. `--json`: NDJSON `{at, level, source, server, message, attributes}` per line |
 | `falak fn logs <fn> [--follow] [--since 1h]` | The same for a function (same flags as `logs`) |
 
 ## Consoles (shells through the terminal relay)
