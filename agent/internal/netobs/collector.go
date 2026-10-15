@@ -278,6 +278,21 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 		attrs: workloadAttrs("host", "host"), ns: "host", inHost: true, listening: hostListening,
 		rep: ReportWorkload{Kind: "host", Name: "host"}}
 	natives := map[string]*workload{}
+	native := func(slug string) *workload {
+		w := natives[slug]
+		if w == nil {
+			w = &workload{key: "native/" + slug, owner: "site/" + slug, res: []*commonpb.KeyValue{str("service.name", slug)},
+				attrs: workloadAttrs("processes", slug), ns: "host", inHost: true, listening: hostListening,
+				rep: ReportWorkload{Kind: "processes", Name: slug, Site: slug}}
+			natives[slug] = w
+		}
+		return w
+	}
+	// The eBPF probe's connects since the last full pass (they join the peers in c.peers).
+	var opened map[string]map[Connect]uint64
+	if full {
+		opened = c.drainConnects()
+	}
 	inodeSite := c.nativeInodes(snap.Native)
 	if ok {
 		for _, s := range hostSocks {
@@ -289,14 +304,15 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 				host.socks = append(host.socks, s)
 				continue
 			}
-			w := natives[slug]
-			if w == nil {
-				w = &workload{key: "native/" + slug, owner: "site/" + slug, res: []*commonpb.KeyValue{str("service.name", slug)},
-					attrs: workloadAttrs("processes", slug), ns: "host", inHost: true, listening: hostListening,
-					rep: ReportWorkload{Kind: "processes", Name: slug, Site: slug}}
-				natives[slug] = w
-			}
+			w := native(slug)
 			w.socks = append(w.socks, s)
+		}
+		// A native site with no socket open at the snapshot (PHP-FPM opening a database connection per request) is
+		// still seen by its connects: it gets its workload so its peers carry them (bounded by maxWorkloads below).
+		for key := range opened {
+			if slug, found := strings.CutPrefix(key, "native/"); found && slug != "" {
+				native(slug)
+			}
 		}
 		wls = append(wls, host)
 		for _, slug := range sortedKeys(natives) {
@@ -363,7 +379,7 @@ func (c *Collector) Collect(ctx context.Context) ([]*metricspb.ResourceMetrics, 
 		}
 		names := c.resolver(cfg, host, ctByIP, ctNameByIP, inodeSite, snap)
 		c.listeners(wls, names)
-		c.peers(wls, names, usage.Accounting == acctOn, now)
+		c.peers(wls, names, opened, usage.Accounting == acctOn, now)
 		<-slow
 		report.WireGuard = wg
 		if probes != nil {
@@ -695,9 +711,27 @@ type peerAgg struct {
 	hasBytes bool
 }
 
-// peers groups every workload's established connections by remote endpoint, adds the conntrack bytes of the minute,
-// keeps the top maxPeers per direction and folds the rest into "other".
-func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.Time) {
+// drainConnects is the eBPF probe's connects since the last call by workload key; nil while the probe is off.
+func (c *Collector) drainConnects() map[string]map[Connect]uint64 {
+	c.mu.Lock()
+	drain := c.connects
+	c.mu.Unlock()
+	if drain == nil {
+		return nil
+	}
+	opened := map[string]map[Connect]uint64{}
+	for k, v := range drain() {
+		if opened[k.Workload] == nil {
+			opened[k.Workload] = map[Connect]uint64{}
+		}
+		opened[k.Workload][k] = v
+	}
+	return opened
+}
+
+// peers groups every workload's established connections and its eBPF connects (opened) by remote endpoint, adds the
+// conntrack bytes of the minute, keeps the top maxPeers per direction and folds the rest into "other".
+func (c *Collector) peers(wls []*workload, n *names, opened map[string]map[Connect]uint64, accounting bool, now time.Time) {
 	var deltas map[string][2]uint64
 	var idx map[string]flowMatch
 	if accounting && c.conntrack != nil {
@@ -710,18 +744,6 @@ func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.T
 			deltas = c.flows.deltas(flows, capped)
 			c.mu.Unlock()
 			idx = flowIndex(flows)
-		}
-	}
-	c.mu.Lock()
-	drain := c.connects
-	c.mu.Unlock()
-	opened := map[string]map[Connect]uint64{}
-	if drain != nil {
-		for k, v := range drain() {
-			if opened[k.Workload] == nil {
-				opened[k.Workload] = map[Connect]uint64{}
-			}
-			opened[k.Workload][k] = v
 		}
 	}
 	c.mu.Lock()

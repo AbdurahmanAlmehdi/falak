@@ -467,6 +467,43 @@ func TestEBPFConnectsJoinThePeers(t *testing.T) {
 	validateReport(t, rep)
 }
 
+func TestEBPFConnectsOfANativeSiteWithoutSockets(t *testing.T) {
+	_, c, _, _ := fixture(t)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	c.now = func() time.Time { return now }
+	db := netip.MustParseAddr("192.0.2.50")
+	drains := 0
+	c.SetConnects(func() map[Connect]uint64 {
+		drains++
+		if drains > 1 {
+			return nil
+		}
+		return map[Connect]uint64{{Workload: "native/backend", Addr: db, Port: 5432}: 40}
+	})
+	_, rep := c.Collect(context.Background())
+	var backend *ReportWorkload
+	for i, w := range rep.Workloads {
+		if w.Site == "backend" {
+			backend = &rep.Workloads[i]
+		}
+	}
+	// PHP-FPM opens its Postgres connection per request: no socket of the site at the snapshot, 40 connects.
+	if backend == nil || backend.Kind != "processes" || len(backend.Peers) != 1 || backend.Peers[0].Address != db.String() ||
+		backend.Peers[0].Connects != 40 || backend.Peers[0].Connections != 0 {
+		t.Fatalf("backend %+v", backend)
+	}
+	validateReport(t, rep)
+
+	// The next full pass has no connects: the site has no workload again.
+	now = now.Add(fullEvery)
+	_, rep = c.Collect(context.Background())
+	for _, w := range rep.Workloads {
+		if w.Site == "backend" {
+			t.Fatalf("workload without sockets or connects: %+v", w)
+		}
+	}
+}
+
 func TestPeersFoldIntoOther(t *testing.T) {
 	root := t.TempDir()
 	var socks []sock
