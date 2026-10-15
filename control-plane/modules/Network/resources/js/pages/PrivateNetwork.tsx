@@ -93,8 +93,7 @@ export default function PrivateNetwork({ network, members, availableServers, can
     return (
         <AppShell
             breadcrumbs={[
-                { title: 'Infrastructure', href: '/servers' },
-                { title: 'Private networks', href: '/network' },
+                { title: 'Network', href: '/network' },
                 { title: network.name, href: `/network/private-networks/${network.id}` },
             ]}
         >
@@ -161,7 +160,7 @@ export default function PrivateNetwork({ network, members, availableServers, can
                                 header: 'Server',
                                 sortValue: (member) => member.server_name,
                                 cell: (member) => (
-                                    <Link href={`/servers/${member.server_id}/network`} className="text-fg font-medium hover:underline">
+                                    <Link href={`/servers/${member.server_id}/private-network`} className="text-fg font-medium hover:underline">
                                         {member.server_name}
                                     </Link>
                                 ),

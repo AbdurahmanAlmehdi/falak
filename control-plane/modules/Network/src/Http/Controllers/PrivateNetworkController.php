@@ -113,7 +113,7 @@ final class PrivateNetworkController extends Controller
             ->where('server_id', $data->id)->orderBy('created_at')->get();
         $joined = $memberships->pluck('network_id')->all();
 
-        return Inertia::render('Network/ServerNetwork', [
+        return Inertia::render('Network/ServerPrivateNetwork', [
             'server' => app(ServerHeaders::class)->for($data->id),
             'privateIpv4' => $data->privateIpv4,
             'memberships' => $memberships->map(fn (PrivateNetworkMember $member) => [

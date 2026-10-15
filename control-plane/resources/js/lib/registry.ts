@@ -262,10 +262,12 @@ export interface ServerSectionProps {
 }
 
 /**
- * A block of the server page (below its services), e.g. Limits' capacity card. Modules register theirs in register.ts.
+ * A block of the server page, e.g. Limits' capacity card. Modules register theirs in register.ts.
  */
 export interface ServerSection {
     id: string;
+    /** The tab it shows on: the overview (below the services, the default) or the Network tab (below the connections). */
+    tab?: 'overview' | 'network';
     /** Lower comes first. */
     order: number;
     permission?: string;
@@ -518,8 +520,10 @@ export function registerServerSections(...sections: ServerSection[]): void {
     sections.forEach((section) => serverSections.set(section.id, section));
 }
 
-export function serverSectionsFor(ctx: Pick<ShellContext, 'can'>): ServerSection[] {
-    return [...serverSections.values()].filter((section) => !section.permission || ctx.can(section.permission)).sort((a, b) => a.order - b.order);
+export function serverSectionsFor(ctx: Pick<ShellContext, 'can'>, tab: ServerSection['tab'] = 'overview'): ServerSection[] {
+    return [...serverSections.values()]
+        .filter((section) => (section.tab ?? 'overview') === tab && (!section.permission || ctx.can(section.permission)))
+        .sort((a, b) => a.order - b.order);
 }
 
 export function navigationFor(ctx: ShellContext): ModuleNavItem[] {

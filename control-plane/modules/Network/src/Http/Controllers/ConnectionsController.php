@@ -14,6 +14,7 @@ use Falak\Network\Application\ConfigureConnections;
 use Falak\Network\Application\Queries\ConnectionQueries;
 use Falak\Network\Domain\Models\NetworkObservation;
 use Falak\Servers\Contracts\ServerDirectory;
+use Falak\Servers\Contracts\ServerHeaders;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Telemetry\Contracts\Data\MetricSeries;
 use Falak\Telemetry\Contracts\Exceptions\TelemetryQueryFailed;
@@ -23,6 +24,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Inertia\Inertia;
+use Inertia\Response;
 
 /**
  * JSON behind the Network tabs (docs/plans/network/connections.md, "UI"): a server's connections, listeners, talks-to,
@@ -44,6 +47,14 @@ final class ConnectionsController extends Controller
         private readonly AgentDirectory $agents,
         private readonly MetricsBackend $metrics,
     ) {}
+
+    /** GET /servers/{server}/network: the server's Network tab (its data comes from the JSON endpoints below). */
+    public function page(Request $request, string $server): Response
+    {
+        $data = $this->server($request->user(), $server);
+
+        return Inertia::render('Network/ServerNetwork', ['server' => app(ServerHeaders::class)->for($data->id)]);
+    }
 
     /** GET /network/servers/{server}/connections?range= */
     public function forServer(Request $request, string $server, SecurityIssues $issues): JsonResponse

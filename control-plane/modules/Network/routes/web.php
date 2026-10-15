@@ -11,7 +11,8 @@ use Illuminate\Support\Facades\Route;
 // Server page tabs (/servers/{id}/{tab}) owned by Network.
 Route::middleware(['auth', 'org'])->group(function () {
     Route::get('servers/{server}/firewall', [FirewallController::class, 'show'])->name('network.firewall.show');
-    Route::get('servers/{server}/network', [PrivateNetworkController::class, 'forServer'])->name('network.server');
+    Route::get('servers/{server}/network', [ConnectionsController::class, 'page'])->name('network.server');
+    Route::get('servers/{server}/private-network', [PrivateNetworkController::class, 'forServer'])->name('network.server.private');
 });
 
 Route::middleware(['auth', 'org'])->prefix('network')->name('network.')->group(function () {

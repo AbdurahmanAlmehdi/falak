@@ -129,6 +129,7 @@ export const routes: BrowserRoute[] = [
     { path: '/servers/:server/processes' },
     { path: '/servers/:server/firewall' },
     { path: '/servers/:server/network' },
+    { path: '/servers/:server/private-network' },
     { path: '/servers/:server/security' },
     { path: '/servers/:server/terminal' },
     { path: '/servers/:server/ssh-keys' },

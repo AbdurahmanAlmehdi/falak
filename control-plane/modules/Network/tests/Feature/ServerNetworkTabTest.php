@@ -31,8 +31,8 @@ it('renders the private network tab with memberships and joinable networks', fun
     $backend = PrivateNetwork::query()->where('name', 'backend')->firstOrFail();
     $this->post("/network/private-networks/{$backend->id}/members", ['server_id' => $this->server->id])->assertSessionHasNoErrors();
 
-    $this->get("/servers/{$this->server->id}/network")->assertOk()->assertInertia(fn ($page) => $page
-        ->component('Network/ServerNetwork', false)
+    $this->get("/servers/{$this->server->id}/private-network")->assertOk()->assertInertia(fn ($page) => $page
+        ->component('Network/ServerPrivateNetwork', false)
         ->where('server.name', 'app-1')
         ->has('memberships', 1)
         ->where('memberships.0.network.name', 'backend')
@@ -42,11 +42,18 @@ it('renders the private network tab with memberships and joinable networks', fun
         ->where('can.join', true));
 });
 
+it('renders the network tab with the shared server header', function () {
+    $this->get("/servers/{$this->server->id}/network")->assertOk()->assertInertia(fn ($page) => $page
+        ->component('Network/ServerNetwork', false)
+        ->where('server.id', $this->server->id)
+        ->has('server.agent'));
+});
+
 it('creates a network from the server tab and joins the server right away', function () {
-    $this->from("/servers/{$this->server->id}/network")
+    $this->from("/servers/{$this->server->id}/private-network")
         ->post('/network/private-networks', ['name' => 'mesh', 'server_id' => $this->server->id])
         ->assertSessionHasNoErrors()
-        ->assertRedirect("/servers/{$this->server->id}/network");
+        ->assertRedirect("/servers/{$this->server->id}/private-network");
 
     $network = PrivateNetwork::query()->where('name', 'mesh')->firstOrFail();
     expect(PrivateNetworkMember::query()->where('network_id', $network->id)->where('server_id', $this->server->id)->exists())->toBeTrue();
@@ -55,6 +62,7 @@ it('creates a network from the server tab and joins the server right away', func
 it('hides the private network tab of other organizations', function () {
     [$stranger] = memberOf();
 
+    $this->actingAs($stranger)->get("/servers/{$this->server->id}/private-network")->assertNotFound();
     $this->actingAs($stranger)->get("/servers/{$this->server->id}/network")->assertNotFound();
     $this->actingAs($stranger)->post('/network/private-networks', ['name' => 'x', 'server_id' => $this->server->id])->assertNotFound();
 });

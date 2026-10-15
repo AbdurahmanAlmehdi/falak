@@ -33,6 +33,7 @@ registerServiceActions({
 
 registerServerSections({
     id: 'terminal.net-tools',
+    tab: 'network',
     order: 700,
     permission: 'network.tools',
     component: lazy(() => netTools().then((module) => ({ default: module.ServerNetTools }))),
@@ -54,6 +55,7 @@ registerServiceActions({
 
 registerServerSections({
     id: 'terminal.net-capture',
+    tab: 'network',
     order: 710,
     permission: 'network.capture',
     component: lazy(() => netCapture().then((module) => ({ default: module.ServerNetCapture }))),
