@@ -11,6 +11,7 @@ export interface DataTableColumn<T> {
     cell: (row: T) => ReactNode;
     /** Makes the column sortable. */
     sortValue?: (row: T) => string | number | null | undefined;
+    /** `right`: numbers and times (tabular figures, never wrapped). */
     align?: 'left' | 'right';
     /** CSS width (e.g. '30%', '120px'). */
     width?: string;
@@ -178,7 +179,7 @@ export function DataTable<T>({
                                               key={column.id}
                                               className={cn(
                                                   'text-fg h-10 px-3 align-middle text-sm',
-                                                  column.align === 'right' && 'tabular text-right',
+                                                  column.align === 'right' && 'tabular text-right whitespace-nowrap',
                                                   column.hideOnMobile && 'hidden sm:table-cell',
                                                   column.className,
                                               )}
