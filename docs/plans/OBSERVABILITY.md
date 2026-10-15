@@ -683,9 +683,6 @@ the shared rules), gets its own independent review, and is checked live on cloud
 
 ## Phase 5: eBPF and packet capture
 
-- eBPF probe in the agent: per-process latency, DNS lookups, retransmits (needs a recent kernel; optional feature).
-- On-demand capture: a 30 s `tcpdump` on one container or port, downloaded as pcap; its own permission, audited.
-- Packet capture plan (stream G): [network/capture.md](network/capture.md).
 Two streams, built in parallel on their own branches, each with its own plan under `docs/plans/network/`; phase 4's
 shared rules (bounded labels, one agent feature per stream, additive shared files, read-only by default) apply.
 

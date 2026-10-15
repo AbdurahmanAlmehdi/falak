@@ -54,8 +54,6 @@ HTTP, TCP from the host or, with `container`, inside a container's network names
 Packet capture (docs/plans/network/capture.md): `net.capture` gates the whole `net.capture` command (tcpdump on a host
 interface or in a container's namespace), its `net.capture.progress` request (whose reply can cancel it) and the
 chunk uploads to `/agent/v1/uploads/net.capture/<capture_id>`.
-eBPF (docs/plans/network/ebpf.md): `net.ebpf` gates the whole `net.ebpf.configure` command (`{enabled}`, opt-in per
-server; persisted in `/etc/falak/ebpf.json`; its result is the probe's status) and the agent's `facts.ebpf`
 eBPF (docs/plans/network/ebpf.md): `net.ebpf` gates the whole `net.ebpf.configure` command (`{enabled, full_dns_names?,
 reenable?}`, opt-in per server; persisted in `/etc/falak/ebpf.json` with an over-budget stop that only `reenable`
 clears; its result is the probe's status) and the agent's `facts.ebpf`
