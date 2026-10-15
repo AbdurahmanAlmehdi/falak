@@ -433,6 +433,11 @@
         },
         "routes": {
           "type": "integer"
+        },
+        "rate_limits_refused": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Feature edge.rate_limit: why the payload rate limits were left out of the applied config (no module and no usable build, a FrankenPHP edge, a build that failed here); the rest of the config is applied"
         }
       }
     }

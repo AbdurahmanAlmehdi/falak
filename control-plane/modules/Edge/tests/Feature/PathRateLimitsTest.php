@@ -6,6 +6,7 @@ use Falak\Fleet\Application\PayloadCompatibility;
 use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentStatus;
 use Falak\Fleet\Contracts\Data\AgentInfo;
+use Falak\Fleet\Events\CommandFinished;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
 use Falak\Identity\Domain\Models\Organization;
@@ -43,7 +44,7 @@ function rl_agents(array $features): void
 }
 
 beforeEach(function () {
-    ['sites' => $this->sites, 'servers' => $this->servers] = edge_fakes();
+    ['sites' => $this->sites, 'servers' => $this->servers, 'agents' => $this->agents] = edge_fakes();
     [$this->user, $this->organization] = actingAsMember(Role::Admin);
     $org = $this->organization->id;
     $this->web = edge_server($this->servers, $org, ['id' => strtolower((string) Str::ulid()), 'name' => 'web-1', 'phpRuntime' => 'fpm', 'arch' => 'x86_64']);
@@ -124,4 +125,34 @@ it('serves the build publicly with its checksum', function () {
     $this->get('/install/edge/caddy-linux-amd64')->assertOk()->assertHeader('X-Checksum-Sha256', hash('sha256', 'caddy'));
     $this->get('/install/edge/caddy-linux-arm64')->assertNotFound();
     $this->get('/install/edge/caddy-linux-mips')->assertNotFound();
+});
+
+it('refuses servers without a published build for their architecture', function () {
+    $arm = edge_server($this->servers, $this->organization->id, ['id' => strtolower((string) Str::ulid()), 'name' => 'arm-1', 'phpRuntime' => 'fpm', 'arch' => 'aarch64']);
+    $site = edge_site($this->sites, $this->organization->id, [$arm->id], ['id' => strtolower((string) Str::ulid()), 'slug' => 'armsite']);
+    rl_agents([$arm->id => ['edge.rate_limit']]);
+
+    $this->post('/network/rate-limits', ['site_id' => $site->id, 'path' => '/login', 'events' => 10, 'window_s' => 60])->assertSessionHasErrors('site_id');
+    expect(session('errors')->first('site_id'))->toContain("No Falak Caddy build is published for arm-1's architecture");
+});
+
+it('never sends rate limits to a FrankenPHP edge', function () {
+    PathRateLimit::query()->create(['organization_id' => $this->organization->id, 'site_id' => $this->app2->id, 'path' => '/login', 'events' => 10, 'window_s' => 60]);
+    app(AddDomain::class)($this->app2, 'app2.example.com');
+
+    $payload = edge_compile($this->franken->id);
+    expect(json_encode($payload))->not->toContain('rate_limits')
+        ->and($payload)->not->toHaveKey('caddy_build');
+});
+
+it('shows the servers whose edge applied its config without the rate limits', function () {
+    $this->post('/network/rate-limits', ['site_id' => $this->shop->id, 'path' => '/login', 'events' => 10, 'window_s' => 60])->assertSessionHasNoErrors();
+    $command = collect($this->agents->ofType('edge.caddy.apply'))->last();
+    event(new CommandFinished($command['handle']->id, $this->organization->id, $this->web->id, 'edge.caddy.apply', 'key', 0,
+        ['changed' => true, 'config_sha256' => str_repeat('d', 64), 'routes' => 2, 'rate_limits_refused' => 'Falak\'s Caddy build lacks modules the edge needs: dns.providers.route53']));
+
+    expect(edge_schema_errors('edge.caddy.apply', $command['payload']))->toBe([]);
+    $this->get('/network/rate-limits')->assertInertia(fn ($page) => $page
+        ->where('notApplied.0.server', 'web-1')
+        ->where('notApplied.0.reason', fn ($reason) => str_contains((string) $reason, 'dns.providers.route53')));
 });

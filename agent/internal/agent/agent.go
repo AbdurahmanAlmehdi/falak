@@ -275,6 +275,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	// Not derived from ctx: on shutdown the subsystems keep running while commands drain (see gracefulStop).
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	// A Caddy build switch an agent restart interrupted: kept when the edge answers, else rolled back.
+	if err := comps.Edge.ResolvePendingSwap(runCtx); err != nil {
+		log.Error("edge Caddy build switch", "err", err)
+	}
 	if err := tel.Start(runCtx); err != nil {
 		return fmt.Errorf("telemetry: %w", err)
 	}

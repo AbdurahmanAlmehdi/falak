@@ -24,10 +24,16 @@ return new class extends Migration
             $table->timestamps();
             $table->unique(['site_id', 'path']);
         });
+
+        // Why the server's edge applied its config without the rate limits (the agent's result), null when it did.
+        Schema::table('edge_server_states', function (Blueprint $table) {
+            $table->string('rate_limits_refused', 1000)->nullable();
+        });
     }
 
     public function down(): void
     {
+        Schema::table('edge_server_states', fn (Blueprint $table) => $table->dropColumn('rate_limits_refused'));
         Schema::dropIfExists('edge_path_rate_limits');
     }
 };

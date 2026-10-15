@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/runner/runnertest"
@@ -155,22 +157,44 @@ func TestRateLimitInstallsFalakCaddyOnce(t *testing.T) {
 	}
 }
 
-func TestRateLimitRefusals(t *testing.T) {
-	franken := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/local/bin/frankenphp", FrankenPHP: true})
-	m, f, _, _, build := rateLimitSetup(t, franken, stockModules)
-	if _, err := m.Apply(context.Background(), withRule(payload, build), stream()); err == nil || !strings.Contains(err.Error(), "FrankenPHP") || f.Ran("systemctl") {
+func applied(t *testing.T, m *Manager, p Payload) ApplyResult {
+	t.Helper()
+	r, err := m.Apply(context.Background(), p, stream())
+	if err != nil {
 		t.Fatal(err)
+	}
+	return r.(ApplyResult)
+}
+
+func loadedRateLimit(fc *fakeCaddy) bool {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	b, _ := json.Marshal(fc.cfg)
+	return strings.Contains(string(b), `"rate_limit"`)
+}
+
+// Rate limits the edge cannot run never block the rest of the config: it is applied without them and the result says
+// why (the panel shows it).
+func TestRateLimitRefusalsApplyTheRestOfTheConfig(t *testing.T) {
+	franken := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/local/bin/frankenphp", FrankenPHP: true})
+	m, f, fc, _, build := rateLimitSetup(t, franken, stockModules)
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "FrankenPHP") || !r.Changed || loadedRateLimit(fc) || f.Ran("systemctl") {
+		t.Fatalf("%+v %v", r, f.Lines())
 	}
 
 	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
-	m, _, _, _, build = rateLimitSetup(t, unit, stockModules)
-	if _, err := m.Apply(context.Background(), withRule(payload, nil), stream()); err == nil || !strings.Contains(err.Error(), "no Falak Caddy build") {
-		t.Fatal(err)
+	m, _, fc, _, build = rateLimitSetup(t, unit, stockModules)
+	if r := applied(t, m, withRule(payload, nil)); !strings.Contains(r.RateLimitsRefused, "no Falak Caddy build") || loadedRateLimit(fc) || fc.loads != 1 {
+		t.Fatalf("%+v", r)
 	}
+	// A download whose checksum differs (or that fails): refused this time, tried again next time.
 	bad := *build
 	bad.SHA256 = strings.Repeat("b", 64)
-	if _, err := m.Apply(context.Background(), withRule(payload, &bad), stream()); err == nil {
-		t.Fatal("checksum mismatch accepted")
+	if r := applied(t, m, withRule(payload, &bad)); !strings.Contains(r.RateLimitsRefused, "downloading") {
+		t.Fatalf("%+v", r)
+	}
+	if _, failed := m.loadRLState().Failed[bad.SHA256]; failed {
+		t.Fatal("a failed download is remembered")
 	}
 	plain := *build
 	plain.URL = strings.Replace(build.URL, "https://", "http://", 1)
@@ -178,33 +202,50 @@ func TestRateLimitRefusals(t *testing.T) {
 		t.Fatal("http build URL accepted")
 	}
 
-	// A build lacking a module the current Caddy has: the edge keeps its Caddy.
-	m, f, _, dest, build := rateLimitSetup(t, unit, stockModules+"dns.providers.route53\n")
-	if _, err := m.Apply(context.Background(), withRule(payload, build), stream()); err == nil || !strings.Contains(err.Error(), "dns.providers.route53") || f.Ran("systemctl") {
-		t.Fatal(err)
+	// A build lacking a module the current Caddy has: refused, remembered, never downloaded or checked again.
+	m, f, fc, dest, build := rateLimitSetup(t, unit, stockModules+"dns.providers.route53\n")
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "dns.providers.route53") || f.Ran("systemctl") || loadedRateLimit(fc) {
+		t.Fatalf("%+v", r)
 	}
 	if u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath); strings.Contains(string(u), dest) {
 		t.Fatal("unit switched")
 	}
+	f.Reset()
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "failed on this server before") || f.Ran(dest) {
+		t.Fatalf("%+v %v", r, f.Lines())
+	}
 }
 
-// The build is checked against the edge's current config before the swap, and an edge that does not come back with it
-// is rolled back to the Caddy it ran.
+// The build is checked against the edge's config before the swap, as the edge runs it (its user, its DNS provider
+// tokens); an edge that does not come back is rolled back, and the build is not tried again.
 func TestRateLimitSwapIsValidatedAndRolledBack(t *testing.T) {
 	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
 
-	// The current config (persisted by an earlier apply) is rejected by the build: no swap.
-	m, f, _, dest, build := rateLimitSetup(t, unit, stockModules)
-	if _, err := m.Apply(context.Background(), payload, stream()); err != nil {
-		t.Fatal(err)
+	// A DNS-01 server: validated as the caddy user, with the tokens of edge.env.
+	m, f, fc, dest, build := rateLimitSetup(t, unit, stockModules)
+	dns := payload
+	dns.Sites = append([]Site(nil), payload.Sites...)
+	dns.Sites[1] = Site{ID: "wild", Domains: []string{"w.example.com"}, Kind: "static", Root: "/srv/w", TLS: &TLS{DNS: &DNS{Provider: "cloudflare", APIToken: "tok"}}}
+	applied(t, m, dns)
+	var validate *runnertest.Call
+	f.OnFunc(dest+" validate", func(c runnertest.Call) (runner.Result, error) { validate = &c; return runner.Result{}, nil })
+	if r := applied(t, m, withRule(dns, build)); r.RateLimitsRefused != "" || !loadedRateLimit(fc) {
+		t.Fatalf("%+v", r)
 	}
-	f.On(dest+" validate", runner.Result{ExitCode: 1, Stderr: []byte("unknown module")})
-	if _, err := m.Apply(context.Background(), withRule(payload, build), stream()); err == nil || !strings.Contains(err.Error(), "rejects the edge's current config") || f.Ran("systemctl restart") {
-		t.Fatal(err, f.Lines())
+	if validate == nil || validate.User != "caddy" || !validate.ClearEnv || !slices.Contains(validate.Env, TokenEnv("tok")+"=tok") || !slices.Contains(validate.Env, "XDG_DATA_HOME=/var/lib/caddy") {
+		t.Fatalf("%+v", validate)
 	}
 
-	// The edge does not restart with the build: back to /usr/bin/caddy, restarted, error reported.
-	m, f, _, dest, build = rateLimitSetup(t, unit, stockModules)
+	// The current config is rejected by the build: no swap, remembered.
+	m, f, fc, dest, build = rateLimitSetup(t, unit, stockModules)
+	applied(t, m, payload)
+	f.On(dest+" validate", runner.Result{ExitCode: 1, Stderr: []byte("unknown module")})
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "rejects the edge's config") || f.Ran("systemctl restart") || loadedRateLimit(fc) {
+		t.Fatalf("%+v %v", r, f.Lines())
+	}
+
+	// The edge does not restart with the build: back to /usr/bin/caddy, restarted; the next apply does not try again.
+	m, f, fc, dest, build = rateLimitSetup(t, unit, stockModules)
 	var restarts atomic.Int32
 	f.OnFunc("systemctl restart falak-edge.service", func(runnertest.Call) (runner.Result, error) {
 		if restarts.Add(1) == 1 {
@@ -212,12 +253,85 @@ func TestRateLimitSwapIsValidatedAndRolledBack(t *testing.T) {
 		}
 		return runner.Result{}, nil
 	})
-	_, err := m.Apply(context.Background(), withRule(payload, build), stream())
-	if err == nil || !strings.Contains(err.Error(), "rolled back to /usr/bin/caddy") || restarts.Load() != 2 {
-		t.Fatal(err, restarts.Load())
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "rolled back to /usr/bin/caddy") || restarts.Load() != 2 || loadedRateLimit(fc) {
+		t.Fatalf("%+v %d", r, restarts.Load())
 	}
 	u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath)
-	if !strings.Contains(string(u), "ExecStart=/usr/bin/caddy run") || strings.Contains(string(u), dest) {
+	if !strings.Contains(string(u), "ExecStart=/usr/bin/caddy run") || strings.Contains(string(u), dest) || m.o.FS.Exists(m.swapMarkerPath()) {
 		t.Fatal(string(u))
+	}
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "failed on this server before") || restarts.Load() != 2 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// An edge already on a Falak build moves to the build the control plane ships now; older builds are pruned.
+func TestRateLimitUpgradesFalakBuildAndPrunes(t *testing.T) {
+	m, f, fc, dest, build := rateLimitSetup(t, "", stockModules)
+	dir := m.o.FS.P(runtime.CaddyBuildDir)
+	os.MkdirAll(dir, 0o755)
+	old, older := filepath.Join(dir, "caddy-0000000000000001"), filepath.Join(dir, "caddy-0000000000000000")
+	os.WriteFile(old, []byte("old"), 0o755)
+	os.WriteFile(older, []byte("older"), 0o755)
+	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: old})
+	os.MkdirAll(filepath.Dir(m.o.FS.P(runtime.EdgeUnitPath)), 0o755)
+	os.WriteFile(m.o.FS.P(runtime.EdgeUnitPath), []byte(unit), 0o644)
+	f.On(old+" list-modules", runner.Result{Stdout: []byte(stockModules + "http.handlers.rate_limit\n")})
+
+	if r := applied(t, m, withRule(payload, build)); r.RateLimitsRefused != "" || !loadedRateLimit(fc) {
+		t.Fatalf("%+v", r)
+	}
+	u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath)
+	if !strings.Contains(string(u), "ExecStart="+dest+" run") {
+		t.Fatal(string(u))
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("the previous build must be kept")
+	}
+	if _, err := os.Stat(older); err == nil {
+		t.Fatal("an older build was not pruned")
+	}
+
+	// An upgrade that fails keeps the current build and still applies the rate limits.
+	m, f, fc, _, build = rateLimitSetup(t, unit, stockModules)
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(m.o.FS.P(runtime.CaddyBuildDir+"/caddy-0000000000000001"), []byte("old"), 0o755)
+	cur := m.o.FS.P(runtime.CaddyBuildDir + "/caddy-0000000000000001")
+	os.WriteFile(m.o.FS.P(runtime.EdgeUnitPath), []byte(runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: cur})), 0o644)
+	f.On(cur+" list-modules", runner.Result{Stdout: []byte(stockModules + "dns.providers.route53\nhttp.handlers.rate_limit\n")})
+	if r := applied(t, m, withRule(payload, build)); r.RateLimitsRefused != "" || !loadedRateLimit(fc) || f.Ran("systemctl restart") {
+		t.Fatalf("%+v", r)
+	}
+	if u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath); !strings.Contains(string(u), "ExecStart="+cur+" run") {
+		t.Fatal(string(u))
+	}
+}
+
+// A switch an agent restart interrupted: kept when the edge answers, rolled back (and remembered) when it does not.
+func TestResolvePendingSwap(t *testing.T) {
+	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
+	m, f, _, dest, build := rateLimitSetup(t, unit, stockModules)
+	mk, _ := json.Marshal(swapMarker{Previous: runtime.EdgeUnit{Binary: "/usr/bin/caddy", User: "caddy"}, Target: dest, SHA256: build.SHA256})
+	m.o.FS.WriteFile(m.swapMarkerPath(), mk, 0o600)
+	if err := m.ResolvePendingSwap(context.Background()); err != nil || m.o.FS.Exists(m.swapMarkerPath()) || f.Ran("systemctl") {
+		t.Fatal(err, f.Lines())
+	}
+
+	m.o.FS.WriteFile(m.swapMarkerPath(), mk, 0o600)
+	os.WriteFile(m.o.FS.P(runtime.EdgeUnitPath), []byte(runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: dest})), 0o644)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	alive := m.o.Client
+	m.o.Client, m.o.AdminWait = &Client{Base: dead.URL}, time.Millisecond
+	f.OnFunc("systemctl restart falak-edge.service", func(runnertest.Call) (runner.Result, error) { m.o.Client = alive; return runner.Result{}, nil })
+	if err := m.ResolvePendingSwap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := m.o.FS.ReadFile(runtime.EdgeUnitPath)
+	if !strings.Contains(string(u), "ExecStart=/usr/bin/caddy run") || m.o.FS.Exists(m.swapMarkerPath()) {
+		t.Fatal(string(u))
+	}
+	if _, failed := m.loadRLState().Failed[build.SHA256]; !failed {
+		t.Fatal("the build is not remembered as failed")
 	}
 }

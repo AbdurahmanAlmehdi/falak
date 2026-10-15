@@ -106,6 +106,8 @@ type EdgeUnit struct {
 	User       string // default caddy
 	FrankenPHP bool
 	Groups     []string // SupplementaryGroups (site users' groups)
+	// SkipValidate switches the binary without validating the config with it (a rollback to the binary that ran it).
+	SkipValidate bool `json:"skip_validate,omitempty"`
 }
 
 // RenderEdgeUnit renders the systemd unit.
@@ -210,6 +212,13 @@ func EnsureEdgeUnit(ctx context.Context, r runner.Runner, fs hostfs.FS, st comma
 		return false, err
 	} else if fixed {
 		changed = true
+	}
+	// A different binary must accept the config the edge loads at start, or the restart below would take every site
+	// down (stock Caddy cannot load a config with rate_limit handlers, FrankenPHP's build lacks the module too).
+	if cur, ok := CurrentEdgeUnit(fs); ok && cur.Binary != u.Binary && !u.SkipValidate {
+		if err := ValidateEdgeConfig(ctx, r, fs, u); err != nil {
+			return false, fmt.Errorf("%w from %s to %s: %v", errBinarySwitch, cur.Binary, u.Binary, err)
+		}
 	}
 	u.Groups = mergeGroups(fs, u.Groups)
 	unitChanged, err := fs.WriteFile(EdgeUnitPath, []byte(RenderEdgeUnit(u)), 0o644)

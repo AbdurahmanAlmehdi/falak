@@ -17,6 +17,7 @@ use Illuminate\Support\Carbon;
  * @property ?string $config_sha256
  * @property ?int $routes
  * @property ?string $error
+ * @property ?string $rate_limits_refused why the applied config left the rate limits out (edge.rate_limit)
  * @property ?Carbon $dispatched_at
  * @property ?Carbon $applied_at
  * @property ?list<string> $octane_sites site ids the last dispatched config proxies to Octane

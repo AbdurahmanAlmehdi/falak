@@ -31,6 +31,8 @@ interface SiteOption {
 interface Props {
     limits: LimitRow[];
     sites: SiteOption[];
+    /** Servers whose edge applied its config without the rate limits (the agent's reason). */
+    notApplied?: { server: string; reason: string }[];
     can: { manage: boolean };
 }
 
@@ -99,7 +101,7 @@ function AddDialog({ sites, open, onOpenChange }: { sites: SiteOption[]; open: b
     );
 }
 
-export default function RateLimits({ limits, sites, can }: Props) {
+export default function RateLimits({ limits, sites, notApplied = [], can }: Props) {
     const [adding, setAdding] = useState(false);
 
     const remove = (limit: LimitRow) =>
@@ -121,6 +123,11 @@ export default function RateLimits({ limits, sites, can }: Props) {
                 )
             }
         >
+            {notApplied.map((row) => (
+                <p key={row.server} role="alert" className="border-warning/40 bg-warning-soft text-warning rounded-lg border px-4 py-3 text-sm">
+                    Rate limits not applied on {row.server}: {row.reason}
+                </p>
+            ))}
             <DataTable
                 label="Rate limits"
                 rows={limits}

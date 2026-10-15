@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/runner/runnertest"
+	"github.com/OthmanHaba/falak/agent/internal/runtime"
 )
 
 // hostSim is a fake host: tracks installed packages and systemd state.
@@ -425,5 +427,51 @@ func TestAptStepsRecoverFromAnOndrejSourceWithoutARelease(t *testing.T) {
 	r, err = p2.Apply(context.Background(), plan2, commands.NewTestStream("c", &commands.Collector{}))
 	if err == nil || !strings.Contains(r.(Result).Steps[0].Error, "repository https://example.test/repo (/etc/apt/sources.list.d/example.list) breaks apt-get update") {
 		t.Fatalf("%v %+v", err, r)
+	}
+}
+
+// Re-provisioning a server whose edge runs Falak's Caddy build (rate limits) keeps it: stock Caddy could not load the
+// edge's config (docs/plans/network/protection.md).
+func TestReprovisionKeepsFalakCaddyBuild(t *testing.T) {
+	root := t.TempDir()
+	f := &runnertest.Fake{}
+	h := newHost(f, root)
+	h.users["caddy"] = true
+	h.pkgs["caddy"] = true
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("key")) }))
+	defer srv.Close()
+	fs := hostfs.FS{Root: root}
+	build := fs.P(runtime.CaddyBuildDir + "/caddy-0123456789abcdef")
+	os.MkdirAll(filepath.Dir(build), 0o755)
+	os.WriteFile(build, []byte("caddy"), 0o755)
+	os.MkdirAll(filepath.Dir(fs.P(runtime.EdgeUnitPath)), 0o755)
+	os.WriteFile(fs.P(runtime.EdgeUnitPath), []byte(runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: build})), 0o644)
+	p := New(Deps{Runner: f, FS: fs, HTTP: srv.Client(), Arch: "amd64", CaddyKeyURL: srv.URL + "/gpg.key"})
+	plan, err := commands.Decode[Plan](json.RawMessage(`{"timezone": "UTC", "runtimes": {"caddy": {"enabled": true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Apply(context.Background(), plan, commands.NewTestStream("c", &commands.Collector{})); err != nil {
+		t.Fatal(err)
+	}
+	u, _ := fs.ReadFile(runtime.EdgeUnitPath)
+	if !strings.Contains(string(u), "ExecStart="+build+" run") || f.Ran("/usr/bin/caddy validate") {
+		t.Fatalf("%s\n%v", u, f.Lines())
+	}
+
+	// The build is gone (deleted by hand): stock Caddy again, but only if it accepts the edge's config.
+	os.Remove(build)
+	os.MkdirAll(filepath.Dir(fs.P(runtime.EdgeBootstrap)), 0o755)
+	os.WriteFile(fs.P(runtime.EdgeBootstrap), []byte(`{"apps":{"http":{}}}`), 0o644)
+	f.On("/usr/bin/caddy validate", runner.Result{ExitCode: 1, Stderr: []byte("module not registered: http.handlers.rate_limit")})
+	col := &commands.Collector{}
+	st := commands.NewTestStream("c", col)
+	r, err := p.Apply(context.Background(), plan, st)
+	st.Flush()
+	if err == nil || !strings.Contains(fmt.Sprintf("%+v %s", r, col.Output("")), "refusing to switch") {
+		t.Fatalf("%v %+v %s", err, r, col.Output(""))
+	}
+	if u, _ := fs.ReadFile(runtime.EdgeUnitPath); !strings.Contains(string(u), "ExecStart="+build+" run") {
+		t.Fatal("the unit was switched to a binary that rejects the config")
 	}
 }

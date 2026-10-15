@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -676,5 +677,49 @@ func TestEdgeUnitJoinsSiteGroupsAndNeverDropsThem(t *testing.T) {
 	b, _ := fs.ReadFile(EdgeUnitPath)
 	if !strings.Contains(string(b), "SupplementaryGroups=falak shop\n") {
 		t.Fatalf("unit:\n%s", b)
+	}
+}
+
+func TestCaddyBinaryAndValidatedSwitches(t *testing.T) {
+	fs := hostfs.FS{Root: t.TempDir()}
+	if CaddyBinary(fs) != StockCaddy {
+		t.Fatal("no unit: stock caddy")
+	}
+	build := fs.P(CaddyBuildDir + "/caddy-0123456789abcdef")
+	os.MkdirAll(filepath.Dir(build), 0o755)
+	os.WriteFile(build, []byte("x"), 0o755)
+	os.MkdirAll(filepath.Dir(fs.P(EdgeUnitPath)), 0o755)
+	os.WriteFile(fs.P(EdgeUnitPath), []byte(RenderEdgeUnit(EdgeUnit{Binary: build})), 0o644)
+	if CaddyBinary(fs) != build {
+		t.Fatal(CaddyBinary(fs))
+	}
+	os.WriteFile(fs.P(EdgeUnitPath), []byte(RenderEdgeUnit(EdgeUnit{Binary: FrankenPHPBinary, FrankenPHP: true})), 0o644)
+	if CaddyBinary(fs) != StockCaddy {
+		t.Fatal("a FrankenPHP unit is not a Caddy build")
+	}
+
+	// Switching binaries validates the boot config as the edge user, with the edge's environment.
+	os.MkdirAll(filepath.Dir(fs.P(EdgeBootstrap)), 0o755)
+	os.WriteFile(fs.P(EdgeBootstrap), []byte(`{}`), 0o644)
+	os.WriteFile(fs.P(EdgeEnvPath), []byte("# tokens\nFALAK_DNS_TOKEN_ABC=secret\n"), 0o600)
+	var call *runnertest.Call
+	f := (&runnertest.Fake{}).On("getent passwd caddy", runner.Result{Stdout: []byte("caddy:x:998:998::/var/lib/caddy:/usr/sbin/nologin\n")})
+	f.OnFunc(build+" validate", func(c runnertest.Call) (runner.Result, error) {
+		call = &c
+		return runner.Result{ExitCode: 1, Stderr: []byte("bad")}, nil
+	})
+	st := commands.NewTestStream("x", &commands.Collector{})
+	if _, err := EnsureEdgeUnit(context.Background(), f, fs, st, EdgeUnit{Binary: build}, false); err == nil || !strings.Contains(err.Error(), "refusing to switch") {
+		t.Fatal(err)
+	}
+	if call == nil || call.User != "caddy" || !call.ClearEnv || !slices.Contains(call.Env, "FALAK_DNS_TOKEN_ABC=secret") {
+		t.Fatalf("%+v", call)
+	}
+	if f.Ran("systemctl restart") {
+		t.Fatal("restarted")
+	}
+	// A rollback skips validation.
+	if _, err := EnsureEdgeUnit(context.Background(), f, fs, st, EdgeUnit{Binary: build, SkipValidate: true}, false); err != nil {
+		t.Fatal(err)
 	}
 }

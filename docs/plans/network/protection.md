@@ -74,7 +74,9 @@ revision, desired / applied hash, status, command id, error). Idempotency key `n
 - `blocks`: the server's own blocks plus the organization-wide ones and the server's auto-bans, active only (≤ 10,000).
 - `release`: auto-bans a user lifted (or a manual block replaced, or a guard suspended): the agent forgets them from its
   local state too (it would re-add them otherwise); cleared once an apply succeeds.
-- `never_block`: the guard list (below), so the agent can refuse auto-bans the control plane would refuse.
+- `never_block`: the guard list (below), so the agent can refuse auto-bans the control plane would refuse. At most
+  5,000 entries: the control plane, the servers and the private networks always (never cut), then members' recent
+  panel addresses, most recent first, up to the limit.
 - Result: `{changed, added, removed, failed: [{cidr, error}], set_counters}`.
 
 The agent diffs against the live sets (`nft -j list set`): elements no longer wanted are deleted, missing ones added
@@ -162,12 +164,15 @@ block, unblock, auto-ban, suspension and settings change is audited (`network.ip
 
 ## SSH brute force
 
-The agent reads sshd's messages every minute: `journalctl -t sshd -t sshd-session -t sshd-auth -o json --after-cursor`
+The agent reads sshd's messages every minute: `journalctl _COMM=sshd _COMM=sshd-session _COMM=sshd-auth -o json
+--after-cursor` — `_COMM` is the process name journald takes from the kernel, so `logger -t sshd` from any local user
+cannot forge an entry (`-t`, the syslog identifier, could be); entries of another process are skipped again on read
 (Ubuntu ≥ 24.04 and Debian 12 log sshd to the journal only; OpenSSH ≥ 9.8 logs authentication from `sshd-session`),
 falling back to `/var/log/auth.log` (offset + inode, rotation-safe) when journalctl is missing or the journal has no
 storage ("No journal files were found"). In auth.log only the syslog program field decides that a line is sshd's (a
-message of another program that mentions `sshd[1]:` is not). At most 5,000 lines a pass; the first pass only sets the
-cursor.
+message of another program that mentions `sshd[1]:` is not). auth.log has no trusted field: a local user's `logger -t
+sshd` lines are counted there (a reason to keep journald storage on). At most 5,000 lines a pass; the first pass only
+sets the cursor.
 
 **The user name is the attacker's text.** Every pattern is anchored at both ends and takes the user name greedily, so the
 address is always the line's *last* `from <ip> port <n>`: `Invalid user x from 192.0.2.66 port 1 from 203.0.113.9
@@ -247,24 +252,47 @@ server without rate-limited sites gets the same payload as before (no `caddy_bui
 builds **Falak's Caddy** in its `edge-caddy` stage (`xcaddy build v2.11.4 --with github.com/mholt/caddy-ratelimit@v0.1.0
 --with github.com/caddy-dns/cloudflare@v0.2.4`, amd64 + arm64, with `.sha256` sidecars; CI's image smoke test checks
 `list-modules`) and serves it publicly at `/install/edge/caddy-linux-<arch>` like the agent installer. When a server
-has rate-limited sites, `edge.caddy.apply` carries `caddy_build: {url, sha256}` for its architecture. Before loading
-such a config the agent checks `list-modules` of the binary `falak-edge.service` runs: with the module, nothing
-happens. Without it, it downloads the build over HTTPS (checksum verified) to
-`/usr/local/lib/falak/caddy/caddy-<sha>`, refuses it unless it has `http.handlers.rate_limit` **and every module the
-current Caddy has** (a newer apt Caddy with modules the build lacks keeps running, with an error), checks that it
-accepts the config the edge loads at start (`validate` of the persisted bootstrap config), then points
-`falak-edge.service` at it and restarts the edge once (a second of downtime for that server's sites). If the edge does
-not come back (the restart fails or the admin API does not answer within 30 s), the unit is put back on the Caddy it
-ran and restarted again, and the apply fails with the reason: rate limits are not applied, everything else keeps
-serving. Later applies find the module and do nothing. `/usr/bin/caddy` itself is never touched (apt keeps updating
-it; the build is a separate file). `deploy/edge/Dockerfile` (the panel's own edge) does not need it: it serves no sites.
+has rate-limited sites, `edge.caddy.apply` carries `caddy_build: {url, sha256}` for its architecture (the panel refuses
+rules for a server whose architecture has no published build).
+
+Before loading such a config the agent checks `list-modules` of the binary `falak-edge.service` runs. Without the
+module it downloads the build over HTTPS (checksum verified) to `/usr/local/lib/falak/caddy/caddy-<sha>` and refuses it
+unless it has `http.handlers.rate_limit` **and every module the current Caddy has** (a newer apt Caddy with modules the
+build lacks keeps running). It then validates **the config the edge loads at start** (the persisted bootstrap config)
+with the build **as the edge runs it**: as its user (`caddy`), with the unit's environment and its `EnvironmentFile`
+(the DNS provider tokens a DNS-01 config refers to as `{env.FALAK_DNS_TOKEN_*}`; without them the Cloudflare provider
+rejects the config), so a log file it would create is not root's. Only then does it write a swap marker
+(`/etc/falak/caddy/swap.json`), point `falak-edge.service` at the build and restart the edge once (a second of downtime
+for that server's sites). If the edge does not come back (the restart fails or the admin API does not answer within
+30 s), the unit is put back on the Caddy it ran (without validation: it ran this config a moment ago) and restarted;
+an agent that dies in between finds the marker at its next start and does the same unless the edge answers. Older
+builds in the directory are pruned (the current and the previous one stay). A build the edge already runs is
+**upgraded** the same way when the control plane ships a different one; a failed upgrade keeps the current build (rate
+limits keep working).
+
+**A refusal never takes the other sites down, and is not retried forever.** Whatever stops the rate limits — no build
+for the server, a FrankenPHP edge, a build that lacks a module, rejects the config or did not start — the agent applies
+the config **without the rate-limit handlers** and reports why in the result (`rate_limits_refused`); the panel shows
+"Rate limits not applied on <server>: <reason>" on Network → Rate limits. A build that failed (checks, validation,
+restart) is remembered by its checksum (`/etc/falak/caddy/ratelimit.json`) and never tried again on that server; a new
+build (another checksum) is. A failed download is not remembered (it may be transient).
+
+**One answer to "which Caddy".** `runtime.CaddyBinary` decides it for provisioning, the agent's unit refresh and the
+rate-limit installer: a unit already running a Falak build (that still exists) keeps it, else `/usr/bin/caddy`. So a
+re-provisioning (a timezone change, a PHP removal, a retry) never puts the edge back on stock Caddy, which could not
+load the rate-limited config. And any change of the edge's binary (provisioning, FrankenPHP installs, the installer)
+first validates the bootstrap config with the target binary, as the edge user with its environment, and refuses the
+switch when it is rejected: the edge keeps running the binary it has. `/usr/bin/caddy` itself is never touched (apt
+keeps updating it; the build is a separate file). `deploy/edge/Dockerfile` (the panel's own edge) does not need it: it
+serves no sites.
 
 **Trust.** The build is not signed: its integrity rests on the SHA-256 the control plane computes from the file it
 ships and sends inside the `edge.caddy.apply` command (delivered over the agent's mTLS channel); the agent downloads
 only over HTTPS and refuses a file whose digest differs. The download URL is public (like the agent installer).
 
 **FrankenPHP edges are refused**: the panel refuses rules for sites on a server whose PHP runtime is FrankenPHP (its
-binary is FrankenPHP's own build) and the agent refuses them too; use a Cloudflare rate limit there. Servers whose agent
+binary is FrankenPHP's own build), the compiler never sends rate limits to such a server (a site moved onto it later, a
+load balancer), and the agent applies its config without them; use a Cloudflare rate limit there. Servers whose agent
 lacks `edge.rate_limit` are refused with "update the agent"; PayloadCompatibility strips `sites.*.rate_limits` and
 `caddy_build` for them all the same.
 

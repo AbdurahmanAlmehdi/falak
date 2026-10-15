@@ -170,7 +170,7 @@ every rule. Once a minute the agent sends `net.protection.observed` (sshd failur
 counters, block hits); control planes without the type answer 404 and the agent keeps the metrics only.
 `edge.rate_limit` adds `edge.caddy.apply` `sites[].rate_limits` (`{path, events, window_s}`, only on sites with rules)
 and `caddy_build` (`{url, sha256}`, only with rate limits): the agent installs Falak's Caddy build (caddy-ratelimit)
-when the edge's Caddy lacks `http.handlers.rate_limit`, and refuses rate limits on a FrankenPHP edge.
+when the edge's Caddy lacks `http.handlers.rate_limit`; rate limits it cannot run (FrankenPHP edge, no or failed build) are left out of the applied config and the result says why (`rate_limits_refused`).
 
 ## Secrets on servers (v0.10.0)
 **Env files on tmpfs.** `deploy.prepare` writes `env_file` to `/run/falak/env/<site>.env` (directory 0711 root, file

@@ -504,7 +504,8 @@ func (p *Provisioner) caddy(ctx context.Context, st commands.Stream, version str
 	}
 	changed = changed || len(inst) > 0
 	if asEdge {
-		ec, err := runtime.EnsureEdgeUnit(ctx, p.d.Runner, p.d.FS, st, runtime.EdgeUnit{Binary: "/usr/bin/caddy"}, len(inst) > 0)
+		// A server whose edge runs Falak's Caddy build (rate limits) keeps it: stock Caddy cannot load that config.
+		ec, err := runtime.EnsureEdgeUnit(ctx, p.d.Runner, p.d.FS, st, runtime.EdgeUnit{Binary: runtime.CaddyBinary(p.d.FS)}, len(inst) > 0)
 		return changed || ec, err
 	}
 	return changed, nil

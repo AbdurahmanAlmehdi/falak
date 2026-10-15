@@ -161,6 +161,8 @@ type Options struct {
 	// Runner and HTTP install Falak's Caddy build when a config needs the rate_limit module (ratelimit.go).
 	Runner runner.Runner
 	HTTP   *http.Client
+	// AdminWait is how long the admin API may take to answer after a restart (0 = 30 s).
+	AdminWait time.Duration
 }
 
 // Manager implements edge.* executors.
@@ -202,7 +204,11 @@ func (m *Manager) syncEnv(ctx context.Context, p Payload, s commands.Stream) err
 
 // waitAdmin waits up to 30 s for the edge's admin API after a restart.
 func (m *Manager) waitAdmin(ctx context.Context) error {
-	for i := 0; i < 60; i++ {
+	tries := 60
+	if m.o.AdminWait > 0 {
+		tries = max(int(m.o.AdminWait/(500*time.Millisecond)), 1)
+	}
+	for i := 0; i < tries; i++ {
 		if _, err := m.o.Client.Config(ctx); err == nil {
 			return nil
 		}
@@ -226,12 +232,27 @@ type ApplyResult struct {
 	Changed      bool   `json:"changed"`
 	ConfigSHA256 string `json:"config_sha256"`
 	Routes       int    `json:"routes"`
+	// RateLimitsRefused says why the payload's rate limits were left out of the applied config (edge.rate_limit).
+	RateLimitsRefused string `json:"rate_limits_refused,omitempty"`
 }
 
 // Apply renders and loads the full config; no-op when the running config is already identical.
 func (m *Manager) Apply(ctx context.Context, p Payload, s commands.Stream) (any, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Rate limits the edge cannot run (no module and no usable build, a FrankenPHP edge): the config is applied without
+	// them and the result says why, so the panel can show it. Validated first: a bad payload is refused as before.
+	if _, err := Render(p, m.certDir()); err != nil {
+		return nil, &commands.PayloadError{Err: err}
+	}
+	refused, err := m.ensureRateLimit(ctx, p, s)
+	if err != nil {
+		return nil, err
+	}
+	if refused != "" {
+		fmt.Fprintf(s.Stderr(), "rate limits not applied: %s\n", refused)
+		p = p.withoutRateLimits()
+	}
 	cfg, err := Render(p, m.certDir())
 	if err != nil {
 		return nil, &commands.PayloadError{Err: err}
@@ -240,10 +261,7 @@ func (m *Manager) Apply(ctx context.Context, p Payload, s commands.Stream) (any,
 	if err != nil {
 		return nil, err
 	}
-	res := ApplyResult{ConfigSHA256: hostfs.SHA256(want), Routes: countRoutes(cfg)}
-	if err := m.ensureRateLimit(ctx, p, s); err != nil {
-		return nil, err
-	}
+	res := ApplyResult{ConfigSHA256: hostfs.SHA256(want), Routes: countRoutes(cfg), RateLimitsRefused: refused}
 	if err := m.syncEnv(ctx, p, s); err != nil {
 		return nil, err
 	}

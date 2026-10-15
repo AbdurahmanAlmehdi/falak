@@ -4,6 +4,7 @@ namespace Falak\Edge\Http\Controllers;
 
 use Falak\Edge\Application\EdgeChanges;
 use Falak\Edge\Domain\Models\PathRateLimit;
+use Falak\Edge\Domain\Models\ServerState;
 use Falak\Edge\Infrastructure\EdgeCaddyBuilds;
 use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Identity\Contracts\AuditLog;
@@ -57,6 +58,11 @@ final class PathRateLimitController extends Controller
                 'name' => $site->name,
                 'refusal' => self::refusal($site->id, $changes, $servers, $agents),
             ])->sortBy('name')->values(),
+            // Servers whose edge applied its config without the rate limits, and why (the agent's last result).
+            'notApplied' => ServerState::query()->whereIn('server_id', $limits->pluck('site_id')->unique()->flatMap(fn (string $siteId) => $changes->serversFor($siteId))->unique()->values())
+                ->whereNotNull('rate_limits_refused')->get()
+                ->map(fn (ServerState $state) => ['server' => $servers->find($state->server_id)->name ?? $state->server_id, 'reason' => $state->rate_limits_refused])
+                ->values(),
             'can' => ['manage' => $this->access->can($request->user(), $organizationId, 'edge.manage')],
         ]);
     }
@@ -146,6 +152,10 @@ final class PathRateLimitController extends Controller
 
             if (! ($agents->forServer($id)?->supports(self::FEATURE) ?? false)) {
                 return "Update the agent on {$server->name} first (edge rate limits need a newer agent).";
+            }
+
+            if (app(EdgeCaddyBuilds::class)->forArch($server->arch) === null) {
+                return "No Falak Caddy build is published for {$server->name}'s architecture (".($server->arch ?? 'unknown').').';
             }
         }
 

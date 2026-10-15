@@ -119,6 +119,16 @@ final class RouteCompiler
 
         usort($entries, fn (array $a, array $b) => strcmp($a['id'], $b['id']));
 
+        // A FrankenPHP edge has no rate_limit module (its binary is FrankenPHP's own build): its routes never carry
+        // rate limits, whichever site they serve (a site that moved onto it, a load balancer of one).
+        if ($this->servers->find($serverId)?->phpRuntime === 'frankenphp') {
+            $entries = array_map(function (array $entry) {
+                unset($entry['rate_limits']);
+
+                return $entry;
+            }, $entries);
+        }
+
         // Falak's Caddy build (rate_limit module), only with rate limits: the agent installs it when the edge lacks it.
         $caddyBuild = collect($entries)->contains(fn (array $entry) => isset($entry['rate_limits']))
             ? app(EdgeCaddyBuilds::class)->forArch($this->servers->find($serverId)?->arch)
