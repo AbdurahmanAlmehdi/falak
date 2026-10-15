@@ -30,6 +30,10 @@ beforeEach(function () {
     $this->site = edge_site($this->sites, $this->organization->id, [], ['name' => 'Shop', 'testDomain' => 'shop.test.falak.dev']);
 });
 
+it('redirects /uptime to the Observability page', function () {
+    $this->get('/uptime')->assertRedirect('/observability/uptime');
+});
+
 it('creates one monitor per site domain and removes those whose domain is gone', function () {
     $this->domains->domains = [
         ['site_id' => $this->site->id, 'name' => 'shop.example.com'],

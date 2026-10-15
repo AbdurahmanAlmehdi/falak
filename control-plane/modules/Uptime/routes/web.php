@@ -13,6 +13,8 @@ Route::middleware(['auth', 'org'])->prefix('observability/uptime')->name('observ
 });
 
 Route::middleware(['auth', 'org'])->prefix('uptime')->name('uptime.')->group(function () use ($ulid) {
+    // The page lives under Observability; /uptime is what people type.
+    Route::redirect('/', '/observability/uptime')->name('redirect');
     // Service panel Uptime tab (JSON).
     Route::get('sites/{siteId}', [MonitorController::class, 'site'])->where('siteId', $ulid)->name('sites.show');
 
