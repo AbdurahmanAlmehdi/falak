@@ -5,6 +5,7 @@ import {
     IconButton,
     Input,
     MetricChart,
+    RelativeTime,
     Segmented,
     Select,
     Skeleton,
@@ -224,7 +225,15 @@ export default function SiteHttp({ siteId, can }: { siteId: string; can: (permis
                 </figure>
             </div>
 
-            <TopTables base={base} query={query} siteId={siteId} can={can} logs={data?.logs_configured !== false} />
+            <TopTables
+                base={base}
+                query={query}
+                siteId={siteId}
+                can={can}
+                logs={data?.logs_configured !== false}
+                range={range}
+                threatIssues={data?.issues.security ?? []}
+            />
             <div className="grid gap-3 lg:grid-cols-2">
                 <Bandwidth base={base} />
                 <RequestLookup base={base} />
@@ -283,7 +292,24 @@ function Country({ row }: { row: Row }) {
 }
 
 /** One drill-down table at a time, loaded when picked. */
-function TopTables({ base, query, siteId, can, logs }: { base: string; query: string; siteId: string; can: (p: string) => boolean; logs: boolean }) {
+function TopTables({
+    base,
+    query,
+    siteId,
+    can,
+    logs,
+    range,
+    threatIssues,
+}: {
+    base: string;
+    query: string;
+    siteId: string;
+    can: (p: string) => boolean;
+    logs: boolean;
+    range: Range;
+    /** The open security Issues (the banner's): the threats table lists them too, they stay open past the range. */
+    threatIssues: IssueRef[];
+}) {
     const [table, setTable] = useState<Table>('paths');
     const url = logs ? `${base}/http/top${query}${query ? '&' : '?'}table=${table}` : null;
     const { data, error, loading } = useJson<TopData>(url, { unwrap: false });
@@ -347,6 +373,20 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
                     <span className="text-fg-muted text-xs">countries of {(data.coverage * 100).toFixed(0)}% of requests (top clients)</span>
                 )}
             </div>
+            {table === 'threats' && threatIssues.length > 0 && (
+                <ul className="grid gap-0.5 text-xs" aria-label="Open threat issues">
+                    {threatIssues.map((issue) => (
+                        <li key={issue.id}>
+                            <a className="text-fg underline-offset-2 hover:underline" href={issue.url}>
+                                {issue.title}
+                            </a>{' '}
+                            <span className="text-fg-faint">
+                                · {issue.occurrences}× · last seen <RelativeTime value={issue.last_seen_at} />
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            )}
             {!logs ? (
                 <p className="text-fg-muted text-xs">Configure Loki to see the access log tables.</p>
             ) : error ? (
@@ -355,7 +395,11 @@ function TopTables({ base, query, siteId, can, logs }: { base: string; query: st
                 <Skeleton className="h-32" />
             ) : rows.length === 0 ? (
                 <p className="text-fg-muted text-xs">
-                    {table === 'countries' && geo && !geo.country ? 'The country database is not downloaded yet.' : 'Nothing in this range.'}
+                    {table === 'countries' && geo && !geo.country
+                        ? 'The country database is not downloaded yet.'
+                        : table === 'threats' && threatIssues.length > 0
+                          ? `No threat requests per client in the last ${range}. The open issues above count every hit since they opened: pick a longer range to see their clients.`
+                          : 'Nothing in this range.'}
                 </p>
             ) : (
                 <div className="overflow-x-auto">
