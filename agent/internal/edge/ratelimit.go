@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -236,8 +237,16 @@ func (m *Manager) installBuild(ctx context.Context, u runtime.EdgeUnit, current 
 	}
 	target := u
 	target.Binary = m.o.FS.P(dest)
-	// The config the edge loads at start, as the edge loads it (its user, its environment: DNS provider tokens).
+	// The config the edge loads at start, as the edge loads it (its user, its environment: DNS provider tokens). The
+	// build is only remembered as failed when it is the build's fault: it ran and rejected the config while the edge's
+	// own Caddy accepts it. A validation that could not run, or a config the current Caddy rejects too, is not.
 	if err := runtime.ValidateEdgeConfig(ctx, m.o.Runner, m.o.FS, target); err != nil {
+		if !errors.Is(err, runtime.ErrConfigRejected) {
+			return "validating the edge's config with Falak's Caddy build: " + shortErr(err), nil
+		}
+		if cerr := runtime.ValidateEdgeConfig(ctx, m.o.Runner, m.o.FS, u); cerr != nil {
+			return "the edge's config is rejected by its current Caddy too: " + shortErr(cerr), nil
+		}
 		return fail(shortErr(err))
 	}
 	marker, _ := json.Marshal(swapMarker{Previous: u, Target: target.Binary, SHA256: b.SHA256, At: time.Now().UTC()})

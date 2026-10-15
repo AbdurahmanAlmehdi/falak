@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -333,5 +334,35 @@ func TestResolvePendingSwap(t *testing.T) {
 	}
 	if _, failed := m.loadRLState().Failed[build.SHA256]; !failed {
 		t.Fatal("the build is not remembered as failed")
+	}
+}
+
+// A build is only remembered as failed when it rejected a config the edge's own Caddy accepts.
+func TestRateLimitValidationFailuresThatAreNotTheBuilds(t *testing.T) {
+	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
+
+	// The validation could not run (exec error): not remembered.
+	m, f, _, dest, build := rateLimitSetup(t, unit, stockModules)
+	applied(t, m, payload)
+	f.OnFunc(dest+" validate", func(runnertest.Call) (runner.Result, error) {
+		return runner.Result{ExitCode: -1}, errors.New("fork/exec: permission denied")
+	})
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "permission denied") {
+		t.Fatalf("%+v", r)
+	}
+	if _, failed := m.loadRLState().Failed[build.SHA256]; failed {
+		t.Fatal("an exec error is remembered")
+	}
+
+	// The current Caddy rejects the config too: the config, not the build; not remembered.
+	m, f, _, dest, build = rateLimitSetup(t, unit, stockModules)
+	applied(t, m, payload)
+	f.On(dest+" validate", runner.Result{ExitCode: 1, Stderr: []byte("bad config")})
+	f.On("/usr/bin/caddy validate", runner.Result{ExitCode: 1, Stderr: []byte("bad config")})
+	if r := applied(t, m, withRule(payload, build)); !strings.Contains(r.RateLimitsRefused, "rejected by its current Caddy too") {
+		t.Fatalf("%+v", r)
+	}
+	if _, failed := m.loadRLState().Failed[build.SHA256]; failed {
+		t.Fatal("a config the current Caddy rejects too is blamed on the build")
 	}
 }

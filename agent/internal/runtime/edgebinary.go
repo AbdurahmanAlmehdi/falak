@@ -113,10 +113,13 @@ func ValidateEdgeConfig(ctx context.Context, r runner.Runner, fs hostfs.FS, u Ed
 		if len(msg) > 500 {
 			msg = msg[len(msg)-500:]
 		}
-		return fmt.Errorf("%s rejects the edge's config: %s", u.Binary, msg)
+		return fmt.Errorf("%w: %s rejects the edge's config: %s", ErrConfigRejected, u.Binary, msg)
 	}
 	return nil
 }
+
+// ErrConfigRejected marks a validation the binary itself failed (a nonzero exit), as opposed to one that could not run.
+var ErrConfigRejected = errors.New("config rejected")
 
 // errBinarySwitch marks a refused change of the edge's binary.
 var errBinarySwitch = errors.New("refusing to switch the edge's binary")
