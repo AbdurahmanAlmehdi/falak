@@ -48,7 +48,10 @@ them (every query below tolerates that).
 
 Cardinality of `url.route` stays bounded per site: per path segment, a value that identifies a record becomes `:id`:
 digits (`123`), UUIDs, ULIDs, hex of 16+ characters (hashes), and long mixed tokens (20+ characters with both letters
-and digits: API keys, signed URL parts). A hashed asset name keeps its extension (`app-3f2a9c1b.js` → `:asset.js`).
+and digits: API keys, signed URL parts), and short mixed ids (6+ letters and digits with 3+ digits: `75243p09010`,
+`dk1l076m0115`; `v1`, `oauth2`, `base64` stay). A hashed asset name keeps its extension (`app-3f2a9c1b.js` →
+`:asset.js`), a file name with such an id or a number of 4+ digits in it too (`dk1l076m0115-1-thumb.webp` →
+`:file.webp`).
 At most 8 segments are kept (`/a/b/…/h/…`), the result at most 200 bytes; the query string is never part of it. The
 same function runs in the agent only (the control plane groups by the field).
 
