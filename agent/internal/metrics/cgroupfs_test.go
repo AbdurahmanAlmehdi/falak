@@ -90,7 +90,7 @@ func TestReadCgroup(t *testing.T) {
 		"cg/cpu.stat":       "usage_usec 2500000\nuser_usec 2000000\nsystem_usec 500000\nnr_periods 40\nnr_throttled 4\nthrottled_usec 125000\n",
 		"cg/cpu.max":        "150000 100000\n",
 		"cg/memory.current": "10000\n",
-		"cg/memory.stat":    "anon 6000\nfile 3000\nkernel 1000\n",
+		"cg/memory.stat":    "anon 6000\nfile 3000\nkernel 1000\nshmem 1000\n",
 		"cg/memory.max":     "536870912\n",
 		"cg/memory.events":  "low 0\nhigh 0\nmax 3\noom 1\noom_kill 2\noom_group_kill 0\n",
 		"cg/io.stat":        "8:0 rbytes=4096 wbytes=8192 rios=1 wios=2 dbytes=0 dios=0\n",
@@ -117,7 +117,7 @@ func TestReadCgroup(t *testing.T) {
 			if s.CPULimit != 1.5 || s.MemLimit != 536870912 || s.PidsLimit != 256 {
 				t.Errorf("limits %+v", s)
 			}
-			if !s.HasMem || s.MemUsed() != 7000 || s.MemFile != 3000 || !s.HasOOM || s.OOMKills != 2 {
+			if !s.HasMem || s.MemUsed() != 8000 || s.MemCache() != 2000 || s.MemFile != 3000 || !s.HasOOM || s.OOMKills != 2 {
 				t.Errorf("memory %+v", s)
 			}
 			if !s.HasIO || s.ReadBytes != 4096 || s.WriteBytes != 8192 || !s.HasPids || s.Pids != 7 {

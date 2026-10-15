@@ -19,8 +19,9 @@ type CgroupStats struct {
 	HasCPU, HasThrottle                                 bool
 	// CPULimit is cpu.max's quota/period in cores; 0 = no limit ("max").
 	CPULimit float64
-	// memory.current and memory.stat's file (page cache): used = current - file, cache = file.
-	MemCurrent, MemFile uint64
+	// memory.current and memory.stat's file (page cache) and shmem (shared memory and tmpfs, part of file but not
+	// reclaimable: Postgres' shared_buffers): used = current - (file - shmem), cache = file - shmem.
+	MemCurrent, MemFile, MemShmem uint64
 	HasMem              bool
 	// MemLimit is memory.max; 0 = no limit.
 	MemLimit int64
@@ -36,12 +37,14 @@ type CgroupStats struct {
 	PidsLimit int64
 }
 
-// MemUsed is memory.current without the page cache (reclaimable, shown apart).
+// MemUsed is memory.current without the page cache (reclaimable, shown apart); shared memory counts as used.
 func (s CgroupStats) MemUsed() uint64 {
-	if s.MemFile > s.MemCurrent {
-		return 0
-	}
-	return s.MemCurrent - s.MemFile
+	return s.MemCurrent - s.MemCache()
+}
+
+// MemCache is the reclaimable page cache: memory.stat's file without shmem, at most memory.current.
+func (s CgroupStats) MemCache() uint64 {
+	return min(s.MemFile-min(s.MemShmem, s.MemFile), s.MemCurrent)
 }
 
 // ReadCgroup reads a cgroup v2 directory (a host path under fs). ok is false when the directory has no cpu.stat
@@ -68,7 +71,8 @@ func ReadCgroup(fs hostfs.FS, dir string) (CgroupStats, bool) {
 		if n, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64); err == nil {
 			s.MemCurrent, s.HasMem = n, true
 			if b, ok := read("memory.stat"); ok {
-				s.MemFile = parseFlatKeyed(b)["file"]
+				kv := parseFlatKeyed(b)
+				s.MemFile, s.MemShmem = kv["file"], kv["shmem"]
 			}
 		}
 	}

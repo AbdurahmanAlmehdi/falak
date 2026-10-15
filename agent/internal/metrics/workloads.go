@@ -215,7 +215,7 @@ func fromCgroup(s CgroupStats) usage {
 	}
 	if s.HasMem {
 		u.has |= hasMem | hasCache
-		u.memUsed, u.memCache = int64(s.MemUsed()), int64(min(s.MemFile, s.MemCurrent))
+		u.memUsed, u.memCache = int64(s.MemUsed()), int64(s.MemCache())
 	}
 	if s.HasOOM {
 		u.has |= hasOOM

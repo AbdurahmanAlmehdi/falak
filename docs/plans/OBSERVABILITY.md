@@ -76,7 +76,7 @@ call that blocks ~1 s per container on some Docker versions):
 | `cpu.stat` | `usage_usec` (CPU time), `nr_periods`, `nr_throttled`, `throttled_usec` |
 | `cpu.max` | `<quota> <period>` → limit in cores; `max` = none |
 | `memory.current`, `memory.max` | usage, limit (`max` = none) |
-| `memory.stat` | `anon`, `file` (page cache is shown apart: "used" is `anon` + kernel, cache is reclaimable) |
+| `memory.stat` | `anon`, `file`, `shmem` (page cache is shown apart: "used" is `anon` + kernel + `shmem`, cache is `file` − `shmem`, reclaimable; shared memory such as Postgres' shared_buffers counts as used) |
 | `memory.events` | `oom_kill` |
 | `io.stat` | `rbytes`, `wbytes`, `rios`, `wios` summed over devices |
 | `pids.current`, `pids.max` | processes, limit |
