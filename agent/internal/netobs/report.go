@@ -59,19 +59,22 @@ type ReportListener struct {
 
 // ReportPeer is one remote endpoint: outbound by address and port, inbound by address (port 0).
 type ReportPeer struct {
-	Direction   string  `json:"direction"`
-	Address     string  `json:"address"`
-	Port        int     `json:"port"`
-	Name        string  `json:"name,omitempty"`
-	Connections int     `json:"connections"`
-	RxBytes     *uint64 `json:"rx_bytes,omitempty"`
-	TxBytes     *uint64 `json:"tx_bytes,omitempty"`
+	Direction   string `json:"direction"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	Name        string `json:"name,omitempty"`
+	Connections int    `json:"connections"`
+	// Connects are the connections opened in the minute (eBPF on): short-lived ones a socket snapshot misses.
+	Connects uint64  `json:"connects,omitempty"`
+	RxBytes  *uint64 `json:"rx_bytes,omitempty"`
+	TxBytes  *uint64 `json:"tx_bytes,omitempty"`
 }
 
 // PeerSums are the folded peers' totals.
 type PeerSums struct {
 	Peers       int     `json:"peers"`
 	Connections int     `json:"connections"`
+	Connects    uint64  `json:"connects,omitempty"`
 	RxBytes     *uint64 `json:"rx_bytes,omitempty"`
 	TxBytes     *uint64 `json:"tx_bytes,omitempty"`
 }

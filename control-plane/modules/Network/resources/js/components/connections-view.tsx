@@ -210,6 +210,11 @@ export function ConnectionsView({ url, scope, serverId = null, siteId = null }: 
             {data?.talks_to && (
                 <Section title="Talks to" description="Outbound connections, by remote endpoint (the 20 busiest per workload, the rest folded).">
                     <PeerTable rows={data.talks_to} context="talks_to" serverId={serverId} siteId={siteId} />
+                    {data.ebpf === false && (
+                        <p className="text-fg-muted mt-2 text-xs">
+                            Short-lived connections (like a database connection per request) may not appear. Turn on eBPF on the server to see them.
+                        </p>
+                    )}
                 </Section>
             )}
             {data?.clients && (
@@ -298,6 +303,7 @@ function PeerTable({
     const { props } = usePage<SharedData>();
     const actions = useMemo(() => ipActionsFor(shellContext(props)), [props]);
     const withBytes = rows.some((row) => row.rx_bytes !== undefined && row.rx_bytes !== null);
+    const withConnects = rows.some((row) => (row.connects ?? 0) > 0);
     const columns: DataTableColumn<PeerRow>[] = [
         {
             id: 'peer',
@@ -308,6 +314,17 @@ function PeerTable({
         { id: 'address', header: 'Address', cell: (row) => <span className="font-mono text-xs">{row.address ?? ''}</span>, hideOnMobile: true },
         { id: 'workload', header: 'From', cell: (row) => row.workload, hideOnMobile: true },
         { id: 'connections', header: 'Connections', align: 'right', cell: (row) => count(row.connections), sortValue: (row) => row.connections },
+        ...(withConnects
+            ? [
+                  {
+                      id: 'connects',
+                      header: 'Opened / min',
+                      align: 'right' as const,
+                      cell: (row: PeerRow) => count(row.connects ?? 0),
+                      sortValue: (row: PeerRow) => row.connects ?? 0,
+                  },
+              ]
+            : []),
         ...(withBytes
             ? [
                   {

@@ -42,6 +42,8 @@ export interface PeerRow {
     rdns: string | null;
     workload: string;
     connections: number;
+    /** Connections opened in the minute (eBPF on): short-lived ones the socket snapshot misses. */
+    connects?: number;
     rx_bytes?: number | null;
     tx_bytes?: number | null;
     /** The folded peers past the top 20. */
@@ -80,6 +82,8 @@ export interface ConnectionsResponse {
     step: number;
     observed_at: string | null;
     reporting: Reporting;
+    /** The eBPF probe runs on the server(s): talks-to includes short-lived connections (connects). */
+    ebpf?: boolean;
     conntrack?: { entries?: number; limit?: number; accounting: 'on' | 'off' | 'unavailable' } | null;
     connections?: ConnectionCounts | null;
     listeners?: ListenerRow[];

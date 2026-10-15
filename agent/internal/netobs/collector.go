@@ -98,6 +98,7 @@ type Collector struct {
 	ownersScanned time.Time
 	flows         flowCounters
 	peerIO        map[string]*peerCounter
+	connects      func() map[Connect]uint64
 	cpMissing     bool
 }
 
@@ -107,6 +108,22 @@ type peerCounter struct {
 	attrs           []*commonpb.KeyValue
 	rx, tx          uint64
 	seen            time.Time
+}
+
+// Connect is an outbound destination of a workload (its key: host, ct/<id>, native/<slug>), from the eBPF probe.
+type Connect struct {
+	Workload string
+	Addr     netip.Addr
+	Port     uint16
+}
+
+// SetConnects adds the eBPF probe's connects (outbound connections opened per workload and destination since the
+// last call) to the peers of each full pass: short-lived connections (a database connection per request) that a socket
+// snapshot misses. fn returns nil while the probe is off.
+func (c *Collector) SetConnects(fn func() map[Connect]uint64) {
+	c.mu.Lock()
+	c.connects = fn
+	c.mu.Unlock()
 }
 
 // New creates an enabled collector (15 s interval) and loads the persisted configuration.
@@ -673,6 +690,7 @@ type peerAgg struct {
 	port     uint16
 	name     string
 	conns    int
+	connects uint64 // opened in the minute (eBPF)
 	rx, tx   uint64
 	hasBytes bool
 }
@@ -692,6 +710,18 @@ func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.T
 			deltas = c.flows.deltas(flows, capped)
 			c.mu.Unlock()
 			idx = flowIndex(flows)
+		}
+	}
+	c.mu.Lock()
+	drain := c.connects
+	c.mu.Unlock()
+	opened := map[string]map[Connect]uint64{}
+	if drain != nil {
+		for k, v := range drain() {
+			if opened[k.Workload] == nil {
+				opened[k.Workload] = map[Connect]uint64{}
+			}
+			opened[k.Workload][k] = v
 		}
 	}
 	c.mu.Lock()
@@ -723,14 +753,24 @@ func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.T
 				}
 			}
 		}
+		for k, cnt := range opened[w.key] {
+			a := k.Addr.Unmap()
+			key := dirOut + "|" + nameKey(a, k.Port)
+			p := aggs[key]
+			if p == nil {
+				p = &peerAgg{dir: dirOut, addr: a, port: k.Port, name: n.name(w, dirOut, a, k.Port), hasBytes: accounting}
+				aggs[key] = p
+			}
+			p.connects += cnt
+		}
 		list := make([]*peerAgg, 0, len(aggs))
 		for _, p := range aggs {
 			list = append(list, p)
 		}
 		sort.Slice(list, func(i, j int) bool {
 			a, b := list[i], list[j]
-			if a.conns != b.conns {
-				return a.conns > b.conns
+			if a.conns+int(a.connects) != b.conns+int(b.connects) {
+				return a.conns+int(a.connects) > b.conns+int(b.connects)
 			}
 			if a.rx+a.tx != b.rx+b.tx {
 				return a.rx+a.tx > b.rx+b.tx
@@ -752,13 +792,14 @@ func (c *Collector) peers(wls []*workload, n *names, accounting bool, now time.T
 				o := w.rep.Other[p.dir]
 				o.Peers++
 				o.Connections += p.conns
+				o.Connects += p.connects
 				if p.hasBytes {
 					o.RxBytes, o.TxBytes = addPtr(o.RxBytes, p.rx), addPtr(o.TxBytes, p.tx)
 				}
 				w.rep.Other[p.dir] = o
 			} else {
 				kept[p.dir]++
-				rp := ReportPeer{Direction: p.dir, Address: p.addr.String(), Port: int(p.port), Name: p.name, Connections: p.conns}
+				rp := ReportPeer{Direction: p.dir, Address: p.addr.String(), Port: int(p.port), Name: p.name, Connections: p.conns, Connects: p.connects}
 				if p.hasBytes {
 					rx, tx := p.rx, p.tx
 					rp.RxBytes, rp.TxBytes = &rx, &tx

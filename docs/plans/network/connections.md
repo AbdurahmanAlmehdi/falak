@@ -115,6 +115,13 @@ folded into `other`. Names, in order:
 
 No raw IP is ever a metric label.
 
+Short-lived connections (a database connection per PHP request) are rarely open at a snapshot. While the eBPF probe
+runs on the server ([ebpf.md](ebpf.md)), its successful outbound connects of the minute, per workload and destination
+(at most 4,096 destinations between two reports, from the existing `peers` map: no extra kernel work), join the same
+grouping as `connects` (a peer with 0 open connections and connects is kept); ranking uses connections + connects.
+The server and site Network tabs show them as "Opened / min" and, while the probe is off, a note under
+Talks to that such connections may not appear (`ebpf` in the connections JSON).
+
 ### Bytes per peer (conntrack)
 
 Sockets carry no byte counters; conntrack does, when **accounting** is on (`/proc/sys/net/netfilter/nf_conntrack_acct`,

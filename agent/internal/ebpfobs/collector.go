@@ -117,7 +117,10 @@ type Collector struct {
 	status       Status
 	lastPass     time.Time
 
-	prevPeers   map[peerKey]peerVal
+	prevPeers map[peerKey]peerVal
+	// connects are the outbound connections opened per workload and destination since the last DrainConnects
+	// (netobs' talks-to: short-lived connections a socket snapshot misses), at most maxConnects keys.
+	connects    map[Connect]uint64
 	prevHists   map[histKey]histVal
 	prevDNS     map[dnsKey]dnsVal
 	prevRuntime map[string]time.Duration
@@ -127,6 +130,26 @@ type Collector struct {
 }
 
 type cost struct{ spent, wall time.Duration }
+
+// Connect is an outbound destination of a workload ("host", "ct/<id>", "native/<slug>": netobs' workload keys).
+type Connect struct {
+	Workload string
+	Addr     netip.Addr
+	Port     uint16
+}
+
+// maxConnects bounds the destinations kept between two drains (netobs keeps the top 20 per workload anyway).
+const maxConnects = 4096
+
+// DrainConnects returns the outbound connections opened per workload and destination since the last call (nil
+// while the probe is off) and starts over.
+func (c *Collector) DrainConnects() map[Connect]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	m := c.connects
+	c.connects = nil
+	return m
+}
 
 // New creates a collector (off until the setting says otherwise; the persisted setting is loaded).
 func New(opts Options) *Collector {
@@ -550,6 +573,15 @@ func (c *Collector) collectLocked() []*metricspb.ResourceMetrics {
 		}
 		w := at.of(k.O)
 		dir := dirName(k.Dir)
+		if k.Dir == dirOut && d.Connects > 0 {
+			ck := Connect{Workload: w.id, Addr: peerAddr(k), Port: k.Port}
+			if c.connects == nil {
+				c.connects = map[Connect]uint64{}
+			}
+			if _, ok := c.connects[ck]; ok || len(c.connects) < maxConnects {
+				c.connects[ck] += d.Connects
+			}
+		}
 		label := name(w.inHost, dir, peerAddr(k), k.Port)
 		key := w.id + "|" + dir + "|" + label
 		a := aggs[key]

@@ -437,6 +437,36 @@ func TestAccountingOffReportsCountsOnly(t *testing.T) {
 	}
 }
 
+func TestEBPFConnectsJoinThePeers(t *testing.T) {
+	_, c, _, _ := fixture(t)
+	db := netip.MustParseAddr("192.0.2.50")
+	drains := 0
+	c.SetConnects(func() map[Connect]uint64 {
+		drains++
+		return map[Connect]uint64{{Workload: "host", Addr: db, Port: 5432}: 7, {Workload: "ct/gone", Addr: db, Port: 6379}: 3}
+	})
+	_, rep := c.Collect(context.Background())
+	if drains != 1 {
+		t.Fatalf("drained %d times", drains)
+	}
+	var found *ReportPeer
+	for _, w := range rep.Workloads {
+		for i, p := range w.Peers {
+			if p.Address == db.String() {
+				if w.Kind != "host" || found != nil {
+					t.Fatalf("connects attributed to %s", w.Name)
+				}
+				found = &w.Peers[i]
+			}
+		}
+	}
+	// A database connection per request: never open at the snapshot, seen by its connects.
+	if found == nil || found.Direction != "outbound" || found.Port != 5432 || found.Connections != 0 || found.Connects != 7 {
+		t.Fatalf("peer %+v", found)
+	}
+	validateReport(t, rep)
+}
+
 func TestPeersFoldIntoOther(t *testing.T) {
 	root := t.TempDir()
 	var socks []sock

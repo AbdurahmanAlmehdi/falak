@@ -281,6 +281,13 @@ func TestTCPCountersDeltasAndResets(t *testing.T) {
 		}
 	}})
 	p := pass(c, out, now, 15*time.Second)
+	// Outbound connects per workload and destination for netobs talks-to; drained once.
+	if got := c.DrainConnects(); len(got) != 1 || got[Connect{Workload: "host", Addr: netip.MustParseAddr("10.0.0.5"), Port: 5432}] != 10 {
+		t.Fatalf("connects %v", got)
+	}
+	if got := c.DrainConnects(); got != nil {
+		t.Fatalf("drained twice: %v", got)
+	}
 	retr := `falak.net.tcp.retransmits{svc=falak-host,falak.net.direction=outbound,falak.net.peer=db:01kdb,falak.workload.kind=host,falak.workload.name=host}`
 	// A new series is shipped at 0 first (rate() takes a counter's first sample as its baseline), its count next pass.
 	if v, ok := p[retr]; !ok || v != 0 || src.sweeps != 1 {

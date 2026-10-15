@@ -170,6 +170,15 @@ func Build(d Deps) *Components {
 		Out: d.Telemetry.Relay(), Logger: log.With("component", "ebpf")})
 	probe.Register(reg)
 	d.Telemetry.Follow(probe)
+	// Talks-to sees short-lived connections (a database connection per request) while the probe runs.
+	network.SetConnects(func() map[netobs.Connect]uint64 {
+		m := probe.DrainConnects()
+		out := make(map[netobs.Connect]uint64, len(m))
+		for k, v := range m {
+			out[netobs.Connect(k)] = v
+		}
+		return out
+	})
 	prot := protect.New(protect.Deps{Runner: d.Runner, FS: d.FS, Logger: log.With("component", "protection"), StateDir: cfg.StateDir,
 		ControlPlane: d.ControlPlane})
 	prot.Register(reg)

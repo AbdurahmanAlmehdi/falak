@@ -174,14 +174,16 @@ final class ConnectionsController extends Controller
 
     /**
      * Why the tables may be empty: `agent_outdated` (no net.connections on one of the servers), `waiting` (no report
-     * yet), `stale` (the latest is old), `ok`.
+     * yet), `stale` (the latest is old), `ok`. `ebpf`: the eBPF probe runs on every one of the servers, so talks-to
+     * also counts short-lived connections (their connects) that the socket snapshots miss.
      *
      * @param  list<string>  $serverIds
      * @return array<string, mixed>
      */
     private function frame(string $range, int $step, array $serverIds, ?NetworkObservation $observation): array
     {
-        $outdated = collect($this->agents->forServers($serverIds))->contains(fn ($agent) => ! $agent->supports(ConfigureConnections::FEATURE));
+        $agents = collect($this->agents->forServers($serverIds));
+        $outdated = $agents->contains(fn ($agent) => ! $agent->supports(ConfigureConnections::FEATURE));
         $stale = (int) config('network.connections.stale_seconds', 300);
 
         return [
@@ -194,6 +196,7 @@ final class ConnectionsController extends Controller
                 $observation->observed_at->lt(now()->subSeconds($stale)) => 'stale',
                 default => 'ok',
             },
+            'ebpf' => $agents->isNotEmpty() && $agents->every(fn ($agent) => in_array($agent->facts['ebpf']['state'] ?? null, ['running', 'degraded'], true)),
         ];
     }
 

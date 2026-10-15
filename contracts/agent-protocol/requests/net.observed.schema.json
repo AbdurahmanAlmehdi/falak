@@ -240,6 +240,11 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "connects": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "connections opened in the minute (eBPF on): short-lived ones the socket snapshot misses"
+              },
               "rx_bytes": {
                 "type": [
                   "integer",
@@ -277,6 +282,10 @@
                   "type": "integer",
                   "minimum": 0
                 },
+                "connects": {
+                  "type": "integer",
+                  "minimum": 0
+                },
                 "rx_bytes": {
                   "type": [
                     "integer",
@@ -306,6 +315,10 @@
                   "minimum": 0
                 },
                 "connections": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "connects": {
                   "type": "integer",
                   "minimum": 0
                 },

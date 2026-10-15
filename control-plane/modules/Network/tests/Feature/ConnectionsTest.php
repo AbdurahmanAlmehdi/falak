@@ -280,6 +280,14 @@ it('says why a server has no report yet', function () {
     $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('reporting', 'agent_outdated');
 });
 
+it('says whether talks-to includes short-lived connections (the eBPF probe runs)', function () {
+    $enrolled = fleet_enroll($this->organization->id, $this->server->id, ['features' => ['net.connections']]);
+    $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('ebpf', false);
+
+    $enrolled['agent']->forceFill(['facts' => [...$enrolled['agent']->facts, 'ebpf' => ['state' => 'running']]])->save();
+    $this->getJson("/network/servers/{$this->server->id}/connections")->assertOk()->assertJsonPath('ebpf', true);
+});
+
 it('queries the metrics of the server only', function () {
     Http::preventStrayRequests();
     config(['telemetry.metrics.backend' => 'victoriametrics', 'telemetry.metrics.query_url' => 'http://vm:8428']);
