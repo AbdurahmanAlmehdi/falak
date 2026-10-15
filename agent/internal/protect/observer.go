@@ -117,7 +117,7 @@ func (o *Observer) Pass(ctx context.Context) Report {
 	if p.st.AutoBan.WindowS > 0 {
 		window = time.Duration(p.st.AutoBan.WindowS) * time.Second
 	}
-	p.auth.add(evs, window)
+	p.auth.add(evs, window, source == SourceJournal)
 	p.auth.prune(now, window)
 	newBans := 0
 	if p.st.Configured && p.st.AutoBan.Enabled {

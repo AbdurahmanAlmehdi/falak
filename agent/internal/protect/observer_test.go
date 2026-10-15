@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -30,7 +31,7 @@ func TestParseAuthLog(t *testing.T) {
 			evs = append(evs, ev)
 		}
 	}
-	tr.add(evs, 10*time.Minute)
+	tr.add(evs, 10*time.Minute, true)
 	got := map[string]SourceStat{}
 	for _, s := range tr.report() {
 		got[s.IP] = s
@@ -104,8 +105,8 @@ func TestAuthPatternsResistFraming(t *testing.T) {
 func TestParseJournal(t *testing.T) {
 	raw, _ := os.ReadFile("testdata/journal.json")
 	evs, cursor := ParseJournal(raw, time.Now())
-	// The forged entry (`logger -t sshd`, _COMM=logger) is not an event.
-	if cursor != "s=a;i=7" || len(evs) != 4 {
+	// The forged entries (`logger -t sshd`: _COMM=logger; a copy of logger named sshd: _UID=1000) are not events.
+	if cursor != "s=a;i=8" || len(evs) != 4 {
 		t.Fatalf("%q %+v", cursor, evs)
 	}
 	if evs[0].Addr.String() != "2001:db8::bad" || !evs[0].Invalid || evs[0].At.Unix() != 1760522400 || evs[0].PID != 901 {
@@ -116,7 +117,7 @@ func TestParseJournal(t *testing.T) {
 	}
 	// Per connection: 902 twice is one failure; IPv6 counted per /64.
 	tr := newTracker()
-	tr.add(evs, time.Hour)
+	tr.add(evs, time.Hour, true)
 	got := map[string]int{}
 	for _, s := range tr.report() {
 		got[s.IP] = s.Failures
@@ -153,7 +154,7 @@ func TestTrackerBucketsAndIPv6Aggregation(t *testing.T) {
 	for _, a := range []string{"2001:db8:1:2::ff", "2001:db8:1:2:abcd::1", "2001:db8:1:3::1"} {
 		evs = append(evs, AuthEvent{Kind: AuthFailure, Addr: netip.MustParseAddr(a), At: now0.Add(500 * time.Second)})
 	}
-	tr.add(evs, w)
+	tr.add(evs, w, true)
 	src := netip.MustParsePrefix("2001:db8:1:2::/64")
 	if len(tr.hits[src]) > bucketsPerWin+2 {
 		t.Fatalf("%d buckets", len(tr.hits[src]))
@@ -245,7 +246,7 @@ func reportSchema(t *testing.T) *jsonschema.Schema {
 func journalLines(lines ...string) []byte {
 	var b bytes.Buffer
 	for i, l := range lines {
-		j, _ := json.Marshal(map[string]string{"__CURSOR": "c" + string(rune('a'+i)), "MESSAGE": l})
+		j, _ := json.Marshal(map[string]string{"__CURSOR": "c" + string(rune('a'+i)), "MESSAGE": l, "_COMM": "sshd", "_UID": "0"})
 		b.Write(j)
 		b.WriteByte('\n')
 	}
@@ -391,7 +392,7 @@ func TestAutoBanRateLimit(t *testing.T) {
 		evs = append(evs, AuthEvent{Kind: AuthFailure, Addr: a, Count: 2, At: now0})
 	}
 	p.mu.Lock()
-	p.auth.add(evs, 10*time.Minute)
+	p.auth.add(evs, 10*time.Minute, true)
 	bans := p.autoBanLocked(context.Background(), now0, 10*time.Minute)
 	p.mu.Unlock()
 	if bans != maxBansPerPass || len(n.has()) != maxBansPerPass {
@@ -408,5 +409,39 @@ func TestResolveHostsAndHostOf(t *testing.T) {
 	got := ResolveHosts("https://198.51.100.200:8443/x", "https://[2001:db8::5]/")(context.Background())
 	if len(got) != 2 || got[0].String() != "198.51.100.200" {
 		t.Fatal(got)
+	}
+}
+
+// auth.log can be written by any local user (syslog): its events are reported, never auto-banned or trusted.
+func TestAuthLogEventsNeverAutoBan(t *testing.T) {
+	n := newFakeNft()
+	root := t.TempDir()
+	base := n.runner(root)
+	f := &runnertest.Fake{}
+	f.On("journalctl", runner.Result{Stderr: []byte("No journal files were found.\n")})
+	f.OnFunc("", func(c runnertest.Call) (runner.Result, error) { return base.Run(context.Background(), c.Cmd) })
+	clock := now0
+	p := New(Deps{Runner: f, FS: hostfs.FS{Root: root}, StateDir: "/var/lib/falak", Now: func() time.Time { return clock },
+		LocalAddrs: func() []netip.Addr { return nil }})
+	if _, err := p.Apply(context.Background(), ApplyPayload{Blocks: []Block{}, AutoBan: &AutoBan{Enabled: true, Failures: 3, WindowS: 600, BanS: 3600}}, st); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "var/log/auth.log")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, nil, 0o640)
+	o := p.NewObserver(&reqs{}, &sink{})
+	o.reader.Read(context.Background()) // positions at the end of the file
+	var b strings.Builder
+	for i := range 10 {
+		fmt.Fprintf(&b, "Oct 15 10:00:%02d h sshd[%d]: Invalid user x from 203.0.113.9 port 1\n", i, 100+i)
+	}
+	os.WriteFile(path, []byte(b.String()), 0o640)
+	clock = clock.Add(time.Minute)
+	r := o.Pass(context.Background())
+	if r.Auth == nil || r.Auth.Source != SourceAuthLog || r.Auth.Sources[0].Failures != 10 {
+		t.Fatalf("%+v", r.Auth)
+	}
+	if len(r.Bans) != 0 || len(n.has()) != 0 {
+		t.Fatalf("banned from auth.log: %+v %v", r.Bans, n.has())
 	}
 }

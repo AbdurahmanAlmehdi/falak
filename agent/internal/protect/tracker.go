@@ -67,12 +67,17 @@ func sourcePrefix(a netip.Addr) netip.Prefix {
 	return p
 }
 
-// add records events; window is how far back failures count.
-func (t *tracker) add(evs []AuthEvent, window time.Duration) {
+// add records events; window is how far back failures count. banable says whether the events come from an
+// authenticated source (journald: root's sshd): only those count towards auto-bans and trusted logins. Events of
+// /var/log/auth.log, which any local user can write to through syslog, are reported (Issues) but never ban anyone.
+func (t *tracker) add(evs []AuthEvent, window time.Duration, banable bool) {
 	size := max(window/bucketsPerWin, time.Second)
 	for _, ev := range evs {
 		switch ev.Kind {
 		case AuthAccepted:
+			if !banable {
+				continue
+			}
 			if _, ok := t.trusted[ev.Addr]; ok || len(t.trusted) < maxTrusted {
 				t.trusted[ev.Addr] = ev.At
 				t.trustChanged = true
@@ -110,6 +115,9 @@ func (t *tracker) add(evs []AuthEvent, window time.Duration) {
 			}
 			if ev.User != "" && len(st.Users) < maxUsers && !contains(st.Users, ev.User) {
 				st.Users = append(st.Users, ev.User)
+			}
+			if !banable {
+				continue
 			}
 			bs, ok := t.hits[src]
 			if !ok && len(t.hits) >= maxTracked {

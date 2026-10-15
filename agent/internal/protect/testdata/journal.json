@@ -1,8 +1,9 @@
-{"__CURSOR":"s=a;i=1","__REALTIME_TIMESTAMP":"1760522400000000","_PID":"901","SYSLOG_IDENTIFIER":"sshd-session","MESSAGE":"Invalid user test from 2001:db8::bad port 5555"}
-{"__CURSOR":"s=a;i=2","__REALTIME_TIMESTAMP":"1760522401000000","_PID":"901","SYSLOG_IDENTIFIER":"sshd-session","MESSAGE":"Failed password for invalid user test from 2001:db8::bad port 5555 ssh2"}
-{"__CURSOR":"s=a;i=3","__REALTIME_TIMESTAMP":"1760522402000000","_PID":"902","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 1 ssh2"}
-{"__CURSOR":"s=a;i=4","__REALTIME_TIMESTAMP":"1760522403000000","_PID":"903","SYSLOG_IDENTIFIER":"sshd","MESSAGE":[73,110,118,97,108,105,100,32,117,115,101,114,32,255,32,102,114,111,109,32,50,48,51,46,48,46,49,49,51,46,56,32,112,111,114,116,32,49]}
+{"__CURSOR":"s=a;i=1","__REALTIME_TIMESTAMP":"1760522400000000","_PID":"901","SYSLOG_IDENTIFIER":"sshd-session","MESSAGE":"Invalid user test from 2001:db8::bad port 5555","_COMM":"sshd","_UID":"0"}
+{"__CURSOR":"s=a;i=2","__REALTIME_TIMESTAMP":"1760522401000000","_PID":"901","SYSLOG_IDENTIFIER":"sshd-session","MESSAGE":"Failed password for invalid user test from 2001:db8::bad port 5555 ssh2","_COMM":"sshd","_UID":"0"}
+{"__CURSOR":"s=a;i=3","__REALTIME_TIMESTAMP":"1760522402000000","_PID":"902","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 1 ssh2","_COMM":"sshd","_UID":"0"}
+{"__CURSOR":"s=a;i=4","__REALTIME_TIMESTAMP":"1760522403000000","_PID":"903","SYSLOG_IDENTIFIER":"sshd","MESSAGE":[73,110,118,97,108,105,100,32,117,115,101,114,32,255,32,102,114,111,109,32,50,48,51,46,48,46,49,49,51,46,56,32,112,111,114,116,32,49],"_COMM":"sshd","_UID":"0"}
 not json
-{"__CURSOR":"s=a;i=5","__REALTIME_TIMESTAMP":"1760522404000000","_PID":"904","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Server listening on :: port 22."}
-{"__CURSOR":"s=a;i=6","__REALTIME_TIMESTAMP":"1760522405000000","_PID":"902","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 1 ssh2"}
-{"__CURSOR":"s=a;i=7","__REALTIME_TIMESTAMP":"1760522406000000","_PID":"905","_COMM":"logger","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Invalid user x from 192.0.2.66 port 1"}
+{"__CURSOR":"s=a;i=5","__REALTIME_TIMESTAMP":"1760522404000000","_PID":"904","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Server listening on :: port 22.","_COMM":"sshd","_UID":"0"}
+{"__CURSOR":"s=a;i=6","__REALTIME_TIMESTAMP":"1760522405000000","_PID":"902","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 1 ssh2","_COMM":"sshd","_UID":"0"}
+{"__CURSOR":"s=a;i=7","__REALTIME_TIMESTAMP":"1760522406000000","_PID":"905","_COMM":"logger","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Invalid user x from 192.0.2.66 port 1","_UID":"0"}
+{"__CURSOR":"s=a;i=8","__REALTIME_TIMESTAMP":"1760522407000000","_PID":"906","_COMM":"sshd","_UID":"1000","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Invalid user x from 192.0.2.66 port 1"}
