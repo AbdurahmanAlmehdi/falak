@@ -93,6 +93,8 @@ type source interface {
 	Runtime() map[string]time.Duration
 	// Groups are the program groups attached, sorted.
 	Groups() []string
+	// SweepRunq deletes run-queue stamps older than age (tasks that never ran again) and says how many.
+	SweepRunq(age time.Duration) (int, error)
 	// Shed detaches one group's programs.
 	Shed(group string)
 	Close() error

@@ -6,7 +6,9 @@
   "additionalProperties": false,
   "required": ["enabled"],
   "properties": {
-    "enabled": { "type": "boolean" }
+    "enabled": { "type": "boolean" },
+    "full_dns_names": { "type": "boolean", "description": "ship whole DNS query names as metric labels (default off: names fold to their registrable domain, api.stripe.com → stripe.com)" },
+    "reenable": { "type": "boolean", "description": "clear an over-budget stop (the panel's explicit re-enable only; a re-sent setting never restarts a probe the budget stopped)" }
   },
   "$defs": {
     "result": { "$ref": "../facts.schema.json#/$defs/ebpf" }

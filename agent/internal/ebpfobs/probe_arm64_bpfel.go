@@ -24,6 +24,7 @@ const (
 	probeMapRunqStart       = "runq_start"
 	probeProgDnsEgress      = "dns_egress"
 	probeProgDnsIngress     = "dns_ingress"
+	probeProgOnExit         = "on_exit"
 	probeProgOnReceiveReset = "on_receive_reset"
 	probeProgOnRetransmit   = "on_retransmit"
 	probeProgOnSendReset    = "on_send_reset"
@@ -77,6 +78,7 @@ type probeSpecs struct {
 type probeProgramSpecs struct {
 	DnsEgress      *ebpf.ProgramSpec `ebpf:"dns_egress"`
 	DnsIngress     *ebpf.ProgramSpec `ebpf:"dns_ingress"`
+	OnExit         *ebpf.ProgramSpec `ebpf:"on_exit"`
 	OnReceiveReset *ebpf.ProgramSpec `ebpf:"on_receive_reset"`
 	OnRetransmit   *ebpf.ProgramSpec `ebpf:"on_retransmit"`
 	OnSendReset    *ebpf.ProgramSpec `ebpf:"on_send_reset"`
@@ -155,6 +157,7 @@ type probeVariables struct {
 type probePrograms struct {
 	DnsEgress      *ebpf.Program `ebpf:"dns_egress"`
 	DnsIngress     *ebpf.Program `ebpf:"dns_ingress"`
+	OnExit         *ebpf.Program `ebpf:"on_exit"`
 	OnReceiveReset *ebpf.Program `ebpf:"on_receive_reset"`
 	OnRetransmit   *ebpf.Program `ebpf:"on_retransmit"`
 	OnSendReset    *ebpf.Program `ebpf:"on_send_reset"`
@@ -168,6 +171,7 @@ func (p *probePrograms) Close() error {
 	return _ProbeClose(
 		p.DnsEgress,
 		p.DnsIngress,
+		p.OnExit,
 		p.OnReceiveReset,
 		p.OnRetransmit,
 		p.OnSendReset,

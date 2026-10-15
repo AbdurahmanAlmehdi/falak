@@ -548,6 +548,16 @@ int BPF_PROG(on_wakeup_new, struct task_struct *p)
 	return 0;
 }
 
+// A task that exits without being switched in again (woken while running, then gone) would keep its stamp: the plain
+// hash would fill and a reused pid would inherit a stale wakeup. Its stamp goes with it.
+SEC("tp_btf/sched_process_exit")
+int BPF_PROG(on_exit, struct task_struct *p)
+{
+	__u32 pid = BPF_CORE_READ(p, pid);
+	bpf_map_delete_elem(&runq_start, &pid);
+	return 0;
+}
+
 SEC("tp_btf/sched_switch")
 int BPF_PROG(on_switch, bool preempt, struct task_struct *prev, struct task_struct *next)
 {

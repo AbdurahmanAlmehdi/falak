@@ -40,6 +40,7 @@ type counter struct {
 	wl, owner, name string
 	res, attrs      []*commonpb.KeyValue
 	v               float64
+	pending         float64 // counted in the pass that created the series, shipped from the next one
 	seen            time.Time
 	labelled        bool // a peer or name label: dropped once idle, the others live as long as their workload
 }
@@ -69,7 +70,9 @@ func seriesKey(w *workload, metric string, kv []*commonpb.KeyValue) string {
 	return b.String()
 }
 
-// add increases a counter (created at 0, so a series exists from its first event on).
+// add increases a counter. A series is created at the first non-zero increase and shipped at 0 in that pass, its
+// value from the next one: a counter's first sample is a baseline to rate() and increase(), so a series appearing
+// with its first events already counted would lose them.
 func (c *Collector) add(w *workload, metric string, v float64, now time.Time, labelled bool, kv ...*commonpb.KeyValue) {
 	k := seriesKey(w, metric, kv)
 	s := c.counters[k]
@@ -77,12 +80,20 @@ func (c *Collector) add(w *workload, metric string, v float64, now time.Time, la
 		if v == 0 {
 			return
 		}
-		s = &counter{wl: w.id, owner: w.owner, name: metric, res: w.res, attrs: with(w.attrs, kv...), labelled: labelled}
+		s = &counter{wl: w.id, owner: w.owner, name: metric, res: w.res, attrs: with(w.attrs, kv...), labelled: labelled, pending: v, seen: now}
 		c.counters[k] = s
+		return
 	}
 	s.v += v
 	if v > 0 {
 		s.seen = now
+	}
+}
+
+// flushPending adds what new series counted in the previous pass (they were shipped at 0 then).
+func (c *Collector) flushPending() {
+	for _, s := range c.counters {
+		s.v, s.pending = s.v+s.pending, 0
 	}
 }
 

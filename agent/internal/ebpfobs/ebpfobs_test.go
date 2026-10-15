@@ -30,6 +30,7 @@ type fakeSource struct {
 	runtime map[string]time.Duration
 	groups  []string
 	closed  bool
+	sweeps  int
 }
 
 func newFake() *fakeSource {
@@ -72,6 +73,8 @@ func (f *fakeSource) Runtime() map[string]time.Duration {
 	return out
 }
 
+func (f *fakeSource) SweepRunq(time.Duration) (int, error) { f.sweeps++; return 0, nil }
+
 func (f *fakeSource) Groups() []string { return append([]string(nil), f.groups...) }
 
 func (f *fakeSource) Shed(g string) {
@@ -109,7 +112,7 @@ func testCollector(t *testing.T, src *fakeSource, opts Options) (*Collector, *si
 	c.check = func() (bool, string) { return true, "" }
 	c.open = func(hostfs.FS) (source, []string, error) { return src, nil, nil }
 	c.cpus = 2
-	c.setEnabled(true)
+	c.apply(Config{Enabled: true})
 	return c, out, &now
 }
 
@@ -214,7 +217,7 @@ func TestMapLayoutsMatchTheObject(t *testing.T) {
 		}
 	}
 	for g, progs := range map[string][]string{groupTCP: {"on_set_state", "on_retransmit", "on_send_reset", "on_receive_reset"},
-		groupDNS: {"dns_egress", "dns_ingress"}, groupRunq: {"on_wakeup", "on_wakeup_new", "on_switch"}} {
+		groupDNS: {"dns_egress", "dns_ingress"}, groupRunq: {"on_wakeup", "on_wakeup_new", "on_switch", "on_exit"}} {
 		for _, p := range progs {
 			if spec.Programs[p] == nil {
 				t.Errorf("%s: program %s missing from the object", g, p)
@@ -279,6 +282,12 @@ func TestTCPCountersDeltasAndResets(t *testing.T) {
 	}})
 	p := pass(c, out, now, 15*time.Second)
 	retr := `falak.net.tcp.retransmits{svc=falak-host,falak.net.direction=outbound,falak.net.peer=db:01kdb,falak.workload.kind=host,falak.workload.name=host}`
+	// A new series is shipped at 0 first (rate() takes a counter's first sample as its baseline), its count next pass.
+	if v, ok := p[retr]; !ok || v != 0 || src.sweeps != 1 {
+		t.Fatalf("first pass: retransmits %v (present %v), sweeps %d", v, ok, src.sweeps)
+	}
+	rtt := p[`falak.net.tcp.peer.rtt{svc=falak-host,falak.net.direction=outbound,falak.net.peer=db:01kdb,falak.workload.kind=host,falak.workload.name=host}`]
+	p = pass(c, out, now, 15*time.Second)
 	if p[retr] != 3 {
 		t.Fatalf("retransmits = %v\n%v", p[retr], keys(p))
 	}
@@ -288,8 +297,8 @@ func TestTCPCountersDeltasAndResets(t *testing.T) {
 	if v := p[`falak.net.tcp.resets{svc=falak-host,falak.net.direction=inbound,falak.net.peer=external,falak.net.reset.direction=sent,falak.workload.kind=host,falak.workload.name=host}`]; v != 2 {
 		t.Errorf("resets sent to an inbound external peer = %v", v)
 	}
-	if v := p[`falak.net.tcp.peer.rtt{svc=falak-host,falak.net.direction=outbound,falak.net.peer=db:01kdb,falak.workload.kind=host,falak.workload.name=host}`]; v != 0.002 {
-		t.Errorf("mean RTT = %v", v)
+	if rtt != 0.002 {
+		t.Errorf("mean RTT = %v", rtt)
 	}
 
 	// Next pass: +2 retransmits; the counter adds up.
@@ -325,6 +334,7 @@ func TestPeersFoldedToTopN(t *testing.T) {
 		src.peers[k] = peerVal{Retrans: uint64(100 - i)}
 	}
 	c, out, now := testCollector(t, src, Options{})
+	pass(c, out, now, 15*time.Second)
 	p := pass(c, out, now, 15*time.Second)
 	labels, other := 0, 0.0
 	for k, v := range p {
@@ -345,26 +355,29 @@ func TestPeersFoldedToTopN(t *testing.T) {
 func TestDNSNamesFailuresAndTimeouts(t *testing.T) {
 	src := newFake()
 	for i := 0; i < maxNames+2; i++ {
-		src.dns[dnsKey{CgID: 1, QName: qname(fmt.Sprintf("n%02d.Example.com", i))}] = dnsVal{Queries: uint64(50 - i), Responses: uint64(50 - i)}
+		src.dns[dnsKey{CgID: 1, QName: qname(fmt.Sprintf("api.N%02d.com", i))}] = dnsVal{Queries: uint64(50 - i), Responses: uint64(50 - i)}
 	}
-	src.dns[dnsKey{CgID: 1, QName: qname("api.stripe.com")}] = dnsVal{Queries: 100, Responses: 99, ServFail: 4, NXDomain: 2}
+	// Folded to their registrable domain: 70 + 30 queries of stripe.com.
+	src.dns[dnsKey{CgID: 1, QName: qname("api.stripe.com")}] = dnsVal{Queries: 70, Responses: 69, ServFail: 4, NXDomain: 2}
+	src.dns[dnsKey{CgID: 1, QName: qname("files.eu.stripe.com")}] = dnsVal{Queries: 30, Responses: 30}
 	src.pending = []dnsPending{{TS: 1, K: dnsKey{CgID: 1, QName: qname("slow.example")}}}
 	src.hists[histKey{O: owner{CgID: 1}, Kind: kindDNS}] = histVal{Slots: [slots]uint64{10: 3, 26: 1}, SumUS: 5000, Count: 4}
 	c, out, now := testCollector(t, src, Options{})
+	pass(c, out, now, 15*time.Second)
 	p := pass(c, out, now, 15*time.Second)
 	host := "svc=falak-host,"
 	want := map[string]float64{
-		`falak.net.dns.queries{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                                         100 + 50*12 - 66,
-		`falak.net.dns.failures{` + host + `falak.net.dns.error=servfail,falak.workload.kind=host,falak.workload.name=host}`:           4,
-		`falak.net.dns.failures{` + host + `falak.net.dns.error=nxdomain,falak.workload.kind=host,falak.workload.name=host}`:           2,
-		`falak.net.dns.failures{` + host + `falak.net.dns.error=timeout,falak.workload.kind=host,falak.workload.name=host}`:            1,
-		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=api.stripe.com,falak.workload.kind=host,falak.workload.name=host}`:  100,
-		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=n00.example.com,falak.workload.kind=host,falak.workload.name=host}`: 50,
-		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=other,falak.workload.kind=host,falak.workload.name=host}`:           41 + 40 + 39,
-		`falak.net.dns.duration_count{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                                  4,
-		`falak.net.dns.duration_bucket[9]{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                              3,
-		`falak.net.dns.duration_bucket[23]{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                             1,
-		`falak.net.dns.duration_sum{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                                    0.005,
+		`falak.net.dns.queries{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                                    100 + 50*12 - 66,
+		`falak.net.dns.failures{` + host + `falak.net.dns.error=servfail,falak.workload.kind=host,falak.workload.name=host}`:      4,
+		`falak.net.dns.failures{` + host + `falak.net.dns.error=nxdomain,falak.workload.kind=host,falak.workload.name=host}`:      2,
+		`falak.net.dns.failures{` + host + `falak.net.dns.error=timeout,falak.workload.kind=host,falak.workload.name=host}`:       1,
+		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=stripe.com,falak.workload.kind=host,falak.workload.name=host}`: 100,
+		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=n00.com,falak.workload.kind=host,falak.workload.name=host}`:    50,
+		`falak.net.dns.name.queries{` + host + `falak.net.dns.name=other,falak.workload.kind=host,falak.workload.name=host}`:      41 + 40 + 39,
+		`falak.net.dns.duration_count{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                             4,
+		`falak.net.dns.duration_bucket[9]{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                         3,
+		`falak.net.dns.duration_bucket[23]{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                        1,
+		`falak.net.dns.duration_sum{` + host + `falak.workload.kind=host,falak.workload.name=host}`:                               0.005,
 	}
 	for k, v := range want {
 		if p[k] != v {
@@ -441,16 +454,90 @@ func TestBudgetShedsRunqThenDetaches(t *testing.T) {
 	if s.State != StateOverBudget || !src.closed || len(s.Programs) != 0 {
 		t.Fatalf("still over budget: %+v (closed %v)", s, src.closed)
 	}
-	// Not retried by the loop; a new "on" tries again.
+	// Not retried by the loop, nor by the control plane re-sending the setting (an upgrade, the agent back online),
+	// nor by a restart: only an explicit re-enable.
 	opened := 0
 	c.open = func(hostfs.FS) (source, []string, error) { opened++; return newFake(), nil, nil }
 	pass(c, out, now, 15*time.Second)
-	if opened != 0 {
-		t.Error("an over-budget probe was reopened by the loop")
+	if s := c.apply(Config{Enabled: true}); opened != 0 || s.State != StateOverBudget {
+		t.Fatalf("re-sent setting reopened it: opened %d, %+v", opened, s)
 	}
-	c.setEnabled(true)
-	if opened != 1 || c.Status().State != StateRunning {
-		t.Errorf("re-enable: opened %d, %+v", opened, c.Status())
+	b, _ := c.opts.FS.ReadFile("/etc/falak/ebpf.json")
+	if !strings.Contains(string(b), `"auto_disabled":"`) {
+		t.Errorf("not persisted: %s", b)
+	}
+	restarted := New(Options{FS: c.opts.FS, EtcDir: "/etc/falak"})
+	restarted.check = func() (bool, string) { return true, "" }
+	restarted.open = c.open
+	restarted.Tick()
+	if s := restarted.Status(); opened != 0 || s.State != StateOverBudget || !s.Enabled {
+		t.Fatalf("restart reopened it: opened %d, %+v", opened, s)
+	}
+	if s := c.apply(Config{Enabled: true, Reenable: true}); opened != 1 || s.State != StateRunning {
+		t.Errorf("re-enable: opened %d, %+v", opened, s)
+	}
+	if b, _ := c.opts.FS.ReadFile("/etc/falak/ebpf.json"); strings.Contains(string(b), "auto_disabled") {
+		t.Errorf("re-enable kept the stop: %s", b)
+	}
+}
+
+func TestBudgetBurstTripsInOnePass(t *testing.T) {
+	src := newFake()
+	c, out, now := testCollector(t, src, Options{})
+	pass(c, out, now, 15*time.Second)
+	src.runtime[groupRunq] += 2 * time.Second // 6.7 % of 2 CPUs × 15 s
+	pass(c, out, now, 15*time.Second)
+	if s := c.Status(); s.State != StateDegraded || !strings.Contains(s.Detail, "in one pass") {
+		t.Errorf("%+v", s)
+	}
+}
+
+func TestStatusTextsFitTheSchema(t *testing.T) {
+	c, _, _ := testCollector(t, newFake(), Options{})
+	c.mu.Lock()
+	c.status.Detail, c.status.Reason = strings.Repeat("é", 5000), strings.Repeat("x", 400)
+	c.mu.Unlock()
+	s := c.Status()
+	if n := len([]rune(s.Detail)); n != maxDetail {
+		t.Errorf("detail %d runes", n)
+	}
+	if n := len([]rune(s.Reason)); n != maxReason {
+		t.Errorf("reason %d runes", n)
+	}
+}
+
+func TestRegistrableDomain(t *testing.T) {
+	for in, want := range map[string]string{
+		"api.eu.stripe.com": "stripe.com", "stripe.com": "stripe.com", "a.b.example.co.uk": "example.co.uk",
+		"x.example.com.au": "example.com.au", "redis": "redis", ".": ".", "4.3.2.1.in-addr.arpa": "in-addr.arpa",
+		"abcdefghi.abcdefghi.abc…": longName, "www.example.de": "example.de",
+	} {
+		if got := registrable(in); got != want {
+			t.Errorf("%s => %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestNameRankingIsSticky(t *testing.T) {
+	r := newNameRanker()
+	first := map[string]uint64{}
+	for i := 0; i < maxNames; i++ {
+		first[fmt.Sprintf("n%d.com", i)] = 100
+	}
+	r.update(map[string]map[string]uint64{"w": first}, 15*time.Second)
+	// A newcomer with a burst slightly above the incumbents does not take a place; one far busier does.
+	r.update(map[string]map[string]uint64{"w": {"new.com": 120}}, 15*time.Second)
+	if r.label("w", "new.com") != otherLabel {
+		t.Error("a small burst displaced an incumbent")
+	}
+	r.update(map[string]map[string]uint64{"w": {"big.com": 1000}}, 15*time.Second)
+	if r.label("w", "big.com") != "big.com" || len(r.top["w"]) != maxNames {
+		t.Errorf("top %v", r.top["w"])
+	}
+	// Ranked over about an hour: an hour later the old counts are a quarter.
+	r.update(map[string]map[string]uint64{"w": {"later.com": 10}}, time.Hour)
+	if s := r.scores["w"]["big.com"]; s < 249 || s > 251 {
+		t.Errorf("decayed score %v", s)
 	}
 }
 

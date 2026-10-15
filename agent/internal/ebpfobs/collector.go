@@ -33,10 +33,17 @@ const (
 	otherLabel   = "other"
 	seriesExpiry = 10 * time.Minute
 	dnsTimeout   = 5 * time.Second
+	// A run-queue stamp this old belongs to a task that never ran again (missed exit): swept by the agent.
+	runqStale = 10 * time.Second
 	// The probe's budget: its in-kernel run time plus the agent's reads, as a share of the machine's CPU capacity
 	// over budgetWindow.
 	budgetRatio  = 0.01
 	budgetWindow = 5 * time.Minute
+	// A single pass above this many times the budget trips it at once (no five minutes at 5 %+ of the CPU).
+	budgetBurst = 5
+
+	maxDetail = 2000 // facts.schema.json ebpf.detail
+	maxReason = 300  // facts.schema.json ebpf.reason
 )
 
 // State values of Status.State.
@@ -96,13 +103,19 @@ type Collector struct {
 	interval  atomic.Int64
 	wake      chan struct{}
 
-	mu       sync.Mutex
-	enabled  bool
-	tried    bool // a start was attempted for the current setting: failures are not retried in a loop
-	detected bool
-	src      source
-	status   Status
-	lastPass time.Time
+	mu      sync.Mutex
+	enabled bool
+	// fullNames ships whole DNS names instead of their registrable domain (net.ebpf.configure full_dns_names).
+	fullNames bool
+	// autoDisabled is why the budget turned the probe off ("" = it did not): persisted, so neither a restart nor the
+	// control plane's re-sends turn it back on; only an explicit re-enable (or turning it off) clears it.
+	autoDisabled string
+	names        *nameRanker
+	tried        bool // a start was attempted for the current setting: failures are not retried in a loop
+	detected     bool
+	src          source
+	status       Status
+	lastPass     time.Time
 
 	prevPeers   map[peerKey]peerVal
 	prevHists   map[histKey]histVal
@@ -121,7 +134,7 @@ func New(opts Options) *Collector {
 		opts.Logger = slog.Default()
 	}
 	c := &Collector{opts: opts, log: opts.Logger, now: time.Now, open: openProbe, cpus: runtime.NumCPU(),
-		wake: make(chan struct{}, 1), status: Status{State: StateOff, Programs: []string{}}}
+		wake: make(chan struct{}, 1), status: Status{State: StateOff, Programs: []string{}}, names: newNameRanker()}
 	c.check = func() (bool, string) {
 		if !platformSupported {
 			return false, "not linux/amd64 or linux/arm64"
@@ -170,8 +183,21 @@ func (c *Collector) Status() Status {
 	if !c.detected {
 		c.detectLocked()
 	}
+	return c.statusLocked()
+}
+
+// statusLocked is a copy of the status, its texts cut to the schema's lengths.
+func (c *Collector) statusLocked() Status {
 	s := c.status
 	s.Programs = append([]string{}, s.Programs...)
+	s.Detail, s.Reason = truncate(s.Detail, maxDetail), truncate(s.Reason, maxReason)
+	return s
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
 	return s
 }
 
@@ -242,7 +268,14 @@ func (c *Collector) reconcileLocked() {
 		c.tried = false
 		return
 	}
-	if c.src != nil || c.tried {
+	if c.src != nil {
+		return
+	}
+	if c.autoDisabled != "" {
+		c.status.State, c.status.Detail = StateOverBudget, c.autoDisabled
+		return
+	}
+	if c.tried {
 		return
 	}
 	c.tried = true
@@ -289,17 +322,24 @@ func (c *Collector) closeLocked() {
 	c.reset()
 }
 
-// setEnabled applies the setting now (the command's answer reflects it).
-func (c *Collector) setEnabled(on bool) Status {
+// apply applies the setting now (the command's answer reflects it). Turning it off, or an explicit re-enable, clears
+// an over-budget stop; a plain "on" (the control plane re-sending the setting) leaves it stopped.
+func (c *Collector) apply(cfg Config) Status {
 	c.mu.Lock()
+	on := cfg.Enabled
+	if !on || cfg.Reenable {
+		c.autoDisabled = ""
+	}
 	if c.enabled != on || !on || c.src == nil {
-		// A new "on" retries a failed or over-budget probe; "off" always detaches.
+		// A new "on" retries a failed probe; "off" always detaches.
 		c.tried = false
 	}
-	c.enabled = on
+	c.enabled, c.fullNames = on, cfg.FullDNSNames
 	c.reconcileLocked()
-	s := c.status
-	s.Programs = append([]string{}, s.Programs...)
+	if err := c.saveLocked(); err != nil {
+		c.log.Warn("eBPF: could not persist the setting", "err", err)
+	}
+	s := c.statusLocked()
 	c.mu.Unlock()
 	c.poke()
 	return s
@@ -487,6 +527,7 @@ func (p *peerAgg) activity() uint64 {
 func (c *Collector) collectLocked() []*metricspb.ResourceMetrics {
 	now := c.now()
 	start := time.Now()
+	c.flushPending()
 	var snap metrics.NetSnapshot
 	if c.opts.Workloads != nil {
 		snap = c.opts.Workloads.NetSnapshot()
@@ -580,6 +621,9 @@ func (c *Collector) collectLocked() []*metricspb.ResourceMetrics {
 		}
 		if d.Queries > 0 {
 			qn, _ := decodeQName(k.QName[:])
+			if !c.fullNames {
+				qn = registrable(qn)
+			}
 			key := w.id + "|" + qn
 			if names[key] == nil {
 				names[key] = &nameAgg{w: w, name: qn}
@@ -594,27 +638,32 @@ func (c *Collector) collectLocked() []*metricspb.ResourceMetrics {
 	if err != nil {
 		c.log.Debug("eBPF DNS pending read failed", "err", err)
 	}
+	// Unanswered after dnsTimeout: a resolver that did not answer, or an answer the probe could not match (a reply from
+	// another socket). Counted apart (error "timeout"), never part of the failure alert.
 	for _, p := range late {
 		c.add(at.of(owner{CgID: p.K.CgID, UID: p.K.UID}), "falak.net.dns.failures", 1, now, false, str("falak.net.dns.error", "timeout"))
 	}
-	byW := map[string][]*nameAgg{}
+	byW := map[string]map[string]uint64{}
+	wls := map[string]*workload{}
 	for _, n := range names {
-		byW[n.w.id] = append(byW[n.w.id], n)
-	}
-	for _, list := range byW {
-		sort.Slice(list, func(i, j int) bool {
-			if list[i].queries != list[j].queries {
-				return list[i].queries > list[j].queries
-			}
-			return list[i].name < list[j].name
-		})
-		for i, n := range list {
-			label := n.name
-			if i >= maxNames {
-				label = otherLabel
-			}
-			c.add(n.w, "falak.net.dns.name.queries", float64(n.queries), now, true, str("falak.net.dns.name", label))
+		if byW[n.w.id] == nil {
+			byW[n.w.id] = map[string]uint64{}
 		}
+		byW[n.w.id][n.name] += n.queries
+		wls[n.w.id] = n.w
+	}
+	c.names.update(byW, now.Sub(c.lastPass))
+	for id, list := range byW {
+		folded := map[string]uint64{}
+		for name, q := range list {
+			folded[c.names.label(id, name)] += q
+		}
+		for label, q := range folded {
+			c.add(wls[id], "falak.net.dns.name.queries", float64(q), now, true, str("falak.net.dns.name", label))
+		}
+	}
+	if n, err := c.src.SweepRunq(runqStale); err == nil && n > 0 {
+		c.log.Debug("eBPF run-queue stamps swept", "count", n)
 	}
 
 	// The probe's own cost and the budget.
@@ -723,14 +772,20 @@ func (c *Collector) budget(spent, wall time.Duration) {
 			break
 		}
 	}
-	cpus := max(1, c.cpus)
-	ratio := s.Seconds() / (w.Seconds() * float64(cpus))
+	cpus := float64(max(1, c.cpus))
+	ratio := s.Seconds() / (w.Seconds() * cpus)
 	pct := float64(int(ratio*10000+0.5)) / 100
 	c.status.OverheadPercent = &pct
-	if w < budgetWindow || ratio <= budgetRatio {
+	pass := spent.Seconds() / (wall.Seconds() * cpus)
+	var detail string
+	switch {
+	case pass > budgetBurst*budgetRatio:
+		detail = fmt.Sprintf("%.2f %% of CPU in one pass (budget %.0f %%)", pass*100, budgetRatio*100)
+	case w >= budgetWindow && ratio > budgetRatio:
+		detail = fmt.Sprintf("%.2f %% of CPU over %s (budget %.0f %%)", ratio*100, budgetWindow, budgetRatio*100)
+	default:
 		return
 	}
-	detail := fmt.Sprintf("%.2f %% of CPU over %s (budget %.0f %%)", ratio*100, budgetWindow, budgetRatio*100)
 	for _, g := range c.src.Groups() {
 		if g == groupRunq {
 			c.src.Shed(groupRunq)
@@ -741,7 +796,11 @@ func (c *Collector) budget(spent, wall time.Duration) {
 		}
 	}
 	c.closeLocked()
+	c.autoDisabled = detail
 	c.status.State, c.status.Detail = StateOverBudget, detail
+	if err := c.saveLocked(); err != nil {
+		c.log.Warn("eBPF: could not persist the over-budget stop", "err", err)
+	}
 	c.log.Warn("eBPF probe over budget: detached", "overhead", detail)
 }
 

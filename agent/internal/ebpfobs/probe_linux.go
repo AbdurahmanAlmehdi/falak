@@ -26,7 +26,7 @@ const platformSupported = true
 var groups = map[string][]string{
 	groupTCP:  {"on_set_state", "on_retransmit", "on_send_reset", "on_receive_reset"},
 	groupDNS:  {"dns_egress", "dns_ingress"},
-	groupRunq: {"on_wakeup", "on_wakeup_new", "on_switch"},
+	groupRunq: {"on_wakeup", "on_wakeup_new", "on_switch", "on_exit"},
 }
 
 // probe is the loaded probe: its maps, and per group its programs and links.
@@ -240,6 +240,25 @@ func (p *probe) Peers(fn func(peerKey, peerVal)) error { return iterate(p.m("pee
 func (p *probe) Hists(fn func(histKey, histVal)) error { return iterate(p.m("hists"), fn) }
 func (p *probe) DNSNames(fn func(dnsKey, dnsVal)) error {
 	return iterate(p.m("dns_names"), fn)
+}
+
+func (p *probe) SweepRunq(age time.Duration) (int, error) {
+	m := p.m("runq_start")
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &ts); err != nil {
+		return 0, err
+	}
+	now := uint64(ts.Nano())
+	var old []uint32
+	err := iterate(m, func(pid uint32, at uint64) {
+		if now > at && time.Duration(now-at) > age {
+			old = append(old, pid)
+		}
+	})
+	for _, pid := range old {
+		_ = m.Delete(pid)
+	}
+	return len(old), err
 }
 
 func (p *probe) ExpirePending(age time.Duration) ([]dnsPending, error) {

@@ -5,6 +5,7 @@ package ebpfobs
 import (
 	"net"
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -135,6 +136,17 @@ func TestLoadAttach(t *testing.T) {
 	}
 	if late, err := src.ExpirePending(100 * time.Millisecond); err != nil || len(late) != 1 {
 		t.Errorf("unanswered queries = %d (%v), want 1", len(late), err)
+	}
+	// An exited process leaves no run-queue stamp behind (sched_process_exit), and the sweep runs.
+	cmd := exec.Command("/bin/true")
+	if err := cmd.Run(); err == nil {
+		var stamp uint64
+		if err := src.(*probe).m("runq_start").Lookup(uint32(cmd.Process.Pid), &stamp); err == nil {
+			t.Errorf("pid %d exited but kept its run-queue stamp", cmd.Process.Pid)
+		}
+	}
+	if _, err := src.SweepRunq(10 * time.Second); err != nil {
+		t.Errorf("sweep: %v", err)
 	}
 	for g, d := range src.Runtime() {
 		t.Logf("in-kernel run time so far: %s %v", g, d)
