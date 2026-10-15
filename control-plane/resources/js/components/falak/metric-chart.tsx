@@ -172,8 +172,13 @@ export function MetricChart({
             <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="0" />
             <XAxis dataKey="t" tickFormatter={timeFormat} tick={tickStyle} axisLine={false} tickLine={false} minTickGap={32} />
             <YAxis
-                tickFormatter={(tick: number) => axisLabel(tick, format)}
-                tick={tickStyle}
+                // A plain <text>: recharts' default tick wraps a label wider than its guess ("954 MB" on two lines,
+                // "6,000 ms" pushed above the plot).
+                tick={({ x, y, payload }) => (
+                    <text x={x} y={y} dy="0.355em" textAnchor="end" {...tickStyle} className="whitespace-nowrap">
+                        {axisLabel(Number(payload.value), format)}
+                    </text>
+                )}
                 axisLine={false}
                 tickLine={false}
                 width={ticks ? axisWidth(ticks, format) : 56}

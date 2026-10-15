@@ -57,4 +57,8 @@ describe('axisLabel', () => {
     it('sizes the axis for the longest label', () => {
         expect(axisWidth([0, 100], (value) => `${value.toFixed(1)} ms`)).toBeGreaterThanOrEqual(8 * 6.5);
     });
+
+    it("counts the unit's capitals wider than digits", () => {
+        expect(axisWidth([0, 954], (value) => `${value} MB`)).toBeGreaterThan(axisWidth([0, 954], (value) => `${value} ms`));
+    });
 });

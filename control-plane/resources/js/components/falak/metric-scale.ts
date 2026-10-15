@@ -87,9 +87,14 @@ export function niceTicks(max: number, format: (value: number) => string): numbe
     return [0, top];
 }
 
-/** Axis width for the longest label (11px sans digits ≈ 6.5px each). */
-export function axisWidth(ticks: number[], format: (value: number) => string): number {
-    const longest = Math.max(0, ...ticks.map((tick) => axisLabel(tick, format).length));
+/** A label's width at 11px sans: digits, punctuation and lowercase ≈ 6.5px, capitals (the unit's "MB") ≈ 8px. */
+function labelWidth(label: string): number {
+    return [...label].reduce((width, char) => width + (/[A-Z%]/.test(char) ? 8 : 6.5), 0);
+}
 
-    return Math.max(28, Math.ceil(longest * 6.5) + 8);
+/** Axis width for the widest label, units included (the tick renderer never wraps it). */
+export function axisWidth(ticks: number[], format: (value: number) => string): number {
+    const widest = Math.max(0, ...ticks.map((tick) => labelWidth(axisLabel(tick, format))));
+
+    return Math.max(28, Math.ceil(widest) + 8);
 }
