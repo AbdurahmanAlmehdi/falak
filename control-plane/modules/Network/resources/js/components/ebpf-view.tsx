@@ -116,7 +116,7 @@ export function EbpfView({ url, scope, range, service }: EbpfViewProps) {
                             <MetricChart
                                 title="TCP retransmits"
                                 data={view.retransmits.points}
-                                series={view.retransmits.keys.slice(0, 5).map((key) => ({ key, label: bucketLabel(key) }))}
+                                series={view.retransmits.keys.slice(0, 5).map((key) => ({ key, label: bucketLabel(key, data?.peer_labels) }))}
                                 format={formatRate}
                                 loading={initial}
                                 timeFormat={timeFormat}

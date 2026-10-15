@@ -14,7 +14,6 @@ use Falak\Network\Application\ConfigureConnections;
 use Falak\Network\Application\Queries\ConnectionQueries;
 use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Domain\Models\NetworkObservation;
-use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Servers\Contracts\ServerHeaders;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Telemetry\Contracts\Data\MetricSeries;
@@ -35,18 +34,15 @@ use Inertia\Response;
  */
 final class ConnectionsController extends Controller
 {
+    use NamesPeers;
     use ResolvesServers;
 
     /** The agent sends the eBPF probe's connects with talks-to (agent/internal/version.Features). */
     private const EBPF_CONNECTS = 'net.ebpf.connects';
 
-    /** @var array<string, array{label: string, url: ?string}> */
-    private array $names = [];
-
     public function __construct(
         private readonly CurrentOrganization $organization,
         private readonly OrganizationAccess $access,
-        private readonly ServerDirectory $servers,
         private readonly DatabaseDirectory $databases,
         private readonly AgentDirectory $agents,
         private readonly MetricsBackend $metrics,
@@ -252,34 +248,6 @@ final class ConnectionsController extends Controller
     }
 
     /**
-     * A peer name (server:<id>, db:<id>, site:<slug>[/<service>], host:<process>, host) as a label and a link; null when
-     * it names nothing of this organization.
-     *
-     * @return array{label: string, url: ?string}|null
-     */
-    private function name(?string $name): ?array
-    {
-        if ($name === null || $name === '') {
-            return null;
-        }
-
-        if (array_key_exists($name, $this->names)) {
-            return $this->names[$name];
-        }
-
-        $organizationId = $this->organization->requireId();
-        [$kind, $ref] = array_pad(explode(':', $name, 2), 2, '');
-
-        return $this->names[$name] = match ($kind) {
-            'server' => ($s = $this->servers->find($ref)) && $s->organizationId === $organizationId ? ['label' => $s->name, 'url' => "/servers/{$s->id}"] : null,
-            'db' => ($d = $this->databases->instance($ref)) && $d->organizationId === $organizationId ? ['label' => $d->name, 'url' => null] : null,
-            'site' => ['label' => $ref, 'url' => null],
-            'host' => ['label' => $ref === '' ? 'this server' : $ref, 'url' => null],
-            default => null,
-        };
-    }
-
-    /**
      * @param  array<string, string>  $queries
      * @return array{charts: array<string, mixed>, errors: object}
      */
@@ -306,6 +274,6 @@ final class ConnectionsController extends Controller
             }
         }
 
-        return ['charts' => (object) $charts, 'errors' => (object) $errors];
+        return ['charts' => (object) $charts, 'peer_labels' => (object) $this->peerLabels($charts), 'errors' => (object) $errors];
     }
 }

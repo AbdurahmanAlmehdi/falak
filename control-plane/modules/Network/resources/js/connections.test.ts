@@ -57,6 +57,12 @@ describe('bucketLabel', () => {
         expect(bucketLabel('host:caddy')).toBe('caddy');
         expect(bucketLabel('site:shop/web')).toBe('shop/web');
     });
+
+    it('prefers the name the control plane resolved over the raw id', () => {
+        const names = { 'db:01m4ttn3p88s74np1e8yqgcyah': 'main-pg' };
+        expect(bucketLabel('db:01m4ttn3p88s74np1e8yqgcyah', names)).toBe('main-pg');
+        expect(bucketLabel('db:01zzzzzzzzzzzzzzzzzzzzzzzz', names)).toBe('01zzzzzzzzzzzzzzzzzzzzzzzz');
+    });
 });
 
 describe('actionableIp', () => {

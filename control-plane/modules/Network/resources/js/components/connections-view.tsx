@@ -86,7 +86,7 @@ export function ConnectionsView({ url, scope, serverId = null, siteId = null }: 
         .filter((key) => view.states.keys.includes(key))
         .slice(0, 5)
         .map((key) => ({ key, label: STATES[key], mark: 'area' as const, stack: 's' }));
-    const top = (keys: string[]) => keys.slice(0, 5).map((key) => ({ key, label: bucketLabel(key) }));
+    const top = (keys: string[]) => keys.slice(0, 5).map((key) => ({ key, label: bucketLabel(key, data?.peer_labels) }));
 
     return (
         <div className="grid min-w-0 gap-4">

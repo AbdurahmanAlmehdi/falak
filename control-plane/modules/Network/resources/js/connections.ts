@@ -93,6 +93,8 @@ export interface ConnectionsResponse {
     probes?: ProbeRow[];
     services?: string[];
     charts: Record<string, MetricSeriesDto[]>;
+    /** The names of the charts' falak_net_peer values the control plane knows (a server's, a database's). */
+    peer_labels?: Record<string, string>;
     errors: Record<string, string>;
 }
 
@@ -151,8 +153,12 @@ export function peerLabel(row: PeerRow): string {
     return row.direction === 'outbound' && row.port > 0 && !row.peer ? `${name}:${row.port}` : name;
 }
 
-/** Peer names of the agent's metric labels ("server:<id>", "db:<id>", "external:443", "other") as short labels. */
-export function bucketLabel(name: string): string {
+/**
+ * Peer names of the agent's metric labels ("server:<id>", "db:<id>", "external:443", "other") as short labels: the
+ * name the control plane resolved (`names`, the response's peer_labels) before the raw id.
+ */
+export function bucketLabel(name: string, names?: Record<string, string>): string {
+    if (names?.[name]) return names[name];
     const [kind, rest] = name.includes(':') ? [name.slice(0, name.indexOf(':')), name.slice(name.indexOf(':') + 1)] : [name, ''];
 
     switch (kind) {

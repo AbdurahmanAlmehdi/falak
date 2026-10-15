@@ -31,6 +31,8 @@ export interface EbpfResponse {
     step: number;
     servers: EbpfServer[];
     charts: Record<string, MetricSeriesDto[]>;
+    /** The names of the charts' falak_net_peer values the control plane knows (a server's, a database's). */
+    peer_labels?: Record<string, string>;
     names: { name: string; queries: number }[];
     /** `workloads`: the server's own processes' names are left out (they need network.manage). */
     names_scope: 'all' | 'workloads';

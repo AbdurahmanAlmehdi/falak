@@ -215,6 +215,19 @@ it('scopes a site to its workload and servers, and a database to its instance', 
     $this->actingAs($this->user)->getJson("/network/databases/{$foreign->id}/ebpf")->assertNotFound();
 });
 
+it('names the peers of the retransmit series (a database, a server) for the legend; never another organization\'s', function () {
+    ebpf_agent($this, ['net.ebpf'], ['supported' => true, 'enabled' => true, 'state' => 'running', 'programs' => ['tcp']]);
+    EbpfSetting::query()->create(['server_id' => $this->server->id, 'organization_id' => $this->organization->id, 'enabled' => true, 'status' => 'applied']);
+    $db = databases_instance($this->organization, 'postgresql', $this->server, ['name' => 'main-pg']);
+    $other = network_server($this->organization, ['name' => 'app-2']);
+    $foreign = databases_instance(Organization::factory()->create(), 'postgresql');
+    ebpf_vm([[['falak_net_peer' => "db:{$db->id}"], 2], [['falak_net_peer' => "server:{$other->id}"], 1],
+        [['falak_net_peer' => "db:{$foreign->id}"], 1], [['falak_net_peer' => 'external:443'], 1]]);
+
+    $this->getJson("/network/servers/{$this->server->id}/ebpf")->assertOk()
+        ->assertJsonPath('peer_labels', ["db:{$db->id}" => 'main-pg', "server:{$other->id}" => 'app-2']);
+});
+
 it('alerts on DNS failures and retransmit spikes once they hold, and clears them', function () {
     EbpfSetting::query()->create(['server_id' => $this->server->id, 'organization_id' => $this->organization->id, 'enabled' => true, 'status' => 'applied']);
     $other = network_server($this->organization, ['name' => 'app-2']);

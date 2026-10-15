@@ -29,6 +29,7 @@ use Illuminate\Validation\Rule;
  */
 final class EbpfController extends Controller
 {
+    use NamesPeers;
     use ResolvesServers;
 
     /** Turning the probe on or off (and its options): Admin only. */
@@ -158,6 +159,7 @@ final class EbpfController extends Controller
             'step' => $step,
             'servers' => $status,
             'charts' => (object) $charts,
+            'peer_labels' => (object) $this->peerLabels($charts),
             'names' => $names,
             'names_scope' => $hostNames ? 'all' : 'workloads',
             'errors' => (object) $errors,
