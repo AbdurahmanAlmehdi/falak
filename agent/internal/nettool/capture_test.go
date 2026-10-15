@@ -36,7 +36,7 @@ func TestCaptureSpecValidate(t *testing.T) {
 	}
 	s := CaptureSpec{CaptureID: testCaptureID}
 	_ = s.Validate()
-	if s.Interface != "default" || s.DurationS != 30 || s.MaxBytes != 20<<20 || s.Snaplen != 128 {
+	if s.Interface != "default" || s.DurationS != 30 || s.MaxBytes != 20<<20 || s.Snaplen != 96 {
 		t.Errorf("defaults: %+v", s)
 	}
 	bad := []CaptureSpec{
@@ -82,12 +82,12 @@ func TestCaptureExpressionAndArgv(t *testing.T) {
 	s := CaptureSpec{CaptureID: testCaptureID, Filter: &CaptureFilter{Host: "10.0.0.5", Port: 80, Direction: "out"}}
 	_ = s.Validate()
 	got := strings.Join(tcpdumpArgv("/usr/bin/tcpdump", "eth0", s, "tcpdump"), "|")
-	if want := "/usr/bin/tcpdump|-n|-p|-U|-i|eth0|-s|128|-w|-|-Z|tcpdump|-Q|out|--|host 10.0.0.5 and port 80"; got != want {
+	if want := "/usr/bin/tcpdump|-n|-p|-U|-i|eth0|-s|96|-w|-|-Z|tcpdump|-Q|out|--|host 10.0.0.5 and port 80"; got != want {
 		t.Errorf("argv %s", got)
 	}
 	s = CaptureSpec{CaptureID: testCaptureID}
 	_ = s.Validate()
-	if got := strings.Join(tcpdumpArgv("tcpdump", "any", s, "nobody"), " "); got != "tcpdump -n -p -U -i any -s 128 -w - -Z nobody" {
+	if got := strings.Join(tcpdumpArgv("tcpdump", "any", s, "nobody"), " "); got != "tcpdump -n -p -U -i any -s 96 -w - -Z nobody" {
 		t.Errorf("argv without a filter: %s", got)
 	}
 }
@@ -376,7 +376,7 @@ func TestCaptureRunsUploadsAndCleansUp(t *testing.T) {
 		t.Error("no progress reported")
 	}
 	args, _ := os.ReadFile(e.args)
-	if !strings.HasPrefix(string(args), "-n -p -U -i eth0 -s 128 -w - -Z ") || !strings.HasSuffix(strings.TrimSpace(string(args)), "-- tcp and port 443") {
+	if !strings.HasPrefix(string(args), "-n -p -U -i eth0 -s 96 -w - -Z ") || !strings.HasSuffix(strings.TrimSpace(string(args)), "-- tcp and port 443") {
 		t.Errorf("tcpdump args %q", args)
 	}
 	if !strings.Contains(e.out.stderr.String(), "listening on eth0") || !strings.Contains(e.out.stdout.String(), "uploaded") {

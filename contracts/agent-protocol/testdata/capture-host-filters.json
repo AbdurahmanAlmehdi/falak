@@ -1,0 +1,31 @@
+{
+  "description": "net.capture filter.host values: the agent (nettool.parseHostFilter) and the control plane (NetCaptureSpec::validHostFilter) must agree. An IP or a CIDR, never a name, no leading zeros, no zones.",
+  "valid": [
+    "10.0.0.5",
+    "10.0.0.0/24",
+    "10.0.0.0/0",
+    "10.0.0.0/32",
+    "2001:db8::1",
+    "2001:db8::/32",
+    "::/0",
+    "::1/128"
+  ],
+  "invalid": [
+    "",
+    "example.com",
+    "-w /etc/passwd",
+    "10.0.0.1 or port 22",
+    "10.0.0.0/024",
+    "10.0.0.0/00",
+    "::/0128",
+    "10.0.0.0/+8",
+    "10.0.0.0/33",
+    "2001:db8::/129",
+    "010.0.0.1",
+    "10.0.0.0/",
+    "10.0.0.0/8/8",
+    "fe80::1%eth0",
+    " 10.0.0.1",
+    "10.0.0.0/8\n"
+  ]
+}

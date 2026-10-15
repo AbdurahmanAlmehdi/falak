@@ -63,6 +63,13 @@ const (
 	pcapRecordHeader  = 16
 )
 
+// captureKillGrace is how long tcpdump gets to exit after SIGINT before its group is killed; signalGroup sends a signal
+// to a process group (tests replace both).
+var (
+	captureKillGrace = 3 * time.Second
+	signalGroup      = func(pgid int, sig syscall.Signal) error { return syscall.Kill(-pgid, sig) }
+)
+
 var ifaceNameRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.:@-]{0,14}$`)
 
 // RegisterCapture adds net.capture (it needs Options.CP).
@@ -176,7 +183,7 @@ func (m *Manager) runCapture(ctx context.Context, p CaptureSpec, argv []string, 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append([]string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}, m.opts.Env...)
 	cmd.Dir = "/"
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = captureSysProcAttr() // its own process group; on Linux killed with the agent (Pdeathsig)
 	if netns != nil {
 		cmd.ExtraFiles = []*os.File{netns} // fd 3
 	}
@@ -190,19 +197,31 @@ func (m *Manager) runCapture(ctx context.Context, p CaptureSpec, argv []string, 
 		return "", fmt.Errorf("start tcpdump: %w", err)
 	}
 
+	// Signals go to tcpdump's process group only while it can't have been reaped: the waiter first waits for the exit
+	// without reaping (the zombie keeps the pid and the group id from being reused), marks it gone under mu, and only
+	// then reaps. stop and the SIGKILL fallback check that mark under the same lock, and the fallback timer is stopped.
 	var (
 		mu     sync.Mutex
 		reason string
+		gone   bool
+		kill   *time.Timer
 	)
+	pid := cmd.Process.Pid
 	stop := func(why string) {
 		mu.Lock()
 		defer mu.Unlock()
-		if reason != "" {
+		if reason != "" || gone {
 			return
 		}
 		reason = why
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) // tcpdump flushes and prints its counters
-		time.AfterFunc(3*time.Second, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+		_ = signalGroup(pid, syscall.SIGINT) // tcpdump flushes and prints its counters
+		kill = time.AfterFunc(captureKillGrace, func() {
+			mu.Lock()
+			defer mu.Unlock()
+			if !gone {
+				_ = signalGroup(pid, syscall.SIGKILL)
+			}
+		})
 	}
 	copyErr := make(chan error, 1)
 	go func() { copyErr <- copyPcap(out, w, p.MaxBytes, counts, func() { stop(capEndSizeLimit) }) }()
@@ -210,6 +229,13 @@ func (m *Manager) runCapture(ctx context.Context, p CaptureSpec, argv []string, 
 	var cerr error
 	go func() {
 		cerr = <-copyErr
+		waitExitedNoReap(pid)
+		mu.Lock()
+		gone = true
+		if kill != nil {
+			kill.Stop()
+		}
+		mu.Unlock()
 		_ = cmd.Wait()
 		close(exited)
 	}()
@@ -282,6 +308,9 @@ func (m *Manager) uploadCapture(ctx context.Context, id, path string, size int64
 		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 			return err
 		}
+		if n == 0 {
+			return errors.New("the capture file is shorter than recorded")
+		}
 		chunk := buf[:n]
 		cs := sha256.Sum256(chunk)
 		headers := map[string]string{
@@ -305,9 +334,6 @@ func (m *Manager) uploadCapture(ctx context.Context, id, path string, size int64
 		}
 		if uerr != nil {
 			return fmt.Errorf("upload the capture (offset %d): %w", off, uerr)
-		}
-		if n == 0 {
-			return errors.New("the capture file is shorter than recorded")
 		}
 		off += int64(n)
 	}

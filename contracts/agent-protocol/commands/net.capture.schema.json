@@ -93,7 +93,7 @@
       "type": "integer",
       "minimum": 64,
       "maximum": 262144,
-      "description": "bytes kept per packet (default 128: headers only; 262144: full packets)"
+      "description": "bytes kept per packet (default 96: packet headers, which may include the first bytes of a payload; 262144: full packets)"
     },
     "duration_s": {
       "type": "integer",

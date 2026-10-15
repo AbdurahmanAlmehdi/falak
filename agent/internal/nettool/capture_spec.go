@@ -16,7 +16,7 @@ const (
 	MinCaptureBytes      = 1 << 20
 	MaxCaptureBytes      = 100 << 20
 	DefaultCaptureBytes  = 20 << 20
-	HeadersSnaplen       = 128
+	HeadersSnaplen       = 96 // packet headers (may include the first bytes of a payload)
 	FullSnaplen          = 262144
 	minSnaplen           = 64
 	captureIfaceDefault  = "default"

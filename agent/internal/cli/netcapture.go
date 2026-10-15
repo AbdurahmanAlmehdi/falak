@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/cli/api"
 )
+
+var captureIDRe = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$`)
 
 const captureWarning = "Packet captures may contain sensitive data (cookies, tokens, personal data). The file is kept encrypted for 24 hours and every download is audited."
 
@@ -36,7 +39,7 @@ func cmdNetCapture(ctx context.Context, a *App, args []string) error {
 	fs.StringVar(&req.Interface, "interface", "", "servers and native sites: default, wireguard or docker")
 	fs.IntVar(&req.DurationS, "duration", 0, "seconds (1-60, default 30)")
 	fs.IntVar(&req.MaxMB, "max-size", 0, "MiB (1-100, default 20)")
-	fs.BoolVar(&req.FullPackets, "full", false, "capture full packets (default: the first 128 bytes, headers only)")
+	fs.BoolVar(&req.FullPackets, "full", false, "capture full packets (default: packet headers, the first 96 bytes, which may include the first bytes of a payload)")
 	fs.StringVar(&f.Host, "host", "", "filter: an IP or a CIDR")
 	fs.IntVar(&f.Port, "port", 0, "filter: a port")
 	fs.StringVar(&f.Protocol, "protocol", "", "filter: tcp, udp or icmp")
@@ -68,6 +71,10 @@ func cmdNetCapture(ctx context.Context, a *App, args []string) error {
 	capt, err := cl.StartNetCapture(ctx, path, req)
 	if err != nil {
 		return err
+	}
+	// The id goes into URLs and the default file name: only ever a ULID, whatever the server answered.
+	if !captureIDRe.MatchString(capt.ID) {
+		return fmt.Errorf("net capture: the server answered an invalid capture id %q", capt.ID)
 	}
 	where := "on " + capt.ServerName
 	if capt.Container != nil {

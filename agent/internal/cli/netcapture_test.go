@@ -12,7 +12,13 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/cli/api"
 )
 
+const testCaptureID = "01JA2B3C4D5E6F7G8H9J0K1M2N"
+
 func captureHarness(t *testing.T, final string) (*harness, *[]map[string]any, *[]string) {
+	return captureHarnessWithID(t, final, testCaptureID)
+}
+
+func captureHarnessWithID(t *testing.T, final, id string) (*harness, *[]map[string]any, *[]string) {
 	var bodies []map[string]any
 	var paths []string
 	polls := 0
@@ -22,7 +28,7 @@ func captureHarness(t *testing.T, final string) (*harness, *[]map[string]any, *[
 		_ = json.NewEncoder(w).Encode(v)
 	}
 	capt := func(status string) map[string]any {
-		return map[string]any{"data": map[string]any{"id": "c1", "server_name": "main-1", "status": status, "duration_s": 5, "packets_captured": 3, "bytes_captured": 100, "expires_at": "2026-10-16T10:00:00Z"}}
+		return map[string]any{"data": map[string]any{"id": id, "server_name": "main-1", "status": status, "duration_s": 5, "packets_captured": 3, "bytes_captured": 100, "expires_at": "2026-10-16T10:00:00Z"}}
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.Method+" "+r.URL.Path)
@@ -32,13 +38,13 @@ func captureHarness(t *testing.T, final string) (*harness, *[]map[string]any, *[
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			bodies = append(bodies, body)
 			reply(w, 201, capt("queued"))
-		case r.URL.Path == api.Path(api.PathNetCapture, "capture", "c1"):
+		case r.URL.Path == api.Path(api.PathNetCapture, "capture", id):
 			if polls++; polls == 1 {
 				reply(w, 200, capt("capturing"))
 				return
 			}
 			reply(w, 200, capt(final))
-		case r.URL.Path == api.Path(api.PathNetCaptureDownload, "capture", "c1"):
+		case r.URL.Path == api.Path(api.PathNetCaptureDownload, "capture", id):
 			if r.Header.Get("Authorization") != "Bearer "+token {
 				w.WriteHeader(401)
 				return
@@ -75,6 +81,21 @@ func TestNetCaptureDownloads(t *testing.T) {
 	h, _, _ = captureHarness(t, "ready")
 	if code := h.run("net", "capture", "--server", "main-1", "--yes", "-o", out); code == 0 {
 		t.Fatal("overwrote the file")
+	}
+}
+
+func TestNetCaptureRefusesAnInvalidCaptureID(t *testing.T) {
+	h, _, paths := captureHarnessWithID(t, "ready", "../../tmp/evil")
+	dir := t.TempDir()
+	h.wd = dir
+	if code := h.run("net", "capture", "--server", "main-1", "--yes"); code == 0 || !strings.Contains(h.err.String(), "invalid capture id") {
+		t.Fatalf("code %d: %s", code, h.err.String())
+	}
+	if len(*paths) != 1 {
+		t.Fatalf("followed an invalid id: %v", *paths)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("wrote %v", entries)
 	}
 }
 

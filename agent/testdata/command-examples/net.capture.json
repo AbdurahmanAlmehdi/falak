@@ -11,7 +11,7 @@
     "protocol": "tcp",
     "direction": "both"
   },
-  "snaplen": 128,
+  "snaplen": 96,
   "duration_s": 30,
   "max_bytes": 20971520
 }
