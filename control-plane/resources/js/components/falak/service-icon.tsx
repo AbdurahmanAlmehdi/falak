@@ -1,3 +1,4 @@
+import { brandFillProps } from '@/lib/brand-color';
 import { cn } from '@/lib/utils';
 import { Box, Code2, Database, FileCode2, Globe, HardDrive, Server, SquareFunction, type LucideIcon } from 'lucide-react';
 import {
@@ -111,13 +112,6 @@ const GENERIC: Record<string, LucideIcon> = {
 // Logos whose brand color is (near) black/white read poorly on one theme: draw them in the text color instead.
 const MONOCHROME = new Set(['nextdotjs', 'bun', 'deno', 'symfony']);
 
-function nearBlackOrWhite(hex: string): boolean {
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
-    return luminance < 0.2 || luminance > 0.9;
-}
-
 export function hasServiceIcon(name: string | null | undefined): boolean {
     return Boolean(name && (BRANDS[name.toLowerCase()] || GENERIC[name.toLowerCase()]));
 }
@@ -139,16 +133,18 @@ export function ServiceIcon({ name, size = 16, mono = false, title, className }:
     const a11y = title ? { role: 'img' as const, 'aria-label': title } : { 'aria-hidden': true as const };
 
     if (brand) {
-        const monochrome = mono || MONOCHROME.has(brand.slug) || nearBlackOrWhite(brand.hex);
+        const monochrome = mono || MONOCHROME.has(brand.slug);
+        // Brand colors are data (the logo's identity), not UI tokens; adjusted per theme to stay visible (lib/brand-color).
+        const fill = monochrome ? null : brandFillProps(brand.hex);
 
         return (
             <svg
                 viewBox="0 0 24 24"
                 width={size}
                 height={size}
-                className={cn('shrink-0', monochrome && 'text-fg', className)}
-                // Brand colors are data (the logo's identity), not UI tokens.
-                fill={monochrome ? 'currentColor' : `#${brand.hex}`}
+                className={cn('shrink-0', fill ? fill.className : 'text-fg', className)}
+                style={fill?.style}
+                fill={fill ? undefined : 'currentColor'}
                 {...a11y}
             >
                 {title && <title>{title}</title>}

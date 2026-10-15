@@ -1,3 +1,4 @@
+import { brandFillProps } from '@/lib/brand-color';
 import { cn } from '@/lib/utils';
 import { Cloud, Code2, HardDrive, Hash, KeyRound, Mail, Plug, Server, Webhook, type LucideIcon } from 'lucide-react';
 import {
@@ -83,15 +84,17 @@ export function IntegrationIcon({ name, size = 16, mono = false, title, classNam
 
     if (brand) {
         const monochrome = mono || MONOCHROME.has(key);
+        // Brand colors are data (the logo's identity), not UI tokens; adjusted per theme to stay visible (lib/brand-color).
+        const fill = monochrome ? null : brandFillProps(brand.hex);
 
         return (
             <svg
                 viewBox="0 0 24 24"
                 width={size}
                 height={size}
-                className={cn('shrink-0', monochrome && 'text-fg', className)}
-                // Brand colors are data (the logo's identity), not UI tokens.
-                fill={monochrome ? 'currentColor' : `#${brand.hex}`}
+                className={cn('shrink-0', fill ? fill.className : 'text-fg', className)}
+                style={fill?.style}
+                fill={fill ? undefined : 'currentColor'}
                 {...a11y}
             >
                 {title && <title>{title}</title>}

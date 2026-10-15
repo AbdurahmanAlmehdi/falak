@@ -1,3 +1,4 @@
+import { brandFillProps } from '@/lib/brand-color';
 import { cn } from '@/lib/utils';
 import { LayoutTemplate } from 'lucide-react';
 import {
@@ -46,7 +47,7 @@ import { type TemplateIconRef } from '../types';
  * Brand icons (simple-icons) the catalog uses. Keep in sync with CATALOG_BRAND_ICONS in TemplateCatalogTest.php;
  * unknown keys (custom templates) fall back to a generic icon.
  */
-const BRANDS: Record<string, SimpleIcon> = {
+export const BRANDS: Record<string, SimpleIcon> = {
     adminer: siAdminer,
     appsmith: siAppsmith,
     bookstack: siBookstack,
@@ -86,14 +87,6 @@ const BRANDS: Record<string, SimpleIcon> = {
     wordpress: siWordpress,
 };
 
-// Near-black / near-white brand colors read poorly on one theme: draw them in the text color instead.
-function monochrome(hex: string): boolean {
-    const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
-    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-
-    return luminance < 0.25 || luminance > 0.9;
-}
-
 export function TemplateIcon({ icon, name, size = 20, className }: { icon: TemplateIconRef; name: string; size?: number; className?: string }) {
     if (icon?.type === 'url') {
         return <img src={icon.url} alt="" width={size} height={size} className={cn('shrink-0', className)} loading="lazy" />;
@@ -105,15 +98,16 @@ export function TemplateIcon({ icon, name, size = 20, className }: { icon: Templ
         return <LayoutTemplate width={size} height={size} className={cn('text-fg-muted shrink-0', className)} aria-hidden />;
     }
 
-    const mono = monochrome(brand.hex);
+    // Brand colors are data (the logo's identity), adjusted per theme to stay visible (lib/brand-color).
+    const fill = brandFillProps(brand.hex);
 
     return (
         <svg
             viewBox="0 0 24 24"
             width={size}
             height={size}
-            className={cn('shrink-0', mono && 'text-fg', className)}
-            fill={mono ? 'currentColor' : `#${brand.hex}`}
+            className={cn('shrink-0', fill.className, className)}
+            style={fill.style}
             role="img"
             aria-label={name}
         >
