@@ -6,7 +6,7 @@ import { Input } from '@/components/falak/input';
 import { RelativeTime } from '@/components/falak/relative-time';
 import { Select } from '@/components/falak/select';
 import { toast } from '@/components/falak/toast';
-import InfrastructureLayout from '@/layouts/infrastructure-layout';
+import NetworkLayout from '@/layouts/network-layout';
 import { router, useForm } from '@inertiajs/react';
 import { Gauge, Plus, Trash2 } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
@@ -111,8 +111,8 @@ export default function RateLimits({ limits, sites, notApplied = [], can }: Prop
         });
 
     return (
-        <InfrastructureLayout
-            section="networks"
+        <NetworkLayout
+            section="rate-limits"
             title="Rate limits"
             description="Requests per client IP on paths of your sites, enforced by the server's edge (Caddy)."
             actions={
@@ -151,6 +151,6 @@ export default function RateLimits({ limits, sites, notApplied = [], can }: Prop
                 rowActions={can.manage ? (limit) => [{ label: 'Remove', icon: <Trash2 />, danger: true, onSelect: () => remove(limit) }] : undefined}
             />
             {can.manage && adding && <AddDialog sites={sites} open={adding} onOpenChange={setAdding} />}
-        </InfrastructureLayout>
+        </NetworkLayout>
     );
 }

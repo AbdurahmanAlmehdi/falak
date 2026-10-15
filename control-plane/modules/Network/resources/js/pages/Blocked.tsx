@@ -8,7 +8,7 @@ import { Section } from '@/components/falak/section';
 import { Select } from '@/components/falak/select';
 import { Tag } from '@/components/falak/tag';
 import { toast } from '@/components/falak/toast';
-import InfrastructureLayout from '@/layouts/infrastructure-layout';
+import NetworkLayout from '@/layouts/network-layout';
 import { router, useForm } from '@inertiajs/react';
 import { Ban, Plus, Settings2, Trash2 } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
@@ -218,8 +218,8 @@ export default function Blocked({ blocks, servers, yourIp, can }: Props) {
         router.delete(`/network/blocks/${block.id}`, { preserveScroll: true, onSuccess: () => toast.success(`${block.cidr} unblocked`) });
 
     return (
-        <InfrastructureLayout
-            section="networks"
+        <NetworkLayout
+            section="blocked"
             title="Blocked IPs"
             description={
                 <>
@@ -360,6 +360,6 @@ export default function Blocked({ blocks, servers, yourIp, can }: Props) {
 
             {can.protect && <BlockDialog servers={servers} open={blocking} onOpenChange={setBlocking} />}
             {settings && <AutoBanDialog server={settings} onClose={() => setSettings(null)} />}
-        </InfrastructureLayout>
+        </NetworkLayout>
     );
 }
