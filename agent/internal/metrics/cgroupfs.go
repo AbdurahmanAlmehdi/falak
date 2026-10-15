@@ -22,7 +22,7 @@ type CgroupStats struct {
 	// memory.current and memory.stat's file (page cache) and shmem (shared memory and tmpfs, part of file but not
 	// reclaimable: Postgres' shared_buffers): used = current - (file - shmem), cache = file - shmem.
 	MemCurrent, MemFile, MemShmem uint64
-	HasMem              bool
+	HasMem                        bool
 	// MemLimit is memory.max; 0 = no limit.
 	MemLimit int64
 	// OOMKills is memory.events' oom_kill.
