@@ -437,8 +437,8 @@ using that key adopts the worker and names it.
 
 ```yaml
 domains:
-  - shop.example.com                                   # a plain host
-  - name: www.shop.example.com
+  - api.shop.example.com                               # a plain host
+  - name: shop.example.com                             # www redirects go on the apex
     www: to_apex                                       # none | to_www | to_apex
   - name: "*.shop.example.com"
     tls: dns                                           # auto | dns | custom | internal | off
