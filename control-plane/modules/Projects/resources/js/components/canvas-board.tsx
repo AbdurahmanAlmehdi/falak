@@ -74,6 +74,7 @@ interface BoardActions {
     dropTarget: string | null;
     renaming: string | null;
     onOpen: (service: CanvasService, child?: string) => void;
+    onOpenVolume?: (service: CanvasService, volumeId: string) => void;
     onGroup: (group: CanvasGroup, action: GroupAction) => void;
     onRename: (group: CanvasGroup, name: string | null) => void;
     onCompose: (service: CanvasService, action: ComposeAction) => void;
@@ -100,13 +101,20 @@ const ServiceNodeView = memo(function ServiceNodeView({ data, selected }: NodePr
     return (
         <>
             <Handles />
-            <ServiceCard service={data.service} selected={board.selectedId === data.service.id} marked={selected} className="cursor-pointer" />
+            <ServiceCard
+                service={data.service}
+                selected={board.selectedId === data.service.id}
+                marked={selected}
+                className="cursor-pointer"
+                onOpenVolume={board.onOpenVolume && ((volumeId) => board.onOpenVolume?.(data.service, volumeId))}
+            />
         </>
     );
 });
 
 const ChildNodeView = memo(function ChildNodeView({ data }: NodeProps<ChildNode>) {
     const { child, service } = data;
+    const board = useBoard();
 
     return (
         <>
@@ -126,6 +134,7 @@ const ChildNodeView = memo(function ChildNodeView({ data }: NodeProps<ChildNode>
                     volumes: child.volumes,
                 }}
                 data-compose={service.id}
+                onOpenVolume={board.onOpenVolume && ((volumeId) => board.onOpenVolume?.(service, volumeId))}
             />
         </>
     );
@@ -383,6 +392,8 @@ export interface CanvasBoardProps {
     /** Where the viewport is remembered (per environment) across visits. */
     viewportKey: string;
     onOpen: (service: CanvasService, child?: string) => void;
+    /** A volume chip of a card: the volume opens over the service's panel. */
+    onOpenVolume?: (service: CanvasService, volumeId: string) => void;
     onPaneClick: () => void;
     onLayout: (changes: LayoutChange[]) => void;
     onGroup: (group: CanvasGroup, action: GroupAction) => void;
@@ -540,6 +551,7 @@ export function CanvasBoard({
     renaming,
     viewportKey,
     onOpen,
+    onOpenVolume,
     onPaneClick,
     onLayout,
     onGroup,
@@ -768,8 +780,8 @@ export function CanvasBoard({
     );
 
     const board = useMemo<BoardActions>(
-        () => ({ editable, selectedId, dropTarget, renaming, onOpen, onGroup, onRename, onCompose }),
-        [editable, selectedId, dropTarget, renaming, onOpen, onGroup, onRename, onCompose],
+        () => ({ editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onCompose }),
+        [editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onCompose],
     );
 
     return (

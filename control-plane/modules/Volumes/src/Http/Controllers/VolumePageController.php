@@ -98,7 +98,8 @@ final class VolumePageController extends Controller
         ]);
     }
 
-    public function show(Request $request, Volume $volume, BackupStorage $storage): Response
+    /** GET /volumes/{id}: the page, or (JSON) the same props for the canvas panel's volume layer. */
+    public function show(Request $request, Volume $volume, BackupStorage $storage): Response|JsonResponse
     {
         $this->authorize('view', $volume);
         $volume->load(['attachments', 'schedules']);
@@ -114,7 +115,7 @@ final class VolumePageController extends Controller
 
         $operations = Operation::query()->where('volume_id', $volume->id)->latest()->orderByDesc('id')->limit(20)->get();
 
-        return Inertia::render('Volumes/Show', [
+        $props = [
             'volume' => $this->presentVolumes(collect([$volume]))[0],
             'backups' => $backups->map(fn (VolumeBackup $backup) => $this->presentBackup($backup))->values(),
             'schedules' => $volume->schedules->map(fn ($schedule) => $this->presentSchedule($schedule))->values(),
@@ -131,7 +132,11 @@ final class VolumePageController extends Controller
                 'manage' => $this->access->can($request->user(), $organizationId, VolumePolicy::MANAGE),
                 'browse' => $this->access->can($request->user(), $organizationId, VolumePolicy::BROWSE),
             ],
-        ]);
+        ];
+
+        return $request->wantsJson() && $request->header('X-Inertia') === null
+            ? response()->json(['data' => $props])
+            : Inertia::render('Volumes/Show', $props);
     }
 
     /**

@@ -375,6 +375,7 @@ it('hides other organizations’ volumes', function () {
     [$stranger] = memberOf(null, Role::Owner);
 
     $this->actingAs($stranger)->get("/volumes/{$volume->id}")->assertNotFound();
+    $this->actingAs($stranger)->getJson("/volumes/{$volume->id}")->assertNotFound();
     $this->actingAs($stranger)->getJson("/volumes/{$volume->id}/browse")->assertNotFound();
     $this->actingAs($stranger)->delete("/volumes/{$volume->id}", ['confirm' => 'data'])->assertNotFound();
     $this->actingAs($stranger)->get("/servers/{$this->server->id}/volumes")->assertNotFound();
@@ -424,4 +425,9 @@ it('renders the server, project and volume pages', function () {
         ->assertInertia(fn ($page) => $page->component('Volumes/Server', false)->where('volumes.0.id', $volume->id));
     $this->get("/volumes/{$volume->id}")->assertOk()
         ->assertInertia(fn ($page) => $page->component('Volumes/Show', false)->where('volume.name', 'data')->where('can.browse', true));
+    // The canvas panel's volume layer reads the same props as JSON.
+    $this->getJson("/volumes/{$volume->id}")->assertOk()
+        ->assertJsonPath('data.volume.id', $volume->id)
+        ->assertJsonPath('data.can.manage', true)
+        ->assertJsonStructure(['data' => ['backups', 'schedules', 'operations', 'storage_providers', 'servers', 'attachable_sites', 'browsable', 'download_max_bytes']]);
 });

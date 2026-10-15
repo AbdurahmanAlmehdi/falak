@@ -80,7 +80,16 @@ export function VolumesSettings({ ctx }: ServiceTabProps) {
                 <div key={attachment.id} className="border-border flex flex-wrap items-center gap-3 border-b pb-3 last:border-b-0 last:pb-0">
                     <HardDrive className="text-fg-faint size-4 shrink-0" aria-hidden />
                     <div className="grid min-w-0 flex-1 gap-0.5">
-                        <a href={volume.url} className="text-fg truncate font-mono text-xs font-medium hover:underline">
+                        <a
+                            href={volume.url}
+                            className="text-fg truncate font-mono text-xs font-medium hover:underline"
+                            onClick={(event) => {
+                                // Over this panel; ⌘/Ctrl/⇧-click still opens the volume page.
+                                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+                                event.preventDefault();
+                                ctx.openLayer('volume', volume.id);
+                            }}
+                        >
                             {volume.name}
                         </a>
                         <span className="text-fg-muted flex items-center gap-1.5 font-mono text-xs">

@@ -1,10 +1,21 @@
-import { registerCommands, registerServiceSettingsSections } from '@/lib/registry';
+import { registerCommands, registerServiceLayers, registerServiceSettingsSections } from '@/lib/registry';
 import { type SharedData } from '@/types';
 import { HardDrive } from 'lucide-react';
 import { lazy } from 'react';
 
 // Panel code loads with the canvas, not with every page.
 const VolumesSettings = lazy(() => import('./panel/volumes-settings').then((module) => ({ default: module.VolumesSettings })));
+const VolumeLayer = lazy(() => import('./panel/volume-layer').then((module) => ({ default: module.VolumeLayer })));
+
+// A volume chip on a canvas card opens the volume over its service's panel (`?volume={id}`), the canvas still in view.
+registerServiceLayers({
+    id: 'volume',
+    kinds: ['site', 'database'],
+    param: 'volume',
+    permission: 'volumes.view',
+    label: (ctx) => `${ctx.service.name} volume`,
+    component: VolumeLayer,
+});
 
 // Settings tab of a site: its volumes (container services attach theirs here). Storage sits between Deploy and
 // Networking; functions keep no data.

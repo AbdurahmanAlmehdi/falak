@@ -16,6 +16,8 @@ export interface ServiceCardProps extends HTMLAttributes<HTMLDivElement> {
     selected?: boolean;
     /** Part of a multi-selection on the canvas (e.g. to group). */
     marked?: boolean;
+    /** A plain click on a volume chip (the canvas opens it in the panel); ⌘/Ctrl/⇧-click still follows its page link. */
+    onOpenVolume?: (volumeId: string) => void;
 }
 
 /** Host of a URL without the scheme ("https://shop.acme.com" → "shop.acme.com"). */
@@ -35,10 +37,11 @@ const LABEL_TONE: Record<string, string> = {
  * The canvas card of a service (§4): icon + name (+ runtime badges), the public domain (sites) or engine/server
  * (databases) underneath, and the live status at the bottom ("● Online", "● Deploying 64%") with server chips. A
  * service with persistent storage gets a strip of disks docked under the card: its volumes with used / limit, each
- * linking to its volume page (an engine's data dir, or a compose volume before the first deploy, has no page).
+ * linking to its volume page (an engine's data dir, or a compose volume before the first deploy, has no page); on the
+ * canvas a click opens it in the side panel instead.
  * Selected (panel open) = accent border; hover lifts the card (canvas CSS).
  */
-export function ServiceCard({ service, selected = false, marked = false, className, ...props }: ServiceCardProps) {
+export function ServiceCard({ service, selected = false, marked = false, onOpenVolume, className, ...props }: ServiceCardProps) {
     const detail = service.kind === 'site' ? (service.url ? host(service.url) : service.subtitle) : service.subtitle;
     const servers = service.kind === 'site' ? service.servers : [];
     const volumes = service.volumes ?? [];
@@ -101,7 +104,7 @@ export function ServiceCard({ service, selected = false, marked = false, classNa
                     data-testid="volume-strip"
                 >
                     {volumes.slice(0, 2).map((volume, index) => (
-                        <VolumeChip key={volume.id ?? `${volume.name}-${index}`} volume={volume} />
+                        <VolumeChip key={volume.id ?? `${volume.name}-${index}`} volume={volume} onOpen={onOpenVolume} />
                     ))}
                     {volumes.length > 2 && <span className="text-fg-faint text-2xs shrink-0 self-center">+{volumes.length - 2}</span>}
                 </div>
@@ -118,7 +121,7 @@ function usage(volume: CanvasVolume): string | null {
     return volume.detail;
 }
 
-function VolumeChip({ volume }: { volume: CanvasVolume }) {
+function VolumeChip({ volume, onOpen }: { volume: CanvasVolume; onOpen?: (volumeId: string) => void }) {
     const text = usage(volume);
     const full = volume.used_bytes !== null && volume.limit_bytes ? volume.used_bytes / volume.limit_bytes > 0.85 : false;
     const className = cn(
@@ -135,14 +138,19 @@ function VolumeChip({ volume }: { volume: CanvasVolume }) {
         </>
     );
 
-    // Opens the volume page; never starts a card drag or selects the card.
+    // Opens the volume (panel or page); never starts a card drag or selects the card.
     return volume.url ? (
         <a
             href={volume.url}
             title={title}
             className={className}
             data-testid="volume-chip"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+                event.stopPropagation();
+                if (!onOpen || !volume.id || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+                event.preventDefault();
+                onOpen(volume.id);
+            }}
             onPointerDown={(event) => event.stopPropagation()}
         >
             {content}

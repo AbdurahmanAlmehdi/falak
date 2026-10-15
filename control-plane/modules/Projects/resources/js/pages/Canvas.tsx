@@ -573,6 +573,16 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         renaming={renaming}
                         viewportKey={`${project.id}:${environment.id}`}
                         onOpen={(service, child) => openService(service, child ? 'services' : null)}
+                        onOpenVolume={
+                            shell.can('volumes.view')
+                                ? (service, volumeId) =>
+                                      navigate({
+                                          ...EMPTY_STACK,
+                                          base: { kind: service.kind, id: service.ref_id, tab: null, item: null },
+                                          layer: { id: 'volume', record: volumeId.toLowerCase(), tab: null },
+                                      })
+                                : undefined
+                        }
                         onPaneClick={() => {
                             if (routeRef.current.base) navigate(EMPTY_STACK);
                         }}

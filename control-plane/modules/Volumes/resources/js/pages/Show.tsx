@@ -43,7 +43,7 @@ import {
     type VolumeOperation,
 } from '../types';
 
-interface Props {
+export interface VolumeProps {
     volume: Volume;
     backups: VolumeBackup[];
     schedules: BackupSchedule[];
@@ -58,41 +58,25 @@ interface Props {
 
 type Dialogs = 'attach' | 'resize' | 'clone' | 'move' | 'delete' | null;
 
-/** /volumes/{id}: one volume — where it is mounted, its size, backups, copies, files and deletion. */
-export default function Show({
-    volume,
-    backups,
-    schedules,
-    operations,
-    storage_providers,
-    servers,
-    attachable_sites,
-    browsable,
-    download_max_bytes,
-    can,
-}: Props) {
-    const [dialog, setDialog] = useState<Dialogs>(null);
-    const [detaching, setDetaching] = useState<VolumeAttachment | null>(null);
-    const action = useVolumeAction();
-    const portable = volume.kind === 'docker' || volume.kind === 'sized';
-    const running =
+/** The canvas panel's tabs; the page shows them all, one after the other. */
+export type VolumeTab = 'overview' | 'backups' | 'files';
+
+/** Something is in progress: poll every few seconds instead of every minute. */
+export function volumeBusy({ volume, operations, backups }: Pick<VolumeProps, 'volume' | 'operations' | 'backups'>): boolean {
+    return (
         volume.status === 'pending' ||
         volume.status === 'deleting' ||
         operations.some((operation) => operation.status === 'running' || operation.status === 'pending') ||
-        backups.some((backup) => backup.status === 'pending');
+        backups.some((backup) => backup.status === 'pending')
+    );
+}
 
-    usePoll(running ? 3_000 : 60_000, { only: SHOW_RELOAD });
-
+/** /volumes/{id}: one volume — where it is mounted, its size, backups, copies, files and deletion. */
+export default function Show(props: VolumeProps) {
+    const { volume } = props;
     const backTo = volume.server ? `/servers/${volume.server.id}/volumes` : null;
-    // A field falak.yaml sets (/volumes/<key>/<field>) is read-only here; the server answers 422 to a change.
-    const managedField = (field: string) => !!volume.managed?.paths.some((path) => path.split('/').length === 4 && path.endsWith(`/${field}`));
-    const deleteBlocked = volume.managed
-        ? 'Declared in falak.yaml: remove it from the file (the file never deletes it on its own).'
-        : volume.protected
-          ? 'Protected volumes cannot be deleted: turn protection off first.'
-          : volume.attachments.length > 0
-            ? 'Detach it from its services first (or delete it with its service).'
-            : null;
+
+    usePoll(volumeBusy(props) ? 3_000 : 60_000, { only: SHOW_RELOAD });
 
     return (
         <AppShell
@@ -107,53 +91,89 @@ export default function Show({
             ]}
         >
             <Head title={`${volume.name} · Volume`} />
-            <div className="mx-auto grid w-full max-w-5xl gap-8">
-                <PageHeader
-                    title={
-                        <span className="flex items-center gap-2">
-                            <HardDrive className="text-fg-faint size-4" aria-hidden />
-                            <span className="font-mono">{volume.name}</span>
-                            {volume.protected && <Lock className="text-fg-faint size-3.5" aria-label="Protected" />}
-                            <ManagedBadge config={volume.managed} />
-                            <StatusBadge
-                                status={volumeStatus(volume)}
-                                label={volume.status_message && volume.status === 'active' ? 'Attention' : undefined}
-                            />
-                        </span>
-                    }
-                    description={`${kindLabel(volume.kind)} · ${volume.server?.name ?? 'every server of its site'}`}
-                    actions={
-                        can.manage && (
-                            <>
-                                {volume.kind === 'sized' && (
-                                    <Button
-                                        icon={<Expand />}
-                                        onClick={() => setDialog('resize')}
-                                        disabled={volume.status !== 'active' || managedField('size')}
-                                    >
-                                        Resize
-                                    </Button>
-                                )}
-                                {portable && (
-                                    <Button icon={<Copy />} onClick={() => setDialog('clone')} disabled={volume.status !== 'active'}>
-                                        Clone
-                                    </Button>
-                                )}
-                                {portable && !volume.compose && (
-                                    <Button
-                                        icon={<ArrowRightLeft />}
-                                        onClick={() => setDialog('move')}
-                                        disabled={volume.status !== 'active' || managedField('server')}
-                                    >
-                                        Move
-                                    </Button>
-                                )}
-                            </>
-                        )
-                    }
-                />
+            <VolumeDetail {...props} onDeleted={() => router.visit(backTo ?? '/servers')} />
+        </AppShell>
+    );
+}
 
-                {volume.status_message && (
+/**
+ * The volume page's content, also the canvas panel's volume layer: there `tab` picks one part (Overview with the
+ * actions, Backups, Files) and the panel header names the volume.
+ */
+export function VolumeDetail({
+    volume,
+    backups,
+    schedules,
+    operations,
+    storage_providers,
+    servers,
+    attachable_sites,
+    browsable,
+    download_max_bytes,
+    can,
+    tab,
+    onDeleted,
+}: VolumeProps & { tab?: VolumeTab; onDeleted: () => void }) {
+    const [dialog, setDialog] = useState<Dialogs>(null);
+    const [detaching, setDetaching] = useState<VolumeAttachment | null>(null);
+    const action = useVolumeAction();
+    const portable = volume.kind === 'docker' || volume.kind === 'sized';
+    const show = (part: VolumeTab) => tab === undefined || tab === part;
+    // A field falak.yaml sets (/volumes/<key>/<field>) is read-only here; the server answers 422 to a change.
+    const managedField = (field: string) => !!volume.managed?.paths.some((path) => path.split('/').length === 4 && path.endsWith(`/${field}`));
+    const deleteBlocked = volume.managed
+        ? 'Declared in falak.yaml: remove it from the file (the file never deletes it on its own).'
+        : volume.protected
+          ? 'Protected volumes cannot be deleted: turn protection off first.'
+          : volume.attachments.length > 0
+            ? 'Detach it from its services first (or delete it with its service).'
+            : null;
+
+    const actions = can.manage && (
+        <>
+            {volume.kind === 'sized' && (
+                <Button icon={<Expand />} onClick={() => setDialog('resize')} disabled={volume.status !== 'active' || managedField('size')}>
+                    Resize
+                </Button>
+            )}
+            {portable && (
+                <Button icon={<Copy />} onClick={() => setDialog('clone')} disabled={volume.status !== 'active'}>
+                    Clone
+                </Button>
+            )}
+            {portable && !volume.compose && (
+                <Button icon={<ArrowRightLeft />} onClick={() => setDialog('move')} disabled={volume.status !== 'active' || managedField('server')}>
+                    Move
+                </Button>
+            )}
+        </>
+    );
+
+    return (
+        <>
+            <div className={tab === undefined ? 'mx-auto grid w-full max-w-5xl gap-8' : 'grid gap-8'}>
+                {tab === undefined ? (
+                    <PageHeader
+                        title={
+                            <span className="flex items-center gap-2">
+                                <HardDrive className="text-fg-faint size-4" aria-hidden />
+                                <span className="font-mono">{volume.name}</span>
+                                {volume.protected && <Lock className="text-fg-faint size-3.5" aria-label="Protected" />}
+                                <ManagedBadge config={volume.managed} />
+                                <StatusBadge
+                                    status={volumeStatus(volume)}
+                                    label={volume.status_message && volume.status === 'active' ? 'Attention' : undefined}
+                                />
+                            </span>
+                        }
+                        description={`${kindLabel(volume.kind)} · ${volume.server?.name ?? 'every server of its site'}`}
+                        actions={actions}
+                    />
+                ) : (
+                    tab === 'overview' && can.manage && <div className="flex flex-wrap gap-2">{actions}</div>
+                )}
+
+                {show('overview') && volume.status_message && (
                     <Callout
                         tone={volume.status === 'failed' ? 'danger' : 'warning'}
                         title={volume.status === 'failed' ? 'The volume could not be created' : undefined}
@@ -162,131 +182,142 @@ export default function Show({
                     </Callout>
                 )}
 
-                <Section title="Overview">
-                    <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-center">
-                        <UsageBar volume={volume} className="max-w-sm" />
-                        {can.manage && (
-                            <label className="text-fg-muted flex items-center gap-2 text-sm">
-                                <Switch
-                                    checked={volume.protected}
-                                    disabled={action.busy || managedField('protected')}
-                                    onCheckedChange={(checked) =>
-                                        void action.run(
-                                            'PATCH',
-                                            `/volumes/${volume.id}`,
-                                            { protected: checked },
-                                            checked ? 'Volume protected' : 'Protection removed',
-                                        )
-                                    }
-                                />
-                                Protected
-                            </label>
-                        )}
-                    </div>
-                    <KeyValue
-                        items={[
-                            ...(volume.docker_name
-                                ? [{ label: 'Docker volume', value: volume.docker_name, mono: true, copy: volume.docker_name }]
-                                : []),
-                            ...(volume.host_path
-                                ? [
-                                      {
-                                          label: volume.kind === 'sized' ? 'Mountpoint' : 'Path',
-                                          value: volume.host_path,
-                                          mono: true,
-                                          copy: volume.host_path,
-                                      },
-                                  ]
-                                : []),
-                            ...(volume.compose
-                                ? [
-                                      {
-                                          label: 'Compose',
-                                          value: `${volume.compose.key}${volume.compose.external ? ' (external: never deleted by Falak)' : ''}`,
-                                      },
-                                  ]
-                                : []),
-                            { label: 'Usage measured', value: <RelativeTime value={volume.used_at} fallback="Not yet" /> },
-                            { label: 'Created', value: <RelativeTime value={volume.created_at} /> },
-                        ]}
-                    />
-                </Section>
+                {show('overview') && (
+                    <Section title="Overview">
+                        <div className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-center">
+                            <UsageBar volume={volume} className="max-w-sm" />
+                            {can.manage && (
+                                <label className="text-fg-muted flex items-center gap-2 text-sm">
+                                    <Switch
+                                        checked={volume.protected}
+                                        disabled={action.busy || managedField('protected')}
+                                        onCheckedChange={(checked) =>
+                                            void action.run(
+                                                'PATCH',
+                                                `/volumes/${volume.id}`,
+                                                { protected: checked },
+                                                checked ? 'Volume protected' : 'Protection removed',
+                                            )
+                                        }
+                                    />
+                                    Protected
+                                </label>
+                            )}
+                        </div>
+                        <KeyValue
+                            items={[
+                                ...(volume.docker_name
+                                    ? [{ label: 'Docker volume', value: volume.docker_name, mono: true, copy: volume.docker_name }]
+                                    : []),
+                                ...(volume.host_path
+                                    ? [
+                                          {
+                                              label: volume.kind === 'sized' ? 'Mountpoint' : 'Path',
+                                              value: volume.host_path,
+                                              mono: true,
+                                              copy: volume.host_path,
+                                          },
+                                      ]
+                                    : []),
+                                ...(volume.compose
+                                    ? [
+                                          {
+                                              label: 'Compose',
+                                              value: `${volume.compose.key}${volume.compose.external ? ' (external: never deleted by Falak)' : ''}`,
+                                          },
+                                      ]
+                                    : []),
+                                { label: 'Usage measured', value: <RelativeTime value={volume.used_at} fallback="Not yet" /> },
+                                { label: 'Created', value: <RelativeTime value={volume.created_at} /> },
+                            ]}
+                        />
+                    </Section>
+                )}
 
-                <Section
-                    title="Attached to"
-                    description="Services that mount this volume. Attaching or detaching redeploys the service."
-                    bare
-                    aside={
-                        can.manage &&
-                        attachable_sites.length > 0 && (
-                            <Button size="sm" icon={<Plus />} onClick={() => setDialog('attach')}>
-                                Attach
-                            </Button>
-                        )
-                    }
-                >
-                    <DataTable<VolumeAttachment>
-                        label="Attachments"
-                        rows={volume.attachments}
-                        rowKey={(row) => row.id}
-                        empty={{ icon: <Link2 />, title: 'Not attached', description: 'Attach it to a container service to mount it.', size: 'sm' }}
-                        columns={[
-                            {
-                                id: 'service',
-                                header: 'Service',
-                                cell: (row) =>
-                                    row.url ? (
-                                        <Link href={row.url} className="hover:underline">
-                                            {row.name}
-                                        </Link>
-                                    ) : (
-                                        row.name
-                                    ),
-                            },
-                            {
-                                id: 'path',
-                                header: volume.kind === 'shared_path' ? 'Path in the release' : 'Mount path',
-                                cell: (row) => (
-                                    <span className="flex items-center gap-2">
-                                        <span className="font-mono text-xs">{row.mount_path}</span>
-                                        {row.read_only && <Tag tone="faint">read-only</Tag>}
-                                    </span>
-                                ),
-                            },
-                        ]}
-                        rowActions={
-                            can.manage
-                                ? (row) => [
-                                      row.detachable && volume.managed
-                                          ? { label: 'Mounted by falak.yaml', disabled: true }
-                                          : row.detachable
-                                            ? { label: 'Detach', icon: <Unlink />, danger: true, onSelect: () => setDetaching(row) }
-                                            : {
-                                                  label: row.type === 'compose_service' ? 'Set by the compose file' : 'Kept by the database',
-                                                  disabled: true,
-                                              },
-                                  ]
-                                : undefined
+                {show('overview') && (
+                    <Section
+                        title="Attached to"
+                        description="Services that mount this volume. Attaching or detaching redeploys the service."
+                        bare
+                        aside={
+                            can.manage &&
+                            attachable_sites.length > 0 && (
+                                <Button size="sm" icon={<Plus />} onClick={() => setDialog('attach')}>
+                                    Attach
+                                </Button>
+                            )
                         }
+                    >
+                        <DataTable<VolumeAttachment>
+                            label="Attachments"
+                            rows={volume.attachments}
+                            rowKey={(row) => row.id}
+                            empty={{
+                                icon: <Link2 />,
+                                title: 'Not attached',
+                                description: 'Attach it to a container service to mount it.',
+                                size: 'sm',
+                            }}
+                            columns={[
+                                {
+                                    id: 'service',
+                                    header: 'Service',
+                                    cell: (row) =>
+                                        row.url ? (
+                                            <Link href={row.url} className="hover:underline">
+                                                {row.name}
+                                            </Link>
+                                        ) : (
+                                            row.name
+                                        ),
+                                },
+                                {
+                                    id: 'path',
+                                    header: volume.kind === 'shared_path' ? 'Path in the release' : 'Mount path',
+                                    cell: (row) => (
+                                        <span className="flex items-center gap-2">
+                                            <span className="font-mono text-xs">{row.mount_path}</span>
+                                            {row.read_only && <Tag tone="faint">read-only</Tag>}
+                                        </span>
+                                    ),
+                                },
+                            ]}
+                            rowActions={
+                                can.manage
+                                    ? (row) => [
+                                          row.detachable && volume.managed
+                                              ? { label: 'Mounted by falak.yaml', disabled: true }
+                                              : row.detachable
+                                                ? { label: 'Detach', icon: <Unlink />, danger: true, onSelect: () => setDetaching(row) }
+                                                : {
+                                                      label: row.type === 'compose_service' ? 'Set by the compose file' : 'Kept by the database',
+                                                      disabled: true,
+                                                  },
+                                      ]
+                                    : undefined
+                            }
+                        />
+                    </Section>
+                )}
+
+                {show('backups') && (
+                    <BackupsSection
+                        volume={volume}
+                        backups={backups}
+                        schedules={schedules}
+                        providers={storage_providers}
+                        servers={servers}
+                        canManage={can.manage}
                     />
-                </Section>
+                )}
 
-                <BackupsSection
-                    volume={volume}
-                    backups={backups}
-                    schedules={schedules}
-                    providers={storage_providers}
-                    servers={servers}
-                    canManage={can.manage}
-                />
-
-                {can.browse && browsable && volume.status !== 'pending' && (
+                {show('files') && can.browse && browsable && volume.status !== 'pending' && (
                     <FileBrowser volumeId={volume.id} providers={storage_providers} maxBytes={download_max_bytes} />
                 )}
 
-                {operations.length > 0 && <OperationsSection operations={operations} />}
+                {show('overview') && operations.length > 0 && <OperationsSection operations={operations} />}
 
-                {can.manage && (
+                {show('overview') && can.manage && (
                     <Section title="Danger zone" tone="danger">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <p className="text-fg-muted text-sm">
@@ -381,13 +412,13 @@ export default function Show({
                     try {
                         await requestJson(`/volumes/${volume.id}`, 'DELETE', { confirm });
                         setDialog(null);
-                        router.visit(backTo ?? '/servers');
+                        onDeleted();
                     } catch (error) {
                         action.setErrors(error instanceof HttpError ? error.errors : { volume: errorMessage(error) });
                     }
                 }}
             />
-        </AppShell>
+        </>
     );
 }
 
