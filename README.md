@@ -218,6 +218,11 @@ The guide to the file, every field, approvals, drift and the security model: [`d
 ### API
 Sanctum bearer tokens scoped to one organization. Endpoints and payloads: [`docs/API.md`](docs/API.md).
 
+### AI agents
+An Agent Skill ([`skills/falak`](skills/falak)) teaches Claude Code, Codex and other `SKILL.md` agents to operate
+Falak through the CLI, `falak.yaml` and the API, and to ask before destructive actions. `falak skill install` writes
+it to `~/.claude/skills/falak` (`--project`, `--dir`). Install and least-privilege tokens: [`docs/AI_SKILL.md`](docs/AI_SKILL.md).
+
 ### Cloudflare
 Connect a Cloudflare token in **Settings → Integrations → Cloudflare** and Falak manages the DNS of your zones:
 records follow your domains, new services get names under your zone, and services work behind the orange cloud

@@ -1,0 +1,36 @@
+# Falak
+
+> Falak (falak.sh) is a self-hosted, open-source deployment platform in the spirit of Railway and Laravel Forge: a Laravel control plane (web panel and REST API), a Go agent on each server, and the `falak` CLI. It deploys PHP (FrankenPHP, PHP-FPM, Laravel), Node, Bun, Deno, static and Docker apps, Docker Compose stacks and one-click templates, scale-to-zero Cloud Functions, and PostgreSQL/MySQL/MariaDB/Redis/Valkey containers with encrypted backups, onto your own servers. Projects can be described as code in `falak.yaml`.
+
+Key facts for agents:
+
+- CLI: `falak` (install: `curl -fsSL https://falak.sh/install-cli.sh | sh`). Auth: `falak login --url https://<panel>` (browser device flow) or `FALAK_URL` + `FALAK_TOKEN` (an API token from Settings → API tokens, scoped by abilities to one organization). Add `--json` for machine-readable output.
+- Exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version, 5 invalid falak.yaml, 6 waits for an approval, 7 drifted.
+- Config as code: `falak.yaml` (schema `https://falak.sh/schema/v1.json`); `falak init`, `falak validate`, `falak plan`, `falak apply --wait`. Secrets are referenced as `${{ secrets.NAME }}` and set with `falak secret set NAME` (value on stdin), never written in the file.
+- API: `/api/v1`, `Authorization: Bearer <token>`, `Accept: application/json`, responses wrapped in `{"data": ...}`.
+- Destructive actions (database/site/server deletion, `apply --allow-destroy`, approving risky runs, restores, secret rotation, `env push`) need a human's confirmation.
+
+## Agent skill
+
+- [SKILL.md](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/SKILL.md): the Agent Skill (Claude Code, Codex and other SKILL.md harnesses) — core workflows and ground rules
+- [CLI reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/cli.md): every `falak` command, flag and exit code
+- [falak.yaml reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/config.md): units, environments, references, risky changes
+- [API reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/api.md): tokens, abilities and the main `/api/v1` endpoints
+- [Workflows](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/workflows.md): deploy from a repo or a template, databases, functions, secrets, domains, logs, consoles, network tools
+- [Safety](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/safety.md): what needs a human's confirmation, secret handling, least-privilege tokens
+
+## Docs
+
+- [Installing the AI skill](https://github.com/OthmanHaba/falak/blob/main/docs/AI_SKILL.md): install the skill and authenticate an agent
+- [Config as code](https://github.com/OthmanHaba/falak/blob/main/docs/CONFIG_AS_CODE.md): the full falak.yaml guide
+- [HTTP API](https://github.com/OthmanHaba/falak/blob/main/docs/API.md): every endpoint and payload
+- [Cloud Functions](https://github.com/OthmanHaba/falak/blob/main/docs/FUNCTIONS.md): runtimes, versions, schedules, access
+- [Compose and templates](https://github.com/OthmanHaba/falak/blob/main/docs/COMPOSE_TEMPLATES.md): Docker Compose sites and the template catalog
+- [Backups](https://github.com/OthmanHaba/falak/blob/main/docs/BACKUPS.md): encryption, keys, restore drills, point-in-time recovery
+
+## Optional
+
+- [Install](https://github.com/OthmanHaba/falak/blob/main/docs/INSTALL.md): production install of the control plane
+- [Disaster recovery](https://github.com/OthmanHaba/falak/blob/main/docs/DISASTER_RECOVERY.md): control-plane backups, the emergency kit, drills
+- [Cloudflare](https://github.com/OthmanHaba/falak/blob/main/docs/CLOUDFLARE.md): managed DNS zones, proxying, rate limits
+- [Secret providers](https://github.com/OthmanHaba/falak/blob/main/docs/SECRET_PROVIDERS.md): Vault, AWS, 1Password, Doppler, Infisical, webhook
