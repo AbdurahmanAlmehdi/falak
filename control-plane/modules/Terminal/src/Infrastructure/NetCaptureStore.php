@@ -16,6 +16,9 @@ use Illuminate\Support\Facades\Storage;
  */
 final class NetCaptureStore
 {
+    /** Aead::seal adds a 12-byte nonce and a 16-byte tag to every chunk. */
+    private const SEAL_OVERHEAD = 12 + 16;
+
     public function __construct(private readonly Sealer $sealer) {}
 
     /** A new sealed data key for a capture (kept on its row). */
@@ -68,6 +71,29 @@ final class NetCaptureStore
         });
 
         return hash_final($hash);
+    }
+
+    /**
+     * Whether the stored chunks cover exactly size_bytes: each one starts where the previous ended (its plaintext is its
+     * sealed size minus the nonce and tag), the first at 0, the last ending at size_bytes.
+     */
+    public function complete(NetCapture $capture): bool
+    {
+        if ($capture->size_bytes === null) {
+            return false;
+        }
+
+        $next = 0;
+
+        foreach ($this->offsets($capture->id) as $offset) {
+            if ($offset !== $next) {
+                return false;
+            }
+
+            $next += $this->disk()->size(self::path($capture->id, $offset)) - self::SEAL_OVERHEAD;
+        }
+
+        return $next === $capture->size_bytes;
     }
 
     public function delete(string $captureId): void

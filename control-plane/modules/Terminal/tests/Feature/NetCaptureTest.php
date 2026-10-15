@@ -122,14 +122,14 @@ it('starts a capture on a server: payload, row, audit entry', function () {
     $command = $this->agents->last('net.capture');
     expect($command['payload'])->toBe([
         'capture_id' => $capture->id, 'interface' => 'wireguard', 'filter' => ['host' => '10.0.0.0/24', 'protocol' => 'tcp', 'port' => 5432],
-        'snaplen' => 128, 'duration_s' => 10, 'max_bytes' => 5 * 1024 * 1024,
+        'snaplen' => 96, 'duration_s' => 10, 'max_bytes' => 5 * 1024 * 1024,
     ])->and($command['timeout'])->toBe(10 + StartNetCapture::COMMAND_GRACE_SECONDS)
         ->and($response->json('data'))->toMatchArray(['id' => $capture->id, 'status' => 'queued', 'server_name' => 'main-1', 'download_url' => null])
         ->and($response->json('data'))->not->toHaveKey('data_key')
         ->and($capture->expires_at->diffInHours(now(), true))->toBeGreaterThan(23.9);
 
     $audit = AuditEntry::query()->where('action', 'network.capture_started')->sole();
-    expect($audit->context)->toMatchArray(['target_type' => 'server', 'server_name' => 'main-1', 'interface' => 'wireguard', 'duration_s' => 10, 'snaplen' => 128]);
+    expect($audit->context)->toMatchArray(['target_type' => 'server', 'server_name' => 'main-1', 'interface' => 'wireguard', 'duration_s' => 10, 'snaplen' => 96]);
 });
 
 it('captures in a container for docker sites and databases, never with an interface', function () {
@@ -167,8 +167,8 @@ it('needs the acknowledgement and validates like the agent', function (array $in
 ]);
 
 it('builds payloads with defaults', function () {
-    expect(NetCaptureSpec::payload([], false))->toBe(['interface' => 'default', 'snaplen' => 128, 'duration_s' => 30, 'max_bytes' => 20 * 1024 * 1024])
-        ->and(NetCaptureSpec::payload(['filter' => ['host' => '2001:db8::/32', 'direction' => 'in']], true))->toBe(['filter' => ['host' => '2001:db8::/32', 'direction' => 'in'], 'snaplen' => 128, 'duration_s' => 30, 'max_bytes' => 20 * 1024 * 1024])
+    expect(NetCaptureSpec::payload([], false))->toBe(['interface' => 'default', 'snaplen' => 96, 'duration_s' => 30, 'max_bytes' => 20 * 1024 * 1024])
+        ->and(NetCaptureSpec::payload(['filter' => ['host' => '2001:db8::/32', 'direction' => 'in']], true))->toBe(['filter' => ['host' => '2001:db8::/32', 'direction' => 'in'], 'snaplen' => 96, 'duration_s' => 30, 'max_bytes' => 20 * 1024 * 1024])
         ->and(fn () => NetCaptureSpec::payload(['filter' => ['host' => 'fe80::1%eth0']], false))->toThrow(ValidationException::class);
 });
 
@@ -353,4 +353,39 @@ it('expires captures after 24 hours and fails stuck ones', function () {
     $this->travel(31)->days();
     app()->call([new SweepTerminalSessions, 'handle']);
     expect(NetCapture::query()->count())->toBe(0);
+});
+
+// ---- review fixes -------------------------------------------------------------------------------------------
+
+it('validates host filters exactly like the agent (shared corpus)', function () {
+    $corpus = json_decode((string) file_get_contents(dirname(base_path()).'/contracts/agent-protocol/testdata/capture-host-filters.json'), true);
+
+    foreach ($corpus['valid'] as $host) {
+        expect(NetCaptureSpec::validHostFilter($host))->toBeTrue("{$host} refused");
+    }
+    foreach ($corpus['invalid'] as $host) {
+        expect(NetCaptureSpec::validHostFilter($host))->toBeFalse("{$host} accepted");
+    }
+});
+
+it('deletes uploaded chunks when a cancel ends the capture, and audits a cancel once', function () {
+    $capture = capture_start();
+    capture_upload($capture, 0, 'abcd', capture_pcap())->assertOk();
+    expect(Storage::disk('local')->allFiles("net-captures/{$capture->id}"))->not->toBe([]);
+
+    $this->postJson("/net-captures/{$capture->id}/cancel")->assertOk()->assertJsonPath('data.status', 'cancelled');
+    $this->postJson("/net-captures/{$capture->id}/cancel")->assertOk();
+
+    expect(Storage::disk('local')->allFiles("net-captures/{$capture->id}"))->toBe([])
+        ->and(AuditEntry::query()->where('action', 'network.capture_cancelled')->count())->toBe(1);
+});
+
+it('refuses to stream a stored file with a missing chunk', function () {
+    $capture = capture_start();
+    capture_upload_all($capture, capture_pcap());
+    $this->get("/net-captures/{$capture->id}/download")->assertOk();
+
+    Storage::disk('local')->delete(NetCaptureStore::path($capture->id, 0));
+    $this->get("/net-captures/{$capture->id}/download")->assertStatus(410);
+    expect(AuditEntry::query()->where('action', 'network.capture_downloaded')->count())->toBe(1);
 });

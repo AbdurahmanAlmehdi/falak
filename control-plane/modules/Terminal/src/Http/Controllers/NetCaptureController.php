@@ -15,6 +15,7 @@ use Falak\Terminal\Domain\Models\TerminalSession;
 use Falak\Terminal\Infrastructure\NetCaptureStore;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -104,21 +105,32 @@ final class NetCaptureController extends Controller
     }
 
     /** POST net-captures/{capture}/cancel: the agent stops at its next progress report (or never gets the command). */
-    public function cancel(Request $request, string $capture, AgentGateway $agents): JsonResponse
+    public function cancel(Request $request, string $capture, AgentGateway $agents, NetCaptureStore $store): JsonResponse
     {
-        $model = $this->find($request, $capture);
+        $id = $this->find($request, $capture)->id;
 
-        if ($model->isActive() && $model->cancel_requested_at === null) {
+        // Under the row lock the upload handler takes too: a chunk can't land between the check and the cancel, and two
+        // cancels can't both audit.
+        $model = DB::transaction(function () use ($id, $agents, $store) {
+            $model = NetCapture::query()->lockForUpdate()->findOrFail($id);
+
+            if (! $model->isActive() || $model->cancel_requested_at !== null) {
+                return $model;
+            }
+
             $model->forceFill(['cancel_requested_at' => now()])->save();
 
             if ($model->command_id !== null && $agents->cancel($model->command_id)) {
+                $store->delete($model->id);
                 $model->forceFill(['status' => NetCapture::CANCELLED, 'finished_at' => now()])->save();
             }
 
             $this->audit->record('network.capture_cancelled', 'net_capture', $model->id, [
                 'target_name' => $model->target_name, 'server_name' => $model->server_name,
             ], $model->organization_id);
-        }
+
+            return $model;
+        });
 
         return response()->json(['data' => $model->toPanel()]);
     }
@@ -130,6 +142,8 @@ final class NetCaptureController extends Controller
 
         abort_if($model->status === NetCapture::EXPIRED || $model->expires_at->isPast(), 410, 'This capture expired; captures are kept 24 hours.');
         abort_unless($model->status === NetCapture::READY, 409, 'The capture is not ready.');
+        // Never stream a file with a hole or a tail missing (a lost chunk on the disk): the response would look complete.
+        abort_unless($store->complete($model), 410, 'The stored capture file is incomplete; start a new capture.');
 
         $this->audit->record('network.capture_downloaded', 'net_capture', $model->id, [
             'target_name' => $model->target_name, 'server_name' => $model->server_name, 'size_bytes' => $model->size_bytes, 'sha256' => $model->sha256,

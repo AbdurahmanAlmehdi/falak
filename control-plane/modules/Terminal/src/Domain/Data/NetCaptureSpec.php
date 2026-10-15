@@ -18,7 +18,8 @@ final class NetCaptureSpec
 
     public const DIRECTIONS = ['in', 'out', 'both'];
 
-    public const HEADERS_SNAPLEN = 128;
+    /** Packet headers (may include the first bytes of a payload). */
+    public const HEADERS_SNAPLEN = 96;
 
     public const FULL_SNAPLEN = 262144;
 
@@ -126,7 +127,9 @@ final class NetCaptureSpec
 
         $max = str_contains($ip, ':') ? 128 : 32;
 
-        return ctype_digit($bits) && strlen($bits) <= 3 && (int) $bits <= $max;
+        // No leading zeros ("/024", "/00"), like Go's netip.ParsePrefix: both sides accept exactly the same strings
+        // (contracts/agent-protocol/testdata/capture-host-filters.json).
+        return preg_match('/^(0|[1-9][0-9]{0,2})\z/', $bits) === 1 && (int) $bits <= $max;
     }
 
     private static function integer(mixed $value, int $min, int $max, string $field, string $message): int

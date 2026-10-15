@@ -136,7 +136,7 @@ export function NetCapturePanel({ endpoint, target, inContainer, extra }: NetCap
                         ]}
                     />
                 </Field>
-                <Field label="Capture full packets (default: the first 128 bytes, headers only)" inline>
+                <Field label="Capture full packets (default: packet headers, which may include the first bytes of a payload)" inline>
                     <Checkbox checked={form.full_packets} onCheckedChange={(checked) => set('full_packets', checked === true)} />
                 </Field>
                 <div className="flex items-end gap-3 sm:col-span-2">

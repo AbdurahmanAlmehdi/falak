@@ -17,7 +17,7 @@ second, entered as `/proc/self/fd/3` by `nsenter`).
 | `interface` | servers and native sites: `default` (the default route's interface), `wireguard` (the first WireGuard interface), `docker` (`docker0`). Containers always capture on `any` (every interface of the container's namespace, loopback included) | `default` |
 | `duration_s` | 1–60 | 30 |
 | `max_bytes` | 1 MiB–100 MiB (pcap file size) | 20 MiB |
-| `snaplen` | `128` (headers only) or `0` = full packets (262144) | 128 |
+| `snaplen` | `96`: packet headers (may include the first bytes of a payload), or full packets (262144) | 96 |
 | `filter.host` | an IP or a CIDR (never a name: tcpdump would resolve it with the host's resolver, in a container too) | |
 | `filter.port` | 1–65535 (not with `icmp`) | |
 | `filter.protocol` | `tcp`, `udp`, `icmp` (`icmp or icmp6`) | |
@@ -29,8 +29,12 @@ tcpdump as one argv element after `--`. Admins don't get a raw-BPF box: the stru
 panel is for (one peer, one port, one protocol), and a raw expression would be one more parser to trust. A capture
 without a filter takes everything on the interface.
 
-**Headers only by default.** A snap length of 128 bytes keeps L2–L4 headers and the start of the payload (enough for
-TLS SNI and most HTTP request lines, not bodies). Full packets are a checkbox with its own warning.
+**Packet headers by default (may include the first bytes of a payload).** A snap length of 96 bytes keeps the L2–L4
+headers (Ethernet or Linux cooked 14–20, IPv4 20–60 or IPv6 40, TCP 20–60, UDP 8). What's left of the 96 bytes after
+the headers, often a few dozen bytes, is the start of the payload: the beginning of an HTTP request line (with query
+tokens), a DNS name, the start of a TLS ClientHello. The panel, the CLI and these docs call it "packet headers (may
+include the first bytes of a payload)", never "headers only". Full packets are an explicit checkbox (`--full`) with its
+own warning.
 
 ## Agent: `net.capture` (feature `net.capture`)
 
@@ -42,7 +46,7 @@ TLS SNI and most HTTP request lines, not bodies). Full packets are a checkbox wi
   "interface": "default",
   "container": { "labels": { "falak.site": "shop" } },
   "filter": { "host": "10.0.0.5", "port": 443, "protocol": "tcp", "direction": "both" },
-  "snaplen": 128,
+  "snaplen": 96,
   "duration_s": 30,
   "max_bytes": 20971520
 }
