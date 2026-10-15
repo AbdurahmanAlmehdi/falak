@@ -104,7 +104,8 @@ func TestAuthPatternsResistFraming(t *testing.T) {
 func TestParseJournal(t *testing.T) {
 	raw, _ := os.ReadFile("testdata/journal.json")
 	evs, cursor := ParseJournal(raw, time.Now())
-	if cursor != "s=a;i=6" || len(evs) != 4 {
+	// The forged entry (`logger -t sshd`, _COMM=logger) is not an event.
+	if cursor != "s=a;i=7" || len(evs) != 4 {
 		t.Fatalf("%q %+v", cursor, evs)
 	}
 	if evs[0].Addr.String() != "2001:db8::bad" || !evs[0].Invalid || evs[0].At.Unix() != 1760522400 || evs[0].PID != 901 {

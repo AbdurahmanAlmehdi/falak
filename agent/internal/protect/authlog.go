@@ -187,7 +187,11 @@ type journalEntry struct {
 	Cursor   string          `json:"__CURSOR"`
 	Realtime string          `json:"__REALTIME_TIMESTAMP"`
 	PID      string          `json:"_PID"`
+	Comm     string          `json:"_COMM"`
 }
+
+// sshdComm are the trusted process names of sshd's entries (journald's _COMM).
+var sshdComm = map[string]bool{"sshd": true, "sshd-session": true, "sshd-auth": true}
 
 // ParseJournal reads `journalctl -o json` output: the events and the last cursor.
 func ParseJournal(out []byte, now time.Time) ([]AuthEvent, string) {
@@ -206,6 +210,10 @@ func ParseJournal(out []byte, now time.Time) ([]AuthEvent, string) {
 		}
 		if e.Cursor != "" {
 			cursor = e.Cursor
+		}
+		// Defense in depth (journalctl already matches _COMM): another program's entry, e.g. `logger -t sshd`.
+		if e.Comm != "" && !sshdComm[e.Comm] {
+			continue
 		}
 		ev, ok := ParseAuthMessage(journalMessage(e.Message))
 		if !ok {
@@ -272,7 +280,9 @@ func (r *authReader) Read(ctx context.Context) ([]AuthEvent, string) {
 }
 
 func (r *authReader) readJournal(ctx context.Context) ([]AuthEvent, bool) {
-	args := []string{"-t", "sshd", "-t", "sshd-session", "-t", "sshd-auth", "-o", "json", "--no-pager", "-q", "-n", strconv.Itoa(maxJournal)}
+	// _COMM is set by journald from the kernel (the process name), unlike SYSLOG_IDENTIFIER (-t): `logger -t sshd`
+	// from any local user cannot forge an entry. Matches of one field are ORed.
+	args := []string{"_COMM=sshd", "_COMM=sshd-session", "_COMM=sshd-auth", "-o", "json", "--no-pager", "-q", "-n", strconv.Itoa(maxJournal)}
 	if r.cursor != "" {
 		args = append(args, "--after-cursor", r.cursor)
 	} else {

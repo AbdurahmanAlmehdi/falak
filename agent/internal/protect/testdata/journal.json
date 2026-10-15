@@ -5,3 +5,4 @@
 not json
 {"__CURSOR":"s=a;i=5","__REALTIME_TIMESTAMP":"1760522404000000","_PID":"904","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Server listening on :: port 22."}
 {"__CURSOR":"s=a;i=6","__REALTIME_TIMESTAMP":"1760522405000000","_PID":"902","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 1 ssh2"}
+{"__CURSOR":"s=a;i=7","__REALTIME_TIMESTAMP":"1760522406000000","_PID":"905","_COMM":"logger","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Invalid user x from 192.0.2.66 port 1"}

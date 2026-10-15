@@ -49,7 +49,7 @@
     },
     "never_block": {
       "type": "array",
-      "maxItems": 1000,
+      "maxItems": 5000,
       "items": {
         "type": "string",
         "maxLength": 43,

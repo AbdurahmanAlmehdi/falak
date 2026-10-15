@@ -24,6 +24,11 @@ final class ProtectionGuards
     /** Blocked only when confirmed: Docker networks, load balancers and peers live there. */
     private const PRIVATE = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', 'fc00::/7'];
 
+    /** never_block's size (the agent and the schema accept 5,000). */
+    public const NEVER_BLOCK_MAX = 5000;
+
+    private const MEMBER = 'an address a member used the panel from';
+
     /** @var array<string, list<array{0: Cidr, 1: string}>> per organization, for one request / job */
     private array $memo = [];
 
@@ -107,16 +112,24 @@ final class ProtectionGuards
      */
     public function neverBlock(string $organizationId): array
     {
-        $out = array_map(fn (Cidr $cidr) => (string) $cidr, $this->controlPlane());
+        // The control plane, the servers and the private networks are never cut; members' recent addresses fill the
+        // rest of the list (most recent first) up to its limit.
+        $core = array_map(fn (Cidr $cidr) => (string) $cidr, $this->controlPlane());
+        $members = [];
 
-        foreach ($this->organization($organizationId) as [$cidr]) {
-            $out[] = (string) $cidr;
+        foreach ($this->organization($organizationId) as [$cidr, $what]) {
+            if ($what === self::MEMBER) {
+                $members[] = (string) $cidr;
+            } else {
+                $core[] = (string) $cidr;
+            }
         }
 
-        $out = array_values(array_unique($out));
-        sort($out);
+        $core = array_values(array_unique($core));
+        sort($core);
+        $members = array_values(array_diff(array_unique($members), $core));
 
-        return array_slice($out, 0, 1000);
+        return [...$core, ...array_slice($members, 0, max(0, self::NEVER_BLOCK_MAX - count($core)))];
     }
 
     /**
@@ -155,7 +168,7 @@ final class ProtectionGuards
 
         foreach ($this->organizations->recentMemberAddresses($organizationId, now()->subDays($days), 500) as $address) {
             if (($cidr = Cidr::fromAddress($address)) !== null) {
-                $out[] = [$cidr, 'an address a member used the panel from'];
+                $out[] = [$cidr, self::MEMBER];
             }
         }
 

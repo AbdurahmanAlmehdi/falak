@@ -213,3 +213,13 @@ it('logs configured control-plane entries that are not addresses', function () {
     expect(array_map('strval', app(ProtectionGuards::class)->controlPlane()))->toBe(['198.51.100.200']);
     Log::shouldHaveReceived('warning')->twice();
 });
+
+it('never cuts the control plane or the servers from never_block: members\' addresses come last', function () {
+    [$teammate] = memberOf($this->organization, Role::Viewer);
+    DB::table('sessions')->insert(['id' => Str::random(40), 'user_id' => $teammate->id, 'ip_address' => '1.1.1.1', 'user_agent' => 'x', 'payload' => '', 'last_activity' => now()->getTimestamp()]);
+
+    $list = app(ProtectionGuards::class)->neverBlock($this->organization->id);
+    expect($list)->toContain('192.0.2.10', '198.51.100.200')
+        ->and(array_slice($list, -1))->toBe(['1.1.1.1'])
+        ->and(array_slice($list, 0, -1))->toBe(collect(array_slice($list, 0, -1))->sort()->values()->all());
+});

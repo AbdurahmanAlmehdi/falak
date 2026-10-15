@@ -22,7 +22,7 @@ import (
 // Limits of net.protection.apply (the schema has the same).
 const (
 	MaxBlocks     = 10000
-	MaxNeverBlock = 1000
+	MaxNeverBlock = 5000
 	// An element whose expiry moved by more than this is re-added (its counter restarts).
 	expirySlack = 60
 	// Elements per nft call.
