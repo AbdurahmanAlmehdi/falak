@@ -78,6 +78,15 @@ it('never gives an isolated site a unix user in Falak\'s falak- namespace (Redis
     }
 });
 
+it('gives a PHP site without a version the newest one installed on all its servers', function () {
+    $a = sites_server($this->organization->id, php: ['8.3', '8.4'], phpRuntime: 'fpm');
+    $b = sites_server($this->organization->id, php: ['8.2', '8.3'], phpRuntime: 'fpm');
+
+    $this->post('/sites', sites_input([$a->id, $b->id], ['runtime' => 'php-fpm', 'php_version' => null, 'name' => 'Picker']))->assertSessionHasNoErrors();
+
+    expect(Site::query()->where('name', 'Picker')->value('php_version'))->toBe('8.3');
+});
+
 it('prepares isolated php-fpm sites: unix user, then the FPM pool', function () {
     $server = sites_server($this->organization->id, php: ['8.3', '8.4'], phpRuntime: 'fpm');
 

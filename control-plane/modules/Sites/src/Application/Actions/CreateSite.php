@@ -126,14 +126,13 @@ final class CreateSite
         $preset = Preset::for($framework);
         $runtime = isset($data['runtime']) ? SiteRuntime::from((string) $data['runtime']) : $preset->defaultRuntime();
         $buildMode = isset($data['build_mode']) ? BuildMode::from((string) $data['build_mode']) : $preset->defaultBuildMode($runtime);
-        $phpVersion = $runtime->isPhp() ? (string) ($data['php_version'] ?? '') : null;
-
-        if ($runtime->isPhp() && $phpVersion === '') {
-            throw ValidationException::withMessages(['php_version' => 'Pick a PHP version.']);
-        }
-
         /** @var list<string> $serverIds */
         $serverIds = array_values(array_unique(array_map('strval', (array) ($data['server_ids'] ?? []))));
+
+        $phpVersion = $runtime->isPhp() ? (string) ($data['php_version'] ?? '') : null;
+        if ($phpVersion === '') {
+            $phpVersion = $this->rules->defaultPhpVersion($organizationId, $serverIds);
+        }
         $leaderId = (string) ($data['leader_server_id'] ?? $serverIds[0] ?? '');
 
         if ($serverIds !== [] && ! in_array($leaderId, $serverIds, true)) {

@@ -72,6 +72,27 @@ final class SiteRules
         return $servers;
     }
 
+    /**
+     * The PHP version a site gets when the client sent none (the canvas Create picker): the newest version installed
+     * on every given server, else the newest Falak supports.
+     *
+     * @param  list<string>  $serverIds
+     */
+    public function defaultPhpVersion(string $organizationId, array $serverIds): string
+    {
+        $supported = array_values((array) config('sites.php_versions'));
+        $common = $supported;
+
+        foreach ($serverIds as $serverId) {
+            $server = $this->servers->find($serverId);
+            if ($server !== null && $server->organizationId === $organizationId && $server->phpVersions !== []) {
+                $common = array_values(array_intersect($common, $server->phpVersions));
+            }
+        }
+
+        return (string) (end($common) ?: end($supported));
+    }
+
     public function runtimeSupported(ServerData $server, SiteRuntime $runtime, ?string $phpVersion, string $field = 'server_ids'): void
     {
         $problem = $this->runtimeProblem($server, $runtime, $phpVersion);
