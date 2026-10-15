@@ -1,0 +1,25 @@
+name: Odoo
+slug: odoo
+version: 1.0.0
+description: Open-source ERP and CRM — sales, invoicing, inventory, accounting and dozens of business apps.
+category: business
+icon: odoo
+docs: https://hub.docker.com/_/odoo
+stateful: true
+min_memory_mb: 2048
+popular: true
+tags: [erp, crm, accounting, inventory]
+public:
+  - service: odoo
+    port: 8069
+    health_check_path: /web/health
+inputs:
+  - key: ODOO_MASTER_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Master password
+    description: Protects the database manager; Odoo asks for it when you create the first database.
+  - key: POSTGRES_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password

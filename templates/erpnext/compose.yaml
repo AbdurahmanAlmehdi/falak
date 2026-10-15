@@ -1,0 +1,238 @@
+# Mirrors frappe/frappe_docker pwd.yml (ERPNext v16.51.1, MariaDB 11.8). Its one-shot jobs (configurator,
+# create-site) run their step and then stay up idle with a healthcheck on a marker: Falak deploys with
+# `docker compose up --wait`, keeps every service restarting unless stopped, and reports an exited container as down.
+# The first start creates the site (3 to 5 minutes); later starts migrate it, so a newer image upgrades it.
+services:
+  configurator:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        ls -1 apps > sites/apps.txt
+        bench set-config -g db_host db
+        bench set-config -gp db_port 3306
+        bench set-config -g redis_cache redis://redis-cache:6379
+        bench set-config -g redis_queue redis://redis-queue:6379
+        bench set-config -g redis_socketio redis://redis-queue:6379
+        bench set-config -gp socketio_port 9000
+        touch /tmp/configured
+        exec sleep infinity
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/configured"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  create-site:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f sites/frontend/site_config.json ]; then
+          bench --site frontend migrate
+        else
+          bench new-site --mariadb-user-host-login-scope='%' --admin-password="$$ADMIN_PASSWORD" --db-root-username=root --db-root-password="$$DB_ROOT_PASSWORD" --install-app erpnext --set-default frontend
+        fi
+        bench --site frontend set-config host_name "$$HOST_NAME"
+        touch /tmp/site-ready
+        exec sleep infinity
+    depends_on:
+      configurator:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      DB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      HOST_NAME: ${{ falak.url(frontend) }}
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/site-ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 600s
+
+  backend:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    depends_on:
+      configurator:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  frontend:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    command: ["nginx-entrypoint.sh"]
+    expose: ["8080"]
+    depends_on:
+      backend:
+        condition: service_healthy
+      websocket:
+        condition: service_healthy
+      create-site:
+        condition: service_healthy
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: frontend
+      UPSTREAM_REAL_IP_ADDRESS: 172.16.0.0/12
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: "120"
+      CLIENT_MAX_BODY_SIZE: 50m
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/api/method/ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  websocket:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    command: ["node", "/home/frappe/frappe-bench/apps/frappe/socketio.js"]
+    depends_on:
+      configurator:
+        condition: service_healthy
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  queue-short:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    command: ["bench", "worker", "--queue", "short,default"]
+    depends_on:
+      configurator:
+        condition: service_healthy
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/redis-queue/6379"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  queue-long:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    depends_on:
+      configurator:
+        condition: service_healthy
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/redis-queue/6379"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  scheduler:
+    image: frappe/erpnext:v16.51.1
+    restart: unless-stopped
+    command: ["bench", "schedule"]
+    depends_on:
+      configurator:
+        condition: service_healthy
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/redis-queue/6379"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  db:
+    image: mariadb:11.8.9
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - erpnext-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis-cache:
+    image: redis:8.8.3-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis-queue:
+    image: redis:8.8.3-alpine
+    restart: unless-stopped
+    volumes:
+      - erpnext-redis-queue:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  erpnext-sites:
+  erpnext-logs:
+  erpnext-db:
+  erpnext-redis-queue:

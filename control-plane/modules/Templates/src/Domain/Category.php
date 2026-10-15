@@ -13,6 +13,7 @@ enum Category: string
     case Storage = 'storage';
     case Communication = 'communication';
     case Ai = 'ai';
+    case Business = 'business';
 
     public function label(): string
     {
@@ -26,6 +27,7 @@ enum Category: string
             self::Storage => 'Storage',
             self::Communication => 'Communication',
             self::Ai => 'AI',
+            self::Business => 'Business',
         };
     }
 }

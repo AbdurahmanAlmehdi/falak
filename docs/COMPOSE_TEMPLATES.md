@@ -181,7 +181,7 @@ name: n8n
 slug: n8n
 version: 1.0.0            # template version (bumped when the compose changes)
 description: Workflow automation with 400+ integrations.
-category: automation      # automation | analytics | cms | databases | dev-tools | monitoring | storage | communication | ai
+category: automation      # automation | analytics | cms | databases | dev-tools | monitoring | storage | communication | ai | business
 icon: n8n                 # simple-icons key or ./icon.svg
 docs: https://docs.n8n.io
 stateful: true            # warn when deploying to more than one server
@@ -219,6 +219,13 @@ NocoDB · Redis Stack · Grafana OSS · Appsmith.
 Catalog v2 adds: Ollama + Open WebUI · Langflow (+Postgres) · Qdrant · changedetection.io · ntfy · Nextcloud
 (+MariaDB, Redis) · Paperless-ngx (+Redis) · BookStack (+MariaDB) · Wiki.js (+Postgres) · Forgejo · code-server ·
 Excalidraw · Adminer · Matomo (+MariaDB). Every image supports amd64 and arm64.
+
+Catalog v3 adds ERP: Odoo 19 (+Postgres; threaded, so `/websocket` is served on the public port 8069 — the edge
+routes per service, not per path, to the gevent port 8072) · ERPNext v16 (frappe_docker: backend, nginx frontend,
+websocket, two queues, scheduler, MariaDB, two Redis; 4 GB). One-time jobs (ERPNext's `configurator` and
+`create-site`) do their step and then stay up idle (`exec sleep infinity`, healthy once a marker exists) instead of
+exiting: a catalog service restarts unless stopped and has a healthcheck, and an exited container is reported as down
+(`ComposeServiceState::failing()`). Their step must be idempotent (it reruns on every start).
 
 ---
 

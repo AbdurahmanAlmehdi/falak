@@ -1,0 +1,25 @@
+name: ERPNext
+slug: erpnext
+version: 1.0.0
+description: Open-source ERP on the Frappe framework — accounting, inventory, manufacturing, HR and CRM. Needs 4 GB RAM.
+category: business
+icon: erpnext
+docs: https://github.com/frappe/frappe_docker
+stateful: true
+min_memory_mb: 4096
+popular: true
+tags: [erp, accounting, inventory, manufacturing, frappe]
+public:
+  - service: frontend
+    port: 8080
+    health_check_path: /api/method/ping
+inputs:
+  - key: ADMIN_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Administrator password
+    description: Sign in as Administrator with this password.
+  - key: DB_ROOT_PASSWORD
+    type: secret
+    generate: password(32)
+    label: MariaDB root password

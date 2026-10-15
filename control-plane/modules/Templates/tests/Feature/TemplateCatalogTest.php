@@ -12,18 +12,18 @@ use Falak\Templates\Infrastructure\FilesystemCatalog;
  */
 
 const CATALOG_V1 = [
-    'adminer', 'appsmith', 'bookstack', 'changedetection', 'code-server', 'directus', 'excalidraw', 'forgejo', 'ghost',
-    'gitea', 'grafana', 'langflow', 'listmonk', 'mailpit', 'matomo', 'meilisearch', 'metabase', 'minio', 'n8n',
-    'nextcloud', 'nocodb', 'ntfy', 'ollama', 'paperless-ngx', 'plausible', 'qdrant', 'redis-stack', 'umami',
+    'adminer', 'appsmith', 'bookstack', 'changedetection', 'code-server', 'directus', 'erpnext', 'excalidraw', 'forgejo',
+    'ghost', 'gitea', 'grafana', 'langflow', 'listmonk', 'mailpit', 'matomo', 'meilisearch', 'metabase', 'minio', 'n8n',
+    'nextcloud', 'nocodb', 'ntfy', 'odoo', 'ollama', 'paperless-ngx', 'plausible', 'qdrant', 'redis-stack', 'umami',
     'uptime-kuma', 'vaultwarden', 'wikijs', 'wordpress',
 ];
 
 /** Brand icons the UI ships (modules/Templates/resources/js/components/template-icon.tsx). */
 const CATALOG_BRAND_ICONS = [
-    'adminer', 'appsmith', 'bookstack', 'changedetection', 'clickhouse', 'coder', 'directus', 'docker', 'excalidraw',
-    'forgejo', 'ghost', 'gitea', 'grafana', 'langflow', 'listmonk', 'mariadb', 'matomo', 'meilisearch', 'metabase',
-    'minio', 'mysql', 'n8n', 'nextcloud', 'ntfy', 'ollama', 'paperlessngx', 'plausibleanalytics', 'postgresql',
-    'qdrant', 'redis', 'umami', 'uptimekuma', 'vaultwarden', 'wikidotjs', 'wordpress',
+    'adminer', 'appsmith', 'bookstack', 'changedetection', 'clickhouse', 'coder', 'directus', 'docker', 'erpnext',
+    'excalidraw', 'forgejo', 'ghost', 'gitea', 'grafana', 'langflow', 'listmonk', 'mariadb', 'matomo', 'meilisearch',
+    'metabase', 'minio', 'mysql', 'n8n', 'nextcloud', 'ntfy', 'odoo', 'ollama', 'paperlessngx', 'plausibleanalytics',
+    'postgresql', 'qdrant', 'redis', 'umami', 'uptimekuma', 'vaultwarden', 'wikidotjs', 'wordpress',
 ];
 
 function catalog_files(): array
@@ -78,4 +78,20 @@ it('checks MinIO\'s health on its liveness endpoint (the S3 API answers 403 on /
 
     expect($template->public[0])->toBe(['service' => 'minio', 'port' => 9000, 'health_check_path' => '/minio/health/live'])
         ->and($template->public[1])->not->toHaveKey('health_check_path');
+});
+
+it('runs ERPNext\'s setup jobs once and keeps them up idle (an exited container reads as down)', function () {
+    $services = ComposeDocument::parse(catalog_files()['erpnext']['compose'])->services();
+
+    expect($services['create-site']['depends_on']['configurator']['condition'])->toBe('service_healthy')
+        ->and($services['frontend']['depends_on']['create-site']['condition'])->toBe('service_healthy')
+        ->and($services['configurator']['command'][0])->toContain('touch /tmp/configured', 'exec sleep infinity')
+        ->and($services['create-site']['command'][0])->toContain('if [ -f sites/frontend/site_config.json ]', 'touch /tmp/site-ready', 'exec sleep infinity')
+        ->and($services['db']['command'])->toContain('--character-set-server=utf8mb4', '--collation-server=utf8mb4_unicode_ci');
+});
+
+it('runs Odoo threaded so /websocket is served on its public port', function () {
+    $services = ComposeDocument::parse(catalog_files()['odoo']['compose'])->services();
+
+    expect($services['odoo']['command'][0])->toContain('workers = 0', 'proxy_mode = True', 'admin_passwd = %s');
 });

@@ -33,7 +33,7 @@ it('renders the gallery page with catalog and custom templates', function () {
         ->where('templates.2.slug', 'ours')
         ->where('templates.2.source', 'custom')
         ->where('can', ['deploy' => true, 'manage' => true])
-        ->has('categories', 9));
+        ->has('categories', 10));
 });
 
 it('lists templates as JSON for the Create picker', function () {

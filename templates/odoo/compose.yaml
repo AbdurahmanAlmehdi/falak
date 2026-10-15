@@ -1,0 +1,50 @@
+# Odoo 19 Community. First visit: create the database in the form Odoo shows (it asks for the master password).
+# Threaded mode (workers = 0) serves the web client and /websocket on 8069, so the edge needs no path routing to the
+# gevent port 8072 (only used with workers > 0). The config file is written from the variables on every start.
+services:
+  odoo:
+    image: odoo:19.0-20260926
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        printf '[options]\naddons_path = /mnt/extra-addons\ndata_dir = /var/lib/odoo\nadmin_passwd = %s\nproxy_mode = True\nworkers = 0\n' "$$ODOO_MASTER_PASSWORD" > /tmp/odoo.conf
+        exec /entrypoint.sh odoo
+    expose: ["8069"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      HOST: db
+      USER: odoo
+      PASSWORD: ${POSTGRES_PASSWORD}
+      ODOO_RC: /tmp/odoo.conf
+      ODOO_MASTER_PASSWORD: ${ODOO_MASTER_PASSWORD}
+    volumes:
+      - odoo-data:/var/lib/odoo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8069/web/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  db:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - odoo-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  odoo-data:
+  odoo-db:
