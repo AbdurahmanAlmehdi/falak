@@ -9,7 +9,8 @@ use Illuminate\Contracts\Auth\Authenticatable;
 
 /**
  * Sandboxes of other organizations are hidden (404), never merely forbidden. `use` covers creating sandboxes and seeing
- * them; exec, files, console and kill are for its creator (`use`), or someone with `manage` on anyone's sandbox.
+ * them; exec, files, console, rename, extend and kill are for its creator (`use`), or someone with `manage` on anyone's
+ * sandbox.
  */
 final class SandboxPolicy
 {
@@ -35,6 +36,12 @@ final class SandboxPolicy
     public function operate(Authenticatable $user, Sandbox $sandbox): Response
     {
         return $this->ownOrManage($user, $sandbox, 'Only its creator (or someone with sandboxes.manage) can use this sandbox.');
+    }
+
+    /** Rename and extend. */
+    public function update(Authenticatable $user, Sandbox $sandbox): Response
+    {
+        return $this->ownOrManage($user, $sandbox, 'Only its creator (or someone with sandboxes.manage) can rename or extend this sandbox.');
     }
 
     public function kill(Authenticatable $user, Sandbox $sandbox): Response

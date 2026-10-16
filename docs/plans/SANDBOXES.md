@@ -155,6 +155,9 @@ and firewall reloads):
 - NAT to the internet for `internet`; no veth for `none`; no NAT for `allowlist`, whose only way out is an
   allowlisting HTTP(S) proxy on the bridge (`HTTP(S)_PROXY` set in the sandbox).
 - The agent writes the sandbox's `/etc/resolv.conf` (public resolvers, or the proxy).
+- `internet` sandboxes egress (NAT) from the server's public IP: whatever trusts that address (database firewalls, API
+  allowlists, other servers' rules for this one) trusts the sandboxes too. Documented for users; `none`/`allowlist`
+  or a server nothing trusts are the answer.
 
 The spike proved this is mandatory: on Docker's default bridge a sandbox reached the cloud metadata endpoint
 (including IMDSv2 tokens), the host and other containers.
@@ -277,18 +280,23 @@ Statuses: `creating`, `running`, `failed`, `killed`. (`paused`/`stopped` arrive 
 | `GET /sandboxes/{id}/execs` | | `{data: [{id, cmd, exit_code, duration_ms, actor, started_at}]}` |
 | `POST /sandboxes/{id}/console` | | console session body (as the other console routes) |
 
-Permissions: `sandboxes.view` (GET), `sandboxes.use` (create, extend; exec, files, console and kill on the sandboxes
-you created), `sandboxes.manage` (the same on anyone's, organization settings). `repo.secret` hands a secret's value to
+Permissions: `sandboxes.view` (GET), `sandboxes.use` (create; exec, files, console, rename/extend (PATCH) and kill on
+the sandboxes you created), `sandboxes.manage` (the same on anyone's, organization settings). `repo.secret` hands a secret's value to
 the sandbox, so it also needs `secrets.reveal` (by name on a token, as revealing it) and refuses sensitive secrets.
-Images are refused with `..` or a localhost / loopback / private registry address. Extending a running sandbox sends
+Images are refused with `..` or a localhost / loopback / private registry address; the agent also resolves a
+registry's name before pulling and refuses it when any address isn't public (`127.0.0.1.nip.io`). Extending a running sandbox sends
 `sandbox.extend` and changes nothing when the agent can't be told (503); one still creating takes the new expiry once
-its create succeeded. Exec, files.read and files.list results are forgotten in the control plane once the request read
-them (`x-falak-forget-result`). Throttles: create 30/min, exec 120/min per token.
+its create succeeded (both under the row's lock, so an extend racing the create's result is sent either way);
+`agent_expires_at` is what the agent answered, and SyncSandboxes sends `sandbox.extend` again while it differs. Exec, files.read and files.list results are forgotten in the control plane once the request read
+them (`x-falak-forget-result`), and CommandFinished/CommandFailed carry no result for those types (queued listeners
+would copy it into Redis); queued command listeners of other modules skip `sandbox.*` commands (`SkipsSandboxCommands`). Throttles: create 30/min, exec 120/min per token.
 
 ### Quotas (`config/sandboxes.php`, defaults)
 
 `max_running` 5, `max_ttl` 86400, `default_ttl` 3600, `max_cpus` 4 / `max_memory_mb` 8192 / `max_disk_mb` 51200 per
-sandbox, `max_total_memory_mb` 8192 per organization. Placement: the given server, else the active app server with the
+sandbox, `max_total_memory_mb` 8192 and `max_total_disk_mb` 102400 per organization (live sandboxes). On the server the
+agent refuses a pull, an export or a start that would leave less than min(10%, 5 GiB) free under its root (image size +
+`disk_mb`), cancels a pull at that floor, and refuses images over 10 GiB. Placement: the given server, else the active app server with the
 `sandbox.v1` feature and the most free memory; servers can opt out (`servers.sandboxes_enabled`, default true).
 
 ### MCP tools (`falak mcp`, stdio, JSON-RPC 2.0, protocol 2025-06-18)

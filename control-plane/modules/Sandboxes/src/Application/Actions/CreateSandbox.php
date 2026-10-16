@@ -89,7 +89,7 @@ final class CreateSandbox
      */
     private function insert(string $organizationId, Actor $actor, array $input, array $defaults, float $cpus, int $memory, int $disk, int $ttl, string $network, array $allowHosts, ServerData $server, ?array $repo, ?string $secret): Sandbox
     {
-        $this->checkQuotas($organizationId, $memory);
+        $this->checkQuotas($organizationId, $memory, $disk);
         $name = $this->name($organizationId, $input['name'] ?? null);
         $token = $secret !== null ? $this->secret($organizationId, $secret, $actor) : null;
 
@@ -204,8 +204,8 @@ final class CreateSandbox
         }
     }
 
-    /** The organization's running sandboxes and their memory (under the create lock). */
-    private function checkQuotas(string $organizationId, int $memory): void
+    /** The organization's running sandboxes, their memory and their disk (under the create lock). */
+    private function checkQuotas(string $organizationId, int $memory, int $disk): void
     {
         $live = Sandbox::query()->where('organization_id', $organizationId)->live();
         $running = (clone $live)->count();
@@ -220,6 +220,13 @@ final class CreateSandbox
 
         if ($used + $memory > $total) {
             throw ValidationException::withMessages(['memory_mb' => "Your organization's sandboxes may use {$total} MB of memory in all; {$used} MB are in use."]);
+        }
+
+        $usedDisk = (int) (clone $live)->sum('disk_mb');
+        $totalDisk = (int) config('sandboxes.max_total_disk_mb');
+
+        if ($usedDisk + $disk > $totalDisk) {
+            throw ValidationException::withMessages(['disk_mb' => "Your organization's sandboxes may use {$totalDisk} MB of disk in all; {$usedDisk} MB are in use."]);
         }
     }
 

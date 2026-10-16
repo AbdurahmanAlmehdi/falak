@@ -199,6 +199,17 @@ it('enforces quotas with clear messages', function () {
     sbx_api()->postJson('/api/v1/sandboxes', ['memory_mb' => 9000])->assertUnprocessable()->assertJsonValidationErrors(['memory_mb' => 'main-1 has']);
 });
 
+it('enforces the organization disk quota over its live sandboxes', function () {
+    expect(config('sandboxes.max_total_disk_mb'))->toBe(102400);
+    config(['sandboxes.max_total_disk_mb' => 25000]);
+    sbx_sandbox($this->organization, $this->server, ['name' => 'gone', 'disk_mb' => 50000, 'status' => Sandbox::KILLED]);
+
+    sbx_api()->postJson('/api/v1/sandboxes', ['disk_mb' => 20480])->assertCreated();
+    sbx_api()->postJson('/api/v1/sandboxes', ['disk_mb' => 10240])->assertUnprocessable()
+        ->assertJsonValidationErrors(['disk_mb' => '25000 MB of disk in all; 20480 MB are in use']);
+    sbx_api()->postJson('/api/v1/sandboxes', ['disk_mb' => 4096])->assertCreated();
+});
+
 it('places sandboxes on the active app server with sandbox.v1, sandboxes on and the most free memory', function () {
     $roomy = sbx_server($this->organization, 'roomy', freeMb: 7000);
     sbx_server($this->organization, 'old-agent', ['terminal.v2'], freeMb: 8000);
@@ -715,7 +726,55 @@ it('extends a sandbox still being created once its create succeeded', function (
     $extend = $this->agents->last('sandbox.extend');
     expect(sbx_schema_errors($extend))->toBe([])
         ->and($extend['payload'])->toBe(['id' => $sandbox->id, 'expires_at' => $expires + 3600])
-        ->and($sandbox->refresh()->agent_expires_at->getTimestamp())->toBe($expires + 3600);
+        ->and($sandbox->refresh()->agent_expires_at->getTimestamp())->toBe($expires);
+
+    // agent_expires_at is what the agent answered it enforces.
+    $this->agents->succeed($extend['handle'], ['expires_at' => $expires + 3600]);
+    expect($sandbox->refresh()->agent_expires_at->getTimestamp())->toBe($expires + 3600);
+});
+
+it('sends the expiry when the create finished between reading the sandbox and saving its extension', function () {
+    $sandbox = sbx_sandbox($this->organization, $this->server, ['status' => Sandbox::CREATING]);
+    $expires = $sandbox->expires_at->getTimestamp();
+    $this->agents->answer('sandbox.extend', fn (array $payload) => ['expires_at' => $payload['expires_at']]);
+
+    // The request reads it creating; its create succeeds right after (the row is running when the extend saves).
+    $flipped = false;
+    Sandbox::retrieved(function (Sandbox $model) use (&$flipped) {
+        if (! $flipped && $model->status === Sandbox::CREATING) {
+            $flipped = true;
+            Sandbox::query()->whereKey($model->id)->update(['status' => Sandbox::RUNNING]);
+        }
+    });
+
+    sbx_api()->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['extend' => '30m'])->assertOk()->assertJsonPath('data.status', 'running');
+    $extend = $this->agents->last('sandbox.extend');
+    expect($flipped)->toBeTrue()
+        ->and($extend['payload'])->toBe(['id' => $sandbox->id, 'expires_at' => $expires + 1800])
+        ->and($sandbox->refresh()->expires_at->getTimestamp())->toBe($expires + 1800);
+});
+
+it('sends sandbox.extend again from the sync while the agent enforces another expiry', function () {
+    $behind = sbx_sandbox($this->organization, $this->server, ['name' => 'behind']);
+    $behind->forceFill(['agent_expires_at' => $behind->expires_at->copy()->subMinutes(30)])->save();
+    $synced = sbx_sandbox($this->organization, $this->server, ['name' => 'synced']);
+    $synced->forceFill(['agent_expires_at' => $synced->expires_at])->save();
+    sbx_sandbox($this->organization, $this->server, ['name' => 'creating', 'status' => Sandbox::CREATING]);
+
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    $sent = $this->agents->dispatched('sandbox.extend');
+    expect($sent)->toHaveCount(1)
+        ->and($sent[0]['payload'])->toBe(['id' => $behind->id, 'expires_at' => $behind->expires_at->getTimestamp()])
+        ->and(sbx_schema_errors($sent[0]))->toBe([]);
+
+    // Unanswered: sent again by the next sync (a new slot); answered: not any more.
+    $this->travel(5)->minutes();
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    expect($this->agents->dispatched('sandbox.extend'))->toHaveCount(2);
+    $this->agents->succeed($this->agents->last('sandbox.extend')['handle'], ['expires_at' => $behind->expires_at->getTimestamp()]);
+    $this->travel(5)->minutes();
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    expect($this->agents->dispatched('sandbox.extend'))->toHaveCount(2);
 });
 
 it('keeps names unique among live sandboxes and creates one sandbox at a time per organization', function () {
@@ -733,7 +792,7 @@ it('keeps names unique among live sandboxes and creates one sandbox at a time pe
     sbx_api()->postJson('/api/v1/sandboxes')->assertCreated();
 });
 
-it('keeps exec, files and consoles of a sandbox to its creator and sandboxes.manage', function () {
+it('keeps exec, files, consoles, renames and extensions of a sandbox to its creator and sandboxes.manage', function () {
     $sandbox = sbx_sandbox($this->organization, $this->server);
     [$developer] = memberOf($this->organization, Role::Developer);
     $dev = sbx_token($developer, $this->organization);
@@ -746,7 +805,13 @@ it('keeps exec, files and consoles of a sandbox to its creator and sandboxes.man
     $this->withToken($dev)->getJson("/api/v1/sandboxes/{$sandbox->id}")->assertOk();
     expect($this->agents->dispatched())->toBe([]);
 
+    // Renaming and extending too.
+    $this->withToken($dev)->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['name' => 'mine-now'])->assertForbidden();
+    $this->withToken($dev)->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['extend' => '30m'])->assertForbidden();
+    expect($sandbox->refresh()->name)->toBe('calm-otter');
+
     [$admin] = memberOf($this->organization, Role::Admin);
+    $this->withToken(sbx_token($admin, $this->organization))->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['name' => 'by-admin'])->assertOk();
     $this->agents->answer('sandbox.exec', fn () => ['exit_code' => 0, 'stdout' => '', 'stderr' => '', 'truncated' => false, 'duration_ms' => 1, 'timed_out' => false]);
     $this->withToken(sbx_token($admin, $this->organization))->postJson("/api/v1/sandboxes/{$sandbox->id}/exec", ['cmd' => 'ls'])->assertOk();
 });

@@ -25,6 +25,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -138,9 +139,9 @@ final class SandboxApiController extends Controller
     }
 
     /** PATCH /sandboxes/{id} {name?, extend?}: {data: sandbox} */
-    public function update(Request $request, string $sandbox): JsonResponse
+    public function update(Request $request, string $sandbox, HandleCommandOutcome $outcomes): JsonResponse
     {
-        $model = $this->resolve($request, $sandbox, 'use');
+        $model = $this->resolve($request, $sandbox, 'update');
         $data = $request->validate([
             'name' => ['nullable', 'string', 'max:63', 'regex:'.Sandbox::NAME],
             'extend' => ['nullable'],
@@ -166,7 +167,7 @@ final class SandboxApiController extends Controller
                 throw ValidationException::withMessages(['extend' => 'Give a number of seconds or a duration like 30m.']);
             }
 
-            $this->extend($model, $data['extend']);
+            $this->extend($model, $data['extend'], $outcomes);
         }
 
         return response()->json(['data' => $this->present([$model], $model->organization_id)[0]]);
@@ -296,7 +297,7 @@ final class SandboxApiController extends Controller
      * takes the new expiry first (sandbox.extend; when it can't, nothing changes); one still being created takes it
      * once the create succeeded (HandleCommandOutcome).
      */
-    private function extend(Sandbox $sandbox, int|string $by): void
+    private function extend(Sandbox $sandbox, int|string $by, HandleCommandOutcome $outcomes): void
     {
         abort_unless($sandbox->isLive(), 409, 'The sandbox is not running.');
 
@@ -308,12 +309,34 @@ final class SandboxApiController extends Controller
             throw ValidationException::withMessages(['extend' => 'A sandbox lives at most '.intdiv($max, 60).' minutes in all.']);
         }
 
-        if ($sandbox->isRunning()) {
+        // Asked outside the transaction (the agent's answer is written by another request).
+        $told = $sandbox->isRunning();
+
+        if ($told) {
             $this->agent->ask($sandbox, 'sandbox.extend', ['id' => $sandbox->id, 'expires_at' => $expires->getTimestamp()], 15);
-            $sandbox->agent_expires_at = $expires;
         }
 
-        $sandbox->forceFill(['expires_at' => $expires, 'ttl_seconds' => (int) $sandbox->created_at->diffInSeconds($expires)])->save();
+        // Under the row's lock, as the create's outcome: a create that finished meanwhile either saw this expiry (and
+        // sent it) or is seen running here (and the expiry is sent here). SyncSandboxes catches anything else.
+        $fresh = DB::transaction(function () use ($sandbox, $expires, $told, $outcomes): Sandbox {
+            $fresh = Sandbox::query()->whereKey($sandbox->id)->lockForUpdate()->firstOrFail();
+            abort_unless($fresh->isLive(), 409, 'The sandbox is not running.');
+            $fresh->forceFill(['expires_at' => $expires, 'ttl_seconds' => (int) $fresh->created_at->diffInSeconds($expires)]);
+
+            if ($told) {
+                $fresh->agent_expires_at = $expires;
+            }
+
+            $fresh->save();
+
+            if (! $told && $fresh->isRunning()) {
+                $outcomes->sendExpiry($fresh);
+            }
+
+            return $fresh;
+        });
+
+        $sandbox->setRawAttributes($fresh->getAttributes(), true);
     }
 
     /**

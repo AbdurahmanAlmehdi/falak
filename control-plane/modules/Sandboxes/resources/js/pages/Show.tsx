@@ -28,7 +28,7 @@ import { formatMemory, formatTimeLeft, isLive, sandboxBadge, secondsLeft, useNow
 interface Props {
     sandbox: Sandbox;
     execs: SandboxExec[];
-    can: { use: boolean; operate: boolean; kill: boolean };
+    can: { update: boolean; operate: boolean; kill: boolean };
 }
 
 const EXTENSIONS = [
@@ -105,7 +105,7 @@ export default function Show({ sandbox, execs, can }: Props) {
                     actions={
                         isLive(sandbox) && (
                             <>
-                                {can.use && (
+                                {can.update && (
                                     <>
                                         <Select
                                             value={extendBy}

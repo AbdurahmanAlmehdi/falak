@@ -9,6 +9,8 @@ return [
     'max_memory_mb' => (int) env('FALAK_SANDBOX_MAX_MEMORY_MB', 8192),
     'max_disk_mb' => (int) env('FALAK_SANDBOX_MAX_DISK_MB', 51200),
     'max_total_memory_mb' => (int) env('FALAK_SANDBOX_MAX_TOTAL_MEMORY_MB', 8192),
+    // The disk quotas of an organization's live sandboxes, in all (each is a cap its sandbox may fill).
+    'max_total_disk_mb' => (int) env('FALAK_SANDBOX_MAX_TOTAL_DISK_MB', 102400),
 
     // Defaults of POST /sandboxes.
     'defaults' => [

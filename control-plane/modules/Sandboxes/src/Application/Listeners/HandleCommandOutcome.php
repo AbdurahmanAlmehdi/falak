@@ -8,10 +8,11 @@ use Falak\Sandboxes\Application\Actions\KillSandbox;
 use Falak\Sandboxes\Application\SandboxAgent;
 use Falak\Sandboxes\Domain\Models\Sandbox;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
- * sandbox.create settles a creating sandbox (running with its IP, or failed); sandbox.kill confirms a kill;
- * sandbox.inventory reconciles a server's sandboxes with what its agent runs (SyncSandboxes).
+ * sandbox.create settles a creating sandbox (running with its IP, or failed); sandbox.extend records the expiry the
+ * agent enforces; sandbox.kill confirms a kill; sandbox.inventory reconciles a server's sandboxes with what its agent runs (SyncSandboxes).
  */
 final class HandleCommandOutcome
 {
@@ -26,20 +27,35 @@ final class HandleCommandOutcome
     public function handleFinished(CommandFinished $event): void
     {
         if ($event->type === 'sandbox.create') {
-            $sandbox = Sandbox::query()->where('command_id', $event->commandId)->first();
+            $id = Sandbox::query()->where('command_id', $event->commandId)->value('id');
 
-            if ($sandbox === null) {
+            if ($id === null) {
                 return;
             }
 
-            // Running already: the ?wait=1 request saw the result first. Its result still completes the row.
-            if (in_array($sandbox->status, [Sandbox::CREATING, Sandbox::RUNNING], true)) {
+            // Under the row's lock: an extend at the same time either saved its expiry first (sent here) or sees the
+            // sandbox running afterwards (and sends it itself).
+            $late = DB::transaction(function () use ($id, $event): ?Sandbox {
+                $sandbox = Sandbox::query()->whereKey($id)->lockForUpdate()->firstOrFail();
+
+                // Running already: the ?wait=1 request saw the result first. Its result still completes the row.
+                if (! in_array($sandbox->status, [Sandbox::CREATING, Sandbox::RUNNING], true)) {
+                    return $sandbox;
+                }
+
                 self::started($sandbox, $event->result ?? []);
                 $this->sendExpiry($sandbox);
-            } else {
+
+                return null;
+            });
+
+            if ($late !== null) {
                 // Failed (it took too long) or killed meanwhile: it must not keep running.
-                $this->kill->remove($sandbox, "sandbox.kill:{$sandbox->id}:late");
+                $this->kill->remove($late, "sandbox.kill:{$late->id}:late");
             }
+        } elseif ($event->type === 'sandbox.extend' && preg_match('/^sandbox\.extend:([0-9a-z]{26}):/', $event->idempotencyKey, $m) === 1 && is_numeric($event->result['expires_at'] ?? null)) {
+            // What the agent now enforces (SyncSandboxes sends it again while it differs from expires_at).
+            Sandbox::query()->whereKey($m[1])->update(['agent_expires_at' => Carbon::createFromTimestamp((int) $event->result['expires_at'])]);
         } elseif ($event->type === 'sandbox.kill' && preg_match('/^sandbox\.kill:([0-9a-z]{26})(:|$)/', $event->idempotencyKey, $m) === 1) {
             Sandbox::query()->whereKey($m[1])->where('status', Sandbox::KILLED)->whereNull('kill_confirmed_at')->update(['kill_confirmed_at' => now()]);
         } elseif ($event->type === 'sandbox.inventory') {
@@ -84,18 +100,19 @@ final class HandleCommandOutcome
         ])->save();
     }
 
-    /** Extended while it was being created: the agent only knows the expiry sandbox.create carried. */
-    private function sendExpiry(Sandbox $sandbox): void
+    /**
+     * The agent's expiry behind the sandbox's (extended while it was being created, or meanwhile): sandbox.extend,
+     * without waiting. agent_expires_at follows once the agent answered (handleFinished); until then SyncSandboxes
+     * sends it again ($attempt: its slot).
+     */
+    public function sendExpiry(Sandbox $sandbox, string $attempt = ''): void
     {
         if ($sandbox->agent_expires_at?->getTimestamp() === $sandbox->expires_at->getTimestamp()) {
             return;
         }
 
         $expires = $sandbox->expires_at->getTimestamp();
-
-        if ($this->agent->tryDispatch($sandbox, 'sandbox.extend', ['id' => $sandbox->id, 'expires_at' => $expires], "sandbox.extend:{$sandbox->id}:{$expires}") !== null) {
-            $sandbox->forceFill(['agent_expires_at' => $sandbox->expires_at])->save();
-        }
+        $this->agent->tryDispatch($sandbox, 'sandbox.extend', ['id' => $sandbox->id, 'expires_at' => $expires], "sandbox.extend:{$sandbox->id}:{$expires}".($attempt !== '' ? ":{$attempt}" : ''), 300);
     }
 
     /**

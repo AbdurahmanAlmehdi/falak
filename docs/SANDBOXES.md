@@ -40,7 +40,7 @@ falak sandbox create --server main-1 --json     # pick the server; --json prints
 
 | Flag | Default | Notes |
 |---|---|---|
-| `--image` | `ubuntu:24.04` | Any image the server can pull (`node:22`, `python:3.13`, `alpine:3.22`…) |
+| `--image` | `ubuntu:24.04` | Any public image the server can pull anonymously (`node:22`, `python:3.13`, `alpine:3.22`…), up to 10 GB. Registries on localhost, a private address or the server itself are refused, also by a name that resolves to one (checked on the server before the pull) |
 | `--name` | generated (`brave-otter`) | |
 | `--server` | the server with the most free memory | Name or id; the server must allow sandboxes |
 | `--cpus` | 1 | Fractions work (`0.5`) |
@@ -125,14 +125,26 @@ Killing removes the sandbox, its processes and everything it wrote. Copy out wha
 
 Each sandbox gets its own network namespace and DNS settings.
 
+An `internet` sandbox's traffic leaves from the server's public IP address (NAT), like the server's own. Anything that
+trusts that address, such as a database firewall, an API allowlist or another server's firewall rule that lets this
+server in, trusts every sandbox on it too. Use `none` or `allowlist` for code that mustn't reach those, or run
+sandboxes on a server whose address nothing trusts.
+
 ## Limits
 
 Per sandbox: CPUs, memory and disk as created (defaults above; at most 4 CPUs, 8 GB memory and 50 GB disk by default).
-Per organization (defaults): 5 running sandboxes, 8 GB of memory in total, 1 h default time limit, 24 h maximum.
-Administrators can change these, and a server can opt out of running sandboxes (to keep production servers clean).
+Per organization (defaults): 5 running sandboxes, 8 GB of memory and 100 GB of disk in total (the `--disk` of its live
+sandboxes), 1 h default time limit, 24 h maximum. Administrators can change these (`FALAK_SANDBOX_MAX_RUNNING`,
+`FALAK_SANDBOX_MAX_TOTAL_MEMORY_MB`, `FALAK_SANDBOX_MAX_TOTAL_DISK_MB`...), and a server can opt out of running
+sandboxes (to keep production servers clean).
 
-Permissions (also token abilities): `sandboxes.view` (list, show), `sandboxes.use` (create, extend; exec, files,
-shell and kill on your own sandboxes), `sandboxes.manage` (the same on anyone's sandboxes, organization settings).
+Per server, the agent keeps the disk from filling up: it doesn't pull an image, unpack it or start a sandbox when that
+(the image's size plus the sandbox's `--disk`) would leave less than 10% of the disk, or 5 GB if that is less, free under
+`/var/lib/falak/sandboxes`, and it cancels a pull that gets there. Such a create fails with `not enough disk space`.
+
+Permissions (also token abilities): `sandboxes.view` (list, show), `sandboxes.use` (create; exec, files, shell,
+rename, extend and kill on your own sandboxes), `sandboxes.manage` (the same on anyone's sandboxes, organization
+settings).
 `--repo-secret` also needs `secrets.reveal`. Exec output and file contents pass through the control plane and are not
 kept there; the exec log keeps each command (redacted), who ran it, its exit code or error.
 

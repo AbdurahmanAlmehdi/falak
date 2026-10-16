@@ -74,7 +74,7 @@ final class SandboxPageController extends Controller
             'execs' => SandboxExec::query()->where('sandbox_id', $model->id)->latest('started_at')->latest('id')->limit(200)->get()
                 ->map(fn (SandboxExec $exec) => $exec->present())->values(),
             'can' => [
-                'use' => $user?->can('use', $model) ?? false,
+                'update' => $user?->can('update', $model) ?? false,
                 'operate' => $user?->can('operate', $model) ?? false,
                 'kill' => $user?->can('kill', $model) ?? false,
             ],
