@@ -838,7 +838,7 @@ func (l *live) counter(id string) int {
 	return n
 }
 
-const counterLoop = "nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /tmp/c; sleep 1; done' </dev/null >/dev/null 2>&1 &"
+const counterLoop = "falak-bg 'i=0; while :; do i=$((i+1)); echo $i > /tmp/c; sleep 1; done'"
 
 // nodeServer serves {n, pid, ip, id}: a counter, its pid, its eth0 address and /app/id.
 const nodeServer = `const http=require('http'),os=require('os'),fs=require('fs');let n=0;setInterval(()=>n++,1000);
@@ -890,7 +890,7 @@ func TestLiveV2(t *testing.T) {
 	if !l.check("v2.create.A", err == nil, "ip=%s err=%v", ca.IP, err) {
 		t.FailNow()
 	}
-	l.sh(A, "echo marker-A > /root/marker; head -c 20000000 /dev/urandom > /root/blob; "+counterLoop)
+	l.sh(A, "echo marker-A > /root/marker; head -c 20000000 /dev/urandom > /root/blob; "+counterLoop+"; nohup sleep 1000 </dev/null >/dev/null 2>&1 &")
 	time.Sleep(3 * time.Second)
 	S1 := newID()
 	before := l.counter(A)
@@ -916,6 +916,9 @@ func TestLiveV2(t *testing.T) {
 	time.Sleep(3 * time.Second)
 	c1 := l.counter(R1)
 	l.check("v2.restore.counter-continues", c0 >= before && c0 <= before+3 && c1 >= c0+2, "snapshot≈%d restored=%d after 3s=%d", before, c0, c1)
+	ps := l.sh(R1, "ps -o args | grep -c '^sleep 1000'").out
+	l.check("v2.restore.exec-processes-dropped", strings.TrimSpace(ps) == "0" && strings.TrimSpace(l.sh(A, "ps -o args | grep -c '^sleep 1000'").out) == "1",
+		"exec-started sleep in restore: %q (gVisor kills processes descending from runsc exec on restore; falak-bg jobs survive)", ps)
 	r := l.sh(R1, "cat /root/marker; wc -c < /root/blob; echo $FOO $FORK")
 	l.check("v2.restore.files-and-env", r.out == "marker-A\n20000000\nfrom-create 1\n", "%q %q", r.out, r.errOut)
 	r = l.sh(R1, "wget -q -T 8 -O /dev/null http://example.com && echo internet-ok")
@@ -936,7 +939,7 @@ func TestLiveV2(t *testing.T) {
 	cn, _, err := l.create(CreatePayload{ID: N, Image: "node:22-alpine"})
 	l.check("v2.create.node", err == nil, "ip=%s err=%v", cn.IP, err)
 	_, err = l.s.WriteFile(ctx, WritePayload{ID: N, Path: "/app/server.js", Content: base64.StdEncoding.EncodeToString([]byte(nodeServer))}, nil)
-	l.sh(N, "echo source > /app/id; cd /app && nohup node server.js </dev/null >/app/log 2>&1 &")
+	l.sh(N, "echo source > /app/id; cd /app && falak-bg 'node server.js > /app/log 2>&1'")
 	var sv served
 	var raw string
 	for i := 0; i < 30; i++ {
@@ -1114,6 +1117,29 @@ func TestLiveV2(t *testing.T) {
 	l.s.ReapOnce(ctx)
 	_, statErr = os.Stat(imgDir)
 	l.check("v2.gc.after-snapshots-deleted", os.IsNotExist(statErr), "err=%v", statErr)
+}
+
+// TestLiveRestoreDebug snapshots a counting sandbox, restores it and prints what runs in both (LIVE_DEBUG=1); both
+// are left running for poking at by hand.
+func TestLiveRestoreDebug(t *testing.T) {
+	if os.Getenv("LIVE_DEBUG") == "" {
+		t.Skip("LIVE_DEBUG not set")
+	}
+	l := &live{t: t, ctx: context.Background(), s: newLiveService(&captureRequests{})}
+	A, R, S := newID(), newID(), newID()
+	_, _, err := l.create(CreatePayload{ID: A, Image: "alpine:3.20"})
+	t.Logf("A=%s err=%v", A, err)
+	l.sh(A, counterLoop)
+	time.Sleep(2 * time.Second)
+	_, _, err = l.snapshot(A, S, true)
+	t.Logf("S=%s err=%v", S, err)
+	_, _, err = l.create(CreatePayload{ID: R, Image: "alpine:3.20", FromSnapshot: S})
+	t.Logf("R=%s err=%v", R, err)
+	time.Sleep(3 * time.Second)
+	for _, id := range []string{A, R} {
+		t.Logf("%s ps:\n%s", id, l.sh(id, "ps -o pid,stat,time,args; cat /tmp/c").out)
+	}
+	t.Logf("R runsc.log tail:\n%s", sh("sh", "-c", "tail -c 3000 "+filepath.Join(l.s.dir(R), "runsc.log")))
 }
 
 type failRequests struct{}

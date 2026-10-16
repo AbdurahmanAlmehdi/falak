@@ -81,8 +81,39 @@ type (
 var caps = []string{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER", "CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID",
 	"CAP_SETUID", "CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"}
 
-// initArgs is the sandbox's PID 1: it waits forever and exits on SIGTERM (every image this targets has /bin/sh).
-var initArgs = []string{"/bin/sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 86400 & wait $!; done"}
+// initArgs is the sandbox's PID 1 (every image this targets has /bin/sh). It also starts background jobs: a restore
+// (runsc restore, v0.21) kills every process that descends from a `runsc exec` (gVisor: their stdio is gone), so a
+// process that should live on in snapshots, restores and forks must be a child of init. `falak-bg 'command'` (written
+// by init into /usr/local/bin) hands a job script to init through the FIFO /run/falak/spawn; init runs it with the
+// caller's env and working directory, stdio on /dev/null unless the command redirects it. Without mkfifo the spawner
+// is skipped and init only waits.
+var initArgs = []string{"/bin/sh", "-c", initScript}
+
+const initScript = `trap 'exit 0' TERM INT
+if mkdir -p /run/falak /usr/local/bin && rm -f /run/falak/spawn && mkfifo -m 600 /run/falak/spawn; then
+cat > /usr/local/bin/falak-bg <<'FALAKEOF'
+` + bgScript + `FALAKEOF
+chmod 755 /usr/local/bin/falak-bg
+while :; do
+  if read -r j < /run/falak/spawn; then
+    case "$j" in /run/falak/job.*) [ -f "$j" ] && { sh "$j" </dev/null >/dev/null 2>&1 & } ;; esac
+  fi
+  jobs >/dev/null
+done
+fi
+while :; do sleep 86400 & wait $!; done`
+
+// bgScript is falak-bg: the job script holds the caller's exported env, its working directory and the command.
+const bgScript = `#!/bin/sh
+# falak-bg 'command [> log 2>&1]': run a command in the background as a child of the sandbox's init (PID 1), so it
+# is part of snapshots and keeps running in restores and forks. Processes started from an exec or a console (also
+# with nohup or &) are stopped when a snapshot is restored.
+[ $# -gt 0 ] || { echo "usage: falak-bg 'command [> log 2>&1]'" >&2; exit 2; }
+j=$(mktemp /run/falak/job.XXXXXX) || exit 1
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+{ echo 'rm -f "$0"'; export -p; echo "cd $(q "$(pwd)") || exit 1"; printf '%s\n' "$*"; } > "$j"
+echo "$j" > /run/falak/spawn
+`
 
 const cpuPeriod = 100000
 
