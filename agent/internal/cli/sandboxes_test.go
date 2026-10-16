@@ -41,7 +41,7 @@ func (f *sbxFake) body(key string, v any) {
 }
 
 func sbxHarness(t *testing.T) (*harness, *sbxFake) {
-	f := &sbxFake{bodies: map[string][]byte{}, files: map[string][]byte{"/etc/hostname": []byte("brave-otter\n"), "/bin/blob": {0xff, 0x00, 0xfe}},
+	f := &sbxFake{bodies: map[string][]byte{}, files: map[string][]byte{"/etc/hostname": []byte("brave-otter\n"), "/bin/blob": {0xff, 0x00, 0xfe}, "/var/big.log": []byte("first 5 MB")},
 		exec: api.SandboxExecResult{ExitCode: 3, Stdout: "out\n", Stderr: "err\n", DurationMS: 12}}
 	reply := func(w http.ResponseWriter, code int, v any) {
 		w.Header().Set("Content-Type", "application/json")
@@ -93,6 +93,9 @@ func sbxHarness(t *testing.T) (*harness, *sbxFake) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/octet-stream")
+			if p == "/var/big.log" {
+				w.Header().Set("X-Falak-Truncated", "1")
+			}
 			_, _ = w.Write(data)
 		case key == "PUT "+files:
 			f.files[r.URL.Query().Get("path")] = b
@@ -327,6 +330,14 @@ func TestSandboxCp(t *testing.T) {
 	}
 	if code := h.run("sandbox", "cp", "sbx:"+sbxID+":/etc/hostname", "-"); code != 0 || h.out.String() != "brave-otter\n" {
 		t.Fatalf("download stdout: %d %q", code, h.out.String())
+	}
+
+	// Larger than 5 MB: an error, nothing written.
+	if code := h.run("sandbox", "cp", "sbx:"+sbxID+":/var/big.log", "big.log"); code != ExitError || !strings.Contains(h.err.String(), "larger than 5 MB") {
+		t.Fatalf("truncated: %d %s", code, h.err.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.wd, "big.log")); !os.IsNotExist(err) {
+		t.Fatalf("truncated file written: %v", err)
 	}
 
 	// Directories: a clear error both ways.

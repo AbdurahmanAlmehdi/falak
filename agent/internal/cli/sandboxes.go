@@ -466,13 +466,16 @@ func cmdSandboxCp(ctx context.Context, a *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	data, err := c.SandboxReadFile(ctx, id, srcPath)
+	data, truncated, err := c.SandboxReadFile(ctx, id, srcPath)
 	if err != nil {
 		var e *api.Error
 		if errors.As(err, &e) && e.Status != http.StatusNotFound && strings.Contains(strings.ToLower(e.Message), "director") {
 			return fmt.Errorf("%w: directories aren't supported yet; tar it with falak sandbox exec and copy the file", err)
 		}
 		return err
+	}
+	if truncated {
+		return fmt.Errorf("%s is larger than 5 MB, the most a copy takes: nothing was written; split it in the sandbox (falak sandbox exec %s -- split -b 4M %s %s.part-) and copy the parts", srcPath, srcRef, srcPath, srcPath)
 	}
 	if pos[1] == "-" {
 		_, err = a.Stdout.Write(data)

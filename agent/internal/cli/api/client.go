@@ -83,7 +83,7 @@ type API interface {
 	ExtendSandbox(ctx context.Context, id string, seconds int64) (Sandbox, error)
 	KillSandbox(ctx context.Context, id string) error
 	SandboxExec(ctx context.Context, id string, r SandboxExecRequest) (SandboxExecResult, error)
-	SandboxReadFile(ctx context.Context, id, path string) ([]byte, error)
+	SandboxReadFile(ctx context.Context, id, path string) (data []byte, truncated bool, err error)
 	SandboxListFiles(ctx context.Context, id, path string) (json.RawMessage, error)
 	SandboxWriteFile(ctx context.Context, id, path, mode string, content []byte) (int64, error)
 	OpenSandboxConsole(ctx context.Context, id string, r ConsoleRequest) (ConsoleSession, error)
@@ -173,6 +173,12 @@ func (c *Client) Do(ctx context.Context, method, path string, q url.Values, body
 
 // DoRaw sends body as is (ctype "" sends none) and returns the raw response body; non-2xx answers are an *Error.
 func (c *Client) DoRaw(ctx context.Context, method, path string, q url.Values, body []byte, ctype string) ([]byte, error) {
+	raw, _, err := c.doRaw(ctx, method, path, q, body, ctype)
+	return raw, err
+}
+
+// doRaw is DoRaw with the response headers.
+func (c *Client) doRaw(ctx context.Context, method, path string, q url.Values, body []byte, ctype string) ([]byte, http.Header, error) {
 	u := c.BaseURL + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
@@ -183,7 +189,7 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, q url.Values, b
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if ctype != "" {
@@ -201,12 +207,12 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, q url.Values, b
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode/100 != 2 {
 		e := &Error{Status: resp.StatusCode, Method: method, Path: path, Body: raw}
@@ -219,9 +225,9 @@ func (c *Client) DoRaw(ctx context.Context, method, path string, q url.Values, b
 		} else if len(raw) > 0 && len(raw) < 300 {
 			e.Message = strings.TrimSpace(string(raw))
 		}
-		return nil, e
+		return nil, nil, e
 	}
-	return raw, nil
+	return raw, resp.Header, nil
 }
 
 func get[T any](ctx context.Context, c *Client, path string, q url.Values) (Envelope[T], error) {

@@ -323,14 +323,18 @@ var mcpTools = []*mcpTool{
 		}),
 		needsID: true,
 		run: func(ctx context.Context, c api.API, id string, x mcpArgs) (string, error) {
-			b, err := c.SandboxReadFile(ctx, id, x.Path)
+			b, truncated, err := c.SandboxReadFile(ctx, id, x.Path)
 			if err != nil {
 				return "", err
 			}
-			if utf8.Valid(b) {
-				return string(b), nil
+			note := ""
+			if truncated {
+				note = "\n[truncated at 5 MB]"
 			}
-			return "binary file (" + strconv.Itoa(len(b)) + " bytes), base64:\n" + base64.StdEncoding.EncodeToString(b), nil
+			if utf8.Valid(b) {
+				return string(b) + note, nil
+			}
+			return "binary file (" + strconv.Itoa(len(b)) + " bytes), base64:\n" + base64.StdEncoding.EncodeToString(b) + note, nil
 		},
 	},
 	{

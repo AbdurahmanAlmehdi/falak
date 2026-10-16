@@ -180,9 +180,13 @@ func (c *Client) SandboxExec(ctx context.Context, id string, r SandboxExecReques
 	return out, err
 }
 
-// SandboxReadFile downloads one file (≤ 5 MB).
-func (c *Client) SandboxReadFile(ctx context.Context, id, path string) ([]byte, error) {
-	return c.DoRaw(ctx, http.MethodGet, Path(PathSandboxFiles, "sandbox", id), url.Values{"path": {path}}, nil, "")
+// SandboxReadFile downloads one file; truncated: it is larger than 5 MB and data is only its start (X-Falak-Truncated).
+func (c *Client) SandboxReadFile(ctx context.Context, id, path string) ([]byte, bool, error) {
+	data, h, err := c.doRaw(ctx, http.MethodGet, Path(PathSandboxFiles, "sandbox", id), url.Values{"path": {path}}, nil, "")
+	if err != nil {
+		return nil, false, err
+	}
+	return data, h.Get("X-Falak-Truncated") == "1", nil
 }
 
 // SandboxListFiles returns the directory listing as the API sent it ({entries: [...], truncated?}).

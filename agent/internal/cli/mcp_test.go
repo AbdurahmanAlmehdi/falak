@@ -154,6 +154,9 @@ func TestMCPTools(t *testing.T) {
 	if r := callTool(t, h, "sandbox_read_file", map[string]any{"id": sbxID, "path": "/etc/hostname"}); r.IsError || r.Content[0].Text != "brave-otter\n" {
 		t.Fatalf("read: %+v", r)
 	}
+	if r := callTool(t, h, "sandbox_read_file", map[string]any{"id": sbxID, "path": "/var/big.log"}); r.IsError || r.Content[0].Text != "first 5 MB\n[truncated at 5 MB]" {
+		t.Fatalf("read truncated: %+v", r)
+	}
 	if r := callTool(t, h, "sandbox_read_file", map[string]any{"id": sbxID, "path": "/bin/blob"}); !strings.HasSuffix(r.Content[0].Text, "base64:\n/wD+") {
 		t.Fatalf("read binary: %+v", r)
 	}
