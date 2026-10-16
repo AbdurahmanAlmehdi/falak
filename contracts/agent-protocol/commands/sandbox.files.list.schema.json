@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.list.schema.json",
+  "title": "sandbox.files.list — list a directory inside a sandbox (at most 1000 entries). Errors: not_found, not_directory. Feature sandbox.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "entries"
+      ],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "file",
+                  "dir",
+                  "link",
+                  "other"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string"
+              },
+              "mtime": {
+                "type": [
+                  "integer",
+                  "string"
+                ],
+                "description": "unix seconds"
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

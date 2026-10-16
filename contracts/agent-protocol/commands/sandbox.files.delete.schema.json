@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.delete.schema.json",
+  "title": "sandbox.files.delete — delete a file (or, with recursive, a directory) inside a sandbox. Errors: not_found. Feature sandbox.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096
+    },
+    "recursive": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object"
+    }
+  }
+}

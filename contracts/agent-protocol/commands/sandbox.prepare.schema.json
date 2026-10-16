@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.prepare.schema.json",
+  "title": "sandbox.prepare — install runsc (gVisor's apt repo, pinned release), create the br-sbx bridge and the FALAK-SBX iptables chain; idempotent (sandbox.create runs it itself when needed). Feature sandbox.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {},
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "runsc_version",
+        "platform"
+      ],
+      "properties": {
+        "runsc_version": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string",
+          "description": "systrap | ptrace | kvm"
+        }
+      }
+    }
+  }
+}

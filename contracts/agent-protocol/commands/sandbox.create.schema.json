@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.create.schema.json",
+  "title": "sandbox.create — pull the image, export it as a base rootfs once per digest, write the OCI bundle, create the netns + cgroup and `runsc run --detach` (docs/plans/SANDBOXES.md); optionally git clone a repository; idempotent by id. Feature sandbox.v1",
+  "x-falak-redeliverable": true,
+  "x-falak-forget-secrets": [
+    "repo.token",
+    "env"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "image",
+    "cpus",
+    "memory_mb",
+    "disk_mb",
+    "network",
+    "expires_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "image": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$",
+      "description": "an OCI image reference, e.g. ubuntu:24.04"
+    },
+    "cpus": {
+      "type": "number",
+      "minimum": 0.1,
+      "maximum": 64
+    },
+    "memory_mb": {
+      "type": "integer",
+      "minimum": 64,
+      "maximum": 262144,
+      "description": "cgroup memory limit; hitting it kills the whole sandbox (reaped with reason oom)"
+    },
+    "disk_mb": {
+      "type": "integer",
+      "minimum": 256,
+      "maximum": 1048576,
+      "description": "--overlay2=root:self,size=<disk>: the cap on the sandbox's writes"
+    },
+    "pids": {
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 65536,
+      "default": 1024
+    },
+    "network": {
+      "enum": [
+        "none",
+        "internet",
+        "allowlist"
+      ]
+    },
+    "allow_hosts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*\\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"
+      },
+      "description": "allowlist: the only hosts reachable (through the egress proxy)"
+    },
+    "env": {
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 32768
+      }
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "unix seconds; the agent reaps the sandbox past it on its own (sandbox.reaped, reason expired)"
+    },
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^(https://|git@|ssh://)[^\\s]+$"
+        },
+        "ref": {
+          "type": "string",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9._/@^~-]+$"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "HTTPS token for the clone; never written into the sandbox's env or the cloned repository's config"
+        }
+      },
+      "description": "git clone into /workspace/<repo name> after start"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "status",
+        "image_digest",
+        "started_at"
+      ],
+      "properties": {
+        "status": {
+          "const": "running"
+        },
+        "ip": {
+          "type": "string",
+          "maxLength": 45
+        },
+        "image_digest": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

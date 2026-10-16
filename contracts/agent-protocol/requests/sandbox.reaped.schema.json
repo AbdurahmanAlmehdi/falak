@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/requests/sandbox.reaped.schema.json",
+  "title": "POST /agent/v1/requests/sandbox.reaped — the agent removed a sandbox on its own: past expires_at, killed by its memory limit, or its init process exited (docs/plans/SANDBOXES.md). Feature sandbox.v1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "reason"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "reason": {
+      "enum": [
+        "expired",
+        "oom",
+        "exited"
+      ]
+    }
+  },
+  "$defs": {
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "description": "false: the control plane does not know the sandbox (on this server)"
+        }
+      }
+    }
+  }
+}

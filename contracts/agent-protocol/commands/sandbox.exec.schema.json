@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.exec.schema.json",
+  "title": "sandbox.exec — `runsc exec` a command in a running sandbox with a timeout, separate stdout/stderr (base64) capped at max_output bytes each. Feature sandbox.v1",
+  "x-falak-forget-secrets": [
+    "env",
+    "stdin"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "cmd",
+    "timeout_s"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "cmd": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1000,
+      "items": {
+        "type": "string",
+        "maxLength": 131072
+      },
+      "description": "argv; the control plane sends a string command as [\"sh\",\"-lc\",cmd]"
+    },
+    "cwd": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096
+    },
+    "env": {
+      "type": "object",
+      "maxProperties": 100,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 32768
+      }
+    },
+    "stdin": {
+      "type": "string",
+      "maxLength": 1398104,
+      "contentEncoding": "base64",
+      "description": "≤ 1 MB decoded"
+    },
+    "timeout_s": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120
+    },
+    "max_output": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 262144,
+      "default": 262144
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "exit_code",
+        "stdout",
+        "stderr",
+        "truncated",
+        "duration_ms",
+        "timed_out"
+      ],
+      "properties": {
+        "exit_code": {
+          "type": "integer"
+        },
+        "stdout": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "stderr": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

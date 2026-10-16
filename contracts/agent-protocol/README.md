@@ -308,3 +308,16 @@ overrides a `timed_out`).
 
 On shutdown the agent stops long-polling first and does not start commands from a response that arrives while it
 stops; running commands get 20 s to finish (heartbeats keep reporting them) before they are cancelled.
+
+## Sandboxes (`sandbox.v1`, v0.20.0)
+`sandbox.*` commands drive gVisor sandboxes with `runsc --root=/run/falak-sbx` directly (docs/plans/SANDBOXES.md
+"Contracts"): container `falak-sbx-<id>`, state under `/var/lib/falak/sandboxes/<id>`. `sandbox.create` (runs
+`sandbox.prepare` when needed) and `sandbox.kill` are redeliverable and idempotent by id; a `sandbox.create` for a
+sandbox that already runs only takes the new `expires_at` (the control plane sends it again when a sandbox is
+extended). `sandbox.exec` and `sandbox.files.*` answer within the request (the control plane waits for them);
+stdout, stderr and file contents are base64. Errors are failed commands whose error starts with a code: `not_found`,
+`is_directory`, `not_directory`, or `sandbox <id> not found` when the agent doesn't know the sandbox. The agent reaps
+sandboxes past `expires_at`, out of memory or whose init exited on its own, and reports each with the request
+`sandbox.reaped` `{id, reason}` (retried each minute until a 2xx). `terminal.open` takes a `sandbox: {id}` target
+(exclusive with `container`). Payload secrets forgotten once settled: create `repo.token` and `env`, exec `env` and
+`stdin`, files.write `content`.

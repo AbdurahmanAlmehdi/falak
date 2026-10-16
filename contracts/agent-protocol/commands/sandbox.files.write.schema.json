@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.write.schema.json",
+  "title": "sandbox.files.write — write a file inside a sandbox (≤ 5 MB decoded), creating parent directories unless mkdirs is false. Feature sandbox.v1",
+  "x-falak-forget-secrets": [
+    "content"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "path",
+    "content"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096
+    },
+    "content": {
+      "type": "string",
+      "maxLength": 6990508,
+      "contentEncoding": "base64"
+    },
+    "mode": {
+      "type": "string",
+      "pattern": "^0?[0-7]{3,4}$",
+      "default": "0644"
+    },
+    "mkdirs": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

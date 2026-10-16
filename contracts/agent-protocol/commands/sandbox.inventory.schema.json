@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.inventory.schema.json",
+  "title": "sandbox.inventory — the sandboxes the agent runs (from runsc list and its state directory), for the control plane's reconciliation. Feature sandbox.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {},
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "sandboxes"
+      ],
+      "properties": {
+        "sandboxes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "status"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[0-9a-z]{26}$"
+              },
+              "status": {
+                "enum": [
+                  "running",
+                  "paused",
+                  "stopped"
+                ]
+              },
+              "oom_killed": {
+                "type": "boolean"
+              },
+              "started_at": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "expires_at": {
+                "type": "integer"
+              },
+              "memory_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cpu_seconds": {
+                "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

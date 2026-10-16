@@ -106,6 +106,21 @@
           "description": "docker exec -w"
         }
       }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "sandbox.v1 + terminal.v2: a shell in a sandbox (`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'exec bash -l 2>/dev/null || exec sh -l'`); user, shell and cwd don't apply, env is passed. Exclusive with container",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-z]{26}$",
+          "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+        }
+      }
     }
   },
   "$defs": {
@@ -129,5 +144,11 @@
         }
       }
     }
+  },
+  "not": {
+    "required": [
+      "container",
+      "sandbox"
+    ]
   }
 }

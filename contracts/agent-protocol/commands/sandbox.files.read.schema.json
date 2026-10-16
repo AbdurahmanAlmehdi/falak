@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.read.schema.json",
+  "title": "sandbox.files.read — read a file inside a sandbox (a tar stream through runsc exec; no host path is opened). Errors: not_found, is_directory. Feature sandbox.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "path",
+    "max_bytes"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5242880
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "content",
+        "size",
+        "truncated"
+      ],
+      "properties": {
+        "content": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "pattern": "^0?[0-7]{3,4}$"
+        }
+      }
+    }
+  }
+}
