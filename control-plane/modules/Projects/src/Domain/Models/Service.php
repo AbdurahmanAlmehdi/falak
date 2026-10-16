@@ -8,7 +8,6 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Str;
 
 /**
  * A site / database placed on an environment's canvas. `ref_id` is the owning module's opaque ULID.
@@ -62,13 +61,10 @@ class Service extends Model
         return $this->belongsTo(Group::class);
     }
 
-    /**
-     * Normalised form of a service name used to match references: "Shop API", "shop-api" and
-     * "shop_api" all refer to the same service.
-     */
+    /** See {@see ServiceData::handle()}. */
     public static function handle(string $name): string
     {
-        return Str::slug(str_replace(['_', '.'], '-', trim($name)));
+        return ServiceData::handle($name);
     }
 
     public function toData(): ServiceData

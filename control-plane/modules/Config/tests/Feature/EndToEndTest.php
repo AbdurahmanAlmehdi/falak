@@ -15,6 +15,7 @@ use Falak\Deployments\Domain\Enums\Trigger;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Deployments\Domain\Models\Release;
 use Falak\Deployments\Domain\Models\SiteSettings;
+use Falak\Processes\Domain\Models\Schedule;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Domain\Models\Service;
@@ -200,6 +201,22 @@ it('exporting an environment then planning the export gives an empty plan', func
     [$validation, $plan] = app(PlanFile::class)($world->source, $environment, $yaml, 'yaml');
 
     expect($validation->errors)->toBe([])
+        ->and($plan?->changes->actionable())->toBe([]);
+});
+
+it('exports dashboard names as keys that validate, and planning the export maps them back with no changes', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    Service::query()->where('ref_id', $site->id)->update(['name' => 'Storefront_App']);
+    Schedule::query()->create(['organization_id' => $site->organization_id, 'site_id' => $site->id, 'name' => 'Nightly report', 'command' => 'php artisan report', 'expression' => '0 3 * * *']);
+
+    $environment = app(ProjectDirectory::class)->environment($world->environment->id);
+    $exporter = app(Exporter::class);
+    $yaml = $exporter->render($exporter->document($environment, $world->source), 'yaml');
+    [$validation, $plan] = app(PlanFile::class)($world->source, $environment, $yaml, 'yaml');
+
+    expect($yaml)->toContain("  storefront-app:\n")->toContain("Nightly-report:\n")
+        ->and($validation->errors)->toBe([])
         ->and($plan?->changes->actionable())->toBe([]);
 });
 

@@ -35,6 +35,7 @@ use Falak\Databases\Domain\Models\Database;
 use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Kernel\Security\BackupKeys;
+use Falak\Projects\Contracts\Data\ServiceData;
 use Falak\Projects\Contracts\PreviewEnvironments;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
@@ -735,7 +736,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
         $services = [];
 
         foreach ($this->projects->servicesIn($scope->environmentId) as $service) {
-            $services[$service->name] = $service->kind;
+            $services[ServiceData::handle($service->name)] = $service->kind;
         }
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {

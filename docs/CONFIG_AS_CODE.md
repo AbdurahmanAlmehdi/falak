@@ -136,8 +136,11 @@ previews: { … }                             # pull request previews
 ```
 
 **Units** are keyed by name: lower case letters, digits and dashes, starting with a letter (`web`, `api`, `db`; `secrets`
-is reserved). The key is the service's name on the project canvas and the name `${{ <unit>.KEY }}` references use. A
-file holds at most 100 units and 20 environments.
+is reserved). The key is the service's name on the project canvas and the name `${{ <unit>.KEY }}` references use; a
+service whose name isn't a key (`Storefront`, `storefront_db`) is the unit of its handle (`storefront`, `storefront-db`),
+as references match it. Schedules and daemons made in the dashboard with names a key can't hold read the same way
+(`Nightly report` → `Nightly-report`) and keep their name when the file changes them. A file holds at most 100 units
+and 20 environments.
 
 **Values:**
 - **Durations**: whole numbers with units from largest to smallest: `30s`, `5m`, `1h30m`, `2d`, `0s`. No bare numbers,

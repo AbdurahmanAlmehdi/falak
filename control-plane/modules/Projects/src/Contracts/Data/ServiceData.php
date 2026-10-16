@@ -3,6 +3,7 @@
 namespace Falak\Projects\Contracts\Data;
 
 use Falak\Projects\Contracts\ServiceKind;
+use Illuminate\Support\Str;
 
 /**
  * A site or database placed in a project environment (one environment per site/database).
@@ -23,4 +24,13 @@ final readonly class ServiceData
         public int $x,
         public int $y,
     ) {}
+
+    /**
+     * Normalised form of a service name, unique in an environment: references match it ("Shop API", "shop-api" and
+     * "shop_api" are the same service) and falak.yaml uses it as the service's unit key.
+     */
+    public static function handle(string $name): string
+    {
+        return Str::slug(str_replace(['_', '.'], '-', trim($name)));
+    }
 }

@@ -7,6 +7,7 @@ use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\ValidatesConfig;
+use Falak\Projects\Contracts\Data\ServiceData;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\VariableReferences;
 use Falak\Secrets\Contracts\Data\ScopeChain;
@@ -45,7 +46,7 @@ final class SemanticValidator
         $services = [];
 
         foreach ($this->projects->servicesIn($scope->environmentId) as $service) {
-            $services[$service->name] = $service;
+            $services[ServiceData::handle($service->name)] = $service;
         }
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
@@ -101,7 +102,7 @@ final class SemanticValidator
             foreach ($matches as $m) {
                 $name = trim($m[1]);
 
-                if (strtolower($name) !== VariableReferences::SECRETS && ! isset($resolved['units'][$name]) && ! isset($services[$name])) {
+                if (strtolower($name) !== VariableReferences::SECRETS && ! isset($resolved['units'][$name]) && ! isset($services[ServiceData::handle($name)])) {
                     $missing[] = $name;
                 }
             }

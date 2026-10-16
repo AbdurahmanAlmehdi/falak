@@ -11,6 +11,7 @@ use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\Diff;
+use Falak\Config\Contracts\ItemKey;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
@@ -184,7 +185,8 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
 
                 if ($created || array_filter($list, fn (Change $c) => $c->op !== ChangeOp::Noop) !== []) {
                     $model = app(SaveSchedule::class)($site, $function, $model, array_filter([
-                        'name' => $name,
+                        // An adopted schedule keeps its dashboard name ("Nightly report" behind `Nightly-report`).
+                        'name' => $model?->name ?? $name,
                         'expression' => $wanted['cron'] ?? $model?->expression,
                         'timezone' => $wanted['timezone'] ?? null,
                         'overlap' => $wanted['overlap'] ?? null,
@@ -253,7 +255,7 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
     {
         $function = $this->functions->find($siteId);
 
-        return $function === null ? [] : FunctionSchedule::query()->where('function_id', $function->id)->orderBy('name')->get()->keyBy('name')->all();
+        return $function === null ? [] : ItemKey::map(FunctionSchedule::query()->where('function_id', $function->id)->orderBy('name')->get(), fn (FunctionSchedule $s) => (string) $s->name);
     }
 
     /** Created by this environment's file, and its unit is still the file's (else detached with its function). */

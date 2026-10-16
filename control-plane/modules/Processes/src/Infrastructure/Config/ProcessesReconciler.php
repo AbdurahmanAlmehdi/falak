@@ -11,6 +11,7 @@ use Falak\Config\Contracts\ChangeSet;
 use Falak\Config\Contracts\ConfigIssue;
 use Falak\Config\Contracts\ConfigScope;
 use Falak\Config\Contracts\Diff;
+use Falak\Config\Contracts\ItemKey;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Config\Contracts\Pointer;
 use Falak\Config\Contracts\Reconcilable;
@@ -384,7 +385,8 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
             /** @var ?Daemon $model */
             $model ??= new Daemon(['organization_id' => $site->organizationId, 'site_id' => $site->id, 'created_by' => $ctx->actorId]);
             $data = [
-                'name' => $key,
+                // An adopted daemon or schedule keeps its dashboard name ("Nightly report" behind `Nightly-report`).
+                'name' => $model->exists ? $model->name : $key,
                 'command' => $desired['command'] ?? $model->command,
                 'directory' => $desired['directory'] ?? $model->directory,
                 // Processes from the file always run as the site's own user (validate() refuses any other).
@@ -403,7 +405,7 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
         /** @var ?Schedule $model */
         $data = [
-            'name' => $key,
+            'name' => $model?->name ?? $key,
             'command' => $desired['command'] ?? $model?->command,
             'expression' => $desired['cron'] ?? $model?->expression,
             'timezone' => $desired['timezone'] ?? $model?->timezone,
@@ -495,11 +497,7 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
 
         $model = $section === 'daemons' ? Daemon::class : Schedule::class;
 
-        foreach ($model::query()->where('site_id', $siteId)->orderBy('name')->get() as $row) {
-            $out[(string) $row->name] = $row;
-        }
-
-        return $out;
+        return ItemKey::map($model::query()->where('site_id', $siteId)->orderBy('name')->get(), fn (Model $row) => (string) $row->getAttribute('name'));
     }
 
     /** The unit's site is still managed by this environment's file (a unit removed from the file detaches its site first). */

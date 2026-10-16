@@ -7,6 +7,7 @@ use Falak\Config\Domain\Models\ConfigOwnership;
 use Falak\Config\Domain\Models\ConfigSource;
 use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Projects\Contracts\Data\EnvironmentData;
+use Falak\Projects\Contracts\Data\ServiceData;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
 use Falak\Servers\Contracts\ServerDirectory;
@@ -76,7 +77,8 @@ final class ScopeFactory
     /**
      * Unit key => canvas service. **[decision]** A unit the file manages is mapped by the site (or database container)
      * recorded in config_ownership (resource id), not by the service's name, so renaming the service in the dashboard
-     * doesn't turn the next push into a delete and a create; other units map by service name. A database container is
+     * doesn't turn the next push into a delete and a create; other units map by the service name's handle ("Storefront",
+     * "storefront_db": `storefront`, `storefront-db`, the keys an export writes). A database container is
      * the canvas service of one of its databases.
      *
      * @return array<string, array{kind: string, ref_id: string}>
@@ -87,7 +89,7 @@ final class ScopeFactory
         $byRef = [];
 
         foreach ($this->projects->servicesIn($environmentId) as $service) {
-            $services[$service->name] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
+            $services[ServiceData::handle($service->name)] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
             $byRef[$service->refId] = $service;
         }
 
@@ -107,8 +109,10 @@ final class ScopeFactory
                 continue;
             }
 
-            if (isset($services[$service->name]) && $services[$service->name]['ref_id'] === $service->refId && $service->name !== $owned->unit) {
-                unset($services[$service->name]);
+            $handle = ServiceData::handle($service->name);
+
+            if (isset($services[$handle]) && $services[$handle]['ref_id'] === $service->refId && $handle !== $owned->unit) {
+                unset($services[$handle]);
             }
 
             $services[(string) $owned->unit] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
