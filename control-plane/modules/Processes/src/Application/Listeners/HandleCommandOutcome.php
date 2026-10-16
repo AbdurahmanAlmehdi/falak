@@ -2,6 +2,7 @@
 
 namespace Falak\Processes\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Processes\Application\OctaneRoutes;
@@ -20,6 +21,8 @@ use Illuminate\Support\Str;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(
         private readonly StatusPoller $status,
         private readonly OctaneRoutes $octane,

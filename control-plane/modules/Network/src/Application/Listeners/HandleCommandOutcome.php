@@ -2,6 +2,7 @@
 
 namespace Falak\Network\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Network\Application\ConfigureConnections;
@@ -22,6 +23,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(
         private readonly ConvergePrivateNetwork $converge,
         private readonly ConfigureConnections $connections,

@@ -6,6 +6,7 @@ use Falak\Databases\Events\DatabaseCreated;
 use Falak\Databases\Events\RestoreFinished;
 use Falak\Deployments\Events\DeploymentFailed;
 use Falak\Deployments\Events\DeploymentSucceeded;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Previews\Application\PreviewLifecycle;
@@ -22,6 +23,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandlePreviewEvents implements ShouldHandleEventsAfterCommit, ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(private readonly PreviewLifecycle $lifecycle) {}
 
     public function opened(PullRequestOpened $event): void

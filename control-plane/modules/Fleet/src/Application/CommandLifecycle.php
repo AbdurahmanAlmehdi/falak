@@ -7,14 +7,22 @@ use Falak\Fleet\Domain\Models\Command;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Fleet\Events\CommandOutputReceived;
+use Falak\Fleet\Infrastructure\ProtocolSchemas;
 use Illuminate\Support\Carbon;
 
 /**
  * State transitions of a command. Terminal transitions announce CommandFinished / CommandFailed exactly once
  * per transition, and broadcast the new status to live viewers.
+ *
+ * The events carry the result, except for types whose result is forgotten once read (x-falak-forget-result: sandbox
+ * exec output, file contents): queued listeners serialize their event into the queue, so a 5 MB file read would be
+ * copied into Redis once per listener and kept there (Horizon) after the control plane forgot it. Their listeners load
+ * the command by id when they need more.
  */
 final class CommandLifecycle
 {
+    public function __construct(private readonly ProtocolSchemas $schemas) {}
+
     public function markStarted(Command $command, ?Carbon $at = null): void
     {
         if (! in_array($command->status, [CommandStatus::Queued, CommandStatus::Delivered], true)) {
@@ -74,6 +82,7 @@ final class CommandLifecycle
     private function announce(Command $command): void
     {
         CommandOutputReceived::dispatch($command->id, $command->server_id, $command->status->value, []);
+        $result = in_array($command->type, $this->schemas->forgettableResults(), true) ? null : $command->result;
 
         if ($command->status === CommandStatus::Succeeded) {
             CommandFinished::dispatch(
@@ -83,7 +92,7 @@ final class CommandLifecycle
                 $command->type,
                 $command->idempotency_key,
                 $command->exit_code,
-                $command->result,
+                $result,
             );
 
             return;
@@ -98,7 +107,7 @@ final class CommandLifecycle
             $command->status->value,
             $command->error,
             $command->exit_code,
-            $command->result,
+            $result,
         );
     }
 }

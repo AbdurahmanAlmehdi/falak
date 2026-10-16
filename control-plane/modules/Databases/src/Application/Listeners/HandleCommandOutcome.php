@@ -29,6 +29,7 @@ use Falak\Databases\Events\DatabaseDeleted;
 use Falak\Databases\Events\RestoreFinished;
 use Falak\Databases\Infrastructure\CommandPayloads;
 use Falak\Fleet\Contracts\AgentGateway;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Identity\Contracts\AuditLog;
@@ -46,6 +47,8 @@ use Illuminate\Support\Facades\Log;
  */
 final class HandleCommandOutcome implements ShouldHandleEventsAfterCommit, ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     private const INSTANCE_TYPES = ['db.instance.create', 'db.instance.update', 'db.instance.restart', 'db.instance.delete', 'db.instance.password', 'db.instance.secrets', 'db.instance.upgrade'];
 
     private const TYPES = ['db.create', 'db.drop', 'db.user.apply', 'db.backup', 'db.restore', 'db.drill', 'db.pitr.base', 'db.pitr.restore', 'db.pitr.promote', ...self::INSTANCE_TYPES];

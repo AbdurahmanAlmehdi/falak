@@ -3,6 +3,7 @@
 namespace Falak\Volumes\Application\Listeners;
 
 use Falak\Fleet\Contracts\AgentGateway;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Identity\Contracts\AuditLog;
@@ -33,6 +34,8 @@ use Illuminate\Validation\ValidationException;
  */
 final class HandleCommandOutcome implements ShouldHandleEventsAfterCommit, ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     private const TYPES = ['volume.create', 'volume.delete', 'volume.resize', 'volume.archive', 'volume.restore', 'volume.clone', 'volume.download', 'volume.inventory', 'volume.drill'];
 
     /** Payload secrets dropped once a command settled: archive keys, a customer's age identity. */

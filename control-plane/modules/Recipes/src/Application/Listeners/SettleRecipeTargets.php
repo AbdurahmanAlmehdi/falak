@@ -2,6 +2,7 @@
 
 namespace Falak\Recipes\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Recipes\Application\RunProgress;
@@ -14,6 +15,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class SettleRecipeTargets implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(private readonly RunProgress $progress) {}
 
     public function handleFinished(CommandFinished $event): void

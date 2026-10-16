@@ -3,6 +3,7 @@
 namespace Falak\Sites\Application\Listeners;
 
 use Falak\Fleet\Contracts\CommandStatus;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Sites\Application\TargetProvisioner;
@@ -15,6 +16,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     private const TYPES = ['system.user.create', 'runtime.fpm.pool', 'runtime.bun.install', 'runtime.deno.install', 'system.exec'];
 
     public function __construct(private readonly TargetProvisioner $provisioner) {}

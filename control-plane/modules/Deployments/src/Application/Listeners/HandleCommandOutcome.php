@@ -3,6 +3,7 @@
 namespace Falak\Deployments\Application\Listeners;
 
 use Falak\Deployments\Application\Orchestration\Orchestrator;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -14,6 +15,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     private const TYPES = ['deploy.fetch', 'deploy.prepare', 'deploy.hook', 'deploy.activate', 'deploy.rollback', 'deploy.container.swap', 'proc.restart', 'proc.apply', 'system.exec', 'docker.compose.pull', 'docker.compose.up', 'fn.release.apply'];
 
     public function __construct(private readonly Orchestrator $orchestrator) {}

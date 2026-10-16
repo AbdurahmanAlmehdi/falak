@@ -2,6 +2,7 @@
 
 namespace Falak\Network\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\AgentVersionChanged;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
@@ -16,6 +17,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleProtectionOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(
         private readonly ApplyProtection $apply,
         private readonly Firewalls $firewalls,

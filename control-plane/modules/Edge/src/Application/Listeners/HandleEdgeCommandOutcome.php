@@ -13,6 +13,7 @@ use Falak\Edge\Domain\Models\ServerState;
 use Falak\Edge\Events\CertificateInstallFailed;
 use Falak\Edge\Events\CertificateIssued;
 use Falak\Edge\Events\EdgeApplied;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Network\Contracts\Firewalls;
@@ -25,6 +26,8 @@ use Illuminate\Support\Str;
  */
 final class HandleEdgeCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(private readonly EdgeRoutes $routes) {}
 
     public function handleFinished(CommandFinished $event): void

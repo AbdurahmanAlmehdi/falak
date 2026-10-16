@@ -3,6 +3,7 @@
 namespace Falak\Terminal\Application\Listeners;
 
 use Falak\Fleet\Contracts\AgentGateway;
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Terminal\Application\SessionTransitions;
@@ -15,6 +16,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleTerminalCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public const REASONS = ['exited', 'closed', 'idle', 'timeout'];
 
     public function __construct(

@@ -2,6 +2,7 @@
 
 namespace Falak\Network\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\AgentCameOnline;
 use Falak\Fleet\Events\AgentVersionChanged;
 use Falak\Fleet\Events\CommandFailed;
@@ -15,6 +16,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleEbpfOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(private readonly ConfigureEbpf $configure) {}
 
     public function handleFinished(CommandFinished $event): void

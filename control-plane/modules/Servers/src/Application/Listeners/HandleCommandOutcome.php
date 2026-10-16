@@ -2,6 +2,7 @@
 
 namespace Falak\Servers\Application\Listeners;
 
+use Falak\Fleet\Contracts\SkipsSandboxCommands;
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Identity\Contracts\AuditLog;
@@ -23,6 +24,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
  */
 final class HandleCommandOutcome implements ShouldQueue
 {
+    use SkipsSandboxCommands;
+
     public function __construct(
         private readonly ServerStatusUpdater $status,
         private readonly SyncServerSshKeys $syncKeys,
