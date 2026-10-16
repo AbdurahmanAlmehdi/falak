@@ -264,7 +264,7 @@ Sandbox resource:
  "ttl_seconds":3600,"expires_at":"2026-10-16T20:00:00+00:00","created_at":"…","created_by":{"type":"user|token","name":"…"},
  "ip":"10.88.0.5","kill_reason":null}
 ```
-Statuses: `creating`, `running`, `failed`, `killed`. (`paused`/`stopped` arrive in v0.21.)
+Statuses: `creating`, `running`, `failed`, `killed` (`paused` from v0.21).
 
 | Route | Body / query | Response |
 |---|---|---|
@@ -305,6 +305,104 @@ agent refuses a pull, an export or a start that would leave less than min(10%, 5
 `sandbox_exec {id, command, cwd?, timeout?}`, `sandbox_read_file {id, path}`, `sandbox_write_file {id, path, content}`,
 `sandbox_list_files {id, path}`, `sandbox_extend {id, by}`, `sandbox_kill {id}`. Each maps 1:1 to the HTTP API;
 results are text content (JSON for structured ones), errors set `isError`.
+
+## Contracts (v0.21)
+
+Fixed before the lanes start, as for v0.20. Everything in v0.20 stays as it is.
+
+### Concepts
+
+- **Snapshot:** a frozen copy of a sandbox at one moment: its memory, its running processes and everything it wrote
+  (`runsc checkpoint`). It lives on the sandbox's server, under `/var/lib/falak/sandboxes/snapshots/<snapshot id>`
+  (root-only), and outlives the sandbox. It keeps the base image it needs: the image GC never removes a base rootfs a
+  snapshot uses.
+- **Restore / fork:** a new sandbox made from a snapshot (`runsc restore` into a new bundle and a new netns, so it gets
+  its own IP). Processes continue where they were. Fork = N new sandboxes from one snapshot. Always on the snapshot's
+  server, always with the snapshot's CPUs, memory, disk and network mode (the new sandbox's name, TTL, env additions are
+  its own; env from the snapshot carries over).
+- **Template:** a snapshot with a name you create sandboxes from (`--from <snapshot name>`). There is no separate
+  template object: naming a snapshot makes it reusable; snapshots never expire, you delete them.
+- **Pause / resume:** `runsc pause/resume`. A paused sandbox uses no CPU; its memory stays allocated, so it still counts
+  against quotas. The time limit keeps running while paused.
+- **Idle pause:** a sandbox created with `idle_pause` (seconds, ≥ 60; default none) is paused by the control plane when
+  nothing used it (exec, files, console input, API calls on it) for that long. Any exec, file call or console resumes it
+  first, transparently.
+- **Database copy:** `db: {instance, database}` on create (or a later call) dumps a database of an instance **on the
+  same server** into the sandbox at `/workspace/db/<database>.<ext>` (postgres: custom-format `pg_dump -Fc` →
+  `.dump`, restore with `pg_restore`; mysql/mariadb: SQL → `.sql`). The sandbox can't reach the database itself; it gets
+  a copy of the data. Needs the permission that downloading a database backup needs.
+
+### Statuses
+
+`creating`, `running`, `paused`, `failed`, `killed`. A snapshot: `creating`, `ready`, `failed`, `deleted`.
+
+### Agent commands
+
+| Command | Payload | Result |
+|---|---|---|
+| `sandbox.snapshot` (redeliverable, idempotent by snapshot_id) | `{id, snapshot_id (ulid), leave_running (bool, default true)}` | `{snapshot_id, size_bytes, image_digest, created_at (RFC 3339)}`. With `leave_running: false` the sandbox is stopped and removed after the checkpoint (as a kill) |
+| `sandbox.snapshot.delete` (redeliverable, idempotent) | `{snapshot_id}` | `{}` |
+| `sandbox.create` (extended) | adds optional `from_snapshot: snapshot_id`. With it, `image` is still sent (the snapshot's image) and cpus/memory_mb/disk_mb/network/allow_hosts must equal the snapshot's; `repo` is not allowed; `env` adds to the snapshot's env | same as v0.20; error `snapshot <id> not found` |
+| `sandbox.pause` / `sandbox.resume` (idempotent) | `{id}` | `{status: "paused" \| "running"}` |
+| `sandbox.db.import` | `{id, instance (ulid), engine: postgres\|mysql\|mariadb, database, path (absolute, inside the sandbox)}` | `{path, size_bytes}`. Streams the instance container's logical dump (unencrypted, same tool as `db.backup`) into the sandbox through `runsc exec`; never written to the host disk |
+| `sandbox.inventory` (extended) | `{}` | adds `snapshots: [{snapshot_id, size_bytes}]`; sandbox status may be `paused` |
+
+New agent feature: `sandbox.v2` (snapshots, pause, db import). The control plane requires it for every v0.21 call.
+The reaper leaves paused sandboxes alone except for `expires_at`. Snapshot disk counts against the disk floor check.
+
+### HTTP API (new routes, all under `/api/v1`)
+
+Snapshot resource:
+```json
+{"id":"…","name":"node-ready","status":"ready","sandbox":{"id":"…","name":"brave-otter"},"server":{"id":"…","name":"main-1"},
+ "image":"node:22","cpus":1,"memory_mb":1024,"disk_mb":10240,"network":"internet","size_bytes":31457280,
+ "created_at":"…","created_by":{"type":"user","name":"…"}}
+```
+
+| Route | Body / query | Response |
+|---|---|---|
+| `POST /sandboxes/{sandbox}/snapshots` | `{name?, stop? (bool, default false)}` | 201 snapshot (`creating`); `?wait=1` waits ≤ 60 s for `ready` |
+| `GET /sandboxes/snapshots` | `?sandbox=` | `{data: [snapshot]}` (not deleted) |
+| `GET /sandboxes/snapshots/{snapshot}` | | snapshot |
+| `PATCH /sandboxes/snapshots/{snapshot}` | `{name}` | snapshot |
+| `DELETE /sandboxes/snapshots/{snapshot}` | | 204 |
+| `POST /sandboxes/snapshots/{snapshot}/fork` | `{count? (1–10, default 1), name? (prefix; forks are name-1…name-N when count > 1), ttl?, env?, idle_pause?}`; `?wait=1` | 201 `{data: [sandbox]}` |
+| `POST /sandboxes` (extended) | adds `snapshot?` (id or name; = fork with count 1; image/cpus/memory/disk/network/server/repo not allowed with it), `idle_pause?` (seconds or "10m"), `db?: {instance, database}` | as v0.20 |
+| `POST /sandboxes/{sandbox}/pause` / `/resume` | | sandbox |
+| `POST /sandboxes/{sandbox}/db` | `{instance, database}` | `{data: {path, size_bytes}}` (waits; ≤ 10 min timeout) |
+
+`{snapshot}` accepts an id or a name. Exec, files and console on a `paused` sandbox resume it first (one extra agent
+round trip); `409` stays for `creating`/`failed`/`killed`. Snapshot names are unique per organization among
+non-deleted snapshots. The sandbox resource gains `idle_pause_seconds`, `last_activity_at`, `from_snapshot`
+(`{id, name}` or null).
+
+Permissions: snapshot, fork, pause, resume, db need `sandboxes.use` and the creator-or-`sandboxes.manage` rule on the
+source sandbox; forking someone else's snapshot needs the same rule on the snapshot (its creator or manage). `db` also
+needs the database-backup-download permission (whatever `Databases` requires for downloading a backup) on that
+instance; a token needs that ability by name.
+
+Quotas (config, defaults): `max_snapshots` 20 per organization, `max_snapshot_storage_mb` 51200 per organization, fork
+`count` ≤ 10 and forks count against `max_running`/memory/disk like any sandbox.
+
+### CLI and MCP
+
+```
+falak sandbox snapshot <sandbox> [--name N] [--stop]        → prints the snapshot
+falak sandbox snapshots [--sandbox S]                        (ls) | snapshot rm <snapshot>
+falak sandbox fork <snapshot> [-n 3] [--name N] [--ttl] [--env K=V] [--idle-pause 10m]
+falak sandbox create --from <snapshot> | --idle-pause 10m | --db <instance>/<database>
+falak sandbox pause <sandbox> | resume <sandbox>
+falak sandbox db <sandbox> <instance>/<database>
+```
+`<instance>` accepts an instance id or name. MCP tools added: `sandbox_snapshot {id, name?}`,
+`sandbox_fork {snapshot, count?, ttl?}`, `sandbox_pause {id}`, `sandbox_resume {id}`, `sandbox_list_snapshots {}`;
+`sandbox_create` gains `from_snapshot?` and `idle_pause?`.
+
+### Dashboard
+
+Sandbox page: a Snapshots tab (take, list, fork with a count, delete), Pause/Resume in the header, an idle-pause field
+in the create dialog, "From snapshot" as a create source, and a Database copy action. Sandboxes list: a Snapshots
+section (name, source, size, created, fork, delete).
 
 ## Risks
 
