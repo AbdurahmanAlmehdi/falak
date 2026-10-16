@@ -46,6 +46,7 @@ var Catalogue = []string{
 	"security.audit", "security.fix", "security.undo",
 	"sandbox.prepare", "sandbox.create", "sandbox.exec", "sandbox.files.read", "sandbox.files.list", "sandbox.files.write", "sandbox.files.delete",
 	"sandbox.extend", "sandbox.kill", "sandbox.inventory",
+	"sandbox.snapshot", "sandbox.snapshot.delete", "sandbox.pause", "sandbox.resume", "sandbox.db.import",
 }
 
 const (
@@ -443,7 +444,14 @@ func TestSandboxResultsValidate(t *testing.T) {
 			{ID: "01j9z8y7x6w5v4t3s2r1q0p9na", Status: "running", StartedAt: "2026-10-16T19:00:00Z", ExpiresAt: 1760644800, MemoryBytes: 17 << 20, CPUSeconds: 1.5},
 			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nb", Status: "stopped", OOMKilled: true, ExpiresAt: 1760644800},
 			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nc", Status: "creating", ExpiresAt: 1760644800},
-		}},
+			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nd", Status: "paused", StartedAt: "2026-10-16T19:00:00Z", ExpiresAt: 1760644800, MemoryBytes: 17 << 20},
+		}, Snapshots: []sandbox.InventorySnapshot{{SnapshotID: "01j9z8y7x6w5v4t3s2r1q0p9sn", SizeBytes: 31457280}}},
+		"sandbox.snapshot": sandbox.SnapshotResult{SnapshotID: "01j9z8y7x6w5v4t3s2r1q0p9sn", SizeBytes: 31457280,
+			ImageDigest: "sha256:" + strings.Repeat("a", 64), CreatedAt: "2026-10-17T10:00:00Z"},
+		"sandbox.snapshot.delete": struct{}{},
+		"sandbox.pause":           sandbox.StatusResult{Status: "paused"},
+		"sandbox.resume":          sandbox.StatusResult{Status: "running"},
+		"sandbox.db.import":       sandbox.DBImportResult{Path: "/workspace/db/shop.dump", SizeBytes: 1094580},
 	} {
 		sch, err := c.Compile(idBase + "commands/" + typ + ".schema.json#/$defs/result")
 		if err != nil {
@@ -454,6 +462,21 @@ func TestSandboxResultsValidate(t *testing.T) {
 		if err := sch.Validate(v); err != nil {
 			t.Errorf("%s result invalid: %v\n%s", typ, err, b)
 		}
+	}
+	// A create from a snapshot (v0.21) is a valid sandbox.create payload, and decodes.
+	create, err := c.Compile(idBase + "commands/sandbox.create.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromSnapshot := `{"id":"01j9z8y7x6w5v4t3s2r1q0p9nb","image":"node:22","cpus":1,"memory_mb":1024,"disk_mb":10240,"pids":1024,"network":"internet",` +
+		`"allow_hosts":[],"env":{"FORK":"1"},"expires_at":1760644800,"from_snapshot":"01j9z8y7x6w5v4t3s2r1q0p9sn"}`
+	v, _ := jsonschema.UnmarshalJSON(strings.NewReader(fromSnapshot))
+	if err := create.Validate(v); err != nil {
+		t.Errorf("sandbox.create from_snapshot invalid: %v", err)
+	}
+	var p sandbox.CreatePayload
+	if err := json.Unmarshal([]byte(fromSnapshot), &p); err != nil || p.FromSnapshot != "01j9z8y7x6w5v4t3s2r1q0p9sn" {
+		t.Errorf("from_snapshot decodes to %+v: %v", p, err)
 	}
 	f, err := os.Open(filepath.Join(contractsDir, "requests", "sandbox.reaped.schema.json"))
 	if err != nil {
