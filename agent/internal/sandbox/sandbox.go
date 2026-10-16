@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
@@ -62,6 +63,10 @@ type Deps struct {
 	// GPGKeyURL and RepoURL are gVisor's apt repository.
 	GPGKeyURL, RepoURL string
 	Now                func() time.Time
+	// LookupHost resolves an image's registry (default net.DefaultResolver); DiskSpace reports the free and total
+	// bytes of the filesystem holding a path (default statfs). Tests fake both.
+	LookupHost func(ctx context.Context, host string) ([]netip.Addr, error)
+	DiskSpace  func(path string) (free, total uint64, err error)
 }
 
 // Service runs the sandbox.* commands and the reaper.
@@ -108,6 +113,14 @@ func New(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
+	if d.LookupHost == nil {
+		d.LookupHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	if d.DiskSpace == nil {
+		d.DiskSpace = diskSpace
+	}
 	return &Service{d: d, alloc: newAllocator(filepath.Join(d.Root, "addresses.json")), proxy: newProxy()}
 }
 
@@ -144,22 +157,58 @@ const (
 )
 
 // checkImage accepts a reference by Docker's grammar from a public registry: a registry on localhost or a private,
-// link-local or loopback address (a server's local registry) is refused.
+// link-local or loopback address (a server's local registry) is refused. A registry named by a host name is resolved
+// (checkRegistry) before the pull.
 func checkImage(ref string) error {
 	m := imageRe.FindStringSubmatch(ref)
 	if m == nil || len(ref) > 255 {
 		return payloadErr("invalid image %q", ref)
 	}
-	host := m[1]
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.ToLower(host)
+	host := registryHost(m[1])
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return payloadErr("image %q: a registry on localhost is not allowed", ref)
 	}
 	if a, err := netip.ParseAddr(host); err == nil && (!a.IsGlobalUnicast() || a.IsPrivate() || cgnat.Contains(a)) {
 		return payloadErr("image %q: a registry on a private address is not allowed", ref)
+	}
+	return nil
+}
+
+// registryHost is a reference's registry part without its port, lower-cased; "" for Docker Hub.
+func registryHost(registry string) string {
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		registry = h
+	}
+	switch registry = strings.ToLower(registry); registry {
+	case "docker.io", "index.docker.io", "registry-1.docker.io":
+		return ""
+	}
+	return registry
+}
+
+// checkRegistry resolves the registry of an image about to be pulled, on the agent, and refuses it when any of its
+// addresses isn't public: a name like 127.0.0.1.nip.io or one pointing at the server itself would otherwise get past
+// checkImage to a registry on the server or its network. Docker Hub isn't looked up.
+func (s *Service) checkRegistry(ctx context.Context, ref string) error {
+	m := imageRe.FindStringSubmatch(ref)
+	if m == nil {
+		return payloadErr("invalid image %q", ref)
+	}
+	host := registryHost(m[1])
+	if host == "" {
+		return nil
+	}
+	addrs, err := s.d.LookupHost(ctx, host)
+	if err != nil {
+		return fmt.Errorf("image %s: resolve registry %s: %w", ref, host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("image %s: registry %s has no address", ref, host)
+	}
+	for _, a := range addrs {
+		if !publicAddr(a) {
+			return payloadErr("image %q: registry %s resolves to %s, not a public address: not allowed", ref, host, a.Unmap())
+		}
 	}
 	return nil
 }
@@ -518,7 +567,7 @@ func (s *Service) Create(ctx context.Context, p CreatePayload, st commands.Strea
 }
 
 func (s *Service) create(ctx context.Context, p CreatePayload, st commands.Stream) (CreateResult, error) {
-	img, err := s.baseImage(ctx, p.Image, st)
+	img, err := s.baseImage(ctx, p.Image, uint64(p.DiskMB)<<20, st)
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -639,22 +688,39 @@ type image struct {
 // by tar). Concurrent creates of one image wait for the same export. An image without a base rootfs yet is pulled
 // first, without credentials, even when it is local: one built on this server, or pulled with the server's registry
 // credentials, may have secrets baked in, and only images anyone can pull become base rootfs trees.
-func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream) (image, error) {
+//
+// Disk: diskBytes is the sandbox's disk quota. Nothing is pulled, exported or started when it would leave less than
+// the floor free under Root (checkDisk), a pull is cancelled as soon as free space reaches the floor, and an image
+// over maxImageBytes is refused (and removed when this pull brought it).
+func (s *Service) baseImage(ctx context.Context, ref string, diskBytes uint64, st commands.Stream) (image, error) {
 	cfg, ok, err := s.d.Docker.ImageConfigOf(ctx, ref)
 	if err != nil {
 		return image{}, err
 	}
+	local := ok
 	if !ok || !s.haveRootfs(cfg.ID) {
+		if err := s.checkRegistry(ctx, ref); err != nil {
+			return image{}, err
+		}
+		if err := s.checkDisk(diskBytes+pullReserve, "pulling "+ref); err != nil {
+			return image{}, err
+		}
 		var w io.Writer
 		if st != nil {
 			w = st.Stdout()
 		}
-		if err := s.d.Docker.ImagePull(ctx, ref, nil, w); err != nil {
+		if err := s.pull(ctx, ref, w); err != nil {
 			return image{}, fmt.Errorf("pull %s (sandboxes use images anyone can pull from a registry): %w", ref, err)
 		}
 		if cfg, ok, err = s.d.Docker.ImageConfigOf(ctx, ref); err != nil || !ok {
 			return image{}, fmt.Errorf("image %s missing after pull: %v", ref, err)
 		}
+	}
+	if cfg.Size > maxImageBytes {
+		if !local {
+			_ = s.d.Docker.ImageRemove(context.WithoutCancel(ctx), cfg.ID) // best effort: pulled for this sandbox only
+		}
+		return image{}, payloadErr("image %s is %s, over the %s limit for sandbox images", ref, gib(uint64(cfg.Size)), gib(maxImageBytes))
 	}
 	hex := strings.TrimPrefix(cfg.ID, "sha256:")
 	if !hexRe.MatchString(hex) {
@@ -671,9 +737,16 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 	mu.Lock()
 	defer mu.Unlock()
 	if _, err := os.Stat(img.Rootfs); err == nil {
+		if err := s.checkDisk(diskBytes, "the sandbox's disk"); err != nil {
+			return image{}, err
+		}
 		now := s.d.Now()
 		_ = os.Chtimes(filepath.Dir(img.Rootfs), now, now) // last used, for the image GC
 		return img, nil
+	}
+	// The export writes about the image's size again, and the sandbox may write up to its quota.
+	if err := s.checkDisk(uint64(max(cfg.Size, 0))+diskBytes, "exporting "+ref); err != nil {
+		return image{}, err
 	}
 	tmp := img.Rootfs + ".tmp"
 	_ = os.RemoveAll(tmp)
@@ -709,6 +782,73 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 		return image{}, err
 	}
 	return img, nil
+}
+
+const (
+	// maxImageBytes caps a sandbox image's (unpacked) size.
+	maxImageBytes = 10 << 30
+	// diskFloorMax is the most free space sandboxes must leave under Root; below that, a tenth of the filesystem.
+	diskFloorMax = 5 << 30
+	// pullReserve is what a pull of an image whose size isn't known yet is assumed to take (the pull itself is
+	// cancelled at the floor, and the size is checked once it is known).
+	pullReserve = 1 << 30
+)
+
+// diskPoll is how often free space is checked during a pull (a var: tests shorten it).
+var diskPoll = time.Second
+
+// diskFloor is the free space sandboxes leave on a filesystem of total bytes: 10% of it or 5 GiB, whichever is smaller.
+func diskFloor(total uint64) uint64 { return min(total/10, diskFloorMax) }
+
+// checkDisk refuses when need more bytes under Root would leave less than the floor free.
+func (s *Service) checkDisk(need uint64, what string) error {
+	free, total, err := s.d.DiskSpace(s.d.Root)
+	if err != nil {
+		return fmt.Errorf("free space under %s: %w", s.d.Root, err)
+	}
+	if floor := diskFloor(total); free < floor || free-floor < need {
+		return fmt.Errorf("not enough disk space for %s: %s free under %s, %s needed and %s kept free", what, gib(free), s.d.Root, gib(need), gib(floor))
+	}
+	return nil
+}
+
+// pull pulls an image anonymously, cancelled when free space under Root reaches the floor.
+func (s *Service) pull(ctx context.Context, ref string, w io.Writer) error {
+	pctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		t := time.NewTicker(diskPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if err := s.checkDisk(0, "pulling "+ref); err != nil {
+					cancel(err)
+					return
+				}
+			}
+		}
+	}()
+	err := s.d.Docker.ImagePull(pctx, ref, nil, w)
+	if cause := context.Cause(pctx); err != nil && cause != nil && ctx.Err() == nil {
+		return cause
+	}
+	return err
+}
+
+func gib(b uint64) string { return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30)) }
+
+func diskSpace(path string) (free, total uint64, err error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, 0, err
+	}
+	bs := uint64(st.Bsize)
+	return uint64(st.Bavail) * bs, uint64(st.Blocks) * bs, nil
 }
 
 // haveRootfs reports whether image id has a base rootfs (it was pulled anonymously and exported).

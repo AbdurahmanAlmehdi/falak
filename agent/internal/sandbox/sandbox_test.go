@@ -39,6 +39,8 @@ type fakeDocker struct {
 	have    bool
 	pullErr error             // the registry refuses an anonymous pull
 	labels  map[string]string // the image's labels
+	size    int64             // the image's size
+	block   bool              // a pull runs until it is cancelled
 }
 
 func (f *fakeDocker) ImageRemove(_ context.Context, id string) error {
@@ -55,13 +57,20 @@ func (f *fakeDocker) ImageConfigOf(context.Context, string) (docker.ImageConfig,
 	c.ID = "sha256:" + strings.Repeat("ab", 32)
 	c.Config.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
 	c.Config.Labels = f.labels
+	c.Size = f.size
 	return c, f.have, nil
 }
 
-func (f *fakeDocker) ImagePull(_ context.Context, ref string, _ *docker.Auth, _ io.Writer) error {
+func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ *docker.Auth, _ io.Writer) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pulled = append(f.pulled, ref)
+	if f.block {
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return ctx.Err()
+	}
 	if f.pullErr != nil {
 		return f.pullErr
 	}
@@ -116,6 +125,15 @@ type env struct {
 	mu       sync.Mutex
 	statuses map[string]string // what `runsc list` reports
 	listErr  bool              // `runsc list` fails
+	free     uint64            // free bytes under Root (of 200 GiB)
+	lookups  []string          // registries resolved
+	resolve  map[string][]netip.Addr
+}
+
+func (e *env) setFree(b uint64) {
+	e.mu.Lock()
+	e.free = b
+	e.mu.Unlock()
 }
 
 func newEnv(t *testing.T) *env {
@@ -124,11 +142,25 @@ func newEnv(t *testing.T) *env {
 	goos = "linux"
 	t.Cleanup(func() { goos = old })
 	root := t.TempDir()
-	e := &env{run: &runnertest.Fake{}, dock: &fakeDocker{}, reqs: &fakeRequests{}, root: root, now: time.Unix(1760000000, 0)}
+	e := &env{run: &runnertest.Fake{}, dock: &fakeDocker{}, reqs: &fakeRequests{}, root: root, now: time.Unix(1760000000, 0), free: 100 << 30}
 	e.run.On("runsc --version", runner.Result{Stdout: []byte("runsc version release-20261005.0\nspec: 1.1.0\n")})
 	e.svc = New(Deps{Runner: e.run, FS: hostfs.FS{Root: root}, Docker: e.dock, Requests: e.reqs, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Root: filepath.Join(root, "sandboxes"), RunscRoot: filepath.Join(root, "run"), CgroupRoot: filepath.Join(root, "cgroup"),
-		Now: func() time.Time { return e.now }})
+		Now: func() time.Time { return e.now },
+		LookupHost: func(_ context.Context, host string) ([]netip.Addr, error) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.lookups = append(e.lookups, host)
+			if a, ok := e.resolve[host]; ok {
+				return a, nil
+			}
+			return nil, errors.New("no such host")
+		},
+		DiskSpace: func(string) (uint64, uint64, error) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			return e.free, 200 << 30, nil
+		}})
 	e.run.OnFunc("runsc --root="+e.svc.d.RunscRoot+" list", func(runnertest.Call) (runner.Result, error) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -712,6 +744,35 @@ func TestExecTimeoutKillsTheProcess(t *testing.T) {
 	}
 }
 
+// A timeout that comes before runsc exec wrote its pid file still kills the process group: the kill is retried while
+// runsc exec runs, and once more after it returned.
+func TestExecTimeoutKillsAProcessThatStartedLate(t *testing.T) {
+	old := killRetry
+	killRetry = 10 * time.Millisecond
+	t.Cleanup(func() { killRetry = old })
+	for name, writeAt := range map[string]time.Duration{"while running": 100 * time.Millisecond, "on return": 150 * time.Millisecond} {
+		e := newEnv(t)
+		e.writeBundle(t)
+		e.run.OnFunc("runsc --root="+e.svc.d.RunscRoot+" exec", func(c runnertest.Call) (runner.Result, error) {
+			time.Sleep(writeAt)
+			for _, a := range c.Args {
+				if f, ok := strings.CutPrefix(a, "--internal-pid-file="); ok {
+					_ = os.WriteFile(f, []byte("42\n"), 0o600)
+				}
+			}
+			time.Sleep(150*time.Millisecond - writeAt)
+			return runner.Result{ExitCode: -1}, context.DeadlineExceeded
+		})
+		o, err := e.svc.execIn(context.Background(), sid, execReq{argv: []string{"sleep", "100"}, timeout: 50 * time.Millisecond, max: 100})
+		if err != nil || !o.timedOut {
+			t.Fatal(name, o, err)
+		}
+		if !e.run.Ran("runsc --root=" + e.svc.d.RunscRoot + " kill --pgid=42 falak-sbx-" + sid + " 9") {
+			t.Fatal(name, e.run.Lines())
+		}
+	}
+}
+
 func TestFiles(t *testing.T) {
 	e := newEnv(t)
 	e.writeBundle(t)
@@ -1074,6 +1135,99 @@ func TestImageChecks(t *testing.T) {
 			len(e.dock.pulled) != 1 {
 			t.Fatal(name, err, e.dock.pulled)
 		}
+	}
+}
+
+// A registry is resolved on the agent before the pull: a name for a loopback, private or the server's own address is
+// refused like the address itself would be. Docker Hub isn't looked up.
+func TestRegistryIsResolvedBeforeThePull(t *testing.T) {
+	ctx := context.Background()
+	for image, want := range map[string]string{
+		"127.0.0.1.nip.io:5000/x":    "not a public address",
+		"10.0.0.5.sslip.io/app:1":    "not a public address",
+		"metadata.example.com/x":     "not a public address",
+		"unresolvable.example.com/x": "resolve registry",
+		"ghcr.io/acme/tool:v1":       "",
+		"ubuntu:24.04":               "",
+		"docker.io/library/alpine":   "",
+	} {
+		e := newEnv(t)
+		e.runscList(map[string]string{})
+		e.resolve = map[string][]netip.Addr{
+			"127.0.0.1.nip.io":     {netip.MustParseAddr("127.0.0.1")},
+			"10.0.0.5.sslip.io":    {netip.MustParseAddr("10.0.0.5")},
+			"metadata.example.com": {netip.MustParseAddr("140.82.112.33"), netip.MustParseAddr("::ffff:169.254.169.254")},
+			"ghcr.io":              {netip.MustParseAddr("140.82.112.33")},
+		}
+		p := createPayload(NetNone)
+		p.Image = image
+		_, err := e.svc.Create(ctx, p, nil)
+		if want == "" {
+			if err != nil {
+				t.Fatal(image, err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), want) || len(e.dock.pulled) != 0 {
+			t.Fatal(image, err, e.dock.pulled)
+		}
+		if hub := !strings.Contains(strings.Split(image, "/")[0], "."); (hub || strings.HasPrefix(image, "docker.io/")) && len(e.lookups) != 0 {
+			t.Fatal(image, "looked up", e.lookups)
+		}
+	}
+}
+
+// Nothing is pulled, exported or started when it would leave less than the floor free under Root; an image over the
+// limit is refused and removed; a pull is cancelled when free space reaches the floor.
+func TestDiskSpaceChecks(t *testing.T) {
+	ctx := context.Background()
+	if diskFloor(200<<30) != 5<<30 || diskFloor(20<<30) != 2<<30 {
+		t.Fatal(diskFloor(200<<30), diskFloor(20<<30))
+	}
+	// The pull needs the disk quota (2 GiB) + 1 GiB + the floor (5 GiB).
+	e := newEnv(t)
+	e.runscList(map[string]string{})
+	e.setFree(7 << 30)
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not enough disk space for pulling") || len(e.dock.pulled) != 0 {
+		t.Fatal(err, e.dock.pulled)
+	}
+	// Too big: refused after the pull, and removed.
+	e = newEnv(t)
+	e.runscList(map[string]string{})
+	e.dock.size = 11 << 30
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "over the 10.0 GiB limit") || len(e.dock.rmi) != 1 {
+		t.Fatal(err, e.dock.rmi)
+	}
+	// The export needs the image (8 GiB) + the quota + the floor = 15 GiB.
+	e = newEnv(t)
+	e.runscList(map[string]string{})
+	e.dock.size = 8 << 30
+	e.setFree(14 << 30)
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not enough disk space for exporting") || len(e.dock.created) != 0 {
+		t.Fatal(err, e.dock.created)
+	}
+	e.setFree(15 << 30)
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err != nil {
+		t.Fatal(err)
+	}
+	// Exported already: the sandbox's quota + the floor.
+	_, _ = e.svc.Kill(ctx, KillPayload{ID: sid}, nil)
+	e.setFree(6 << 30)
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not enough disk space for the sandbox's disk") {
+		t.Fatal(err)
+	}
+
+	// A pull that fills the disk is cancelled.
+	old := diskPoll
+	diskPoll = 10 * time.Millisecond
+	t.Cleanup(func() { diskPoll = old })
+	e = newEnv(t)
+	e.runscList(map[string]string{})
+	e.dock.block = true
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		e.setFree(4 << 30)
+	}()
+	if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not enough disk space for pulling") {
+		t.Fatal(err)
 	}
 }
 

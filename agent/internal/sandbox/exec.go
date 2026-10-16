@@ -106,15 +106,27 @@ func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, er
 	defer cancel()
 	// The sandbox holds runsc exec's stdio until every process that inherited it has exited, so killing runsc exec
 	// (the runner does on timeout) doesn't end the call: the process group is killed inside the sandbox as soon as
-	// the time is up, children included.
+	// the time is up, children included. Until runsc has written the pid file there is nothing to kill yet, so the
+	// kill is retried until it worked or runsc exec returned (and once more after that).
 	finished, killed := make(chan struct{}), make(chan bool, 1)
 	go func() {
 		select {
 		case <-finished:
 			killed <- false
+			return
 		case <-tctx.Done():
-			s.killGroup(ctx, id, pidFile)
-			killed <- true
+		}
+		for {
+			if s.killGroup(ctx, id, pidFile) {
+				killed <- true
+				return
+			}
+			select {
+			case <-finished:
+				killed <- false
+				return
+			case <-time.After(killRetry):
+			}
 		}
 	}()
 	start := time.Now()
@@ -135,20 +147,26 @@ func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, er
 	return o, nil
 }
 
+// killRetry is how often a timed-out exec's kill is retried while runsc exec hasn't written its pid file (a var: tests
+// shorten it).
+var killRetry = 250 * time.Millisecond
+
 // killGroup SIGKILLs the process group of the exec whose in-sandbox pid is in pidFile (runsc exec makes each exec its
-// own group leader).
-func (s *Service) killGroup(ctx context.Context, id, pidFile string) {
+// own group leader). It reports whether the group was killed: false while the pid file isn't written yet, or when
+// runsc kill failed.
+func (s *Service) killGroup(ctx context.Context, id, pidFile string) bool {
 	b, err := os.ReadFile(pidFile)
 	if err != nil {
-		return
+		return false
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
 	if err != nil || pid < 2 {
-		return
+		return false
 	}
 	kctx, kcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer kcancel()
-	_, _ = s.d.Runner.Run(kctx, runner.Cmd{Name: "runsc", Args: s.runscArgs("kill", "--pgid="+strconv.Itoa(pid), cid(id), "9")})
+	res, err := s.d.Runner.Run(kctx, runner.Cmd{Name: "runsc", Args: s.runscArgs("kill", "--pgid="+strconv.Itoa(pid), cid(id), "9")})
+	return err == nil && res.ExitCode == 0
 }
 
 // ---- sandbox.exec
