@@ -2,6 +2,7 @@
 
 namespace Falak\Functions\Http\Controllers;
 
+use Falak\Config\Contracts\ItemKey;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
@@ -51,7 +52,13 @@ final class ScheduleController extends Controller
         $input = $request->validate(SaveSchedule::rules());
 
         // A name the file uses is the file's: a schedule created here would be adopted by the next push.
-        if (FunctionSchedule::query()->where('function_id', $function->id)->where('name', trim((string) $input['name']))->get()->contains(fn (FunctionSchedule $s) => app(ManagedResources::class)->managed('function_schedule', $s->id)->any())) {
+        $name = trim((string) $input['name']);
+
+        if (FunctionSchedule::query()->where('function_id', $function->id)->get()->contains(function (FunctionSchedule $s) use ($name) {
+            $managed = app(ManagedResources::class)->managed('function_schedule', $s->id);
+
+            return $managed->any() && ($s->name === $name || $managed->key('schedules') === ItemKey::of($name));
+        })) {
             throw ValidationException::withMessages(['name' => 'falak.yaml manages a schedule with this name: edit the file to change it.']);
         }
 
@@ -64,7 +71,7 @@ final class ScheduleController extends Controller
     {
         [$data, $function] = $this->resolve($request, $site, Permissions::DEPLOY);
         $model = $this->schedule($function, $schedule);
-        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules/'.$model->name);
+        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules'); // any key: the schedule's own key may not be its name
         $model = $save($data, $function, $model, $request->validate(SaveSchedule::rules()));
 
         return response()->json(['data' => $model->present($data->slug)]);
@@ -74,7 +81,7 @@ final class ScheduleController extends Controller
     {
         [$data, $function] = $this->resolve($request, $site, Permissions::DEPLOY);
         $model = $this->schedule($function, $schedule);
-        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules/'.$model->name);
+        app(ManagedResources::class)->managed('function_schedule', $model->id)->guardWhole('name', '/schedules'); // any key: the schedule's own key may not be its name
         $save->delete($data, $model);
 
         return response()->json(['data' => null]);

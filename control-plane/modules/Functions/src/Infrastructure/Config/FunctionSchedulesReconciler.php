@@ -255,7 +255,8 @@ final class FunctionSchedulesReconciler implements Reconcilable, ValidatesConfig
     {
         $function = $this->functions->find($siteId);
 
-        return $function === null ? [] : ItemKey::map(FunctionSchedule::query()->where('function_id', $function->id)->orderBy('name')->get(), fn (FunctionSchedule $s) => (string) $s->name);
+        return $function === null ? [] : ItemKey::map(FunctionSchedule::query()->where('function_id', $function->id)->orderBy('name')->orderBy('id')->get(), fn (FunctionSchedule $s) => (string) $s->name,
+            fn (FunctionSchedule $s) => $this->managed->managed('function_schedule', $s->id)->key('schedules'));
     }
 
     /** Created by this environment's file, and its unit is still the file's (else detached with its function). */

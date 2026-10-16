@@ -62,6 +62,14 @@ final readonly class ManagedFields
         return $out;
     }
 
+    /** The key a named item (a schedule, a daemon) is managed under in a section (`/schedules/<key>`), if any. */
+    public function key(string $section): ?string
+    {
+        $under = $this->under('/'.trim($section, '/'));
+
+        return $under === [] ? null : explode('/', $under[0])[0];
+    }
+
     public function badge(): string
     {
         return 'Managed by '.($this->file ?? 'falak.yaml').($this->commit !== null ? ' @ '.substr($this->commit, 0, 7) : '');

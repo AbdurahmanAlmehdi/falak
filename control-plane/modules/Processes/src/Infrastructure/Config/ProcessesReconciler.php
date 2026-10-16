@@ -495,9 +495,11 @@ final class ProcessesReconciler implements Reconcilable, ValidatesConfig
             return $out;
         }
 
-        $model = $section === 'daemons' ? Daemon::class : Schedule::class;
+        [, $type, $model] = self::KINDS[$section];
 
-        return ItemKey::map($model::query()->where('site_id', $siteId)->orderBy('name')->get(), fn (Model $row) => (string) $row->getAttribute('name'));
+        // ponytail: one ownership query per row; a site has a handful of daemons and schedules.
+        return ItemKey::map($model::query()->where('site_id', $siteId)->orderBy('name')->orderBy('id')->get(), fn (Model $row) => (string) $row->getAttribute('name'),
+            fn (Model $row) => $this->managed->managed($type, (string) $row->getKey())->key($section));
     }
 
     /** The unit's site is still managed by this environment's file (a unit removed from the file detaches its site first). */

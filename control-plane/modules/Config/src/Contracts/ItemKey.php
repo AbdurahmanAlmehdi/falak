@@ -24,21 +24,34 @@ final class ItemKey
     }
 
     /**
-     * Rows by key. A row whose name is already a key keeps it; another takes {@see self::of()} of its name, with `-2`,
-     * `-3`… when that key is taken.
+     * Rows by key. A row the file manages keeps the key it is recorded under ($owned), so a row added later can't take
+     * it; then a row whose name is already a key keeps it; another takes {@see self::of()} of its name, with `-2`,
+     * `-3`… when that key is taken (in the rows' order: order them by name and id).
      *
      * @template T
      *
      * @param  iterable<T>  $rows
      * @param  callable(T): string  $name
+     * @param  ?callable(T): ?string  $owned
      * @return array<string, T>
      */
-    public static function map(iterable $rows, callable $name): array
+    public static function map(iterable $rows, callable $name, ?callable $owned = null): array
     {
         $out = [];
+        $rest = [];
         $later = [];
 
         foreach ($rows as $row) {
+            $key = $owned !== null ? $owned($row) : null;
+
+            if ($key !== null && ! isset($out[$key])) {
+                $out[$key] = $row;
+            } else {
+                $rest[] = $row;
+            }
+        }
+
+        foreach ($rest as $row) {
             $n = $name($row);
 
             if (self::of($n) === $n && ! isset($out[$n])) {

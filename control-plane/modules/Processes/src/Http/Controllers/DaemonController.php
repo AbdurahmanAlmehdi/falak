@@ -2,6 +2,7 @@
 
 namespace Falak\Processes\Http\Controllers;
 
+use Falak\Config\Contracts\ItemKey;
 use Falak\Config\Contracts\ManagedResources;
 use Falak\Kernel\Http\Controller;
 use Falak\Processes\Application\Actions\DeleteProcess;
@@ -28,9 +29,16 @@ final class DaemonController extends Controller
         $site = $this->site($request, $site, 'processes.manage');
         $data = $request->validate(ProcessRules::daemon($site));
 
-        // A name falak.yaml uses is its daemon's identity: another one by that name would be ambiguous.
-        foreach (Daemon::query()->where('site_id', $site->id)->where('name', trim((string) $data['name']))->pluck('id') as $id) {
-            app(ManagedResources::class)->managed('daemon', $id)->guardWhole('name', '/daemons');
+        // A name falak.yaml uses is its daemon's identity: another one by that name (or reading as its key) would be
+        // ambiguous.
+        $name = trim((string) $data['name']);
+
+        foreach (Daemon::query()->where('site_id', $site->id)->get(['id', 'name']) as $row) {
+            $managed = app(ManagedResources::class)->managed('daemon', $row->id);
+
+            if ($row->name === $name || $managed->key('daemons') === ItemKey::of($name)) {
+                $managed->guardWhole('name', '/daemons');
+            }
         }
 
         $save($site, null, $data, $request->user()?->getAuthIdentifier());

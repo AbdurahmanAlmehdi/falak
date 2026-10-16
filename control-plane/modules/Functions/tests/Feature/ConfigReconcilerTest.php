@@ -13,6 +13,7 @@ use Falak\Functions\Infrastructure\Config\FunctionSchedulesReconciler;
 use Falak\Functions\Infrastructure\Config\FunctionsReconciler;
 use Falak\Identity\Contracts\Role;
 use Falak\Sites\Contracts\SiteDirectory;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 require_once __DIR__.'/../../../Sites/tests/Support/config.php';
@@ -152,6 +153,33 @@ it('refuses dashboard edits of what the file manages: settings, allowlist, sched
     $this->putJson("{$base}/schedules/{$nightly->id}", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
     $this->deleteJson("{$base}/schedules/{$nightly->id}")->assertStatus(422);
     $this->postJson("{$base}/schedules", ['name' => 'nightly', 'expression' => '@hourly'])->assertStatus(422);
+});
+
+it('keys schedules by their owned key first, then deterministically, and guards them by that key', function () {
+    $schedule = fn (string $name, string $cron, ?string $id = null) => FunctionSchedule::query()->forceCreate(['id' => $id ?? strtolower((string) Str::ulid()),
+        'function_id' => $this->function->id, 'name' => $name, 'expression' => $cron, 'timezone' => 'UTC', 'overlap' => 'skip', 'timeout_s' => 300, 'enabled' => true]);
+    $nightly = $schedule('Nightly report', '@daily');
+    $ctx = config_ctx($this->env);
+    $desired = ['units' => ['api' => ['type' => 'function', 'schedules' => ['Nightly-report' => ['cron' => '@daily']]]]];
+    $this->schedules->apply($this->scope, $this->schedules->diff($this->scope, $desired, $this->schedules->current($this->scope)), $ctx);
+    $base = "/sites/{$this->site->id}/function";
+
+    // Managed under /schedules/Nightly-report: its name isn't its key, the dashboard still can't edit it or take the key.
+    $this->putJson("{$base}/schedules/{$nightly->id}", ['name' => 'Nightly report', 'expression' => '@hourly'])->assertStatus(422);
+    $this->deleteJson("{$base}/schedules/{$nightly->id}")->assertStatus(422);
+    $this->postJson("{$base}/schedules", ['name' => 'Nightly-report', 'expression' => '@hourly'])->assertStatus(422)->assertJsonValidationErrors('name');
+
+    // Rows made around the guards: the owned row keeps its key; same-name rows take -2 by id, not by insertion order.
+    $schedule('Nightly-report', '@hourly');
+    $schedule('Weekly job', '@monthly', '01k0000000000000000000000z');
+    $schedule('Weekly job', '@weekly', '01k0000000000000000000000a');
+    $current = $this->schedules->current($this->scope)['units']['api']['schedules'];
+
+    expect($current['Nightly-report']['cron'])->toBe('@daily')
+        ->and($current['Nightly-report-2']['cron'])->toBe('@hourly')
+        ->and($current['Weekly-job']['cron'])->toBe('@weekly')
+        ->and($current['Weekly-job-2']['cron'])->toBe('@monthly')
+        ->and(collect($this->schedules->diff($this->scope, $desired, $this->schedules->current($this->scope))->actionable())->all())->toBe([]);
 });
 
 it('refuses a function whose code listing the provider cut short', function () {

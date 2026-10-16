@@ -268,3 +268,22 @@ it('shows managed processes read-only and refuses edits of them', function () {
     $this->put("/sites/{$this->site->id}/queues/{$managed->id}", $input)->assertSessionHasNoErrors();
     expect($managed->refresh()->processes)->toBe(3);
 });
+
+it('an adopted schedule keeps its key: a dashboard row named like it later is refused, or takes the next key', function () {
+    $nightly = Schedule::query()->create(['organization_id' => $this->organization->id, 'site_id' => $this->site->id, 'name' => 'Nightly report', 'command' => 'php artisan report', 'expression' => '0 3 * * *']);
+    $file = ['schedules' => ['Nightly-report' => ['command' => 'php artisan report', 'cron' => '0 3 * * *']]];
+    processes_config_apply($file);
+
+    $this->postJson("/sites/{$this->site->id}/scheduler", ['name' => 'Nightly-report', 'command' => 'other', 'expression' => '@hourly',
+        'overlap' => 'skip', 'timeout' => 60, 'heartbeat' => true, 'enabled' => true, 'all_servers' => false])
+        ->assertStatus(422)->assertJsonValidationErrors('name');
+
+    // One made around the guard reads as Nightly-report-2: planning the file again changes nothing.
+    Schedule::query()->create(['organization_id' => $this->organization->id, 'site_id' => $this->site->id, 'name' => 'Nightly-report', 'command' => 'other', 'expression' => '@hourly']);
+    $current = $this->reconciler->current($this->scope)['units']['web']['schedules'];
+
+    expect(array_keys($current))->toEqualCanonicalizing(['Nightly-report', 'Nightly-report-2'])
+        ->and($current['Nightly-report']['command'])->toBe('php artisan report')
+        ->and(processes_config_apply($file))->toBe([])
+        ->and($nightly->refresh()->only(['name', 'command']))->toBe(['name' => 'Nightly report', 'command' => 'php artisan report']);
+});
