@@ -4,15 +4,24 @@ namespace Falak\Sandboxes\Application\Listeners;
 
 use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
+use Falak\Sandboxes\Application\Actions\DeleteSnapshot;
+use Falak\Sandboxes\Application\Actions\ExecInSandbox;
+use Falak\Sandboxes\Application\Actions\ImportDatabase;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
+use Falak\Sandboxes\Application\Actions\PauseSandbox;
+use Falak\Sandboxes\Application\Actor;
 use Falak\Sandboxes\Application\SandboxAgent;
 use Falak\Sandboxes\Domain\Models\Sandbox;
+use Falak\Sandboxes\Domain\Models\SandboxSnapshot;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
- * sandbox.create settles a creating sandbox (running with its IP, or failed); sandbox.extend records the expiry the
- * agent enforces; sandbox.kill confirms a kill; sandbox.inventory reconciles a server's sandboxes with what its agent runs (SyncSandboxes).
+ * sandbox.create settles a creating sandbox (running with its IP, or failed) and starts the database copy it asked for;
+ * sandbox.extend records the expiry the agent enforces; sandbox.kill confirms a kill; sandbox.pause/resume settle the
+ * status; sandbox.snapshot makes a snapshot ready (or failed); sandbox.snapshot.delete confirms a delete;
+ * sandbox.db.import (a create's copy) goes to the exec log; sandbox.inventory reconciles a server's sandboxes and
+ * snapshots with what its agent has (SyncSandboxes).
  */
 final class HandleCommandOutcome
 {
@@ -22,6 +31,9 @@ final class HandleCommandOutcome
     public function __construct(
         private readonly KillSandbox $kill,
         private readonly SandboxAgent $agent,
+        private readonly DeleteSnapshot $deleteSnapshot,
+        private readonly ExecInSandbox $exec,
+        private readonly ImportDatabase $import,
     ) {}
 
     public function handleFinished(CommandFinished $event): void
@@ -46,6 +58,11 @@ final class HandleCommandOutcome
                 self::started($sandbox, $event->result ?? []);
                 $this->sendExpiry($sandbox);
 
+                // The database copy asked for on create (only this listener sends it: once per create).
+                if ($sandbox->db_import !== null) {
+                    $this->agent->tryDispatch($sandbox, 'sandbox.db.import', ImportDatabase::payload($sandbox, $sandbox->db_import), "sandbox.db.import:{$sandbox->id}:create", 900);
+                }
+
                 return null;
             });
 
@@ -58,13 +75,43 @@ final class HandleCommandOutcome
             Sandbox::query()->whereKey($m[1])->update(['agent_expires_at' => Carbon::createFromTimestamp((int) $event->result['expires_at'])]);
         } elseif ($event->type === 'sandbox.kill' && preg_match('/^sandbox\.kill:([0-9a-z]{26})(:|$)/', $event->idempotencyKey, $m) === 1) {
             Sandbox::query()->whereKey($m[1])->where('status', Sandbox::KILLED)->whereNull('kill_confirmed_at')->update(['kill_confirmed_at' => now()]);
+        } elseif (in_array($event->type, ['sandbox.pause', 'sandbox.resume'], true) && preg_match('/^sandbox\.(?:pause|resume):([0-9a-z]{26})(:|$)/', $event->idempotencyKey, $m) === 1) {
+            PauseSandbox::settle($m[1], $event->type === 'sandbox.pause' ? Sandbox::PAUSED : Sandbox::RUNNING);
+        } elseif ($event->type === 'sandbox.snapshot' && preg_match('/^sandbox\.snapshot:([0-9a-z]{26})(:stop)?$/', $event->idempotencyKey, $m) === 1) {
+            $snapshot = SandboxSnapshot::query()->find($m[1]);
+
+            if ($snapshot !== null) {
+                $this->snapshotted($snapshot, $event->result ?? [], ($m[2] ?? '') === ':stop');
+            }
+        } elseif ($event->type === 'sandbox.snapshot.delete' && preg_match('/^sandbox\.snapshot\.delete:([0-9a-z]{26})(:|$)/', $event->idempotencyKey, $m) === 1) {
+            SandboxSnapshot::query()->whereKey($m[1])->where('status', SandboxSnapshot::DELETED)->whereNull('delete_confirmed_at')->update(['delete_confirmed_at' => now()]);
+        } elseif ($event->type === 'sandbox.db.import') {
+            $this->imported($event->idempotencyKey, null);
         } elseif ($event->type === 'sandbox.inventory') {
             $this->reconcile($event->organizationId, $event->serverId, $event->commandId, (array) ($event->result['sandboxes'] ?? []));
+
+            // sandbox.v2 agents report their snapshots too.
+            if (is_array($event->result) && array_key_exists('snapshots', $event->result)) {
+                $this->reconcileSnapshots($event->serverId, $event->commandId, (array) $event->result['snapshots']);
+            }
         }
     }
 
     public function handleFailed(CommandFailed $event): void
     {
+        if ($event->type === 'sandbox.snapshot' && preg_match('/^sandbox\.snapshot:([0-9a-z]{26})/', $event->idempotencyKey, $m) === 1) {
+            SandboxSnapshot::query()->whereKey($m[1])->where('status', SandboxSnapshot::CREATING)
+                ->update(['status' => SandboxSnapshot::FAILED, 'error' => mb_substr($event->error ?: "sandbox.snapshot {$event->status}", 0, 1000), 'updated_at' => now()]);
+
+            return;
+        }
+
+        if ($event->type === 'sandbox.db.import') {
+            $this->imported($event->idempotencyKey, $event->error ?: "sandbox.db.import {$event->status}");
+
+            return;
+        }
+
         if ($event->type !== 'sandbox.create') {
             return;
         }
@@ -98,6 +145,56 @@ final class HandleCommandOutcome
             'image_digest' => isset($result['image_digest']) ? mb_substr((string) $result['image_digest'], 0, 200) : $sandbox->image_digest,
             'started_at' => isset($result['started_at']) && is_string($result['started_at']) ? Carbon::parse($result['started_at']) : ($sandbox->started_at ?? now()),
         ])->save();
+    }
+
+    /**
+     * A sandbox.snapshot result (here, or the ?wait=1 request's): ready with its size. One deleted meanwhile is removed
+     * from the agent again (it has it now). With $stop the agent removed the sandbox: killed, reason "snapshot".
+     *
+     * @param  array<string, mixed>  $result
+     */
+    public function snapshotted(SandboxSnapshot $snapshot, array $result, bool $stop): void
+    {
+        $deleted = DB::transaction(function () use ($snapshot, $result): bool {
+            $fresh = SandboxSnapshot::query()->whereKey($snapshot->id)->lockForUpdate()->firstOrFail();
+
+            if ($fresh->status === SandboxSnapshot::CREATING) {
+                $fresh->forceFill([
+                    'status' => SandboxSnapshot::READY,
+                    'error' => null,
+                    'size_bytes' => isset($result['size_bytes']) ? (int) $result['size_bytes'] : $fresh->size_bytes,
+                    'image_digest' => isset($result['image_digest']) ? mb_substr((string) $result['image_digest'], 0, 200) : $fresh->image_digest,
+                ])->save();
+            }
+
+            $snapshot->setRawAttributes($fresh->getAttributes(), true);
+
+            return $fresh->status === SandboxSnapshot::DELETED;
+        });
+
+        if ($deleted) {
+            $this->deleteSnapshot->remove($snapshot, "sandbox.snapshot.delete:{$snapshot->id}:late");
+        }
+
+        if ($stop && ($sandbox = Sandbox::query()->find($snapshot->sandbox_id)) !== null) {
+            $this->kill->markKilled($sandbox, 'snapshot');
+        }
+    }
+
+    /** A create's database copy finished ($error null) or failed: an exec log row for its sandbox's creator. */
+    private function imported(string $key, ?string $error): void
+    {
+        if (preg_match('/^sandbox\.db\.import:([0-9a-z]{26}):create$/', $key, $m) !== 1 || ($sandbox = Sandbox::query()->find($m[1])) === null || $sandbox->db_import === null) {
+            return;
+        }
+
+        $actor = new Actor($sandbox->created_by_type, $sandbox->created_by_id, $sandbox->created_by_name);
+        $cmd = ImportDatabase::describe($sandbox->db_import, ImportDatabase::payload($sandbox, $sandbox->db_import)['path']);
+        $this->exec->record($sandbox, $actor, $cmd, null, [], now(), $error === null ? ['exit_code' => 0] : ['error' => $error]);
+
+        if ($error === null) {
+            $this->import->recorded($sandbox, $sandbox->db_import);
+        }
     }
 
     /**
@@ -140,12 +237,17 @@ final class HandleCommandOutcome
 
             if ($sandbox === null || in_array($sandbox->status, [Sandbox::KILLED, Sandbox::FAILED], true)) {
                 $this->kill->remove($sandbox ?? new Sandbox(['id' => $id, 'server_id' => $serverId]), "sandbox.kill:{$id}:sync:{$commandId}");
-            } elseif (($item['status'] ?? null) === 'stopped' && $sandbox->status === Sandbox::RUNNING && $sandbox->created_at->lt($settled)) {
-                $this->kill->__invoke($sandbox, ($item['oom_killed'] ?? false) ? 'oom' : 'exited');
+            } elseif (in_array($sandbox->status, [Sandbox::RUNNING, Sandbox::PAUSED], true) && $sandbox->created_at->lt($settled)) {
+                match ($item['status'] ?? null) {
+                    'stopped' => $this->kill->__invoke($sandbox, ($item['oom_killed'] ?? false) ? 'oom' : 'exited'),
+                    'paused' => PauseSandbox::settle($sandbox->id, Sandbox::PAUSED),
+                    'running' => PauseSandbox::settle($sandbox->id, Sandbox::RUNNING),
+                    default => null,
+                };
             }
         }
 
-        Sandbox::query()->where('organization_id', $organizationId)->where('server_id', $serverId)->where('status', Sandbox::RUNNING)
+        Sandbox::query()->where('organization_id', $organizationId)->where('server_id', $serverId)->whereIn('status', [Sandbox::RUNNING, Sandbox::PAUSED])
             ->where('created_at', '<', $settled)
             ->whereNotIn('id', array_keys($byId) ?: [''])
             ->get()
@@ -155,5 +257,39 @@ final class HandleCommandOutcome
         Sandbox::query()->where('server_id', $serverId)->where('status', Sandbox::KILLED)->whereNull('kill_confirmed_at')
             ->whereNotIn('id', array_keys($byId) ?: [''])
             ->update(['kill_confirmed_at' => now()]);
+    }
+
+    /**
+     * Ready here but gone on the agent: failed. On the agent but deleted, failed or unknown here: removed. Deleted here
+     * and gone there: confirmed. A snapshot still being taken is its command's to settle (SweepSandboxes fails it late).
+     *
+     * @param  array<mixed>  $reported
+     */
+    private function reconcileSnapshots(string $serverId, string $commandId, array $reported): void
+    {
+        $ids = [];
+
+        foreach ($reported as $item) {
+            if (is_array($item) && isset($item['snapshot_id'])) {
+                $ids[] = strtolower((string) $item['snapshot_id']);
+            }
+        }
+
+        $known = SandboxSnapshot::query()->where('server_id', $serverId)->whereIn('id', $ids ?: [''])->get()->keyBy('id');
+
+        foreach ($ids as $id) {
+            $snapshot = $known->get($id);
+
+            if ($snapshot === null || in_array($snapshot->status, [SandboxSnapshot::DELETED, SandboxSnapshot::FAILED], true)) {
+                $this->deleteSnapshot->remove($snapshot ?? new SandboxSnapshot(['id' => $id, 'server_id' => $serverId]), "sandbox.snapshot.delete:{$id}:sync:{$commandId}");
+            }
+        }
+
+        SandboxSnapshot::query()->where('server_id', $serverId)->where('status', SandboxSnapshot::READY)->whereNotIn('id', $ids ?: [''])
+            ->update(['status' => SandboxSnapshot::FAILED, 'error' => 'The snapshot is gone from its server.', 'updated_at' => now()]);
+
+        SandboxSnapshot::query()->where('server_id', $serverId)->where('status', SandboxSnapshot::DELETED)->whereNull('delete_confirmed_at')
+            ->whereNotIn('id', $ids ?: [''])
+            ->update(['delete_confirmed_at' => now()]);
     }
 }

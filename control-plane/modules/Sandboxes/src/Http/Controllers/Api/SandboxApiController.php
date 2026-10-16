@@ -9,12 +9,19 @@ use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Sandboxes\Application\Actions\CreateSandbox;
 use Falak\Sandboxes\Application\Actions\ExecInSandbox;
+use Falak\Databases\Contracts\DatabaseDirectory;
+use Falak\Sandboxes\Application\Actions\DeleteSnapshot;
+use Falak\Sandboxes\Application\Actions\ImportDatabase;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
+use Falak\Sandboxes\Application\Actions\PauseSandbox;
+use Falak\Sandboxes\Application\Actions\TakeSnapshot;
 use Falak\Sandboxes\Application\Actor;
 use Falak\Sandboxes\Application\Listeners\HandleCommandOutcome;
 use Falak\Sandboxes\Application\SandboxAgent;
 use Falak\Sandboxes\Domain\Models\Sandbox;
 use Falak\Sandboxes\Domain\Models\SandboxExec;
+use Falak\Sandboxes\Domain\Models\SandboxSnapshot;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Falak\Sandboxes\Domain\Policies\SandboxPolicy;
 use Falak\Sandboxes\Infrastructure\EloquentSandboxDirectory;
 use Falak\Secrets\Contracts\Secrets;
@@ -60,7 +67,7 @@ final class SandboxApiController extends Controller
     {
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, SandboxPolicy::VIEW);
-        $status = $request->validate(['status' => ['nullable', Rule::in([Sandbox::CREATING, Sandbox::RUNNING, Sandbox::FAILED, Sandbox::KILLED])]])['status'] ?? null;
+        $status = $request->validate(['status' => ['nullable', Rule::in([Sandbox::CREATING, Sandbox::RUNNING, Sandbox::PAUSED, Sandbox::FAILED, Sandbox::KILLED])]])['status'] ?? null;
 
         $query = Sandbox::query()->where('organization_id', $organizationId)->latest('created_at')->latest('id')->limit(500);
         $status !== null
@@ -96,26 +103,224 @@ final class SandboxApiController extends Controller
             'repo.url' => ['required_with:repo', 'string', 'max:2048', 'regex:/^(https:\/\/|git@|ssh:\/\/)\S+$/'],
             'repo.ref' => ['nullable', 'string', 'max:255', 'regex:/^[A-Za-z0-9._\/@^~-]+$/'],
             'repo.secret' => ['nullable', 'string', 'max:255', 'regex:'.Secrets::NAME_PATTERN],
+            'snapshot' => ['nullable', 'string', 'max:255'],
+            'idle_pause' => ['nullable'],
+            'db' => ['nullable', 'array'],
+            'db.instance' => ['required_with:db', 'string', 'max:255'],
+            'db.database' => ['required_with:db', 'string', 'max:64'],
         ]);
 
         $input['env'] = $this->env($input['env'] ?? []);
 
-        if (isset($input['ttl']) && ! is_int($input['ttl']) && ! is_string($input['ttl'])) {
-            throw ValidationException::withMessages(['ttl' => 'Give a number of seconds or a duration like 30m, 2h or 1h30m.']);
+        foreach (['ttl', 'idle_pause'] as $field) {
+            if (isset($input[$field]) && ! is_int($input[$field]) && ! is_string($input[$field])) {
+                throw ValidationException::withMessages([$field => 'Give a number of seconds or a duration like 30m, 2h or 1h30m.']);
+            }
         }
 
         if (isset($input['repo']['secret'])) {
             $this->authorizeSecretRead($request, $organizationId);
         }
 
-        $sandbox = $create($organizationId, Actor::of($request->user()), $input);
+        $actor = Actor::of($request->user());
+        $input['db_import'] = isset($input['db']) ? $this->database($request, $organizationId, $input['db']['instance'], $input['db']['database'], null, 'db.') : null;
 
-        if ($request->boolean('wait') && $sandbox->command_id !== null) {
+        if (($input['snapshot'] ?? null) !== null) {
+            // = a fork with count 1: everything the snapshot fixes is not the request's to choose.
+            $fixed = array_values(array_filter(['image', 'cpus', 'memory_mb', 'disk_mb', 'network', 'allow_hosts', 'server', 'repo'], fn (string $key) => isset($input[$key])));
+
+            if ($fixed !== []) {
+                throw ValidationException::withMessages(array_fill_keys($fixed, 'A sandbox from a snapshot has the snapshot\'s image, size, network and server; leave this out.'));
+            }
+
+            $snapshot = SandboxSnapshot::lookup($organizationId, $input['snapshot']);
+
+            if ($snapshot === null) {
+                throw ValidationException::withMessages(['snapshot' => "No snapshot of your organization is called {$input['snapshot']}."]);
+            }
+
+            $this->authorize('operate', $snapshot);
+            $sandboxes = $create->fork($snapshot, $actor, $input);
+        } else {
+            $sandboxes = [$create($organizationId, $actor, $input)];
+        }
+
+        if ($request->boolean('wait')) {
+            $this->wait($sandboxes, $agents);
+        }
+
+        return response()->json(['data' => $this->present($sandboxes, $organizationId)[0]], 201);
+    }
+
+    /** POST /sandboxes/snapshots/{snapshot}/fork {count?, name?, ttl?, env?, idle_pause?} [?wait=1]: 201 {data: [sandbox]} */
+    public function fork(Request $request, string $snapshot, CreateSandbox $create, AgentGateway $agents): JsonResponse
+    {
+        $model = $this->snapshotOf($snapshot, 'operate');
+        $input = $request->validate([
+            'count' => ['nullable', 'integer', 'min:1', 'max:'.CreateSandbox::MAX_FORK_COUNT],
+            'name' => ['nullable', 'string', 'max:60', 'regex:'.Sandbox::NAME],
+            'ttl' => ['nullable'],
+            'env' => ['nullable', 'array', 'max:100'],
+            'env.*' => ['nullable', 'string', 'max:32768'],
+            'idle_pause' => ['nullable'],
+        ]);
+        $input['env'] = $this->env($input['env'] ?? []);
+
+        foreach (['ttl', 'idle_pause'] as $field) {
+            if (isset($input[$field]) && ! is_int($input[$field]) && ! is_string($input[$field])) {
+                throw ValidationException::withMessages([$field => 'Give a number of seconds or a duration like 30m, 2h or 1h30m.']);
+            }
+        }
+
+        $sandboxes = $create->fork($model, Actor::of($request->user()), $input, (int) ($input['count'] ?? 1));
+
+        if ($request->boolean('wait')) {
+            $this->wait($sandboxes, $agents);
+        }
+
+        return response()->json(['data' => $this->present($sandboxes, $model->organization_id)], 201);
+    }
+
+    /** GET /sandboxes/snapshots ?sandbox=: {data: [snapshot]} (not deleted, newest first) */
+    public function snapshots(Request $request): JsonResponse
+    {
+        $organizationId = $this->organization->requireId();
+        $this->access->authorize($request->user(), $organizationId, SandboxPolicy::VIEW);
+        $ref = $request->validate(['sandbox' => ['nullable', 'string', 'max:255']])['sandbox'] ?? null;
+        $query = SandboxSnapshot::query()->with('sandbox')->where('organization_id', $organizationId)->where('status', '!=', SandboxSnapshot::DELETED)
+            ->latest('created_at')->latest('id')->limit(500);
+
+        if ($ref !== null) {
+            $query->where('sandbox_id', EloquentSandboxDirectory::lookup($organizationId, $ref)->id ?? '');
+        }
+
+        return response()->json(['data' => $this->presentSnapshots($query->get()->all(), $organizationId)]);
+    }
+
+    /** GET /sandboxes/snapshots/{snapshot}: {data: snapshot} */
+    public function showSnapshot(string $snapshot): JsonResponse
+    {
+        $model = $this->snapshotOf($snapshot, 'view');
+
+        return response()->json(['data' => $this->presentSnapshots([$model], $model->organization_id)[0]]);
+    }
+
+    /** POST /sandboxes/{sandbox}/snapshots {name?, stop?} [?wait=1]: 201 {data: snapshot} */
+    public function snapshot(Request $request, string $sandbox, TakeSnapshot $take, AgentGateway $agents, HandleCommandOutcome $outcomes): JsonResponse
+    {
+        $model = $this->resolve($request, $sandbox, 'operate');
+        $data = $request->validate([
+            'name' => ['nullable', 'string', 'max:63', 'regex:'.Sandbox::NAME],
+            'stop' => ['nullable', 'boolean'],
+        ]);
+        $stop = (bool) ($data['stop'] ?? false);
+        $snapshot = $take($model, Actor::of($request->user()), $data['name'] ?? null, $stop);
+
+        if ($request->boolean('wait') && $snapshot->command_id !== null) {
             try {
-                $result = $agents->await($sandbox->command_id, 60);
+                $result = $agents->await($snapshot->command_id, 60);
+
+                if ($result->isFinished() && $result->isSuccessful()) {
+                    $outcomes->snapshotted($snapshot, $result->result ?? [], $stop);
+                } elseif ($result->isFinished()) {
+                    SandboxSnapshot::query()->whereKey($snapshot->id)->where('status', SandboxSnapshot::CREATING)
+                        ->update(['status' => SandboxSnapshot::FAILED, 'error' => mb_substr((string) ($result->error ?: 'The snapshot could not be taken.'), 0, 1000)]);
+                }
+            } catch (CommandTimedOut) {
+                // Still being taken: the answer is the snapshot as it is (HandleCommandOutcome settles it).
+            }
+
+            $snapshot->refresh();
+        }
+
+        return response()->json(['data' => $this->presentSnapshots([$snapshot], $model->organization_id)[0]], 201);
+    }
+
+    /** PATCH /sandboxes/snapshots/{snapshot} {name}: {data: snapshot} */
+    public function updateSnapshot(Request $request, string $snapshot): JsonResponse
+    {
+        $model = $this->snapshotOf($snapshot, 'operate');
+        $name = $request->validate(['name' => ['required', 'string', 'max:63', 'regex:'.Sandbox::NAME]])['name'];
+        abort_if($model->status === SandboxSnapshot::DELETED, 409, 'The snapshot is deleted.');
+
+        if ($name !== $model->name) {
+            $taken = SandboxSnapshot::query()->where('organization_id', $model->organization_id)->where('status', '!=', SandboxSnapshot::DELETED)
+                ->where('name', $name)->whereKeyNot($model->id)->exists();
+
+            try {
+                $taken || $model->forceFill(['name' => $name])->save();
+            } catch (UniqueConstraintViolationException) {
+                $taken = true;
+            }
+
+            if ($taken) {
+                throw ValidationException::withMessages(['name' => "A snapshot called {$name} already exists."]);
+            }
+        }
+
+        return response()->json(['data' => $this->presentSnapshots([$model], $model->organization_id)[0]]);
+    }
+
+    /** DELETE /sandboxes/snapshots/{snapshot}: 204 (deleting a deleted snapshot too) */
+    public function destroySnapshot(string $snapshot, DeleteSnapshot $delete): Response
+    {
+        $delete($this->snapshotOf($snapshot, 'operate'));
+
+        return response()->noContent();
+    }
+
+    /** POST /sandboxes/{sandbox}/pause: {data: sandbox} */
+    public function pause(Request $request, string $sandbox, PauseSandbox $pauses): JsonResponse
+    {
+        $model = $pauses->pause($this->resolve($request, $sandbox, 'operate'));
+
+        return response()->json(['data' => $this->present([$model], $model->organization_id)[0]]);
+    }
+
+    /** POST /sandboxes/{sandbox}/resume: {data: sandbox} */
+    public function resume(Request $request, string $sandbox, PauseSandbox $pauses): JsonResponse
+    {
+        $model = $pauses->resume($this->resolve($request, $sandbox, 'operate'));
+        $model->forceFill(['last_activity_at' => now()])->save();
+
+        return response()->json(['data' => $this->present([$model], $model->organization_id)[0]]);
+    }
+
+    /** POST /sandboxes/{sandbox}/db {instance, database}: {data: {path, size_bytes}} (waits, up to 10 minutes) */
+    public function db(Request $request, string $sandbox, ImportDatabase $import): JsonResponse
+    {
+        $model = $this->resolve($request, $sandbox, 'operate');
+        $data = $request->validate([
+            'instance' => ['required', 'string', 'max:255'],
+            'database' => ['required', 'string', 'max:64'],
+        ]);
+        $db = $this->database($request, $model->organization_id, $data['instance'], $data['database'], $model->server_id);
+        $model = $this->running($request, $sandbox);
+
+        return response()->json(['data' => $import($model, Actor::of($request->user()), $db)]);
+    }
+
+    /**
+     * ?wait=1: up to 60 s in all for the sandboxes' creates; those that finished are settled here (the listener too).
+     *
+     * @param  list<Sandbox>  $sandboxes
+     */
+    private function wait(array $sandboxes, AgentGateway $agents): void
+    {
+        $deadline = time() + 60;
+
+        foreach ($sandboxes as $sandbox) {
+            if ($sandbox->command_id === null) {
+                continue;
+            }
+
+            try {
+                $result = $agents->await($sandbox->command_id, max(1, $deadline - time()));
             } catch (CommandTimedOut) {
                 // Still creating: the answer is the sandbox as it is (HandleCommandOutcome settles it).
-                return response()->json(['data' => $this->present([$sandbox->refresh()], $organizationId)[0]], 201);
+                $sandbox->refresh();
+
+                continue;
             }
 
             $sandbox->refresh();
@@ -126,8 +331,46 @@ final class SandboxApiController extends Controller
                     : HandleCommandOutcome::failed($sandbox, (string) ($result->error ?: 'The sandbox could not be created.'));
             }
         }
+    }
 
-        return response()->json(['data' => $this->present([$sandbox], $organizationId)[0]], 201);
+    /**
+     * A database copy: an instance of the organization (id or name) with that database, on $serverId when given. It hands
+     * out the data, so it needs what downloading a backup needs (a token created with that ability by name; `*` is not
+     * enough).
+     *
+     * @return array{instance: string, instance_name: string, engine: string, database: string, server_id: string}
+     */
+    private function database(Request $request, string $organizationId, string $instance, string $database, ?string $serverId, string $prefix = ''): array
+    {
+        $permission = DatabaseDirectory::BACKUP_DOWNLOAD_PERMISSION;
+        $token = $request->user()?->currentAccessToken();
+
+        if (($token instanceof PersonalAccessToken && ! in_array($permission, (array) $token->abilities, true))
+            || ! $this->access->can($request->user(), $organizationId, $permission)) {
+            throw new AuthorizationException("A database copy hands out the database's data: it needs the {$permission} permission, as downloading a backup (a token created with the {$permission} ability itself).");
+        }
+
+        return app(ImportDatabase::class)->resolve($organizationId, $instance, $database, $serverId, $prefix);
+    }
+
+    private function snapshotOf(string $ref, string $ability): SandboxSnapshot
+    {
+        $snapshot = SandboxSnapshot::lookup($this->organization->requireId(), $ref);
+        abort_if($snapshot === null, 404, 'Snapshot not found.');
+        $this->authorize($ability, $snapshot);
+
+        return $snapshot;
+    }
+
+    /**
+     * @param  list<SandboxSnapshot>  $snapshots
+     * @return list<array<string, mixed>>
+     */
+    private function presentSnapshots(array $snapshots, string $organizationId): array
+    {
+        $names = $this->serverNames($organizationId);
+
+        return array_map(fn (SandboxSnapshot $snapshot) => $snapshot->present($names[$snapshot->server_id] ?? null), $snapshots);
     }
 
     /** GET /sandboxes/{id}: {data: sandbox} */
@@ -142,6 +385,11 @@ final class SandboxApiController extends Controller
     public function update(Request $request, string $sandbox, HandleCommandOutcome $outcomes): JsonResponse
     {
         $model = $this->resolve($request, $sandbox, 'update');
+
+        if ($model->isLive()) {
+            $model->forceFill(['last_activity_at' => now()])->save();
+        }
+
         $data = $request->validate([
             'name' => ['nullable', 'string', 'max:63', 'regex:'.Sandbox::NAME],
             'extend' => ['nullable'],
@@ -310,7 +558,7 @@ final class SandboxApiController extends Controller
         }
 
         // Asked outside the transaction (the agent's answer is written by another request).
-        $told = $sandbox->isRunning();
+        $told = $sandbox->isStarted();
 
         if ($told) {
             $this->agent->ask($sandbox, 'sandbox.extend', ['id' => $sandbox->id, 'expires_at' => $expires->getTimestamp()], 15);
@@ -329,7 +577,7 @@ final class SandboxApiController extends Controller
 
             $fresh->save();
 
-            if (! $told && $fresh->isRunning()) {
+            if (! $told && $fresh->isStarted()) {
                 $outcomes->sendExpiry($fresh);
             }
 
@@ -407,10 +655,17 @@ final class SandboxApiController extends Controller
         return $sandbox;
     }
 
+    /** Exec, files and database copies: a running sandbox (a paused one is resumed first), whose use is activity. */
     private function running(Request $request, string $ref): Sandbox
     {
         $sandbox = $this->resolve($request, $ref, 'operate');
+
+        if ($sandbox->status === Sandbox::PAUSED) {
+            $sandbox = app(PauseSandbox::class)->resume($sandbox);
+        }
+
         abort_unless($sandbox->isRunning(), 409, $sandbox->status === Sandbox::CREATING ? 'The sandbox is still starting.' : "The sandbox is {$sandbox->status}.");
+        $sandbox->forceFill(['last_activity_at' => now()])->save();
 
         return $sandbox;
     }
@@ -421,6 +676,15 @@ final class SandboxApiController extends Controller
      */
     private function present(array $sandboxes, string $organizationId): array
     {
+        $names = $this->serverNames($organizationId);
+        (new EloquentCollection($sandboxes))->loadMissing('fromSnapshot');
+
+        return array_map(fn (Sandbox $sandbox) => $sandbox->present($names[$sandbox->server_id] ?? null), $sandboxes);
+    }
+
+    /** @return array<string, string> */
+    private function serverNames(string $organizationId): array
+    {
         $names = [];
 
         foreach ($this->servers->forOrganization($organizationId) as $server) {
@@ -428,6 +692,6 @@ final class SandboxApiController extends Controller
             $names[$server->id] = $server->name;
         }
 
-        return array_map(fn (Sandbox $sandbox) => $sandbox->present($names[$sandbox->server_id] ?? null), $sandboxes);
+        return $names;
     }
 }

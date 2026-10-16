@@ -3,6 +3,7 @@
 namespace Falak\Terminal\Application\Jobs;
 
 use Falak\Fleet\Contracts\AgentGateway;
+use Falak\Sandboxes\Contracts\SandboxDirectory;
 use Falak\Terminal\Application\Actions\CloseSession;
 use Falak\Terminal\Application\Actions\StartNetCapture;
 use Falak\Terminal\Domain\Enums\SessionStatus;
@@ -39,6 +40,11 @@ final class SweepTerminalSessions implements ShouldQueue
 
         // Network tool runs are kept 30 days (their output lives in Fleet's command output).
         NetToolRun::query()->where('created_at', '<', now()->subDays(30))->delete();
+
+        // An open sandbox console keeps its sandbox active (idle pause): keystrokes through the relay never reach the
+        // control plane, so an open session counts as use.
+        app(SandboxDirectory::class)->markActive(TerminalSession::query()->whereIn('status', SessionStatus::live())
+            ->where('target_type', TerminalSession::TARGET_SANDBOX)->whereNotNull('target_id')->distinct()->pluck('target_id')->all());
 
         TerminalSession::query()
             ->whereIn('status', SessionStatus::live())

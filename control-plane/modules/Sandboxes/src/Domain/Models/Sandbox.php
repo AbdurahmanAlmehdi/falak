@@ -135,6 +135,12 @@ class Sandbox extends Model
         return $this->status === self::RUNNING;
     }
 
+    /** Running or paused: the agent has it (and enforces its expiry). */
+    public function isStarted(): bool
+    {
+        return in_array($this->status, [self::RUNNING, self::PAUSED], true);
+    }
+
     /**
      * The API resource (docs/plans/SANDBOXES.md "HTTP API"). env is never returned, only its keys.
      *

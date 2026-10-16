@@ -158,9 +158,10 @@ final class ConsoleTargets
         );
     }
 
-    /** A shell in a running sandbox (`runsc exec`, as root). */
+    /** A shell in a running sandbox (`runsc exec`, as root); a paused one is resumed first. */
     public function forSandbox(SandboxData $sandbox): ConsoleTarget
     {
+        $sandbox = $this->sandboxes->wake($sandbox->id);
         abort_unless($sandbox->isRunning(), 409, 'Consoles can be opened once the sandbox is running.');
         $server = $this->servers->find($sandbox->serverId);
 
