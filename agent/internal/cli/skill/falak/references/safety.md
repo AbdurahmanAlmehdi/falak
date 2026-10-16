@@ -49,6 +49,10 @@ reach the host, its sites, private networks or cloud metadata, and everything in
   the token is used for the clone and not kept in the sandbox's environment. It needs `secrets.reveal` (the value
   reaches the sandbox) and a secret that is not sensitive; don't ask for that ability just to get around a refusal.
 - Copy results out (`falak sandbox cp`, `git diff`) before killing it.
+- Snapshots and forks of your own sandboxes need no confirmation either, but forks use real memory and disk: kill the
+  ones you don't keep and delete snapshots you no longer need (`falak sandbox snapshots rm`). `falak sandbox db`
+  copies real data into the sandbox: use staging or demo data when there is a choice, and ask before copying a
+  production database.
 
 ## Never print secrets
 

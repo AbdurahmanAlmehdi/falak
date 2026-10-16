@@ -52,10 +52,13 @@ falak sandbox create --server main-1 --json     # pick the server; --json prints
 | `--env K=V` | | Repeatable |
 | `--repo URL[@REF]` | | Clone a git repository into the sandbox |
 | `--repo-secret NAME` | | An organization secret holding a token for a private repository. It is used for the clone, offered only to the repository's host and not kept in the sandbox's environment. Handing a secret's value to a sandbox is revealing it: it needs `secrets.reveal` (a token created with that ability by name, `*` is not enough), and a sensitive (write-only) secret is refused, so create the token's secret with Sensitive off |
+| `--from SNAPSHOT` | | Create from a [snapshot](#snapshots-and-fork) (name or id). Not combined with `--image`, `--cpus`, `--memory`, `--disk`, `--network`, `--allow`, `--server`, `--repo` or `--repo-secret`: the snapshot decides |
+| `--idle-pause 10m` | off | [Pause](#pause-and-idle-pause) the sandbox after this long unused (at least `1m`) |
+| `--db INSTANCE/DATABASE` | | [Copy a database](#database-copy) into the sandbox |
 | `--wait=false` | waits | Return at once (status `creating`) instead of waiting up to 60 s for `running` |
 
 `falak sandbox ls` lists your organization's sandboxes (`NAME STATUS IMAGE SERVER CPU MEM EXPIRES IN`; `--status
-running` filters) and `falak sandbox show <sandbox>` shows one.
+running` or `--status paused` filters) and `falak sandbox show <sandbox>` shows one.
 
 ## Run commands
 
@@ -115,6 +118,74 @@ falak sandbox kill build-1 build-2      # several
 
 Killing removes the sandbox, its processes and everything it wrote. Copy out what you need first.
 
+## Snapshots and fork
+
+A **snapshot** freezes a sandbox at one moment: its memory, its running processes and everything it wrote. The sandbox
+keeps running (unless you ask it to stop). A snapshot lives on the sandbox's server, outlives the sandbox and never
+expires; you delete it. Take one before a risky step, or to save a prepared environment.
+
+```bash
+falak sandbox snapshot build-1 --name node-ready          # waits until it is ready; --stop also removes the sandbox
+falak sandbox snapshots                                    # NAME STATUS SOURCE SERVER IMAGE SIZE CREATED
+falak sandbox snapshots ls --sandbox build-1               # only that sandbox's
+falak sandbox snapshots rm node-ready old-one              # delete (names or ids)
+```
+
+**Fork** makes new sandboxes from a snapshot. Each continues exactly where the snapshot was taken (processes keep
+running), on the snapshot's server, with its image, CPUs, memory, disk and network mode, and gets its own IP. Forks
+copy rather than share: each one uses its own memory and disk, and counts against the running-sandbox cap and the
+quotas. Use it to try several approaches in parallel, then kill the ones you don't keep.
+
+```bash
+falak sandbox fork node-ready -n 3                         # node-ready-1 … node-ready-3
+falak sandbox fork node-ready -n 3 --name attempt --ttl 30m --env STRATEGY=b --idle-pause 10m
+falak sandbox fork node-ready --json                       # prints the forks
+falak sandbox kill attempt-2 attempt-3
+```
+
+`-n` is 1 to 10. With `-n` above 1 `--name` is a prefix (`attempt-1`…). `--env` adds to the snapshot's environment.
+
+**Templates are named snapshots.** There is no separate object: give a snapshot a name and create sandboxes from it,
+as many times as you like, instead of repeating an install every time.
+
+```bash
+falak sandbox create --name base --image node:22 --ttl 30m
+falak sandbox exec base -- "npm ci && npm run build"
+falak sandbox snapshot base --name shop-built --stop      # the template; base is gone
+falak sandbox create --from shop-built --name run-1
+```
+
+Quotas by default: 20 snapshots and 50 GB of snapshot storage per organization. A snapshot with memory is about as big
+as the sandbox's memory in use plus what it wrote. Snapshot names are unique in the organization. Forking or deleting
+someone else's snapshot needs `sandboxes.manage`.
+
+## Pause and idle pause
+
+`falak sandbox pause <sandbox>…` freezes a sandbox's processes: it uses no CPU, but its memory stays allocated (so it
+still counts against the quotas) and its time limit keeps running. `falak sandbox resume <sandbox>…` continues it.
+`falak sandbox ls` shows `paused`.
+
+A sandbox created with `--idle-pause 10m` is paused by Falak when nothing used it (exec, files, shell input, API calls)
+for that long. You don't have to resume it: an exec, a file call or a shell on a paused sandbox resumes it first, at
+the cost of one extra round trip.
+
+## Database copy
+
+`--db INSTANCE/DATABASE` on create, or later `falak sandbox db <sandbox> <instance>/<database>`, dumps a database from
+a database container **on the same server** into the sandbox at `/workspace/db/<database>.dump`
+(PostgreSQL: custom-format `pg_dump -Fc`, restore with `pg_restore`) or `/workspace/db/<database>.sql`
+(MySQL/MariaDB). The instance is its id or name. The sandbox never connects to the database: it gets a copy of the
+data, streamed in without touching the server's disk. It needs the permission that downloading a backup of that
+instance needs (a token needs that ability by name).
+
+```bash
+falak sandbox create --name migrate-test --db pg-main/shop
+falak sandbox exec migrate-test -- "createdb shop && pg_restore -d shop /workspace/db/shop.dump"
+falak sandbox db migrate-test pg-main/reports         # another one later
+```
+
+Copy demo or staging data when you can: whatever is in the dump is readable by whatever runs in the sandbox.
+
 ## Network
 
 | Mode | Reaches |
@@ -160,7 +231,7 @@ Other MCP clients: the command is `falak mcp` (no arguments). The tools:
 
 | Tool | Does |
 |---|---|
-| `sandbox_create` `{image?, name?, ttl?, network?, cpus?, memory_mb?, repo_url?}` | Create a sandbox and wait until it runs; returns it as JSON |
+| `sandbox_create` `{image?, name?, ttl?, network?, cpus?, memory_mb?, repo_url?, from_snapshot?, idle_pause?}` | Create a sandbox and wait until it runs; returns it as JSON. `from_snapshot` replaces image, size, network and repo |
 | `sandbox_list` `{}` | The organization's sandboxes |
 | `sandbox_exec` `{id, command, cwd?, timeout?}` | Run a shell command (root, `sh -lc`, ≤ 120 s); returns the exit code, stdout and stderr |
 | `sandbox_read_file` `{id, path}` | A file's content (binary files as base64) |
@@ -168,6 +239,10 @@ Other MCP clients: the command is `falak mcp` (no arguments). The tools:
 | `sandbox_list_files` `{id, path}` | A directory listing |
 | `sandbox_extend` `{id, by}` | Add time (`"30m"` or seconds) |
 | `sandbox_kill` `{id}` | Kill it |
+| `sandbox_snapshot` `{id, name?}` | Snapshot a running sandbox (disk, memory, processes); it keeps running. Do this before a risky step |
+| `sandbox_fork` `{snapshot, count?, ttl?}` | `count` (1–10) sandboxes from a snapshot, to try approaches in parallel; kill the ones you don't keep |
+| `sandbox_pause` `{id}` / `sandbox_resume` `{id}` | Pause (no CPU, memory stays) / resume. Exec and file calls resume a paused sandbox by themselves |
+| `sandbox_list_snapshots` `{}` | The organization's snapshots |
 
 `id` is the sandbox's id or name. For an agent, prefer a token with only `sandboxes.view` and `sandboxes.use`
 (Settings → API tokens) given to the server through its environment:
@@ -197,6 +272,17 @@ All routes are under `/api/v1`, with a bearer token (`Accept: application/json`)
 | `DELETE /sandboxes/{sandbox}/files` | `?path=&recursive=1` | `204` |
 | `GET /sandboxes/{sandbox}/execs` | | the exec log |
 | `POST /sandboxes/{sandbox}/console` | | a terminal session (use `falak sandbox ssh`) |
+| `POST /sandboxes/{sandbox}/snapshots` | `{name?, stop? (default false)}`; `?wait=1` waits up to 60 s for `ready` | `201` the snapshot |
+| `GET /sandboxes/snapshots` | `?sandbox=` | `{data: [snapshot]}` |
+| `GET /sandboxes/snapshots/{snapshot}` | | the snapshot |
+| `PATCH /sandboxes/snapshots/{snapshot}` | `{name}` | the snapshot |
+| `DELETE /sandboxes/snapshots/{snapshot}` | | `204` |
+| `POST /sandboxes/snapshots/{snapshot}/fork` | `{count? (1–10), name? (prefix), ttl?, env?, idle_pause?}`; `?wait=1` | `201` `{data: [sandbox]}` |
+| `POST /sandboxes` (also) | `{snapshot? (id or name; with it no image, cpus, memory_mb, disk_mb, network, server or repo), idle_pause? (seconds or "10m"), db?: {instance, database}}` | `201` the sandbox |
+| `POST /sandboxes/{sandbox}/pause` · `/resume` | | the sandbox |
+| `POST /sandboxes/{sandbox}/db` | `{instance, database}` (waits, up to 10 min) | `{data: {path, size_bytes}}` |
+
+`{snapshot}` is a snapshot's id or name. Exec, files and the console on a `paused` sandbox resume it first.
 
 A sandbox:
 
@@ -205,10 +291,21 @@ A sandbox:
  "server": {"id": "01jsrv0example000000000000", "name": "main-1"}, "cpus": 1, "memory_mb": 1024, "disk_mb": 10240,
  "network": "internet", "allow_hosts": [], "ttl_seconds": 3600, "expires_at": "2026-10-16T20:00:00+00:00",
  "created_at": "2026-10-16T19:00:00+00:00", "created_by": {"type": "token", "name": "ci"}, "ip": "10.88.0.5",
- "kill_reason": null}
+ "kill_reason": null, "idle_pause_seconds": null, "last_activity_at": "2026-10-16T19:05:00+00:00", "from_snapshot": null}
 ```
 
-Statuses: `creating`, `running`, `failed`, `killed`. Rate limits: 30 creates and 120 execs a minute per token.
+A snapshot:
+
+```json
+{"id": "01jsnap0example00000000000", "name": "node-ready", "status": "ready", "sandbox": {"id": "01jsbx0example000000000000", "name": "brave-otter"},
+ "server": {"id": "01jsrv0example000000000000", "name": "main-1"}, "image": "node:22", "cpus": 1, "memory_mb": 1024,
+ "disk_mb": 10240, "network": "internet", "size_bytes": 31457280, "created_at": "2026-10-16T19:10:00+00:00",
+ "created_by": {"type": "user", "name": "Sam"}}
+```
+
+Sandbox statuses: `creating`, `running`, `paused`, `failed`, `killed`. Snapshot statuses: `creating`, `ready`, `failed`.
+Permissions for snapshot, fork, pause, resume and db are those of the sandbox they act on (`sandboxes.use` on your own,
+`sandboxes.manage` on anyone's); `db` also needs the backup-download permission on the instance. Rate limits: 30 creates and 120 execs a minute per token.
 
 With curl (demo values):
 
@@ -237,8 +334,8 @@ api -X DELETE "$FALAK_URL/api/v1/sandboxes/01jsbx0example000000000000"
 
 ## Coming next
 
-Snapshots (disk and memory), forking a snapshot into several sandboxes, pause/resume and idle pause (v0.21); preview
-URLs, diffs against a snapshot and opening a PR from a sandbox (v0.22).
+Preview URLs for a port in a sandbox, diffs against a snapshot, opening a PR from a sandbox and promoting a sandbox's
+result (v0.22).
 
 ## Known gaps
 

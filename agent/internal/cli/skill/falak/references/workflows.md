@@ -275,6 +275,22 @@ falak sandbox kill agent-1
 Where the repository is cloned depends on the server (look with `falak sandbox exec agent-1 -- "ls /root /workspace"`).
 `ssh` is for people: `falak sandbox ssh agent-1` opens an interactive shell.
 
+### Snapshot before a risky step, fork to try approaches in parallel
+
+```bash
+falak sandbox snapshot agent-1 --name before-refactor          # disk, memory and processes; agent-1 keeps running
+falak sandbox fork before-refactor -n 3 --name try --ttl 30m    # try-1 … try-3, each from that exact moment
+falak sandbox exec try-1 -- "cd /root/shop && ./approach-a.sh && npm test"   # one approach per fork
+falak sandbox exec try-2 -- "cd /root/shop && ./approach-b.sh && npm test"
+falak sandbox kill try-2 try-3                                   # keep only the winner
+falak sandbox snapshots rm before-refactor                       # snapshots stay until deleted
+```
+
+A snapshot with a name is a template: `falak sandbox create --from before-refactor`. `--idle-pause 10m` pauses a
+sandbox nobody is using (any exec or file call resumes it). To test a migration on real-shaped data:
+`falak sandbox create --db pg-main/shop`, then `pg_restore` the file under `/workspace/db/` inside it; use
+staging or demo data where you can.
+
 ### Use the sandboxes from an MCP client
 
 ```bash
@@ -283,6 +299,8 @@ claude mcp add falak -- falak mcp                                 # Claude Code;
 
 The tools mirror the CLI: `sandbox_create` (waits until it runs), `sandbox_exec` (`sh -lc`, ≤ 120 s),
 `sandbox_read_file` / `sandbox_write_file` / `sandbox_list_files`, `sandbox_list`, `sandbox_extend`,
-`sandbox_kill`. The server uses the CLI's credentials; for an agent prefer a token with only `sandboxes.view` and
+`sandbox_kill`, `sandbox_snapshot` (before a risky step), `sandbox_fork` (try approaches in parallel; kill the forks
+you don't keep), `sandbox_pause` / `sandbox_resume`, `sandbox_list_snapshots`; `sandbox_create` takes
+`from_snapshot` and `idle_pause`. The server uses the CLI's credentials; for an agent prefer a token with only `sandboxes.view` and
 `sandboxes.use` (`FALAK_URL` + `FALAK_TOKEN` in the MCP server's environment:
 `claude mcp add falak -e FALAK_URL=https://falak.example.com -e FALAK_TOKEN=… -- falak mcp`).

@@ -180,7 +180,7 @@ the running one). Abilities: `sandboxes.view` (ls, show) and `sandboxes.use` (ev
 
 | Command | What |
 |---|---|
-| `falak sandbox ls [--status S]` | Columns `NAME STATUS IMAGE SERVER CPU MEM EXPIRES IN`. Statuses `creating`, `running`, `failed`, `killed`. `falak sandbox` alone = `ls` |
+| `falak sandbox ls [--status S]` | Columns `NAME STATUS IMAGE SERVER CPU MEM EXPIRES IN`. Statuses `creating`, `running`, `paused`, `failed`, `killed`. `falak sandbox` alone = `ls` |
 | `falak sandbox create [--image I] [--name N] [--server S] [--cpus N] [--memory 1g] [--disk 10g] [--ttl 1h] [--network none\|internet\|allowlist] [--allow HOST]… [--env K=V]… [--repo URL[@REF]] [--repo-secret NAME] [--wait=false]` | Defaults: `ubuntu:24.04`, 1 CPU, 1 GB memory, 10 GB disk, 1 h, `internet`, the server with the most free memory. Sizes: `512m`, `2g` or MB; durations: `30m`, `2h`, `1h30m` or seconds. `--allow` needs `--network allowlist`. `--repo` clones into the sandbox (`--repo-secret`: the name of a secret holding the clone token). Waits until it runs (up to 60 s) unless `--wait=false`. `--json`: the sandbox |
 | `falak sandbox show <sandbox>` | Id, status, image, server, limits, network, IP, expiry, creator, kill reason |
 | `falak sandbox exec <sandbox> [--timeout 60s] [--cwd DIR] [-e K=V]… -- <cmd…>` | One argument after `--` is a shell line (`sh -lc`, root); several are an argv run without a shell. stdout/stderr go to the matching local streams; exits with the remote code (`124` on timeout). `--timeout` max 120 s. Piped stdin (≤ 1 MB, text) is passed to the command. `--json`: `{exit_code, stdout, stderr, truncated, timed_out, duration_ms}` |
@@ -188,6 +188,13 @@ the running one). Abilities: `sandboxes.view` (ls, show) and `sandboxes.use` (ev
 | `falak sandbox ssh <sandbox>` | Interactive shell through the terminal relay (no ports opened) |
 | `falak sandbox extend <sandbox> <30m>` | Add time (the organization caps the total) |
 | `falak sandbox kill <sandbox>…` | Kill one or more; their files are gone. Exit 1 if any failed (the others are still killed) |
+| `falak sandbox snapshot <sandbox> [--name N] [--stop] [--wait=false]` | Freeze the sandbox's disk, memory and processes; it keeps running (`--stop`: removed afterwards). Waits until `ready` (up to 60 s). Prints the snapshot (`--json`: the resource) |
+| `falak sandbox snapshots [ls] [--sandbox S]` | Columns `NAME STATUS SOURCE SERVER IMAGE SIZE CREATED` |
+| `falak sandbox snapshots rm <snapshot>…` | Delete snapshots (names or ids). Exit 1 if any failed |
+| `falak sandbox fork <snapshot> [-n 1] [--name N] [--ttl 1h] [--env K=V]… [--idle-pause 10m] [--wait=false]` | `-n` 1–10 new sandboxes from the snapshot, on its server, with its image, size and network; `--name` is a prefix for `-n` above 1 (`name-1`…). Waits for them; prints them (`--json`: the list) |
+| `falak sandbox create --from <snapshot>` · `--idle-pause 10m` · `--db <instance>/<database>` | `--from` can't be combined with `--image`, `--cpus`, `--memory`, `--disk`, `--network`, `--allow`, `--server`, `--repo`, `--repo-secret`. `--idle-pause` ≥ 1m |
+| `falak sandbox pause <sandbox>…` · `resume <sandbox>…` | Pause (no CPU; memory stays allocated; the time limit keeps running) / resume. `ls` shows `paused`; exec, cp and ssh resume a paused sandbox by themselves |
+| `falak sandbox db <sandbox> <instance>/<database>` | Copy a database of an instance on the sandbox's server to `/workspace/db/<database>.dump` (PostgreSQL) or `.sql` (MySQL/MariaDB). `<instance>`: id or name. Needs the backup-download ability on the instance |
 | `falak mcp` | Run the MCP server on stdin/stdout (JSON-RPC, protocol 2025-06-18) with the sandbox tools; logs go to stderr. Uses the CLI's credentials (`FALAK_URL`/`FALAK_TOKEN` or `falak login`). Setup: `claude mcp add falak -- falak mcp` |
 
 ## The CLI itself

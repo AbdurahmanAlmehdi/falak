@@ -8,7 +8,7 @@ Key facts for agents:
 - Exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version, 5 invalid falak.yaml, 6 waits for an approval, 7 drifted.
 - Config as code: `falak.yaml` (schema `https://falak.sh/schema/v1.json`); `falak init`, `falak validate`, `falak plan`, `falak apply --wait`. Secrets are referenced as `${{ secrets.NAME }}` and set with `falak secret set NAME` (value on stdin), never written in the file.
 - API: `/api/v1`, `Authorization: Bearer <token>`, `Accept: application/json`, responses wrapped in `{"data": ...}`.
-- Sandboxes: disposable gVisor Linux machines for untrusted code and agents: `falak sandbox create|exec|cp|ssh|kill`; MCP server `falak mcp` (`claude mcp add falak -- falak mcp`).
+- Sandboxes: disposable gVisor Linux machines for untrusted code and agents: `falak sandbox create|exec|cp|ssh|kill|snapshot|fork|pause|resume|db`; MCP server `falak mcp` (`claude mcp add falak -- falak mcp`).
 - Destructive actions (database/site/server deletion, `apply --allow-destroy`, approving risky runs, restores, secret rotation, `env push`) need a human's confirmation.
 
 ## Agent skill

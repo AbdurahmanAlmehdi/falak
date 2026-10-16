@@ -163,8 +163,27 @@ falak sandbox kill try-upgrade
 poll the log. Output is capped at 256 KB per stream; files at 5 MB (no directories: tar them). Network: `internet`
 (default; public internet only), `none`, or `allowlist --allow HOST`. Abilities: `sandboxes.view`, `sandboxes.use`.
 
+**Snapshot before a risky step, fork to try approaches in parallel.** A snapshot freezes a sandbox (disk, memory,
+running processes) and it keeps running; a fork is a new sandbox that continues from a snapshot. A named snapshot is a
+reusable template. Kill the forks you don't keep.
+
+```bash
+falak sandbox snapshot try-upgrade --name before-upgrade       # waits until ready
+falak sandbox fork before-upgrade -n 3 --name attempt --ttl 30m # attempt-1 … attempt-3, each from that moment
+falak sandbox create --from before-upgrade --idle-pause 10m     # a single one; idle pause = paused when unused
+falak sandbox snapshots                                         # list; `snapshots rm <snapshot>…` deletes
+falak sandbox pause try-upgrade; falak sandbox resume try-upgrade  # exec and cp also resume a paused sandbox
+falak sandbox db try-upgrade pg-main/shop                       # copy a database of the same server into /workspace/db/
+```
+
+`--from` takes the snapshot's image, size and network (no `--image`, `--cpus`, `--memory`, `--disk`, `--network`,
+`--server`, `--repo`). Paused sandboxes keep their memory and time limit. A database copy is a dump (`.dump` for
+PostgreSQL, `.sql` for MySQL/MariaDB); prefer staging or demo data, and it needs the backup-download ability on the
+instance.
+
 **MCP**: `falak mcp` is a stdio MCP server with the same operations as tools (`sandbox_create`, `sandbox_exec`,
-`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_list`, `sandbox_extend`, `sandbox_kill`),
+`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_list`, `sandbox_extend`, `sandbox_kill`,
+`sandbox_snapshot`, `sandbox_fork`, `sandbox_pause`, `sandbox_resume`, `sandbox_list_snapshots`),
 using the CLI's login. Claude Code: `claude mcp add falak -- falak mcp`. Recipes: workflows.md §11.
 
 ## When the CLI can't do it

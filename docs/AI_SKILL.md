@@ -66,7 +66,8 @@ claude mcp add falak -e FALAK_URL=https://falak.example.com -e FALAK_TOKEN=… -
 ```
 
 Other clients: run the command `falak mcp`. Tools: `sandbox_create`, `sandbox_list`, `sandbox_exec`,
-`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_extend`, `sandbox_kill`.
+`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_extend`, `sandbox_kill`, `sandbox_snapshot`,
+`sandbox_fork`, `sandbox_pause`, `sandbox_resume`, `sandbox_list_snapshots`.
 
 ## Authenticate the CLI for an agent
 

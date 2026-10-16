@@ -183,6 +183,14 @@ token's organization, `409` when it isn't running. Throttles: create 30/min, exe
 | `DELETE /api/v1/sandboxes/{sandbox}/files?path=[&recursive=1]` | `sandboxes.use` | `204` |
 | `GET /api/v1/sandboxes/{sandbox}/execs` | `sandboxes.view` | The exec audit trail `{id, cmd, exit_code, duration_ms, actor, started_at}` |
 | `POST /api/v1/sandboxes/{sandbox}/console` | `sandboxes.use` | Terminal relay session; use `falak sandbox ssh` |
+| `POST /api/v1/sandboxes/{sandbox}/snapshots[?wait=1]` | `sandboxes.use` | `{name?, stop? (false)}` → `201` snapshot `{id, name, status (creating\|ready\|failed), sandbox {id, name}, server, image, cpus, memory_mb, disk_mb, network, size_bytes, created_at, created_by}` |
+| `GET /api/v1/sandboxes/snapshots[?sandbox=]` · `GET`/`PATCH {name}`/`DELETE /api/v1/sandboxes/snapshots/{snapshot}` | `sandboxes.view` / `sandboxes.use` | `{snapshot}` is an id or a name; `DELETE` → `204` |
+| `POST /api/v1/sandboxes/snapshots/{snapshot}/fork[?wait=1]` | `sandboxes.use` | `{count? (1-10), name? (prefix), ttl?, env?, idle_pause?}` → `201` `{data: [sandbox]}` |
+| `POST /api/v1/sandboxes` (also) | `sandboxes.use` | `snapshot?` (id or name; no image/cpus/memory_mb/disk_mb/network/server/repo with it), `idle_pause?` (seconds or "10m", ≥ 60), `db?: {instance, database}` |
+| `POST /api/v1/sandboxes/{sandbox}/pause` · `/resume` | `sandboxes.use` | → the sandbox (`paused` / `running`). Exec, files and console resume a paused sandbox first |
+| `POST /api/v1/sandboxes/{sandbox}/db` | `sandboxes.use` + backup download on the instance | `{instance, database}` → `{data: {path, size_bytes}}` (waits, ≤ 10 min) |
+
+The sandbox resource also has `idle_pause_seconds`, `last_activity_at` and `from_snapshot {id, name}`; statuses add `paused`.
 
 ## Domains, consoles, network
 
