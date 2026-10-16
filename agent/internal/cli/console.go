@@ -29,7 +29,7 @@ type Terminal interface {
 }
 
 const (
-	consoleSynopsis = "<site> [--server NAME|ID] [--service NAME] | --db <instance> | --host <server> [--user NAME]"
+	consoleSynopsis = "<site> [--server NAME|ID] [--service NAME] | --db <instance> | --host <server> [--user NAME] | --sandbox <sandbox>"
 	// consoleRetries is how many times in a row a dropped console reconnects (with a new ticket).
 	consoleRetries = 5
 )
@@ -44,12 +44,13 @@ func cmdConsole(ctx context.Context, a *App, args []string) error {
 	db := fs.String("db", "", "a database container's shell (instance name or id)")
 	host := fs.String("host", "", "a shell on a server (name or id)")
 	user := fs.String("user", "", "--host: the unix user (default root)")
+	sandbox := fs.String("sandbox", "", "a shell in a sandbox (name or id; same as falak sandbox ssh)")
 	pos, err := a.parse(fs, args, 0, 1, consoleSynopsis)
 	if err != nil {
 		return err
 	}
 	targets := 0
-	for _, set := range []bool{len(pos) == 1, *db != "", *host != ""} {
+	for _, set := range []bool{len(pos) == 1, *db != "", *host != "", *sandbox != ""} {
 		if set {
 			targets++
 		}
@@ -61,6 +62,8 @@ func cmdConsole(ctx context.Context, a *App, args []string) error {
 		return usagef("console: --server and --service apply to a site")
 	case *user != "" && *host == "":
 		return usagef("console: --user applies to --host")
+	case *sandbox != "":
+		return a.sandboxConsole(ctx, *sandbox)
 	}
 	c, err := a.api()
 	if err != nil {

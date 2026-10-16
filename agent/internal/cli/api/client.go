@@ -76,6 +76,17 @@ type API interface {
 	CliLoginStart(ctx context.Context, clientName string) (CliLoginStart, error)
 	CliLoginToken(ctx context.Context, deviceCode string) (CliLoginResult, string, error)
 	RevokeCurrentToken(ctx context.Context) error
+
+	Sandboxes(ctx context.Context, status string) ([]Sandbox, error)
+	Sandbox(ctx context.Context, id string) (Sandbox, error)
+	CreateSandbox(ctx context.Context, r SandboxCreateRequest, wait bool) (Sandbox, error)
+	ExtendSandbox(ctx context.Context, id string, seconds int64) (Sandbox, error)
+	KillSandbox(ctx context.Context, id string) error
+	SandboxExec(ctx context.Context, id string, r SandboxExecRequest) (SandboxExecResult, error)
+	SandboxReadFile(ctx context.Context, id, path string) ([]byte, error)
+	SandboxListFiles(ctx context.Context, id, path string) (json.RawMessage, error)
+	SandboxWriteFile(ctx context.Context, id, path, mode string, content []byte) (int64, error)
+	OpenSandboxConsole(ctx context.Context, id string, r ConsoleRequest) (ConsoleSession, error)
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).
@@ -138,25 +149,45 @@ var _ API = (*Client)(nil)
 
 // Do performs a JSON request. body may be nil; out may be nil.
 func (c *Client) Do(ctx context.Context, method, path string, q url.Values, body, out any) error {
+	var b []byte
+	ctype := ""
+	if body != nil {
+		var err error
+		if b, err = json.Marshal(body); err != nil {
+			return err
+		}
+		ctype = "application/json"
+	}
+	raw, err := c.DoRaw(ctx, method, path, q, b, ctype)
+	if err != nil {
+		return err
+	}
+	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return fmt.Errorf("%s %s: decode response: %w", method, path, err)
+	}
+	return nil
+}
+
+// DoRaw sends body as is (ctype "" sends none) and returns the raw response body; non-2xx answers are an *Error.
+func (c *Client) DoRaw(ctx context.Context, method, path string, q url.Values, body []byte, ctype string) ([]byte, error) {
 	u := c.BaseURL + path
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
 	var rd io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		rd = bytes.NewReader(b)
+		rd = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
@@ -170,12 +201,12 @@ func (c *Client) Do(ctx context.Context, method, path string, q url.Values, body
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if resp.StatusCode/100 != 2 {
 		e := &Error{Status: resp.StatusCode, Method: method, Path: path, Body: raw}
@@ -188,15 +219,9 @@ func (c *Client) Do(ctx context.Context, method, path string, q url.Values, body
 		} else if len(raw) > 0 && len(raw) < 300 {
 			e.Message = strings.TrimSpace(string(raw))
 		}
-		return e
+		return nil, e
 	}
-	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("%s %s: decode response: %w", method, path, err)
-	}
-	return nil
+	return raw, nil
 }
 
 func get[T any](ctx context.Context, c *Client, path string, q url.Values) (Envelope[T], error) {

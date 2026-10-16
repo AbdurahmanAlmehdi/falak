@@ -142,6 +142,8 @@ func (a *App) commands() []*command {
 		{name: "approve", args: "<run> [--comment TEXT] [--yes]", summary: "approve a config run waiting for an approval", run: cmdApprove},
 		{name: "reject", args: "<run> [--comment TEXT] [--yes]", summary: "reject a config run waiting for an approval", run: cmdReject},
 		{name: "drift", args: "[-e ENV] [-p PROJECT] [--check]", summary: "compare an environment with its last applied falak.yaml", run: cmdDrift},
+		sandboxCommands(),
+		{name: "mcp", summary: "run the MCP server on stdio (sandbox tools for AI agents: claude mcp add falak -- falak mcp)", run: cmdMCP},
 		skillCommands(),
 		{name: "update", args: "[--version vX.Y.Z] [--check]", summary: "update this falak binary to the latest release (checksum verified)", run: cmdUpdate},
 		{name: "version", summary: "print the version", run: func(_ context.Context, a *App, _ []string) error {
