@@ -25,8 +25,9 @@ func (p OpenPayload) validateSandbox() error {
 	return nil
 }
 
-// sandboxShell starts a login bash when the image has it, else sh.
-const sandboxShell = "exec bash -l 2>/dev/null || exec sh -l"
+// sandboxShell starts a login bash when the image has it, else sh. (Not `exec bash || exec sh`: a failed exec ends a
+// non-interactive sh, so an image without bash got no shell at all.)
+const sandboxShell = "command -v bash >/dev/null 2>&1 && exec bash -l; exec sh -l"
 
 // runscExecArgs: --root=/run/falak-sbx exec --env=TERM=xterm-256color [--env=K=V sorted] falak-sbx-<id>
 // /bin/sh -lc <shell>. runsc exec has no -t flag: it gives the process a terminal when its stdio is a pty, as here.

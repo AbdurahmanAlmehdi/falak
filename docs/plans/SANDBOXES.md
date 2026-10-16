@@ -244,7 +244,7 @@ These are fixed before the three lanes (agent, control plane, CLI) start, so the
 ### Terminal
 
 `terminal.open` gains an optional `sandbox: {id}` target (exclusive with `container`). The agent runs
-`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'exec bash -l 2>/dev/null || exec sh -l'` under the
+`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'command -v bash >/dev/null 2>&1 && exec bash -l; exec sh -l'` under the
 existing pty + relay code. Control plane: `TerminalSession::TARGET_SANDBOX`, `ConsoleTargets::forSandbox`, route
 `POST /api/v1/sandboxes/{sandbox}/console` (returns the same body as the other console routes).
 
