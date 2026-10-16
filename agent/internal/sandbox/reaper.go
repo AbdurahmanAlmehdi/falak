@@ -3,6 +3,8 @@ package sandbox
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -15,17 +17,17 @@ const (
 
 // Run is the reaper: at start (after an agent restart or a reboot) and every minute it removes the sandboxes past
 // expires_at and those whose sandbox stopped (OOM kill, init exited, or gone after a reboot: no restart in v0.20),
-// and tells the control plane. It also re-applies the network (the chains may have been flushed by a firewall or
-// Docker reload while the agent was down) when sandboxes exist.
+// and tells the control plane. Each pass also re-applies the network when sandboxes exist: the chains may have been
+// flushed by a firewall reload, and Docker puts its jumps above the agent's when it starts or creates a network.
 func (s *Service) Run(ctx context.Context) {
-	if goos == "linux" && len(s.states()) > 0 {
-		if err := s.ensureNetwork(ctx); err != nil {
-			s.d.Logger.Error("sandbox network", "err", err)
-		}
-	}
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	for {
+		if goos == "linux" && len(s.states()) > 0 {
+			if err := s.ensureNetwork(ctx); err != nil {
+				s.d.Logger.Error("sandbox network", "err", err)
+			}
+		}
 		s.ReapOnce(ctx)
 		select {
 		case <-ctx.Done():
@@ -60,6 +62,38 @@ func (s *Service) ReapOnce(ctx context.Context) {
 		s.reapOne(ctx, st)
 		mu.Unlock()
 	}
+	s.gcImages(ctx)
+}
+
+// imageTTL is how long an unused base rootfs is kept (its directory's mtime is its last use).
+const imageTTL = 6 * time.Hour
+
+// gcImages removes the base rootfs of images no sandbox uses and none used for imageTTL, and the Docker image too
+// (without force: Docker keeps it while a container uses it or another tag points at it).
+func (s *Service) gcImages(ctx context.Context) {
+	used := map[string]bool{}
+	for _, st := range s.states() {
+		used[filepath.Base(filepath.Dir(st.Rootfs))] = true
+	}
+	root := filepath.Join(s.d.Root, "images")
+	ents, _ := os.ReadDir(root)
+	for _, e := range ents {
+		hex := e.Name()
+		if !e.IsDir() || !hexRe.MatchString(hex) || used[hex] {
+			continue
+		}
+		m, _ := s.imgLocks.LoadOrStore(hex, &sync.Mutex{})
+		mu := m.(*sync.Mutex)
+		mu.Lock() // a create touches the directory under this lock, before its state lists the image
+		if fi, err := os.Stat(filepath.Join(root, hex)); err == nil && s.d.Now().Sub(fi.ModTime()) >= imageTTL {
+			if err := os.RemoveAll(filepath.Join(root, hex)); err != nil {
+				s.d.Logger.Warn("remove sandbox base image", "image", hex, "err", err)
+			} else if err := s.d.Docker.ImageRemove(ctx, "sha256:"+hex); err != nil {
+				s.d.Logger.Debug("docker image kept", "image", hex, "err", err)
+			}
+		}
+		mu.Unlock()
+	}
 }
 
 func (s *Service) reapOne(ctx context.Context, st *state) {
@@ -86,7 +120,11 @@ func (s *Service) reapOne(ctx context.Context, st *state) {
 		var reply struct {
 			Accepted bool `json:"accepted"`
 		}
-		if err := s.d.Requests.Request(ctx, "sandbox.reaped", map[string]string{"id": st.ID, "reason": st.Reaped}, &reply); err != nil {
+		// Bounded: the sandbox's lock is held meanwhile (a dead control plane is retried on the next pass).
+		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		err := s.d.Requests.Request(rctx, "sandbox.reaped", map[string]string{"id": st.ID, "reason": st.Reaped}, &reply)
+		cancel()
+		if err != nil {
 			s.d.Logger.Warn("report reaped sandbox", "sandbox", st.ID, "err", err)
 			return
 		}

@@ -35,7 +35,17 @@ type fakeDocker struct {
 	pulled  []string
 	created []string
 	removed []string
+	rmi     []string
 	have    bool
+	local   bool              // built here: no RepoDigests
+	labels  map[string]string // the image's labels
+}
+
+func (f *fakeDocker) ImageRemove(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rmi = append(f.rmi, id)
+	return nil
 }
 
 func (f *fakeDocker) ImageConfigOf(context.Context, string) (docker.ImageConfig, bool, error) {
@@ -44,6 +54,10 @@ func (f *fakeDocker) ImageConfigOf(context.Context, string) (docker.ImageConfig,
 	var c docker.ImageConfig
 	c.ID = "sha256:" + strings.Repeat("ab", 32)
 	c.Config.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	c.Config.Labels = f.labels
+	if !f.local {
+		c.RepoDigests = []string{"ubuntu@sha256:" + strings.Repeat("cd", 32)}
+	}
 	return c, f.have, nil
 }
 
@@ -101,6 +115,7 @@ type env struct {
 
 	mu       sync.Mutex
 	statuses map[string]string // what `runsc list` reports
+	listErr  bool              // `runsc list` fails
 }
 
 func newEnv(t *testing.T) *env {
@@ -117,6 +132,9 @@ func newEnv(t *testing.T) *env {
 	e.run.OnFunc("runsc --root="+e.svc.d.RunscRoot+" list", func(runnertest.Call) (runner.Result, error) {
 		e.mu.Lock()
 		defer e.mu.Unlock()
+		if e.listErr {
+			return runner.Result{ExitCode: 1}, nil
+		}
 		var rows []map[string]string
 		for id, st := range e.statuses {
 			rows = append(rows, map[string]string{"id": id, "status": st})
@@ -211,12 +229,30 @@ func TestRules(t *testing.T) {
 -A FALAK-SBX -d 172.16.0.0/12 -j DROP
 -A FALAK-SBX -d 192.168.0.0/16 -j DROP
 -A FALAK-SBX -d 100.64.0.0/10 -j DROP
+-A FALAK-SBX -d 0.0.0.0/8 -j DROP
+-A FALAK-SBX -d 192.0.0.0/24 -j DROP
+-A FALAK-SBX -d 198.18.0.0/15 -j DROP
+-A FALAK-SBX -d 224.0.0.0/4 -j DROP
 -A FALAK-SBX -i br-sbx -s 10.88.0.2/32 -j ACCEPT
 -A FALAK-SBX -j DROP
 COMMIT
 *nat
 :FALAK-SBX-NAT - [0:0]
 -A FALAK-SBX-NAT -s 10.88.0.2/32 ! -o br-sbx -j MASQUERADE
+COMMIT
+*raw
+:FALAK-SBX-PRE - [0:0]
+-A FALAK-SBX-PRE -d 10.88.0.1/32 -p tcp --dport 3128 -j RETURN
+-A FALAK-SBX-PRE -m addrtype --dst-type LOCAL -j DROP
+-A FALAK-SBX-PRE -d 169.254.0.0/16 -j DROP
+-A FALAK-SBX-PRE -d 10.0.0.0/8 -j DROP
+-A FALAK-SBX-PRE -d 172.16.0.0/12 -j DROP
+-A FALAK-SBX-PRE -d 192.168.0.0/16 -j DROP
+-A FALAK-SBX-PRE -d 100.64.0.0/10 -j DROP
+-A FALAK-SBX-PRE -d 0.0.0.0/8 -j DROP
+-A FALAK-SBX-PRE -d 192.0.0.0/24 -j DROP
+-A FALAK-SBX-PRE -d 198.18.0.0/15 -j DROP
+-A FALAK-SBX-PRE -d 224.0.0.0/4 -j DROP
 COMMIT
 `
 	if got := rules([]string{"10.88.0.2"}); got != want {
@@ -227,56 +263,98 @@ COMMIT
 	}
 }
 
-func TestApplyRulesAddsJumpsOnce(t *testing.T) {
+// fakeIptables keeps chains (table/chain → rules) for iptables -S, -D and -I 1.
+type fakeIptables struct {
+	chains  map[string][]string
+	inserts []string
+}
+
+func (f *fakeIptables) run(c runnertest.Call) (runner.Result, error) {
+	key := c.Args[2] + "/" + c.Args[4]
+	switch c.Args[3] {
+	case "-S":
+		out := "-P " + c.Args[4] + " ACCEPT\n"
+		for _, r := range f.chains[key] {
+			out += "-A " + c.Args[4] + " " + r + "\n"
+		}
+		return runner.Result{Stdout: []byte(out)}, nil
+	case "-D":
+		r := strings.Join(c.Args[5:], " ")
+		if i := slices.Index(f.chains[key], r); i >= 0 {
+			f.chains[key] = slices.Delete(f.chains[key], i, i+1)
+			return runner.Result{}, nil
+		}
+		return runner.Result{ExitCode: 1}, nil
+	case "-I":
+		f.inserts = append(f.inserts, c.Line)
+		f.chains[key] = append([]string{strings.Join(c.Args[6:], " ")}, f.chains[key]...)
+	}
+	return runner.Result{}, nil
+}
+
+func TestApplyRulesKeepsJumpsOnTop(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	// First run: no jump exists yet (iptables -C fails).
-	e.run.On("iptables -w -t", runner.Result{ExitCode: 1})
-	if err := e.svc.applyRules(ctx, []string{"10.88.0.2"}); err == nil {
-		t.Fatal("a failing insert must fail") // -I matched the same failing rule
+	// Docker's jumps are on top, with a stale copy of one of ours below them.
+	f := &fakeIptables{chains: map[string][]string{"filter/FORWARD": {"-j DOCKER-USER", "-j DOCKER-FORWARD", "-i br-sbx -j FALAK-SBX"}}}
+	e.run.OnFunc("iptables -w", f.run)
+	if err := e.svc.applyRules(ctx, []string{"10.88.0.2"}); err != nil {
+		t.Fatal(err)
 	}
-	e.run = &runnertest.Fake{}
-	e.svc.d.Runner = e.run
-	inserted := map[string]bool{}
-	e.run.OnFunc("iptables -w", func(c runnertest.Call) (runner.Result, error) {
-		key := strings.Join(slices.Delete(slices.Clone(c.Args), 3, 4), " ") // without -C/-I
-		key = strings.Replace(key, " 1 ", " ", 1)
-		if c.Args[3] == "-C" && !inserted[key] {
-			return runner.Result{ExitCode: 1}, nil
-		}
-		if c.Args[3] == "-I" {
-			inserted[strings.Replace(key, c.Args[4]+" 1", c.Args[4], 1)] = true
-		}
-		return runner.Result{}, nil
-	})
-	for range 2 {
-		if err := e.svc.applyRules(ctx, []string{"10.88.0.2"}); err != nil {
-			t.Fatal(err)
+	want := map[string][]string{
+		"filter/FORWARD":  {"-i br-sbx -j FALAK-SBX", "-o br-sbx -j FALAK-SBX", "-j DOCKER-USER", "-j DOCKER-FORWARD"},
+		"filter/INPUT":    {"-i br-sbx -j FALAK-SBX"},
+		"nat/POSTROUTING": {"-s 10.88.0.0/16 -j FALAK-SBX-NAT"},
+		"raw/PREROUTING":  {"-i br-sbx -j FALAK-SBX-PRE"},
+	}
+	for k, w := range want {
+		if strings.Join(f.chains[k], "|") != strings.Join(w, "|") {
+			t.Fatalf("%s: %q", k, f.chains[k])
 		}
 	}
-	var inserts, restores []string
+	// Re-applying changes nothing.
+	f.inserts = nil
+	if err := e.svc.applyRules(ctx, []string{"10.88.0.2"}); err != nil || len(f.inserts) != 0 {
+		t.Fatal(err, f.inserts)
+	}
+	// Docker restarted and put its jump above ours: ours go back to the top, once.
+	f.chains["filter/FORWARD"] = append([]string{"-j DOCKER-USER"}, f.chains["filter/FORWARD"]...)
+	if err := e.svc.applyRules(ctx, []string{"10.88.0.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(f.chains["filter/FORWARD"], "|"); got != "-i br-sbx -j FALAK-SBX|-o br-sbx -j FALAK-SBX|-j DOCKER-USER|-j DOCKER-USER|-j DOCKER-FORWARD" {
+		t.Fatal(got)
+	}
+	var restores int
 	for _, c := range e.run.Calls() {
-		switch {
-		case c.Name == "iptables" && c.Args[3] == "-I":
-			inserts = append(inserts, c.Line)
-		case c.Name == "iptables-restore":
-			restores = append(restores, c.Line)
-			if c.Stdin != rules([]string{"10.88.0.2"}) {
-				t.Fatalf("restore input:\n%s", c.Stdin)
+		if c.Name == "iptables-restore" {
+			restores++
+			if c.Line != "iptables-restore -w --noflush" || c.Stdin != rules([]string{"10.88.0.2"}) {
+				t.Fatalf("%s:\n%s", c.Line, c.Stdin)
 			}
 		}
 	}
-	want := []string{
-		"iptables -w -t filter -I FORWARD 1 -i br-sbx -j FALAK-SBX",
-		"iptables -w -t filter -I FORWARD 1 -o br-sbx -j FALAK-SBX",
-		"iptables -w -t filter -I INPUT 1 -i br-sbx -j FALAK-SBX",
-		"iptables -w -t nat -I POSTROUTING 1 -s 10.88.0.0/16 -j FALAK-SBX-NAT",
-	}
-	if strings.Join(inserts, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("inserts (must happen once):\n%s", strings.Join(inserts, "\n"))
-	}
-	if len(restores) != 2 || restores[0] != "iptables-restore -w --noflush" {
+	if restores != 3 {
 		t.Fatal(restores)
+	}
+}
+
+func TestAntiSpoof(t *testing.T) {
+	want := `table bridge falak_sbx {}
+delete table bridge falak_sbx
+table bridge falak_sbx {
+	chain prerouting {
+		type filter hook prerouting priority -300; policy accept;
+		iifname "sbx*" ether type != { ip, arp } drop
+		iifname "sbxa" ether type ip ip saddr != 10.88.0.2 drop
+		iifname "sbxa" ether type arp arp saddr ip != 10.88.0.2 drop
+		iifname "sbxb" ether type ip ip saddr != 10.88.0.3 drop
+		iifname "sbxb" ether type arp arp saddr ip != 10.88.0.3 drop
+	}
+}
+`
+	if got := antiSpoof(map[string]string{"sbxb": "10.88.0.3", "sbxa": "10.88.0.2"}); got != want {
+		t.Fatalf("got:\n%s", got)
 	}
 }
 
@@ -393,11 +471,16 @@ func TestCreateKillAndRedelivery(t *testing.T) {
 		t.Fatal("re-ran runsc run")
 	}
 
-	// Redelivered with a later expiry (extend): the expiry moves, nothing re-runs.
-	ext := createPayload(NetInternet)
-	ext.ExpiresAt += 1800
-	if _, err := e.svc.Create(ctx, ext, nil); err != nil || e.run.Ran("sh -c") {
-		t.Fatal("extend", err)
+	// Extend moves the expiry only.
+	res, err = e.svc.Extend(ctx, ExtendPayload{ID: sid, ExpiresAt: 1760005400}, nil)
+	if err != nil || res.(ExtendResult).ExpiresAt != 1760005400 || e.run.Ran("sh -c") || e.run.Ran("runsc --root="+e.svc.d.RunscRoot+" delete") {
+		t.Fatal("extend", res, err, e.run.Lines())
+	}
+	if _, err := e.svc.Extend(ctx, ExtendPayload{ID: "01j9z8y7x6w5v4t3s2r1q0p9nz", ExpiresAt: 1}, nil); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Extend(ctx, ExtendPayload{ID: sid}, nil); err == nil {
+		t.Fatal("expires_at 0 accepted")
 	}
 
 	// Inventory.
@@ -408,6 +491,17 @@ func TestCreateKillAndRedelivery(t *testing.T) {
 	if it := inv.(InventoryResult).Sandboxes; len(it) != 1 || it[0].Status != "running" || it[0].ExpiresAt != 1760005400 {
 		t.Fatalf("%+v", it)
 	}
+
+	// A redelivered create while runsc can't be asked is refused: the sandbox is never remade.
+	e.listErr = true
+	e.run.Reset()
+	if _, err := e.svc.Create(ctx, createPayload(NetInternet), nil); err == nil || e.run.Ran("runsc --root="+e.svc.d.RunscRoot+" delete") {
+		t.Fatal("recreated on an unknown status", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.svc.dir(sid), "sandbox.json")); err != nil {
+		t.Fatal(err)
+	}
+	e.listErr = false
 
 	// Kill: everything goes, twice is fine.
 	e.run.Reset()
@@ -448,6 +542,13 @@ func TestCreateValidation(t *testing.T) {
 	for _, mod := range []func(*CreatePayload){
 		func(p *CreatePayload) { p.ID = "BAD" },
 		func(p *CreatePayload) { p.Image = "-rm" },
+		func(p *CreatePayload) { p.Image = "../../containers/x/json" },
+		func(p *CreatePayload) { p.Image = "alpine/../../x" },
+		func(p *CreatePayload) { p.Image = "alpine?x=1" },
+		func(p *CreatePayload) { p.Image = "localhost:5000/app" },
+		func(p *CreatePayload) { p.Image = "127.0.0.1:5000/app" },
+		func(p *CreatePayload) { p.Image = "10.0.0.5/app:1" },
+		func(p *CreatePayload) { p.Image = "169.254.169.254/app" },
 		func(p *CreatePayload) { p.CPUs = 0 },
 		func(p *CreatePayload) { p.MemoryMB = 1 },
 		func(p *CreatePayload) { p.DiskMB = 1 },
@@ -467,7 +568,7 @@ func TestCreateValidation(t *testing.T) {
 
 func TestCloneArgsKeepTheTokenOutOfTheRepo(t *testing.T) {
 	argv, env := cloneArgs(Repo{URL: "https://github.com/acme/shop.git", Token: "tok"})
-	want := []string{"git", "-c", "credential.helper=", "-c", "credential.helper=" + gitCredential, "clone", "--", "https://github.com/acme/shop.git", "/workspace/shop"}
+	want := []string{"git", "-c", "credential.helper=", "-c", "credential.https://github.com.helper=" + gitCredential, "clone", "--", "https://github.com/acme/shop.git", "/workspace/shop"}
 	if strings.Join(argv, "|") != strings.Join(want, "|") || strings.Contains(strings.Join(argv, " "), "tok ") {
 		t.Fatalf("%q", argv)
 	}
@@ -818,7 +919,15 @@ func TestProxy(t *testing.T) {
 			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
 		}
 	}()
-	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("plain ok")) }))
+	var webHost string
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != webHost {
+			_, _ = w.Write([]byte("fronted to " + r.Host))
+			return
+		}
+		_, _ = w.Write([]byte("plain ok"))
+	}))
+	webHost = strings.TrimPrefix(web.URL, "http://")
 	defer web.Close()
 
 	p := newProxy()
@@ -876,6 +985,21 @@ func TestProxy(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatal(resp.StatusCode)
 	}
+	// An allowlisted URL with another Host header: the upstream still gets the URL's host.
+	raw, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(raw, "GET %s/ HTTP/1.1\r\nHost: other.example\r\n\r\n", web.URL)
+	rr, err := http.ReadResponse(bufio.NewReader(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(rr.Body)
+	raw.Close()
+	if string(body) != "plain ok" {
+		t.Fatal(string(body))
+	}
 	// Another sandbox (source address) has its own list.
 	p.del("127.0.0.1")
 	if p.allowed("127.0.0.1", "localhost") {
@@ -927,5 +1051,93 @@ func TestPrepareInstallsRunsc(t *testing.T) {
 	}
 	if k, _ := e.svc.d.FS.ReadFile(gvisorKeyring); string(k) != "KEY" {
 		t.Fatalf("%s", k)
+	}
+}
+
+func TestImageChecks(t *testing.T) {
+	for _, ok := range []string{"alpine", "alpine:3.20", "node:22-alpine", "alpine/git:latest", "ghcr.io/acme/tool:v1.2", "registry.example.com:5000/a/b",
+		"ubuntu@sha256:" + strings.Repeat("a", 64), "my_repo/x__y-z"} {
+		if err := checkImage(ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	ctx := context.Background()
+	for name, mod := range map[string]func(*fakeDocker){
+		"built here": func(f *fakeDocker) { f.local = true },
+		"falak":      func(f *fakeDocker) { f.labels = map[string]string{"falak.site": "shop"} },
+	} {
+		e := newEnv(t)
+		e.runscList(map[string]string{})
+		e.dock.have = true
+		mod(e.dock)
+		if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not allowed in a sandbox") {
+			t.Fatal(name, err)
+		}
+	}
+}
+
+func TestDirsAreRootOnlyAndExtractionIsStripped(t *testing.T) {
+	e := newEnv(t)
+	e.runscList(map[string]string{})
+	if err := os.MkdirAll(filepath.Join(e.svc.d.Root, "images"), 0o755); err != nil { // an older agent's
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Create(context.Background(), createPayload(NetNone), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{e.svc.d.Root, filepath.Join(e.svc.d.Root, "images")} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != 0o700 {
+			t.Fatal(d, fi.Mode(), err)
+		}
+	}
+	if !e.run.Ran("find "+filepath.Join(e.svc.d.Root, "images", strings.Repeat("ab", 32), "rootfs.tmp")+" -xdev ( -type b -o -type c ) -delete") ||
+		!e.run.Ran("find "+filepath.Join(e.svc.d.Root, "images", strings.Repeat("ab", 32), "rootfs.tmp")+" -xdev -type f -perm /6000 -exec chmod ug-s {} +") {
+		t.Fatal(e.run.Lines())
+	}
+}
+
+func TestInventoryReportsCreating(t *testing.T) {
+	e := newEnv(t)
+	e.runscList(map[string]string{"falak-sbx-" + sid: "created"})
+	if err := os.MkdirAll(e.svc.dir(sid), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.writeState(&state{ID: sid, ExpiresAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := e.svc.Inventory(context.Background(), InventoryPayload{}, nil)
+	if err != nil || inv.(InventoryResult).Sandboxes[0].Status != "creating" {
+		t.Fatal(inv, err)
+	}
+}
+
+func TestImageGC(t *testing.T) {
+	e := newEnv(t)
+	e.runscList(map[string]string{})
+	images := filepath.Join(e.svc.d.Root, "images")
+	old, used, fresh := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	for _, h := range []string{old, used, fresh} {
+		if err := os.MkdirAll(filepath.Join(images, h, "rootfs"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		at := e.now.Add(-7 * time.Hour)
+		if h == fresh {
+			at = e.now.Add(-time.Hour)
+		}
+		_ = os.Chtimes(filepath.Join(images, h), at, at)
+	}
+	if err := os.MkdirAll(e.svc.dir(sid), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = e.svc.writeState(&state{ID: sid, Rootfs: filepath.Join(images, used, "rootfs"), StartedAt: "x", ExpiresAt: e.now.Add(time.Hour).Unix()})
+	e.runscList(map[string]string{"falak-sbx-" + sid: "running"})
+	e.svc.ReapOnce(context.Background())
+	for h, keep := range map[string]bool{old: false, used: true, fresh: true} {
+		if _, err := os.Stat(filepath.Join(images, h)); (err == nil) != keep {
+			t.Errorf("%s kept=%v", h[:1], err == nil)
+		}
+	}
+	if strings.Join(e.dock.rmi, ",") != "sha256:"+old {
+		t.Fatal(e.dock.rmi)
 	}
 }

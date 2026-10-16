@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/OthmanHaba/falak/agent/internal/runner"
@@ -29,11 +30,15 @@ const (
 	proxyPort = "3128"
 	chain     = "FALAK-SBX"
 	natChain  = "FALAK-SBX-NAT"
+	rawChain  = "FALAK-SBX-PRE"
+	nftTable  = "falak_sbx"
 )
 
-// blocked are the destinations no sandbox reaches (cloud metadata, private and CGNAT ranges). The server's own
-// addresses are dropped by the addrtype LOCAL rule (all of them, whatever interfaces it has).
-var blocked = []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"}
+// blocked are the destinations no sandbox reaches (cloud metadata, private, CGNAT, "this network", IETF protocol
+// assignments, benchmarking and multicast ranges). The server's own addresses are dropped by the addrtype LOCAL rule
+// (all of them, whatever interfaces it has).
+var blocked = []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "0.0.0.0/8", "192.0.0.0/24",
+	"198.18.0.0/15", "224.0.0.0/4"}
 
 // netnsName and vethName are derived from the id's random tail (a ULID's first 10 characters are its timestamp);
 // interface names are limited to 15 characters.
@@ -199,34 +204,107 @@ func rules(internet []string) string {
 		w("-A %s -s %s/32 ! -o %s -j MASQUERADE", natChain, ip, bridge)
 	}
 	w("COMMIT")
+	// The guard in raw PREROUTING runs before anything Docker (or a firewall) puts in nat or filter, so their ACCEPTs
+	// and DNATs (published ports, user networks) never see a sandbox's packets to the host or a private address.
+	w("*raw")
+	w(":%s - [0:0]", rawChain)
+	w("-A %s -d %s/32 -p tcp --dport %s -j RETURN", rawChain, gatewayIP, proxyPort)
+	w("-A %s -m addrtype --dst-type LOCAL -j DROP", rawChain)
+	for _, n := range blocked {
+		w("-A %s -d %s -j DROP", rawChain, n)
+	}
+	w("COMMIT")
 	return b.String()
 }
 
-// jumps are the only rules outside the agent's chains: added once, at the top.
-var jumps = [][]string{
-	{"-t", "filter", "FORWARD", "-i", bridge, "-j", chain},
-	{"-t", "filter", "FORWARD", "-o", bridge, "-j", chain},
-	{"-t", "filter", "INPUT", "-i", bridge, "-j", chain},
-	{"-t", "nat", "POSTROUTING", "-s", subnet, "-j", natChain},
+// jumps are the only rules outside the agent's chains, kept at the top of their chains (in this order): Docker
+// inserts its own jumps at the top when it starts or creates a network, so they are re-asserted on every reaper tick.
+var jumps = []struct {
+	table, chain string
+	rules        [][]string
+}{
+	{"filter", "FORWARD", [][]string{{"-i", bridge, "-j", chain}, {"-o", bridge, "-j", chain}}},
+	{"filter", "INPUT", [][]string{{"-i", bridge, "-j", chain}}},
+	{"nat", "POSTROUTING", [][]string{{"-s", subnet, "-j", natChain}}},
+	{"raw", "PREROUTING", [][]string{{"-i", bridge, "-j", rawChain}}},
 }
 
-// applyRules replaces the chains' contents and adds the jumps that are missing (iptables -C first).
+// applyRules replaces the chains' contents and moves the jumps to the top of their chains when they aren't there.
 func (s *Service) applyRules(ctx context.Context, internet []string) error {
 	if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "iptables-restore", Args: []string{"-w", "--noflush"},
 		Stdin: strings.NewReader(rules(internet))}); err != nil {
 		return err
 	}
 	for _, j := range jumps {
-		check := append([]string{"-w", j[0], j[1], "-C"}, j[2:]...)
-		if res, err := s.d.Runner.Run(ctx, runner.Cmd{Name: "iptables", Args: check}); err == nil && res.ExitCode == 0 {
+		res, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "iptables", Args: []string{"-w", "-t", j.table, "-S", j.chain}})
+		if err != nil {
+			return err
+		}
+		if jumpsOnTop(string(res.Stdout), j.chain, j.rules) {
 			continue
 		}
-		insert := append([]string{"-w", j[0], j[1], "-I", j[2], "1"}, j[3:]...)
-		if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "iptables", Args: insert}); err != nil {
-			return err
+		for _, r := range j.rules {
+			// Every copy goes (-D removes one per call); a failing -D means none is left.
+			for range 16 {
+				del := append([]string{"-w", "-t", j.table, "-D", j.chain}, r...)
+				if res, err := s.d.Runner.Run(ctx, runner.Cmd{Name: "iptables", Args: del}); err != nil || res.ExitCode != 0 {
+					break
+				}
+			}
+		}
+		for i := len(j.rules) - 1; i >= 0; i-- {
+			insert := append([]string{"-w", "-t", j.table, "-I", j.chain, "1"}, j.rules[i]...)
+			if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "iptables", Args: insert}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// jumpsOnTop reports whether the first rules of `iptables -S chain` are want, in order.
+func jumpsOnTop(listing, chain string, want [][]string) bool {
+	var top []string
+	for _, line := range strings.Split(listing, "\n") {
+		if r, ok := strings.CutPrefix(strings.TrimSpace(line), "-A "+chain+" "); ok {
+			top = append(top, r)
+		}
+	}
+	if len(top) < len(want) {
+		return false
+	}
+	for i, r := range want {
+		if top[i] != strings.Join(r, " ") {
+			return false
+		}
+	}
+	return true
+}
+
+// antiSpoof renders the bridge table that drops a sandbox's frames carrying another address than its own (so the
+// per-address accepts and NAT in FALAK-SBX can trust the source) and anything that isn't IPv4 or ARP. sandboxes maps
+// veth → address.
+func antiSpoof(sandboxes map[string]string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "table bridge %s {}\ndelete table bridge %s\ntable bridge %s {\n\tchain prerouting {\n", nftTable, nftTable, nftTable)
+	b.WriteString("\t\ttype filter hook prerouting priority -300; policy accept;\n")
+	b.WriteString("\t\tiifname \"sbx*\" ether type != { ip, arp } drop\n")
+	veths := make([]string, 0, len(sandboxes))
+	for v := range sandboxes {
+		veths = append(veths, v)
+	}
+	sort.Strings(veths)
+	for _, v := range veths {
+		fmt.Fprintf(&b, "\t\tiifname \"%s\" ether type ip ip saddr != %s drop\n", v, sandboxes[v])
+		fmt.Fprintf(&b, "\t\tiifname \"%s\" ether type arp arp saddr ip != %s drop\n", v, sandboxes[v])
+	}
+	b.WriteString("\t}\n}\n")
+	return b.String()
+}
+
+func (s *Service) applyAntiSpoof(ctx context.Context, sandboxes map[string]string) error {
+	_, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "nft", Args: []string{"-f", "-"}, Stdin: strings.NewReader(antiSpoof(sandboxes))})
+	return err
 }
 
 // resolvConf is a sandbox's /etc/resolv.conf: public resolvers when it reaches the internet; allowlisted sandboxes

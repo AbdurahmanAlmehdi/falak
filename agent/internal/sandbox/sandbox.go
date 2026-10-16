@@ -15,6 +15,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -38,6 +40,7 @@ type Docker interface {
 	ContainerCreate(ctx context.Context, name string, body docker.CreateBody) (string, error)
 	ContainerExport(ctx context.Context, id string) (io.ReadCloser, error)
 	ContainerRemove(ctx context.Context, id string) error
+	ImageRemove(ctx context.Context, id string) error
 }
 
 // Requester is the control plane's request channel (*transport.Client): sandbox.reaped.
@@ -117,13 +120,16 @@ func (s *Service) Register(reg *commands.Registry) {
 	reg.Register("sandbox.files.list", commands.Typed(s.ListFiles))
 	reg.Register("sandbox.files.write", commands.Typed(s.WriteFile))
 	reg.Register("sandbox.files.delete", commands.Typed(s.DeleteFile))
+	reg.Register("sandbox.extend", commands.Typed(s.Extend))
 	reg.Register("sandbox.kill", commands.Typed(s.Kill))
 	reg.Register("sandbox.inventory", commands.Typed(s.Inventory))
 }
 
 var (
-	idRe     = regexp.MustCompile(`^[0-9a-z]{26}$`)
-	imageRe  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,254}$`)
+	idRe = regexp.MustCompile(`^[0-9a-z]{26}$`)
+	// imageRe is Docker's reference grammar: [registry[:port]/]path-components[:tag][@sha256:digest] (no "..", no
+	// URL syntax: the reference goes into Docker API paths).
+	imageRe  = regexp.MustCompile(`^(?:(` + domainRe + `)/)?` + componentRe + `(?:/` + componentRe + `)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?$`)
 	hostRe   = regexp.MustCompile(`^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$`)
 	envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	refRe    = regexp.MustCompile(`^[A-Za-z0-9._/@^~][A-Za-z0-9._/@^~-]{0,254}$`)
@@ -131,6 +137,32 @@ var (
 	hexRe    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	nameRe   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
 )
+
+const (
+	componentRe = `[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*`
+	domainRe    = `(?:localhost|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+)(?::[0-9]{1,5})?`
+)
+
+// checkImage accepts a reference by Docker's grammar from a public registry: a registry on localhost or a private,
+// link-local or loopback address (a server's local registry) is refused.
+func checkImage(ref string) error {
+	m := imageRe.FindStringSubmatch(ref)
+	if m == nil || len(ref) > 255 {
+		return payloadErr("invalid image %q", ref)
+	}
+	host := m[1]
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(host)
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return payloadErr("image %q: a registry on localhost is not allowed", ref)
+	}
+	if a, err := netip.ParseAddr(host); err == nil && (!a.IsGlobalUnicast() || a.IsPrivate() || cgnat.Contains(a)) {
+		return payloadErr("image %q: a registry on a private address is not allowed", ref)
+	}
+	return nil
+}
 
 func payloadErr(format string, a ...any) error {
 	return &commands.PayloadError{Err: fmt.Errorf(format, a...)}
@@ -231,6 +263,9 @@ func (s *Service) Prepare(ctx context.Context, _ PreparePayload, st commands.Str
 func (s *Service) prepare(ctx context.Context, st commands.Stream) (PrepareResult, error) {
 	s.prepMu.Lock()
 	defer s.prepMu.Unlock()
+	if err := s.ensureDirs(); err != nil {
+		return PrepareResult{}, err
+	}
 	if s.prepared != nil {
 		return *s.prepared, nil
 	}
@@ -251,6 +286,20 @@ func (s *Service) prepare(ctx context.Context, st commands.Stream) (PrepareResul
 	}
 	s.prepared = &PrepareResult{RunscVersion: ver, Platform: "systrap"}
 	return *s.prepared, nil
+}
+
+// ensureDirs makes the state root and the base images root-only (every time: MkdirAll leaves an existing directory's
+// mode alone). Base rootfs trees come from untrusted images; no host user may reach them.
+func (s *Service) ensureDirs() error {
+	for _, d := range []string{s.d.Root, filepath.Join(s.d.Root, "images")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chmod(d, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // runscVersion parses `runsc --version` ("runsc version release-20261005.0").
@@ -305,10 +354,12 @@ func (s *Service) ensureNetwork(ctx context.Context) error {
 func (s *Service) syncNetLocked(ctx context.Context, exclude string) error {
 	var internet []string
 	allow := map[string][]string{}
+	veths := map[string]string{}
 	for _, st := range s.states() {
 		if st.ID == exclude || st.Reaped != "" || st.IP == "" {
 			continue
 		}
+		veths[vethName(st.ID)] = st.IP
 		switch st.Network {
 		case NetInternet:
 			internet = append(internet, st.IP)
@@ -318,6 +369,9 @@ func (s *Service) syncNetLocked(ctx context.Context, exclude string) error {
 	}
 	sort.Strings(internet)
 	if err := s.applyRules(ctx, internet); err != nil {
+		return err
+	}
+	if err := s.applyAntiSpoof(ctx, veths); err != nil {
 		return err
 	}
 	s.proxy.mu.Lock()
@@ -386,8 +440,8 @@ func (p *CreatePayload) validate() error {
 		return err
 	}
 	switch {
-	case !imageRe.MatchString(p.Image):
-		return payloadErr("invalid image %q", p.Image)
+	case checkImage(p.Image) != nil:
+		return checkImage(p.Image)
 	case p.CPUs < 0.1 || p.CPUs > 64:
 		return payloadErr("cpus must be 0.1–64")
 	case p.MemoryMB < 64 || p.MemoryMB > 262144:
@@ -435,14 +489,12 @@ func (s *Service) Create(ctx context.Context, p CreatePayload, st commands.Strea
 	if old, err := s.readState(p.ID); err != nil {
 		return nil, err
 	} else if old != nil {
-		if status, known := s.status(ctx, p.ID); known && status == "running" && old.Reaped == "" {
-			// A repeated create is also how the control plane extends a sandbox: take the new expiry, nothing else.
-			if p.ExpiresAt != old.ExpiresAt {
-				old.ExpiresAt = p.ExpiresAt
-				if err := s.writeState(old); err != nil {
-					return nil, err
-				}
-			}
+		status, known := s.status(ctx, p.ID)
+		if !known {
+			// Never remake a sandbox because runsc couldn't be asked: it may be running fine.
+			return nil, fmt.Errorf("sandbox %s exists but runsc can't report its status; try again", p.ID)
+		}
+		if old.Reaped == "" && (status == "running" || status == "paused") {
 			return CreateResult{Status: "running", IP: old.IP, ImageDigest: old.ImageDigest, StartedAt: old.StartedAt}, nil
 		}
 		s.teardown(ctx, old)
@@ -606,12 +658,24 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 	if !hexRe.MatchString(hex) {
 		return image{}, fmt.Errorf("unexpected image id %q", cfg.ID)
 	}
+	// Images built on this server (sites, functions) may have secrets baked in: only images that came from a
+	// registry, and none of Falak's own.
+	if len(cfg.RepoDigests) == 0 {
+		return image{}, fmt.Errorf("image %s was built on this server, not pulled from a registry: not allowed in a sandbox", ref)
+	}
+	for k := range cfg.Config.Labels {
+		if strings.HasPrefix(k, "falak.") {
+			return image{}, fmt.Errorf("image %s is a Falak image (label %s): not allowed in a sandbox", ref, k)
+		}
+	}
 	img := image{ID: cfg.ID, Rootfs: filepath.Join(s.d.Root, "images", hex, "rootfs"), Env: cfg.Config.Env}
 	m, _ := s.imgLocks.LoadOrStore(hex, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
 	if _, err := os.Stat(img.Rootfs); err == nil {
+		now := s.d.Now()
+		_ = os.Chtimes(filepath.Dir(img.Rootfs), now, now) // last used, for the image GC
 		return img, nil
 	}
 	tmp := img.Rootfs + ".tmp"
@@ -634,6 +698,15 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 	defer tr.Close()
 	if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "tar", Args: []string{"-C", tmp, "-x", "--numeric-owner"}, Stdin: tr}); err != nil {
 		return image{}, fmt.Errorf("extract %s: %w", ref, err)
+	}
+	// No setuid/setgid binaries or device nodes from an untrusted image on the host (gVisor's /dev is its own).
+	for _, args := range [][]string{
+		{tmp, "-xdev", "(", "-type", "b", "-o", "-type", "c", ")", "-delete"},
+		{tmp, "-xdev", "-type", "f", "-perm", "/6000", "-exec", "chmod", "ug-s", "{}", "+"},
+	} {
+		if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "find", Args: args}); err != nil {
+			return image{}, fmt.Errorf("extract %s: %w", ref, err)
+		}
 	}
 	if err := os.Rename(tmp, img.Rootfs); err != nil {
 		return image{}, err
@@ -661,7 +734,10 @@ func cloneArgs(r Repo) ([]string, []string) {
 	dest := "/workspace/" + repoName(r.URL)
 	argv := []string{"git"}
 	if r.Token != "" {
-		argv = append(argv, "-c", "credential.helper=", "-c", "credential.helper="+gitCredential)
+		// Only for the repository's host (not a redirect's or a submodule's), after clearing the image's helpers.
+		if u, err := url.Parse(r.URL); err == nil && u.Scheme == "https" && u.Host != "" {
+			argv = append(argv, "-c", "credential.helper=", "-c", "credential.https://"+u.Host+".helper="+gitCredential)
+		}
 	}
 	argv = append(argv, "clone", "--", r.URL, dest)
 	env := []string{"GIT_TERMINAL_PROMPT=0"}
@@ -699,6 +775,44 @@ func (s *Service) clone(ctx context.Context, id string, r Repo) error {
 		}
 	}
 	return nil
+}
+
+// ---- sandbox.extend
+
+// ExtendPayload is sandbox.extend's payload.
+type ExtendPayload struct {
+	ID        string `json:"id"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// ExtendResult is sandbox.extend's result.
+type ExtendResult struct {
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// Extend sets a sandbox's expiry; it never touches the sandbox itself.
+func (s *Service) Extend(_ context.Context, p ExtendPayload, _ commands.Stream) (any, error) {
+	if err := checkID(p.ID); err != nil {
+		return nil, err
+	}
+	if p.ExpiresAt <= 0 {
+		return nil, payloadErr("expires_at must be a unix time")
+	}
+	mu := s.lock(p.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	st, err := s.readState(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	if st == nil || st.Reaped != "" {
+		return nil, fmt.Errorf("sandbox %s not found", p.ID)
+	}
+	st.ExpiresAt = p.ExpiresAt
+	if err := s.writeState(st); err != nil {
+		return nil, err
+	}
+	return ExtendResult{ExpiresAt: st.ExpiresAt}, nil
 }
 
 // ---- sandbox.kill
@@ -788,6 +902,8 @@ func (s *Service) Inventory(ctx context.Context, _ InventoryPayload, _ commands.
 		switch {
 		case st.Reaped != "":
 			it.OOMKilled = st.Reaped == "oom"
+		case st.StartedAt == "" || list[cid(st.ID)] == "created":
+			it.Status = "creating" // mid-create (or a crashed create the reaper will remove): not "stopped"
 		case list[cid(st.ID)] == "running" || list[cid(st.ID)] == "paused":
 			it.Status = list[cid(st.ID)]
 			it.MemoryBytes, it.CPUSeconds = s.usage(st.ID)

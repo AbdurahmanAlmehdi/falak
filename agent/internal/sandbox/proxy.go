@@ -120,6 +120,7 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := r.Clone(r.Context())
 	out.RequestURI = ""
+	out.Host = "" // the upstream gets the allowlisted URL's host, never a Host header fronting another site
 	for _, h := range []string{"Proxy-Connection", "Proxy-Authorization", "Connection", "Keep-Alive", "Te", "Trailer", "Upgrade"} {
 		out.Header.Del(h)
 	}
