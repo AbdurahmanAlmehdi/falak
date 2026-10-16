@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.read.schema.json",
   "title": "sandbox.files.read — read a file inside a sandbox (a tar stream through runsc exec; no host path is opened). Errors: not_found, is_directory. Feature sandbox.v1",
+  "x-falak-forget-result": true,
   "type": "object",
   "additionalProperties": false,
   "required": [

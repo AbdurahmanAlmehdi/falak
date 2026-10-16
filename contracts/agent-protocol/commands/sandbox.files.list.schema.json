@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/sandbox.files.list.schema.json",
   "title": "sandbox.files.list — list a directory inside a sandbox (at most 1000 entries). Errors: not_found, not_directory. Feature sandbox.v1",
+  "x-falak-forget-result": true,
   "type": "object",
   "additionalProperties": false,
   "required": [

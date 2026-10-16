@@ -312,10 +312,14 @@ stops; running commands get 20 s to finish (heartbeats keep reporting them) befo
 ## Sandboxes (`sandbox.v1`, v0.20.0)
 `sandbox.*` commands drive gVisor sandboxes with `runsc --root=/run/falak-sbx` directly (docs/plans/SANDBOXES.md
 "Contracts"): container `falak-sbx-<id>`, state under `/var/lib/falak/sandboxes/<id>`. `sandbox.create` (runs
-`sandbox.prepare` when needed) and `sandbox.kill` are redeliverable and idempotent by id; a `sandbox.create` for a
-sandbox that already runs only takes the new `expires_at` (the control plane sends it again when a sandbox is
-extended). `sandbox.exec` and `sandbox.files.*` answer within the request (the control plane waits for them);
-stdout, stderr and file contents are base64. Errors are failed commands whose error starts with a code: `not_found`,
+`sandbox.prepare` when needed), `sandbox.kill` and `sandbox.extend {id, expires_at}` (result `{expires_at}`; how
+the control plane extends a running sandbox, and one whose create was still running when it was extended) are
+redeliverable and idempotent by id. `sandbox.inventory` reports a sandbox whose create is still running as
+`creating`. `sandbox.exec` and `sandbox.files.*` answer within the request (the control plane waits for them);
+stdout, stderr and file contents are base64. A schema with `"x-falak-forget-result": true` at its root
+(`sandbox.exec`, `sandbox.files.read`, `sandbox.files.list`) has its result forgotten (the command's and its events')
+once the waiting request read it, or by the fleet sweep when nobody did. `sandbox.create`'s image is refused with
+`..` or a trailing dot; `repo.token` is only offered to the repository's own host. Errors are failed commands whose error starts with a code: `not_found`,
 `is_directory`, `not_directory`, or `sandbox <id> not found` when the agent doesn't know the sandbox. The agent reaps
 sandboxes past `expires_at`, out of memory or whose init exited on its own, and reports each with the request
 `sandbox.reaped` `{id, reason}` (retried each minute until a 2xx). `terminal.open` takes a `sandbox: {id}` target

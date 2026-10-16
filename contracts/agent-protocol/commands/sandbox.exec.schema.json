@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/sandbox.exec.schema.json",
   "title": "sandbox.exec — `runsc exec` a command in a running sandbox with a timeout, separate stdout/stderr (base64) capped at max_output bytes each. Feature sandbox.v1",
+  "x-falak-forget-result": true,
   "x-falak-forget-secrets": [
     "env",
     "stdin"

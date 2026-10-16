@@ -28,8 +28,8 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 255,
-      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$",
-      "description": "an OCI image reference, e.g. ubuntu:24.04"
+      "pattern": "^[a-zA-Z0-9](\\.?[a-zA-Z0-9_/:@-])*$",
+      "description": "an OCI image reference, e.g. ubuntu:24.04 (no \"..\", no trailing dot; the control plane also refuses localhost and private or loopback registry addresses)"
     },
     "cpus": {
       "type": "number",

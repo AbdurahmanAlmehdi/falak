@@ -28,6 +28,7 @@
               },
               "status": {
                 "enum": [
+                  "creating",
                   "running",
                   "paused",
                   "stopped"

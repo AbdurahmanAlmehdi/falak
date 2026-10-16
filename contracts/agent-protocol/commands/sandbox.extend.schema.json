@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.extend.schema.json",
+  "title": "sandbox.extend — a running sandbox takes a new expiry (the agent reaps it past expires_at); idempotent. Errors: `sandbox <id> not found`. Feature sandbox.v1",
+  "x-falak-redeliverable": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "expires_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "unix seconds: the new expiry"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "expires_at"
+      ],
+      "properties": {
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
