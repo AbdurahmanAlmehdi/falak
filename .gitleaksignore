@@ -20,3 +20,5 @@ b58b575af808c59e43087b887472dc4135c1dd3c:agent/internal/db/redis_test.go:generic
 3c4a44335ef32e99d3ab42b64938057a512115c5:agent/internal/db/redis_backup_test.go:generic-api-key:425
 # The same fake Redis password (Xk3pQ9…) in the backup / restore Docker integration test.
 17270cfe4525e885219256a73c109fb39385b74b:agent/internal/db/redis_integration_test.go:generic-api-key:490
+# Fake bearer token in the Sandboxes exec redaction test (checks the audit row masks it).
+5fbd96ffddf04bbccb583aa866cf31f679c68318:control-plane/modules/Sandboxes/tests/Feature/SandboxesTest.php:curl-auth-header:252
