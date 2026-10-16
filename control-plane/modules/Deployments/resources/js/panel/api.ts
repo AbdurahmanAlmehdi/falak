@@ -30,6 +30,18 @@ export const TERMINAL = ['succeeded', 'failed', 'cancelled'];
 
 export const deploymentsUrl = (siteId: string) => `/sites/${siteId}/deployments`;
 
+/**
+ * The deployment whose release is live: the newest succeeded one carrying the current release (a rollback or a
+ * redeploy of the same release makes it live again, while the release still names the deployment that built it), else
+ * the release's own deployment. `deployments` is newest first.
+ */
+export function liveDeploymentId(overview: DeploymentsOverview, deployments: Deployment[] = overview.history.data): string | undefined {
+    const current = overview.current;
+    if (!current) return undefined;
+
+    return deployments.find((item) => item.status === 'succeeded' && item.release_id === current.id)?.id ?? current.deployment_id ?? undefined;
+}
+
 /** Start a deployment (optionally of a given commit) and stack its deployment panel. */
 export async function deploy(ctx: ServicePanelContext, ref: { commit?: string | null; branch?: string | null } = {}): Promise<void> {
     try {

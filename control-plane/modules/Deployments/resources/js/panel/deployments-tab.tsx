@@ -6,7 +6,7 @@ import { type ServicePanelContext, type ServiceTabProps } from '@/lib/registry';
 import { Ban, Globe, Layers, MapPin, Rocket, RotateCcw, ScrollText } from 'lucide-react';
 import { useState } from 'react';
 import { type Deployment } from '../types';
-import { cancelDeployment, deploy, deploymentsUrl, rollback, type DeploymentsOverview } from './api';
+import { cancelDeployment, deploy, deploymentsUrl, liveDeploymentId, rollback, type DeploymentsOverview } from './api';
 import { DeploymentCard, HistoryCard } from './deployment-card';
 
 function rowActions(ctx: ServicePanelContext, overview: DeploymentsOverview, deployment: Deployment, reload?: () => void): MenuAction[] {
@@ -94,7 +94,8 @@ function DeploymentList({ ctx }: { ctx: ServicePanelContext }) {
 
     const history = [...data.history.data, ...(more?.items ?? [])];
     const next = more ? more.next : data.history.links.next;
-    const liveDeployment = data.current ? history.find((item) => item.id === data.current?.deployment_id) : undefined;
+    const liveId = liveDeploymentId(data, history);
+    const liveDeployment = liveId ? history.find((item) => item.id === liveId) : undefined;
     // The newest finished deployment failed after the live one (or nothing is live): surface it next to the live card.
     const latestFailed = history.find((item) => item.status === 'failed' || item.status === 'cancelled');
     const failedOnTop =

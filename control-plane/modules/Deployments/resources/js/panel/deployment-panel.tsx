@@ -26,7 +26,7 @@ import { type ServiceLayerProps } from '@/lib/registry';
 import { AlertTriangle, Ban, Copy, Globe, Rocket, RotateCcw } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { type Deployment } from '../types';
-import { deploy, deploymentsUrl, durationMs, firstLine, rollback, type DeploymentsOverview } from './api';
+import { deploy, deploymentsUrl, durationMs, firstLine, liveDeploymentId, rollback, type DeploymentsOverview } from './api';
 import { CommitTag, triggerLabel } from './deployment-row';
 import { NetworkLogs } from './network-logs';
 import { PHASES, timelineRows, useDeployment } from './use-deployment';
@@ -153,19 +153,25 @@ function Details({
  */
 export function DeploymentPanel({ ctx, record, tab, onTabChange, close }: ServiceLayerProps) {
     const siteId = ctx.service.ref_id;
-    const { url, detail, error, terminal, refresh, buildLines, deployLines } = useDeployment(siteId, record, ctx.refresh);
+    // Shared (cached) with the Deployments tab underneath: is this the deployment whose release is live? Fetched again
+    // when the deployment finishes: the copy from while it ran still names the previous release as live.
+    const { data: overview, reload: reloadOverview } = useJson<DeploymentsOverview>(deploymentsUrl(siteId));
+    const { url, detail, error, terminal, refresh, buildLines, deployLines } = useDeployment(siteId, record, () => {
+        ctx.refresh();
+        void reloadOverview();
+    });
     const [busy, setBusy] = useState<string | null>(null);
     const deployment = detail?.deployment;
-    // Shared (cached) with the Deployments tab underneath: is this the deployment whose release is live?
-    const { data: overview } = useJson<DeploymentsOverview>(deploymentsUrl(siteId));
-    const live = overview?.current?.deployment_id === record;
+    const live = overview ? liveDeploymentId(overview) === record : false;
     const [badgeStatus, badgeLabel] =
         deployment?.status === 'succeeded'
-            ? live
-                ? ['active', 'Active']
-                : deployment.rolled_back
-                  ? ['degraded', 'Rolled back']
-                  : ['removed', 'Removed']
+            ? !overview
+                ? ['succeeded', undefined]
+                : live
+                  ? ['active', 'Active']
+                  : deployment.rolled_back
+                    ? ['degraded', 'Rolled back']
+                    : ['removed', 'Removed']
             : [deployment?.status ?? 'queued', deployment?.status === 'waiting' ? 'Waiting' : undefined];
 
     // Default view: build output while building, else the deploy log (build output when a release has no deploy log).
