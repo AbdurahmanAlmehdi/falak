@@ -44,6 +44,7 @@ func TestRenderRuleset(t *testing.T) {
 		`iif "lo" accept`,
 		"meta l4proto { icmp, ipv6-icmp } accept",
 		`tcp dport 2222 accept comment "falak:ssh"`,
+		`iifname "br-sbx" ip daddr 10.88.0.1 tcp dport 3128 accept comment "falak:sandbox-proxy"`,
 		`tcp dport { 80, 443 } accept comment "falak:web public web"`,
 		`ip saddr { 10.0.0.0/8, 192.0.2.4 } tcp dport 5432 accept comment "falak:pg"`,
 		`ip6 saddr fd00::/8 tcp dport 5432 accept comment "falak:pg"`,

@@ -122,6 +122,8 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 		counter = "counter "
 	}
 	fmt.Fprintf(&b, "\t\ttcp dport %d %saccept comment \"falak:ssh\"\n", ssh, counter)
+	// Sandboxes with an allowlist reach the internet only through the agent's egress proxy on their bridge's gateway.
+	fmt.Fprintf(&b, "\t\tiifname \"br-sbx\" ip daddr 10.88.0.1 tcp dport 3128 %saccept comment \"falak:sandbox-proxy\"\n", counter)
 	seen := map[string]bool{}
 	for _, r := range p.Rules {
 		if !idRe.MatchString(r.ID) {
