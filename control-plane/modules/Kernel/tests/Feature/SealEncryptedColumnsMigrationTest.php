@@ -63,7 +63,7 @@ it('can be reversed to APP_KEY ciphertexts', function () {
 it('covers exactly the columns sealed today', function () {
     // Columns added after the migration, sealed from the start (never APP_KEY ciphertexts).
     $bornSealed = ['secrets_providers.id.config', 'databases_instances.id.root_password', 'databases_instances.id.next_root_password', 'databases_instances.id.previous_password',
-        'databases_restores.id.inspection_password', 'previews_previews.id.basic_password', 'sandboxes_sandboxes.id.env'];
+        'databases_restores.id.inspection_password', 'previews_previews.id.basic_password', 'sandboxes_sandboxes.id.env', 'sandboxes_snapshots.id.env'];
     $migrated = array_map(fn (array $c) => implode('.', $c), sealMigration()::COLUMNS);
     $cast = array_values(array_diff(array_map(fn (array $c) => "{$c['table']}.{$c['primary_key']}.{$c['column']}", app(SealedColumns::class)->all()), $bornSealed));
 
@@ -77,7 +77,7 @@ it('finds every sealed model column of the modules', function () {
     app()->forgetInstance(SealedColumns::class);
     $columns = app(SealedColumns::class)->all();
 
-    expect(count($columns))->toBe(37)
+    expect(count($columns))->toBe(38)
         ->and(collect($columns)->map(fn ($c) => "{$c['table']}.{$c['column']}")->all())
         ->toContain('fleet_commands.payload', 'telemetry_settings.otlp_token', 'deployments_site_settings.hook_token', 'identity_users.two_factor_secret')
         ->and(collect($columns)->firstWhere('column', 'hook_token')['primary_key'])->toBe('site_id');

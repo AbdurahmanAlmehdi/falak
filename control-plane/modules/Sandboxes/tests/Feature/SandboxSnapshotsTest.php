@@ -385,7 +385,7 @@ it('needs the sandbox.v2 agent feature for every v0.21 call', function () {
     snap_api()->postJson("/api/v1/sandboxes/snapshots/{$snapshot->id}/fork")->assertUnprocessable()->assertJsonValidationErrors(['server' => $message]);
     snap_api()->postJson('/api/v1/sandboxes', ['server' => 'old', 'idle_pause' => 300])->assertUnprocessable()->assertJsonValidationErrors(['server' => $message]);
     $this->withToken(snap_token($this->user, $this->organization, ['sandboxes.view', 'sandboxes.use', 'databases.restore']))
-        ->postJson("/api/v1/sandboxes/{$sandbox->id}/db", ["instance" => "pg", "database" => "shop"])->assertUnprocessable()->assertJsonValidationErrors(["server" => $message]);
+        ->postJson("/api/v1/sandboxes/{$sandbox->id}/db", ['instance' => 'pg', 'database' => 'shop'])->assertUnprocessable()->assertJsonValidationErrors(['server' => $message]);
     expect($this->agents->dispatched())->toBe([]);
 
     snap_api()->postJson('/api/v1/sandboxes', ['server' => 'old'])->assertCreated();
