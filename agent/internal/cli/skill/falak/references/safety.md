@@ -35,6 +35,20 @@ Show the exact command (or request) and what it will do, and wait for a clear ye
 Read-only commands (`list`, `show`, `logs`, `releases`, `plan`, `validate`, `drift`, `runs`, `config export`,
 `secret list`, `whoami`, `dns/check`) need no confirmation.
 
+## Prefer a sandbox
+
+When you need to run something destructive, untrusted or experimental, run it in a Falak sandbox
+(`falak sandbox create` / `exec`), not in a console on a server and not on the human's machine. A sandbox can't
+reach the host, its sites, private networks or cloud metadata, and everything in it is gone when it is killed.
+
+- Creating, using and killing **your own** sandboxes needs no confirmation (they're disposable). Kill them when you
+  are done (`falak sandbox kill`); don't leave them running until their time limit.
+- Ask before killing a sandbox someone else created (`created_by` in `falak sandbox show`), and before
+  `--network internet` work that sends the human's code or data somewhere.
+- Don't put long-lived secrets into a sandbox (`--env`, files). For a private repository use `--repo-secret NAME`:
+  the token is used for the clone and not kept in the sandbox's environment.
+- Copy results out (`falak sandbox cp`, `git diff`) before killing it.
+
 ## Never print secrets
 
 - Don't echo, log or paste: API tokens, `credentials.json`, `.env` contents, secret values, deploy hook URLs

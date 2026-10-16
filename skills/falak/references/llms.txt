@@ -8,6 +8,7 @@ Key facts for agents:
 - Exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version, 5 invalid falak.yaml, 6 waits for an approval, 7 drifted.
 - Config as code: `falak.yaml` (schema `https://falak.sh/schema/v1.json`); `falak init`, `falak validate`, `falak plan`, `falak apply --wait`. Secrets are referenced as `${{ secrets.NAME }}` and set with `falak secret set NAME` (value on stdin), never written in the file.
 - API: `/api/v1`, `Authorization: Bearer <token>`, `Accept: application/json`, responses wrapped in `{"data": ...}`.
+- Sandboxes: disposable gVisor Linux machines for untrusted code and agents: `falak sandbox create|exec|cp|ssh|kill`; MCP server `falak mcp` (`claude mcp add falak -- falak mcp`).
 - Destructive actions (database/site/server deletion, `apply --allow-destroy`, approving risky runs, restores, secret rotation, `env push`) need a human's confirmation.
 
 ## Agent skill
@@ -16,7 +17,7 @@ Key facts for agents:
 - [CLI reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/cli.md): every `falak` command, flag and exit code
 - [falak.yaml reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/config.md): units, environments, references, risky changes
 - [API reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/api.md): tokens, abilities and the main `/api/v1` endpoints
-- [Workflows](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/workflows.md): deploy from a repo or a template, databases, functions, secrets, domains, logs, consoles, network tools
+- [Workflows](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/workflows.md): deploy from a repo or a template, databases, functions, secrets, domains, logs, consoles, network tools, sandboxes
 - [Safety](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/safety.md): what needs a human's confirmation, secret handling, least-privilege tokens
 
 ## Docs
@@ -25,6 +26,7 @@ Key facts for agents:
 - [Config as code](https://github.com/OthmanHaba/falak/blob/main/docs/CONFIG_AS_CODE.md): the full falak.yaml guide
 - [HTTP API](https://github.com/OthmanHaba/falak/blob/main/docs/API.md): every endpoint and payload
 - [Cloud Functions](https://github.com/OthmanHaba/falak/blob/main/docs/FUNCTIONS.md): runtimes, versions, schedules, access
+- [Sandboxes](https://github.com/OthmanHaba/falak/blob/main/docs/SANDBOXES.md): disposable machines for agents and untrusted code, the MCP server
 - [Compose and templates](https://github.com/OthmanHaba/falak/blob/main/docs/COMPOSE_TEMPLATES.md): Docker Compose sites and the template catalog
 - [Backups](https://github.com/OthmanHaba/falak/blob/main/docs/BACKUPS.md): encryption, keys, restore drills, point-in-time recovery
 

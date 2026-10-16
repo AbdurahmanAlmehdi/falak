@@ -239,3 +239,50 @@ falak config unmanaged                         # what removed units left running
 A run waiting for an approval (exit 6): show the human the risky changes (`falak runs show <run>`); they approve
 with `falak approve <run>` or in the dashboard. Only run `falak approve <run> --yes` yourself when told to approve
 that run.
+
+## 11. Sandboxes
+
+### Try a risky command safely
+
+Anything you aren't sure about (an install script, a migration tool, `rm -rf` in a script, an OS upgrade) goes into
+a sandbox first; it can't touch the human's servers, sites or network.
+
+```bash
+falak sandbox create --image ubuntu:24.04 --name try --ttl 30m --json
+falak sandbox exec try -- "curl -fsSL https://example.com/install.sh | sh"
+falak sandbox exec try -- "some-tool --version; ls -la /usr/local/bin"
+falak sandbox kill try
+```
+
+Nothing to clean up on the server; the sandbox's files go with it.
+
+### Run an agent (or a long job) in a sandbox
+
+Clone the repository into the sandbox, let the agent or the job work there, then take the result out.
+
+```bash
+printf '%s' "$GH_TOKEN" | falak secret set GH_TOKEN -p shop        # (ask) a token that can read the repo
+falak sandbox create --image node:22 --name agent-1 --ttl 2h --memory 2g \
+  --repo https://github.com/acme/shop@main --repo-secret GH_TOKEN --json
+falak sandbox cp ./task.md sbx:agent-1:/root/task.md
+falak sandbox exec agent-1 -- "cd /root/shop && nohup ./run-agent.sh /root/task.md > /tmp/agent.log 2>&1 &"
+falak sandbox exec agent-1 -- "tail -n 50 /tmp/agent.log"         # poll; each exec waits at most 120 s
+falak sandbox exec agent-1 -- "cd /root/shop && git diff" > agent.diff
+falak sandbox extend agent-1 1h                                   # if it needs more time
+falak sandbox kill agent-1
+```
+
+Where the repository is cloned depends on the server (look with `falak sandbox exec agent-1 -- "ls /root /workspace"`).
+`ssh` is for people: `falak sandbox ssh agent-1` opens an interactive shell.
+
+### Use the sandboxes from an MCP client
+
+```bash
+claude mcp add falak -- falak mcp                                 # Claude Code; any MCP client: command `falak mcp`
+```
+
+The tools mirror the CLI: `sandbox_create` (waits until it runs), `sandbox_exec` (`sh -lc`, ≤ 120 s),
+`sandbox_read_file` / `sandbox_write_file` / `sandbox_list_files`, `sandbox_list`, `sandbox_extend`,
+`sandbox_kill`. The server uses the CLI's credentials; for an agent prefer a token with only `sandboxes.view` and
+`sandboxes.use` (`FALAK_URL` + `FALAK_TOKEN` in the MCP server's environment:
+`claude mcp add falak -e FALAK_URL=https://falak.example.com -e FALAK_TOKEN=… -- falak mcp`).

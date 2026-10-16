@@ -25,7 +25,8 @@ Precedence: flags > env > stored credentials. Flags may come before or after pos
 **Exit codes**: `0` ok · `1` error · `2` usage · `3` deployment failed · `4` newer function version (`fn deploy`) ·
 `5` invalid falak.yaml · `6` waits for an approval (`apply`, `approve`) · `7` drifted (`drift`). `falak net …` exits
 with the tool's own exit code, `124` when its timeout stopped it. `falak console` exits with the remote shell's
-code (`130` when interrupted before connecting).
+code (`130` when interrupted before connecting). `falak sandbox exec` exits with the command's code (`124` when its
+timeout stopped it).
 
 **Without a terminal** (an agent, CI): nothing prompts. `login` reads the token from stdin, `secret set` reads the
 value from stdin, `secret delete`, `approve`, `reject` and `apply --approve` need `--yes`, `fn deploy` needs `--yes`
@@ -80,6 +81,7 @@ to include files new to the function, `init` accepts the defaults.
 falak console <site> [--server NAME|ID] [--service NAME]
 falak console --db <instance>
 falak console --host <server> [--user NAME]
+falak console --sandbox <sandbox>           (same as falak sandbox ssh)
 ```
 
 Exactly one target. A site opens in its container (Docker), the named compose `--service` (required when the stack
@@ -170,6 +172,23 @@ Scope: the project (`-p`), or one of its environments with `-e`. Names are `^[A-
 | `falak secret set <NAME> [-p PROJECT] [-e ENV]` | Value from a hidden prompt on a terminal, else all of stdin (one trailing newline dropped). Never an argument. Creates the secret or adds a version (current from the next deployment). `--json`: the secret metadata |
 | `falak secret set --from-env FILE [-p PROJECT] [-e ENV]` | Import every `KEY=VALUE` line (blank values skipped; no multi-line values) |
 | `falak secret delete <NAME> [-p PROJECT] [-e ENV] --yes` | Delete every version. Deployments referencing it fail. `--yes` required without a terminal |
+
+## Sandboxes
+
+Disposable gVisor machines (see SKILL.md). `<sandbox>` is an id or a name (a name matching several sandboxes prefers
+the running one). Abilities: `sandboxes.view` (ls, show) and `sandboxes.use` (everything else).
+
+| Command | What |
+|---|---|
+| `falak sandbox ls [--status S]` | Columns `NAME STATUS IMAGE SERVER CPU MEM EXPIRES IN`. Statuses `creating`, `running`, `failed`, `killed`. `falak sandbox` alone = `ls` |
+| `falak sandbox create [--image I] [--name N] [--server S] [--cpus N] [--memory 1g] [--disk 10g] [--ttl 1h] [--network none\|internet\|allowlist] [--allow HOST]… [--env K=V]… [--repo URL[@REF]] [--repo-secret NAME] [--wait=false]` | Defaults: `ubuntu:24.04`, 1 CPU, 1 GB memory, 10 GB disk, 1 h, `internet`, the server with the most free memory. Sizes: `512m`, `2g` or MB; durations: `30m`, `2h`, `1h30m` or seconds. `--allow` needs `--network allowlist`. `--repo` clones into the sandbox (`--repo-secret`: the name of a secret holding the clone token). Waits until it runs (up to 60 s) unless `--wait=false`. `--json`: the sandbox |
+| `falak sandbox show <sandbox>` | Id, status, image, server, limits, network, IP, expiry, creator, kill reason |
+| `falak sandbox exec <sandbox> [--timeout 60s] [--cwd DIR] [-e K=V]… -- <cmd…>` | One argument after `--` is a shell line (`sh -lc`, root); several are an argv run without a shell. stdout/stderr go to the matching local streams; exits with the remote code (`124` on timeout). `--timeout` max 120 s. Piped stdin (≤ 1 MB, text) is passed to the command. `--json`: `{exit_code, stdout, stderr, truncated, timed_out, duration_ms}` |
+| `falak sandbox cp <src> <dst>` | One side is `sbx:<sandbox>:/absolute/path`, the other a local path or `-` (stdin/stdout). Files only, ≤ 5 MB; uploads keep the local mode; a remote path ending in `/` or a local directory keeps the file name |
+| `falak sandbox ssh <sandbox>` | Interactive shell through the terminal relay (no ports opened) |
+| `falak sandbox extend <sandbox> <30m>` | Add time (the organization caps the total) |
+| `falak sandbox kill <sandbox>…` | Kill one or more; their files are gone. Exit 1 if any failed (the others are still killed) |
+| `falak mcp` | Run the MCP server on stdin/stdout (JSON-RPC, protocol 2025-06-18) with the sandbox tools; logs go to stderr. Uses the CLI's credentials (`FALAK_URL`/`FALAK_TOKEN` or `falak login`). Setup: `claude mcp add falak -- falak mcp` |
 
 ## The CLI itself
 

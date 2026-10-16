@@ -42,6 +42,7 @@ Never put the token in a URL, a committed file or the transcript. Read it from `
 | `config.view` / `config.apply` / `config.approve` / `config.destroy` | view: all; apply: admin, developer; approve, destroy: admin | falak.yaml validate/plan/export/runs/drift / create runs, source / approve risky runs / `allow_destroy` |
 | `edge.view` / `edge.manage` | view: all; manage: admin, developer | domain options, DNS check / Cloudflare rate limits |
 | `templates.view` | all | template catalog (deploying also needs `projects.manage` + `sites.create`) |
+| `sandboxes.view` / `sandboxes.use` / `sandboxes.manage` | view: all; use: admin, developer; manage: admin | list sandboxes / create, exec, files, console, extend, kill / organization sandbox settings |
 | `terminal.open` | admin | consoles |
 | `network.tools` / `network.capture` | admin | `falak net` tools / packet captures |
 | `security.view` / `security.fix` | view: all; fix: admin | security baseline reports / audits and fixes |
@@ -164,6 +165,24 @@ instead of `file`).
 | `GET /api/v1/projects/{project}/config/unmanaged` · `…/config/export?environment=&format=` | `config.view` | |
 | `GET\|PUT /api/v1/projects/{project}/config/source` | `config.view` / `config.apply` | `{connection_id, repository, path?, enabled}` |
 | `GET /api/v1/source-control/connections` | `source_control.view` | Connection ids for the source |
+
+## Sandboxes
+
+Disposable gVisor machines. `{sandbox}` is the id (the CLI resolves names). `404` when the sandbox isn't in the
+token's organization, `409` when it isn't running. Throttles: create 30/min, exec 120/min per token.
+
+| Method and path | Ability | Notes |
+|---|---|---|
+| `POST /api/v1/sandboxes[?wait=1]` | `sandboxes.use` | `{image ("ubuntu:24.04"), name?, server? (id or name), cpus? (1), memory_mb? (1024), disk_mb? (10240), ttl? (seconds or "30m"; 3600), network? ("internet"\|"none"\|"allowlist"), allow_hosts?, env?, repo?: {url, ref?, secret?}}` → `201` sandbox (`creating`; `wait=1` waits up to 60 s for `running`) |
+| `GET /api/v1/sandboxes[?status=]` · `GET /api/v1/sandboxes/{sandbox}` | `sandboxes.view` | `{id, name, status, image, server {id, name}, cpus, memory_mb, disk_mb, network, allow_hosts, ttl_seconds, expires_at, created_at, created_by {type, name}, ip, kill_reason}` |
+| `PATCH /api/v1/sandboxes/{sandbox}` | `sandboxes.use` | `{name?, extend? (seconds or "30m")}` |
+| `DELETE /api/v1/sandboxes/{sandbox}` | `sandboxes.use` | Kill (`204`); its files are gone |
+| `POST /api/v1/sandboxes/{sandbox}/exec` | `sandboxes.use` | `{cmd: "shell line" \| ["argv", …], cwd?, env?, stdin? (text), timeout? (1-120, 60)}` → `{exit_code, stdout, stderr, truncated, timed_out, duration_ms}` (256 KB per stream). Synchronous; background long jobs with `nohup` |
+| `GET /api/v1/sandboxes/{sandbox}/files?path=` | `sandboxes.use` | Raw bytes; `&list=1` → `{entries: [{name, type, size, mode, mtime}]}` |
+| `PUT /api/v1/sandboxes/{sandbox}/files?path=&mode=` | `sandboxes.use` | Body = raw bytes (≤ 5 MB) → `{size}` |
+| `DELETE /api/v1/sandboxes/{sandbox}/files?path=[&recursive=1]` | `sandboxes.use` | `204` |
+| `GET /api/v1/sandboxes/{sandbox}/execs` | `sandboxes.view` | The exec audit trail `{id, cmd, exit_code, duration_ms, actor, started_at}` |
+| `POST /api/v1/sandboxes/{sandbox}/console` | `sandboxes.use` | Terminal relay session; use `falak sandbox ssh` |
 
 ## Domains, consoles, network
 

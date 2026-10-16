@@ -223,6 +223,12 @@ An Agent Skill ([`skills/falak`](skills/falak)) teaches Claude Code, Codex and o
 Falak through the CLI, `falak.yaml` and the API, and to ask before destructive actions. `falak skill install` writes
 it to `~/.claude/skills/falak` (`--project`, `--dir`). Install and least-privilege tokens: [`docs/AI_SKILL.md`](docs/AI_SKILL.md).
 
+### Sandboxes
+Disposable Linux machines on your servers for code you don't trust (an AI agent without permission prompts, a script
+from the internet), isolated with gVisor: root inside, nothing reaches the server, your sites or your network. They
+start in seconds and have a time limit. `falak sandbox create|exec|cp|ssh|kill`, the API, and an MCP server for
+agents: `claude mcp add falak -- falak mcp`. Guide: [`docs/SANDBOXES.md`](docs/SANDBOXES.md).
+
 ### Cloudflare
 Connect a Cloudflare token in **Settings → Integrations → Cloudflare** and Falak manages the DNS of your zones:
 records follow your domains, new services get names under your zone, and services work behind the orange cloud

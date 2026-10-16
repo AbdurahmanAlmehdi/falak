@@ -1,6 +1,6 @@
 ---
 name: falak
-description: Operate a Falak (falak.sh) self-hosted deployment platform through the `falak` CLI, the falak.yaml config-as-code file and the /api/v1 HTTP API. Use when the user wants to deploy, roll back or inspect sites, functions, compose apps, templates or database containers on Falak; write, validate, plan or apply a falak.yaml; manage Falak secrets or a site's .env; read site logs; open consoles; run network diagnostics; or script Falak with an API token. Not for administering the control-plane host itself (that is `falak-ctl`, run as root on the host).
+description: Operate a Falak (falak.sh) self-hosted deployment platform through the `falak` CLI, the falak.yaml config-as-code file and the /api/v1 HTTP API. Use when the user wants to deploy, roll back or inspect sites, functions, compose apps, templates or database containers on Falak; write, validate, plan or apply a falak.yaml; manage Falak secrets or a site's .env; read site logs; open consoles; run network diagnostics; run commands, untrusted code or another agent in a disposable Falak sandbox (`falak sandbox`, `falak mcp`); or script Falak with an API token. Not for administering the control-plane host itself (that is `falak-ctl`, run as root on the host).
 ---
 
 # Falak
@@ -12,7 +12,8 @@ environments; environments hold services (sites, compose stacks, functions, data
 Three ways to drive it, in order of preference for an agent:
 
 1. **`falak` CLI** with `--json`: covers deploys, rollbacks, releases, `.env`, logs, functions, database containers,
-   config as code, secrets, consoles and network tools. Every command is in [references/cli.md](references/cli.md).
+   config as code, secrets, consoles, network tools and sandboxes. Every command is in
+   [references/cli.md](references/cli.md).
 2. **`falak.yaml`** (config as code): the declarative way to describe a project's units and environments, applied on
    push or with `falak apply`. Schema and fields: [references/config.md](references/config.md).
 3. **HTTP API** (`/api/v1`, `Authorization: Bearer <token>`): for what the CLI lacks (creating sites, projects,
@@ -140,6 +141,31 @@ falak fn deploy hooks ./hooks -m "Add /health" --wait   # exit 4: someone deploy
 falak fn invoke hooks /health
 falak fn versions hooks && falak fn rollback hooks 3 --wait
 ```
+
+### Sandboxes (disposable machines for risky or untrusted work)
+
+A sandbox is a throwaway Linux machine on one of the organization's servers, isolated by gVisor: root inside, but
+nothing it does reaches the server, its sites or private networks (no cloud metadata, no host, no other sandboxes).
+It has a time limit (default 1 h) and its files are gone when it is killed or expires. **Prefer a sandbox for
+anything destructive, untrusted or experimental** (an install script from the internet, an upgrade you're unsure
+about, code you were asked to run), and kill it when you're done.
+
+```bash
+falak sandbox create --image node:22 --name try-upgrade --ttl 30m --json    # waits until it runs; ids or names work below
+falak sandbox exec try-upgrade -- "npm i -g some-tool && some-tool --version"   # one argument: sh -lc; exit code is the command's
+falak sandbox cp ./script.sh sbx:try-upgrade:/root/script.sh
+falak sandbox exec try-upgrade -- bash /root/script.sh
+falak sandbox cp sbx:try-upgrade:/root/result.json ./result.json
+falak sandbox kill try-upgrade
+```
+
+`exec` waits at most 120 s (`--timeout`); start longer jobs in the background (`nohup … > /tmp/job.log 2>&1 &`) and
+poll the log. Output is capped at 256 KB per stream; files at 5 MB (no directories: tar them). Network: `internet`
+(default; public internet only), `none`, or `allowlist --allow HOST`. Abilities: `sandboxes.view`, `sandboxes.use`.
+
+**MCP**: `falak mcp` is a stdio MCP server with the same operations as tools (`sandbox_create`, `sandbox_exec`,
+`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_list`, `sandbox_extend`, `sandbox_kill`),
+using the CLI's login. Claude Code: `claude mcp add falak -- falak mcp`. Recipes: workflows.md §11.
 
 ## When the CLI can't do it
 

@@ -3,8 +3,8 @@
 `skills/falak` is an [Agent Skill](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills/overview): a
 `SKILL.md` with instructions plus reference files that teach an AI coding agent (Claude Code, Codex, Cursor and other
 harnesses that read `SKILL.md`) to operate Falak through the `falak` CLI, `falak.yaml` and the `/api/v1` API: deploys
-and rollbacks, config as code, secrets, functions, database containers, templates, logs, consoles and network tools,
-with the rules for what needs a human's confirmation.
+and rollbacks, config as code, secrets, functions, database containers, templates, logs, consoles, network tools and
+sandboxes, with the rules for what needs a human's confirmation.
 
 ```
 skills/falak/
@@ -13,7 +13,7 @@ skills/falak/
     ├── cli.md               # every falak command, flag, default and exit code
     ├── config.md            # the falak.yaml schema (v1), condensed
     ├── api.md               # tokens, abilities, the main /api/v1 endpoints
-    ├── workflows.md         # recipes: repo, template, databases, functions, secrets, domains, logs, consoles, net
+    ├── workflows.md         # recipes: repo, template, databases, functions, secrets, domains, logs, consoles, net, sandboxes
     ├── safety.md            # destructive actions, secret handling, least-privilege tokens
     └── llms.txt             # a short index for the website's /llms.txt
 ```
@@ -49,10 +49,24 @@ cp -R /tmp/falak/skills/falak .claude/skills/              # one project, Claude
   new session after installing.
 - **Codex and other SKILL.md harnesses**: copy the same folder into the harness's skills directory (for Codex CLI,
   `~/.codex/skills/` at the time of writing — check your harness's docs), or use `falak skill install --dir`.
-- **Tools without skill support** (Cursor rules, a system prompt, an MCP server's instructions): point them at the
-  raw files, or paste `SKILL.md` and the reference you need:
+- **Tools without skill support** (Cursor rules, a system prompt): point them at the raw files, or paste `SKILL.md`
+  and the reference you need:
   `https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/SKILL.md` and
   `…/skills/falak/references/<file>`. `references/llms.txt` is the index for tools that read `/llms.txt`.
+
+## MCP server (sandboxes)
+
+The CLI is also an MCP server: `falak mcp` speaks MCP on stdio and gives any MCP client (Claude Code, Codex, Cursor…)
+tools to create, use and kill [sandboxes](SANDBOXES.md), disposable machines where an agent can run anything without
+touching your servers. It uses the CLI's credentials (below).
+
+```bash
+claude mcp add falak -- falak mcp
+claude mcp add falak -e FALAK_URL=https://falak.example.com -e FALAK_TOKEN=… -- falak mcp   # a dedicated token
+```
+
+Other clients: run the command `falak mcp`. Tools: `sandbox_create`, `sandbox_list`, `sandbox_exec`,
+`sandbox_read_file`, `sandbox_write_file`, `sandbox_list_files`, `sandbox_extend`, `sandbox_kill`.
 
 ## Authenticate the CLI for an agent
 
@@ -97,6 +111,7 @@ grant abilities you don't hold. Suggested sets:
 | Deploy functions | `functions.view`, `functions.deploy`, `deployments.view`, `deployments.create`, `telemetry.view` |
 | Edit a site's `.env` | `sites.view`, `sites.env.view`, `sites.env.manage` |
 | Deploy templates | `projects.view`, `projects.manage`, `templates.view`, `sites.create`, `deployments.create` |
+| Use sandboxes (CLI or `falak mcp`) | `sandboxes.view`, `sandboxes.use` |
 
 Keep these for humans unless you decided otherwise: `*`, `config.approve` (approving risky changes),
 `config.destroy` (deleting data from falak.yaml), `databases.manage` (deleting database containers),
