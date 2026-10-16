@@ -70,6 +70,9 @@ jobs:
 
       - name: Vitest
         run: bun run test
+        env:
+          # laravel-vite-plugin refuses to start under CI=true; Vitest only uses it to load the config.
+          LARAVEL_BYPASS_ENV_CHECK: '1'
 
       - name: Build
         run: bun run build
