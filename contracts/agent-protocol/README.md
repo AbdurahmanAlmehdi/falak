@@ -325,3 +325,17 @@ sandboxes past `expires_at`, out of memory or whose init exited on its own, and 
 `sandbox.reaped` `{id, reason}` (retried each minute until a 2xx). `terminal.open` takes a `sandbox: {id}` target
 (exclusive with `container`). Payload secrets forgotten once settled: create `repo.token` and `env`, exec `env` and
 `stdin`, files.write `content`.
+
+## Sandboxes v2 (`sandbox.v2`, v0.21.0)
+Snapshots, pause and database copies (docs/plans/SANDBOXES.md "Contracts (v0.21)"); the control plane sends none of
+these to an agent without the `sandbox.v2` feature. `sandbox.snapshot {id, snapshot_id, leave_running?}` (redeliverable,
+idempotent by `snapshot_id`) is a `runsc checkpoint` into `/var/lib/falak/sandboxes/snapshots/<snapshot_id>` and answers
+`{snapshot_id, size_bytes, image_digest, created_at}`; with `leave_running: false` the sandbox is removed afterwards, as
+by `sandbox.kill`. `sandbox.snapshot.delete {snapshot_id}` is redeliverable and idempotent. `sandbox.create` takes
+`from_snapshot` (restore into a new bundle and netns; `image` is the snapshot's, the sizes and network equal the
+snapshot's, no `repo`, `env` adds to the snapshot's; error `snapshot <id> not found`). `sandbox.pause` / `sandbox.resume
+{id}` are idempotent and answer `{status: "paused" | "running"}`. `sandbox.db.import {id, instance, engine, database,
+path}` streams the instance's logical dump (postgres `pg_dump -Fc`, mysql/mariadb SQL; unencrypted, never on the host
+disk) into the sandbox and answers `{path, size_bytes}`. `sandbox.inventory` adds `snapshots: [{snapshot_id,
+size_bytes}]` and reports paused sandboxes as `paused`; the reaper leaves paused sandboxes alone except for
+`expires_at`.

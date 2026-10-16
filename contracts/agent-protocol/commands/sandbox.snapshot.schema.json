@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.snapshot.schema.json",
+  "title": "sandbox.snapshot — `runsc checkpoint [--leave-running]` of a sandbox (memory, processes and written files) into /var/lib/falak/sandboxes/snapshots/<snapshot_id> (root-only; it outlives the sandbox and keeps its base image from the image GC); idempotent by snapshot_id. With leave_running false the sandbox is stopped and removed after the checkpoint (as sandbox.kill). Errors: `sandbox <id> not found`. Feature sandbox.v2",
+  "x-falak-redeliverable": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "snapshot_id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the snapshot's id (lower-case ULID); stored under /var/lib/falak/sandboxes/snapshots/<snapshot_id>"
+    },
+    "leave_running": {
+      "type": "boolean",
+      "default": true,
+      "description": "false: stop and remove the sandbox once checkpointed"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "size_bytes",
+        "image_digest",
+        "created_at"
+      ],
+      "properties": {
+        "snapshot_id": {
+          "type": "string",
+          "pattern": "^[0-9a-z]{26}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image_digest": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

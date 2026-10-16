@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/sandbox.create.schema.json",
-  "title": "sandbox.create — pull the image, export it as a base rootfs once per digest, write the OCI bundle, create the netns + cgroup and `runsc run --detach` (docs/plans/SANDBOXES.md); optionally git clone a repository; idempotent by id. Feature sandbox.v1",
+  "title": "sandbox.create — pull the image, export it as a base rootfs once per digest, write the OCI bundle, create the netns + cgroup and `runsc run --detach` (docs/plans/SANDBOXES.md); optionally git clone a repository; idempotent by id. With from_snapshot: `runsc restore` of that snapshot into a new bundle and netns instead (error `snapshot <id> not found`; feature sandbox.v2). Feature sandbox.v1",
   "x-falak-redeliverable": true,
   "x-falak-forget-secrets": [
     "repo.token",
@@ -111,6 +111,11 @@
         }
       },
       "description": "git clone into /workspace/<repo name> after start"
+    },
+    "from_snapshot": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "restore this snapshot (on this server) instead of starting the image: image is still sent (the snapshot's); cpus, memory_mb, disk_mb, network and allow_hosts equal the snapshot's; repo is not allowed; env adds to the snapshot's env. Feature sandbox.v2"
     }
   },
   "$defs": {
@@ -139,5 +144,11 @@
         }
       }
     }
+  },
+  "not": {
+    "required": [
+      "from_snapshot",
+      "repo"
+    ]
   }
 }

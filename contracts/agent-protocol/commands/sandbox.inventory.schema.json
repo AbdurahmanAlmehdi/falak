@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://falak.sh/agent-protocol/commands/sandbox.inventory.schema.json",
-  "title": "sandbox.inventory — the sandboxes the agent runs (from runsc list and its state directory), for the control plane's reconciliation. Feature sandbox.v1",
+  "title": "sandbox.inventory — the sandboxes the agent runs (from runsc list and its state directory), for the control plane's reconciliation. sandbox.v2 agents add their snapshots. Feature sandbox.v1",
   "type": "object",
   "additionalProperties": false,
   "required": [],
@@ -52,6 +52,26 @@
               },
               "cpu_seconds": {
                 "type": "number",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "snapshots": {
+          "type": "array",
+          "description": "sandbox.v2: the snapshots on the server",
+          "items": {
+            "type": "object",
+            "required": [
+              "snapshot_id"
+            ],
+            "properties": {
+              "snapshot_id": {
+                "type": "string",
+                "pattern": "^[0-9a-z]{26}$"
+              },
+              "size_bytes": {
+                "type": "integer",
                 "minimum": 0
               }
             }

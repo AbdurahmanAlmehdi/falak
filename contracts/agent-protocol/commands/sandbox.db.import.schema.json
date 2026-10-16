@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.db.import.schema.json",
+  "title": "sandbox.db.import — stream an instance container's logical dump (unencrypted, the tool db.backup uses: postgres pg_dump -Fc, mysql/mariadb SQL) into the sandbox at path through runsc exec; never written to the host disk. Errors: `sandbox <id> not found`. Feature sandbox.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "instance",
+    "engine",
+    "database",
+    "path"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    },
+    "instance": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the database instance's id; container falak-db-<instance>, on the sandbox's server"
+    },
+    "engine": {
+      "enum": [
+        "postgres",
+        "mysql",
+        "mariadb"
+      ]
+    },
+    "database": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$",
+      "maxLength": 4096,
+      "description": "inside the sandbox: /workspace/db/<database>.dump (postgres) or .sql (mysql, mariadb); parent directories are created"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "path",
+        "size_bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

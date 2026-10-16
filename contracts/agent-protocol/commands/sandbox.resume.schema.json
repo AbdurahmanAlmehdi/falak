@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.resume.schema.json",
+  "title": "sandbox.resume — `runsc resume`; idempotent (a sandbox already running answers running). Errors: `sandbox <id> not found`. Feature sandbox.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the sandbox's id (lower-case ULID); runsc container falak-sbx-<id>"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "const": "running"
+        }
+      }
+    }
+  }
+}

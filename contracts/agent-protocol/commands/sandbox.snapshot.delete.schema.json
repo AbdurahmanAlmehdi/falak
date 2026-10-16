@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/sandbox.snapshot.delete.schema.json",
+  "title": "sandbox.snapshot.delete — remove a snapshot's directory (a base image only it kept becomes collectable); idempotent (an unknown snapshot succeeds). Feature sandbox.v2",
+  "x-falak-redeliverable": true,
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshot_id"
+  ],
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[0-9a-z]{26}$",
+      "description": "the snapshot's id (lower-case ULID); stored under /var/lib/falak/sandboxes/snapshots/<snapshot_id>"
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object"
+    }
+  }
+}
