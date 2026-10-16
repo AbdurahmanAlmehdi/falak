@@ -113,7 +113,7 @@
       "required": [
         "id"
       ],
-      "description": "sandbox.v1 + terminal.v2: a shell in a sandbox (`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'exec bash -l 2>/dev/null || exec sh -l'`); user, shell and cwd don't apply, env is passed. Exclusive with container",
+      "description": "sandbox.v1 + terminal.v2: a shell in a sandbox (`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'command -v bash >/dev/null && exec bash -l; exec sh -l'`); user, shell and cwd don't apply, env is passed. Exclusive with container",
       "properties": {
         "id": {
           "type": "string",
