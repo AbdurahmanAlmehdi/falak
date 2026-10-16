@@ -26,7 +26,9 @@ var mcpProtocols = map[string]bool{"2024-11-05": true, "2025-03-26": true, mcpPr
 const mcpInstructions = "Falak sandboxes are disposable Linux machines (gVisor-isolated; you are root inside, nothing " +
 	"reaches the host, its sites or its network). Use one for anything destructive, untrusted or experimental: " +
 	"sandbox_create, then sandbox_exec / sandbox_write_file / sandbox_read_file, and sandbox_kill when done. " +
-	"Each sandbox has a time limit (sandbox_extend adds time); its files are gone when it is killed or expires."
+	"Each sandbox has a time limit (sandbox_extend adds time); its files are gone when it is killed or expires. " +
+	"Before a risky step, take a sandbox_snapshot (disk, memory and processes); sandbox_fork a snapshot to try " +
+	"several approaches in parallel, and sandbox_kill the forks you don't keep."
 
 func cmdMCP(ctx context.Context, a *App, args []string) error {
 	if _, err := a.parse(a.flagSet("mcp"), args, 0, 0, ""); err != nil {
@@ -155,12 +157,17 @@ type mcpArgs struct {
 	CPUs     float64 `json:"cpus"`
 	MemoryMB int     `json:"memory_mb"`
 	RepoURL  string  `json:"repo_url"`
-	Command  string  `json:"command"`
-	Cwd      string  `json:"cwd"`
-	Timeout  seconds `json:"timeout"`
-	Path     string  `json:"path"`
-	Content  *string `json:"content"`
-	By       seconds `json:"by"`
+
+	FromSnapshot string  `json:"from_snapshot"`
+	IdlePause    seconds `json:"idle_pause"`
+	Snapshot     string  `json:"snapshot"`
+	Count        int     `json:"count"`
+	Command      string  `json:"command"`
+	Cwd          string  `json:"cwd"`
+	Timeout      seconds `json:"timeout"`
+	Path         string  `json:"path"`
+	Content      *string `json:"content"`
+	By           seconds `json:"by"`
 }
 
 type mcpTool struct {
@@ -180,7 +187,7 @@ func (a *App) mcpCall(ctx context.Context, t *mcpTool, raw json.RawMessage) (str
 	}
 	for _, req := range t.InputSchema["required"].([]string) {
 		if (req == "id" && x.ID == "") || (req == "command" && x.Command == "") || (req == "path" && x.Path == "") ||
-			(req == "content" && x.Content == nil) || (req == "by" && x.By <= 0) {
+			(req == "snapshot" && x.Snapshot == "") || (req == "content" && x.Content == nil) || (req == "by" && x.By <= 0) {
 			return "", fmt.Errorf("%s is required", req)
 		}
 	}
@@ -250,16 +257,25 @@ var mcpTools = []*mcpTool{
 			"Returns the sandbox as JSON; pass its id (or name) to the other sandbox tools. Kill it with sandbox_kill when " +
 			"you are done; it is killed at expires_at anyway (sandbox_extend adds time).",
 		InputSchema: schema(nil, map[string]any{
-			"image":     prop("string", "Container image, e.g. ubuntu:24.04, node:22, python:3.13 (default ubuntu:24.04)."),
-			"name":      prop("string", "A name to refer to it by (default: generated, e.g. brave-otter)."),
-			"ttl":       durationProp("Time limit: \"30m\", \"2h\" or seconds (default 1h; the organization caps it)."),
-			"network":   map[string]any{"type": "string", "enum": []string{"internet", "none"}, "description": "internet (default): the public internet only, never private networks or cloud metadata; none: loopback only."},
-			"cpus":      prop("number", "CPUs (default 1)."),
-			"memory_mb": prop("integer", "Memory in MB (default 1024). Going over it kills the whole sandbox."),
-			"repo_url":  prop("string", "A git repository to clone into the sandbox (public, or one the organization's secrets give access to). URL@ref picks a branch or tag."),
+			"image":         prop("string", "Container image, e.g. ubuntu:24.04, node:22, python:3.13 (default ubuntu:24.04)."),
+			"name":          prop("string", "A name to refer to it by (default: generated, e.g. brave-otter)."),
+			"ttl":           durationProp("Time limit: \"30m\", \"2h\" or seconds (default 1h; the organization caps it)."),
+			"network":       map[string]any{"type": "string", "enum": []string{"internet", "none"}, "description": "internet (default): the public internet only, never private networks or cloud metadata; none: loopback only."},
+			"cpus":          prop("number", "CPUs (default 1)."),
+			"memory_mb":     prop("integer", "Memory in MB (default 1024). Going over it kills the whole sandbox."),
+			"repo_url":      prop("string", "A git repository to clone into the sandbox (public, or one the organization's secrets give access to). URL@ref picks a branch or tag."),
+			"from_snapshot": prop("string", "A snapshot's name or id: the sandbox continues where it was taken (files, memory, processes) with its image, size and network. Not combined with image, cpus, memory_mb, network or repo_url."),
+			"idle_pause":    durationProp("Pause the sandbox after this long unused (at least \"1m\"), e.g. \"10m\". Any later exec, file call or console resumes it."),
 		}),
 		run: func(ctx context.Context, c api.API, _ string, x mcpArgs) (string, error) {
-			r := api.SandboxCreateRequest{Image: x.Image, Name: x.Name, TTL: int64(x.TTL), Network: x.Network, CPUs: x.CPUs, MemoryMB: x.MemoryMB}
+			r := api.SandboxCreateRequest{Image: x.Image, Name: x.Name, TTL: int64(x.TTL), Network: x.Network, CPUs: x.CPUs, MemoryMB: x.MemoryMB,
+				Snapshot: x.FromSnapshot, IdlePause: int64(x.IdlePause)}
+			if x.FromSnapshot != "" && (x.Image != "" || x.Network != "" || x.CPUs != 0 || x.MemoryMB != 0 || x.RepoURL != "") {
+				return "", errors.New("from_snapshot takes the snapshot's image, size and network: drop image, cpus, memory_mb, network and repo_url")
+			}
+			if r.IdlePause != 0 && r.IdlePause < 60 {
+				return "", errors.New("idle_pause must be at least 1m")
+			}
 			if x.RepoURL != "" {
 				u, ref := splitRepo(x.RepoURL)
 				r.Repo = &api.SandboxRepo{URL: u, Ref: ref}
@@ -400,6 +416,85 @@ var mcpTools = []*mcpTool{
 				return "", err
 			}
 			return "killed " + x.ID, nil
+		},
+	},
+	{
+		Name: "sandbox_snapshot",
+		Description: "Snapshot a running sandbox: its disk, memory and running processes are frozen as they are now, and the sandbox " +
+			"keeps running. Take one before a risky step (an install, a migration, a rewrite); if it goes wrong, sandbox_fork the " +
+			"snapshot to get a copy back from that moment. Pass a name to reuse the snapshot as a template (sandbox_create " +
+			"from_snapshot). Returns the snapshot as JSON; snapshots stay until deleted and count against a storage quota.",
+		InputSchema: schema([]string{"id"}, map[string]any{
+			"id":   idProp,
+			"name": prop("string", "A name for the snapshot (default: generated). Unique in the organization."),
+		}),
+		needsID: true,
+		run: func(ctx context.Context, c api.API, id string, x mcpArgs) (string, error) {
+			s, err := c.SnapshotSandbox(ctx, id, api.SnapshotRequest{Name: x.Name}, true)
+			if err != nil {
+				return "", err
+			}
+			if s.Status == "failed" {
+				return "", fmt.Errorf("snapshot %s failed", s.Name)
+			}
+			return compactJSON(s)
+		},
+	},
+	{
+		Name: "sandbox_fork",
+		Description: "Create count sandboxes (default 1, at most 10) from a snapshot, each continuing from the exact moment it was " +
+			"taken, each with its own copy of the disk and memory. Use it to try several approaches in parallel: fork, run one " +
+			"approach per fork, compare the results, and sandbox_kill the forks you don't keep. Forks count against the running-sandbox " +
+			"cap and the memory and disk quotas. Returns the forks as JSON.",
+		InputSchema: schema([]string{"snapshot"}, map[string]any{
+			"snapshot": prop("string", "The snapshot's name or id (from sandbox_snapshot or sandbox_list_snapshots)."),
+			"count":    prop("integer", "How many forks (1-10, default 1)."),
+			"ttl":      durationProp("Time limit for each fork: \"30m\", \"2h\" or seconds (default 1h)."),
+		}),
+		run: func(ctx context.Context, c api.API, _ string, x mcpArgs) (string, error) {
+			list, err := c.ForkSnapshot(ctx, x.Snapshot, api.ForkRequest{Count: x.Count, TTL: int64(x.TTL)}, true)
+			if err != nil {
+				return "", err
+			}
+			return compactJSON(list)
+		},
+	},
+	{
+		Name:        "sandbox_pause",
+		Description: "Pause a running sandbox: it uses no CPU while paused, but its memory stays allocated and its time limit keeps running. Any exec or file call resumes it automatically; sandbox_resume does it explicitly.",
+		InputSchema: schema([]string{"id"}, map[string]any{"id": idProp}),
+		needsID:     true,
+		run: func(ctx context.Context, c api.API, id string, _ mcpArgs) (string, error) {
+			s, err := c.PauseSandbox(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return compactJSON(s)
+		},
+	},
+	{
+		Name:        "sandbox_resume",
+		Description: "Resume a paused sandbox. Returns the sandbox with its status.",
+		InputSchema: schema([]string{"id"}, map[string]any{"id": idProp}),
+		needsID:     true,
+		run: func(ctx context.Context, c api.API, id string, _ mcpArgs) (string, error) {
+			s, err := c.ResumeSandbox(ctx, id)
+			if err != nil {
+				return "", err
+			}
+			return compactJSON(s)
+		},
+	},
+	{
+		Name:        "sandbox_list_snapshots",
+		Description: "List the organization's snapshots as JSON (id, name, status, source sandbox, server, image, size_bytes). Check it for a snapshot to fork or create from before taking a new one.",
+		InputSchema: schema(nil, map[string]any{}),
+		run: func(ctx context.Context, c api.API, _ string, _ mcpArgs) (string, error) {
+			list, err := c.Snapshots(ctx, "")
+			if err != nil {
+				return "", err
+			}
+			return compactJSON(list)
 		},
 	},
 }

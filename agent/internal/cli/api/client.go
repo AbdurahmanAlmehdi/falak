@@ -87,6 +87,13 @@ type API interface {
 	SandboxListFiles(ctx context.Context, id, path string) (json.RawMessage, error)
 	SandboxWriteFile(ctx context.Context, id, path, mode string, content []byte) (int64, error)
 	OpenSandboxConsole(ctx context.Context, id string, r ConsoleRequest) (ConsoleSession, error)
+	SnapshotSandbox(ctx context.Context, id string, r SnapshotRequest, wait bool) (Snapshot, error)
+	Snapshots(ctx context.Context, sandbox string) ([]Snapshot, error)
+	DeleteSnapshot(ctx context.Context, snapshot string) error
+	ForkSnapshot(ctx context.Context, snapshot string, r ForkRequest, wait bool) ([]Sandbox, error)
+	PauseSandbox(ctx context.Context, id string) (Sandbox, error)
+	ResumeSandbox(ctx context.Context, id string) (Sandbox, error)
+	SandboxImportDB(ctx context.Context, id string, r SandboxDB) (SandboxDBResult, error)
 }
 
 // Error is a non-2xx API response (Laravel `{message, errors}` bodies are decoded).

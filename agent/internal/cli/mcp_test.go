@@ -108,7 +108,7 @@ func TestMCPHandshake(t *testing.T) {
 			}
 		}
 	}
-	if got := strings.Join(names, ","); got != "sandbox_create,sandbox_list,sandbox_exec,sandbox_read_file,sandbox_write_file,sandbox_list_files,sandbox_extend,sandbox_kill" {
+	if got := strings.Join(names, ","); got != "sandbox_create,sandbox_list,sandbox_exec,sandbox_read_file,sandbox_write_file,sandbox_list_files,sandbox_extend,sandbox_kill,sandbox_snapshot,sandbox_fork,sandbox_pause,sandbox_resume,sandbox_list_snapshots" {
 		t.Fatalf("tools %s", got)
 	}
 

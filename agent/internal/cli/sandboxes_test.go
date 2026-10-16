@@ -21,6 +21,8 @@ import (
 const (
 	sbxID       = "01jsbx00000000000000000000"
 	sbxKilledID = "01jsbx0000000000000000000k"
+	sbxID2      = "01jsbx00000000000000000002"
+	sbxSnapID   = "01jsnap0000000000000000000"
 )
 
 // sbxFake serves the sandbox API and records what it was sent.
@@ -63,6 +65,9 @@ func sbxHarness(t *testing.T) (*harness, *sbxFake) {
 			CPUs: 1, MemoryMB: 1024, DiskMB: 10240, Network: "internet", TTLSeconds: 3600,
 			ExpiresAt: time.Now().Add(2*time.Hour + 30*time.Second).UTC().Format(time.RFC3339), CreatedBy: &api.SandboxCreator{Type: "token", Name: "ci"}}
 		killed := api.Sandbox{ID: sbxKilledID, Name: "brave-otter", Status: "killed", Image: "node:22", MemoryMB: 512, CPUs: 0.5}
+		snap := api.Snapshot{ID: sbxSnapID, Name: "node-ready", Status: "ready", Sandbox: &api.SandboxRef{ID: sbxID, Name: "brave-otter"},
+			Server: &api.SandboxServer{ID: "s1", Name: "main-1"}, Image: "node:22", CPUs: 1, MemoryMB: 1024, DiskMB: 10240, Network: "internet",
+			SizeBytes: 31457280, CreatedAt: "2026-10-17T10:30:00+00:00"}
 		one := api.Path(api.PathSandbox, "sandbox", sbxID)
 		files := api.Path(api.PathSandboxFiles, "sandbox", sbxID)
 		switch {
@@ -100,6 +105,24 @@ func sbxHarness(t *testing.T) (*harness, *sbxFake) {
 		case key == "PUT "+files:
 			f.files[r.URL.Query().Get("path")] = b
 			reply(w, 200, map[string]any{"data": map[string]any{"size": len(b)}})
+		case key == "POST "+api.Path(api.PathSandboxSnapshots, "sandbox", sbxID):
+			reply(w, 201, map[string]any{"data": snap})
+		case key == "GET "+api.PathSnapshots:
+			reply(w, 200, map[string]any{"data": []api.Snapshot{snap}})
+		case key == "DELETE "+api.Path(api.PathSnapshot, "snapshot", "node-ready"), key == "DELETE "+api.Path(api.PathSnapshot, "snapshot", sbxSnapID):
+			w.WriteHeader(204)
+		case key == "POST "+api.Path(api.PathSnapshotFork, "snapshot", "node-ready"):
+			second := running
+			second.ID, second.Name = sbxID2, "node-ready-2"
+			running.Name = "node-ready-1"
+			reply(w, 201, map[string]any{"data": []api.Sandbox{running, second}})
+		case key == "POST "+api.Path(api.PathSandboxPause, "sandbox", sbxID):
+			running.Status = "paused"
+			reply(w, 200, map[string]any{"data": running})
+		case key == "POST "+api.Path(api.PathSandboxResume, "sandbox", sbxID):
+			reply(w, 200, map[string]any{"data": running})
+		case key == "POST "+api.Path(api.PathSandboxDB, "sandbox", sbxID):
+			reply(w, 200, map[string]any{"data": map[string]any{"path": "/workspace/db/shop.dump", "size_bytes": 2097152}})
 		case strings.HasPrefix(r.URL.Path, api.PathSandboxes+"/"):
 			reply(w, 404, map[string]string{"message": "Not Found"})
 		default:

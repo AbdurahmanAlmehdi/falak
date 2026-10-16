@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,10 +19,10 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/relay"
 )
 
-const sandboxCreateSynopsis = "[--image I] [--name N] [--server S] [--cpus N] [--memory 1g] [--disk 10g] [--ttl 1h] [--network none|internet|allowlist] [--allow HOST]… [--env K=V]… [--repo URL[@REF]] [--repo-secret NAME] [--wait=false]"
+const sandboxCreateSynopsis = "[--from SNAPSHOT | --image I] [--idle-pause 10m] [--db INSTANCE/DATABASE] [--name N] [--server S] [--cpus N] [--memory 1g] [--disk 10g] [--ttl 1h] [--network none|internet|allowlist] [--allow HOST]… [--env K=V]… [--repo URL[@REF]] [--repo-secret NAME] [--wait=false]"
 
 func sandboxCommands() *command {
-	return &command{name: "sandbox", summary: "disposable gVisor sandboxes for untrusted code", subs: []*command{
+	return &command{name: "sandbox", summary: "disposable gVisor sandboxes for untrusted code", subs: append([]*command{
 		{name: "ls", args: "[--status S]", summary: "list sandboxes", run: cmdSandboxList},
 		{name: "create", args: sandboxCreateSynopsis, summary: "create a sandbox (waits until it runs)", run: cmdSandboxCreate},
 		{name: "show", args: "<sandbox>", summary: "show one sandbox", run: cmdSandboxShow},
@@ -30,7 +31,7 @@ func sandboxCommands() *command {
 		{name: "ssh", args: "<sandbox>", summary: "open a shell in a sandbox (through the terminal relay)", run: cmdSandboxSSH},
 		{name: "extend", args: "<sandbox> <30m>", summary: "add time to a sandbox's limit", run: cmdSandboxExtend},
 		{name: "kill", args: "<sandbox>…", summary: "kill sandboxes (their files are gone)", run: cmdSandboxKill},
-	}}
+	}, snapshotCommands()...)}
 }
 
 var sandboxIDRe = regexp.MustCompile(`^[0-9a-z]{26}$`)
@@ -49,7 +50,7 @@ func resolveSandbox(ctx context.Context, c api.API, ref string) (string, error) 
 	for _, s := range all {
 		if s.Name == ref {
 			hits = append(hits, s)
-			if s.Status == "running" || s.Status == "creating" {
+			if s.Status == "running" || s.Status == "creating" || s.Status == "paused" {
 				live = append(live, s)
 			}
 		}
@@ -159,7 +160,7 @@ func serverName(s api.Sandbox) string {
 
 func cmdSandboxList(ctx context.Context, a *App, args []string) error {
 	fs := a.flagSet("sandbox ls")
-	status := fs.String("status", "", "only sandboxes with this status (creating, running, failed, killed)")
+	status := fs.String("status", "", "only sandboxes with this status (creating, running, paused, failed, killed)")
 	if _, err := a.parse(fs, args, 0, 0, "[--status S]"); err != nil {
 		return err
 	}
@@ -199,10 +200,36 @@ func cmdSandboxCreate(ctx context.Context, a *App, args []string) error {
 	repo := fs.String("repo", "", "git repository to clone, URL[@REF]")
 	repoSecret := fs.String("repo-secret", "", "name of the secret holding the clone token")
 	wait := fs.Bool("wait", true, "wait until it runs (up to 60 s)")
+	from := fs.String("from", "", "create from a snapshot (name or id): its image, size and network, with its memory and processes")
+	idle := fs.String("idle-pause", "", "pause after this long unused (at least 1m), e.g. 10m")
+	db := fs.String("db", "", "copy a database of the server into /workspace/db, INSTANCE/DATABASE")
 	if _, err := a.parse(fs, args, 0, 0, sandboxCreateSynopsis); err != nil {
 		return err
 	}
 	var err error
+	if *from != "" {
+		var clash []string
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "image", "cpus", "memory", "disk", "network", "allow", "server", "repo", "repo-secret":
+				clash = append(clash, "--"+f.Name)
+			}
+		})
+		if len(clash) > 0 {
+			return usagef("--from takes the snapshot's image, size, network and server: drop %s", strings.Join(clash, ", "))
+		}
+		r.Snapshot = *from
+	}
+	if *idle != "" {
+		if r.IdlePause, err = parseIdlePause(*idle); err != nil {
+			return err
+		}
+	}
+	if *db != "" {
+		if r.DB, err = parseDBRef(*db); err != nil {
+			return err
+		}
+	}
 	if *mem != "" {
 		if r.MemoryMB, err = parseMB(*mem); err != nil {
 			return usageError{err.Error()}
@@ -286,13 +313,13 @@ func cmdSandboxShow(ctx context.Context, a *App, args []string) error {
 	if s.KillReason != nil {
 		reason = *s.KillReason
 	}
-	a.kv([][2]string{
+	a.kv(append([][2]string{
 		{"id", s.ID}, {"name", s.Name}, {"status", s.Status}, {"image", s.Image}, {"server", serverName(s)},
 		{"cpus", cpus(s.CPUs)}, {"memory", memory(s.MemoryMB)}, {"disk", memory(s.DiskMB)},
 		{"network", s.Network + strings.TrimSuffix(" "+strings.Join(s.AllowHosts, ", "), " ")}, {"ip", s.IP},
 		{"expires", s.ExpiresAt + " (in " + expiresIn(s) + ")"}, {"created", s.CreatedAt}, {"created by", by},
 		{"kill reason", reason},
-	})
+	}, v21Rows(s)...))
 	return nil
 }
 
