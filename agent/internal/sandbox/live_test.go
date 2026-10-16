@@ -969,7 +969,7 @@ func TestLiveV2(t *testing.T) {
 	}
 	wg.Wait()
 	l.check("v2.fork3", ferr[0] == nil && ferr[1] == nil && ferr[2] == nil, "%s errs=%v", time.Since(start).Round(time.Millisecond), ferr)
-	ips := map[string]bool{cn.IP: true}
+	ips := map[string]bool{} // the source's address was released by its kill: a fork may get it
 	for i, id := range forks {
 		l.sh(id, fmt.Sprintf("echo fork-%d > /app/id", i))
 	}
@@ -981,7 +981,7 @@ func TestLiveV2(t *testing.T) {
 		r := l.sh(id, "wget -q -T 8 -O /dev/null http://example.com && echo internet-ok")
 		l.check(fmt.Sprintf("v2.fork.%d.internet", i), strings.Contains(r.out, "internet-ok"), "%q %q", r.out, r.errOut)
 	}
-	l.check("v2.fork.own-ips", len(ips) == 4, "%v", ips)
+	l.check("v2.fork.own-ips", len(ips) == 3, "%v", ips)
 
 	// ---- leave_running false: checkpoint, then removed as by a kill; the snapshot restores
 	B := newID()
@@ -995,7 +995,8 @@ func TestLiveV2(t *testing.T) {
 		!strings.Contains(sh("ip", "netns", "list"), netnsName(B)), "%s err=%v state=%v", d.Round(time.Millisecond), err, stB)
 	RB := newID()
 	_, _, err = l.create(CreatePayload{ID: RB, Image: "alpine:3.20", FromSnapshot: S3})
-	l.check("v2.snapshot.stop.restores", err == nil && l.sh(RB, "cat /root/marker").out == "marker-B\n" && l.counter(RB) > 0, "err=%v", err)
+	rb := l.sh(RB, "cat /root/marker /tmp/c; ps -o pid,args")
+	l.check("v2.snapshot.stop.restores", err == nil && strings.HasPrefix(rb.out, "marker-B\n") && l.counter(RB) > 0, "err=%v %q %q", err, rb.out, rb.errOut)
 
 	// ---- pause / resume: no CPU while paused; the reaper only expires paused sandboxes
 	P := newID()

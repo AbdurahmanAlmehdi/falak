@@ -631,6 +631,10 @@ func (s *Service) create(ctx context.Context, p CreatePayload, st commands.Strea
 	if err := s.start(ctx, p.ID, p.DiskMB, p.Network, "run"); err != nil {
 		return CreateResult{}, err
 	}
+	// Init writes falak-bg as it starts: the first exec must find it. An image without mkfifo has none (not an error).
+	if o, err := s.execIn(ctx, p.ID, execReq{argv: []string{"sh", "-c", waitSpawner}, timeout: 10 * time.Second, max: 4096}); err != nil || o.code != 0 {
+		s.d.Logger.Debug("sandbox without falak-bg", "sandbox", p.ID, "err", err, "exit", o.code)
+	}
 	sb.StartedAt = s.d.Now().UTC().Format(time.RFC3339)
 	if err := s.writeState(sb); err != nil {
 		return CreateResult{}, err

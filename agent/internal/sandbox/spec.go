@@ -103,6 +103,9 @@ done
 fi
 while :; do sleep 86400 & wait $!; done`
 
+// waitSpawner waits up to 5 s for init's falak-bg (exit 1 without it).
+const waitSpawner = `i=0; while [ $i -lt 50 ]; do [ -x /usr/local/bin/falak-bg ] && [ -p /run/falak/spawn ] && exit 0; sleep 0.1; i=$((i+1)); done; exit 1`
+
 // bgScript is falak-bg: the job script holds the caller's exported env, its working directory and the command.
 const bgScript = `#!/bin/sh
 # falak-bg 'command [> log 2>&1]': run a command in the background as a child of the sandbox's init (PID 1), so it
