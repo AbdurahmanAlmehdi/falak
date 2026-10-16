@@ -36,7 +36,8 @@ interface AgentGateway
     public function dispatch(string $serverId, string $type, array|object $payload, int $timeout = 600, ?string $idempotencyKey = null): CommandHandle;
 
     /**
-     * Block until the command reaches a terminal state (for jobs/CLI; never in HTTP requests).
+     * Block until the command reaches a terminal state (for jobs/CLI; never in HTTP requests). The result of a type
+     * marked `x-falak-forget-result` is returned here once and then dropped from the database.
      *
      * @throws CommandTimedOut when it is still pending after $waitSeconds
      */

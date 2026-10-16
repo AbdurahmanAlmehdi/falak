@@ -42,6 +42,10 @@ final class FleetAgentGateway implements AgentGateway
             $result = $this->status($id);
 
             if ($result->isFinished()) {
+                if (in_array($result->type, $this->schemas->forgettableResults(), true)) {
+                    self::forgetResults([$id]);
+                }
+
                 return $result;
             }
 
@@ -137,6 +141,18 @@ final class FleetAgentGateway implements AgentGateway
             'payload' => $changed ? json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION) : null,
             'secrets_forgotten_at' => now(),
         ]))->save();
+    }
+
+    /**
+     * Drop the results of commands (and of their events) that are only for the request that waited on them
+     * (ProtocolSchemas::FORGET_RESULT); also used by the fleet sweep for those nobody awaited.
+     *
+     * @param  list<string>  $ids
+     */
+    public static function forgetResults(array $ids): void
+    {
+        Command::query()->whereKey($ids)->whereNotNull('result')->update(['result' => null]);
+        CommandEvent::query()->whereIn('command_id', $ids)->whereNotNull('result')->update(['result' => null]);
     }
 
     /**

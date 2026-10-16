@@ -67,3 +67,27 @@ it('sweeps the secrets its module did not forget: settled commands, and commands
     expect($key_of($stuck))->toBe('[forgotten]')
         ->and(json_encode(DB::table('fleet_commands')->whereIn('id', [$settled->id, $stuck->id])->get()))->not->toContain($key);
 });
+
+it('hands an x-falak-forget-result command its result once, then drops it; the sweep drops what nobody awaited', function () {
+    $output = base64_encode('s3cret-output');
+    $payload = ['id' => '01hzysbx000000000000000001', 'cmd' => ['cat', '/run/secret'], 'timeout_s' => 5];
+    $awaited = $this->gateway->dispatch($this->serverId, 'sandbox.exec', $payload);
+    $orphan = $this->gateway->dispatch($this->serverId, 'sandbox.exec', $payload);
+    $this->getJson('/agent/v1/commands?wait=0', $this->headers);
+
+    foreach ([$awaited, $orphan] as $handle) {
+        $this->call('POST', "/agent/v1/commands/{$handle->id}/events", [], [], [], $this->transformHeadersToServerVars($this->headers), fleet_ndjson([
+            ['command_id' => $handle->id, 'seq' => 0, 'kind' => 'finished', 'exit_code' => 0, 'at' => now()->toIso8601ZuluString(),
+                'result' => ['exit_code' => 0, 'stdout' => $output, 'stderr' => '', 'truncated' => false, 'timed_out' => false, 'duration_ms' => 3]],
+        ]))->assertNoContent();
+    }
+
+    expect($this->gateway->await($awaited, 1)->result['stdout'])->toBe($output)
+        ->and(Command::query()->findOrFail($awaited->id)->result)->toBeNull()
+        ->and(DB::table('fleet_command_events')->where('command_id', $awaited->id)->whereNotNull('result')->exists())->toBeFalse()
+        ->and(Command::query()->findOrFail($orphan->id)->result['stdout'])->toBe($output);
+
+    $this->travel(11)->minutes();
+    SweepFleet::dispatchSync();
+    expect(json_encode(DB::table('fleet_commands')->get()).json_encode(DB::table('fleet_command_events')->get()))->not->toContain($output);
+});

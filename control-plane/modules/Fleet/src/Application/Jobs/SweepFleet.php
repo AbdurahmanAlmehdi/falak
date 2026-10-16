@@ -39,6 +39,7 @@ final class SweepFleet implements ShouldBeUnique, ShouldQueue
         $redelivery->expireLeases();
         $this->timeOutCommands($lifecycle);
         $this->forgetSecrets();
+        $this->forgetResults();
         ($upgrades ?? app(AgentUpgradeRollout::class))->sweep();
         $this->prune();
     }
@@ -92,6 +93,28 @@ final class SweepFleet implements ShouldBeUnique, ShouldQueue
         DB::table('fleet_certificates')->whereNotNull('superseded_at')->whereNull('revoked_at')
             ->where('superseded_at', '<', now()->subDays(7))
             ->update(['revoked_at' => now()]);
+    }
+
+    /**
+     * Results only meant for a waiting request (ProtocolSchemas::FORGET_RESULT) of commands settled a few minutes
+     * ago that nobody awaited (the request gave up, a late result).
+     */
+    private function forgetResults(): void
+    {
+        $types = app(ProtocolSchemas::class)->forgettableResults();
+
+        if ($types === []) {
+            return;
+        }
+
+        $terminal = array_map(fn (CommandStatus $status) => $status->value, array_filter(CommandStatus::cases(), fn (CommandStatus $status) => $status->isTerminal()));
+        $ids = Command::query()->whereIn('type', $types)->whereIn('status', $terminal)->whereNotNull('result')
+            ->where('finished_at', '<', now()->subMinutes((int) config('fleet.commands.forget_secrets_after_minutes', 10)))
+            ->limit(500)
+            ->pluck('id')
+            ->all();
+
+        FleetAgentGateway::forgetResults($ids);
     }
 
     /**

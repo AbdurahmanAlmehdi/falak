@@ -27,8 +27,17 @@ final class ProtocolSchemas
      */
     public const FORGET_SECRETS = 'x-falak-forget-secrets';
 
+    /**
+     * Schema root keyword (true) for a command whose result is only for the request waiting on it (a sandbox's command
+     * output, file contents): forgotten once await() returned it, or by the fleet sweep when nobody did.
+     */
+    public const FORGET_RESULT = 'x-falak-forget-result';
+
     /** @var array<string, list<string>>|null command type => paths */
     private ?array $forgettable = null;
+
+    /** @var list<string>|null command types */
+    private ?array $forgettableResults = null;
 
     private ?Validator $validator = null;
 
@@ -85,6 +94,28 @@ final class ProtocolSchemas
         }
 
         return $this->forgettable;
+    }
+
+    /**
+     * Every command type whose result is forgotten once read (see FORGET_RESULT).
+     *
+     * @return list<string>
+     */
+    public function forgettableResults(): array
+    {
+        if ($this->forgettableResults === null) {
+            $this->forgettableResults = [];
+
+            foreach (glob($this->path().'/commands/*.schema.json') ?: [] as $file) {
+                $schema = json_decode((string) file_get_contents($file), true);
+
+                if (is_array($schema) && ($schema[self::FORGET_RESULT] ?? false) === true) {
+                    $this->forgettableResults[] = basename($file, '.schema.json');
+                }
+            }
+        }
+
+        return $this->forgettableResults;
     }
 
     /**
