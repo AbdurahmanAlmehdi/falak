@@ -603,7 +603,7 @@ func TestExecTimeoutKillsTheProcess(t *testing.T) {
 	if !o.timedOut || o.code != -1 || string(o.stdout) != "partial" {
 		t.Fatalf("%+v", o)
 	}
-	if !e.run.Ran("runsc --root=" + e.svc.d.RunscRoot + " kill --pid=42 falak-sbx-" + sid + " 9") {
+	if !e.run.Ran("runsc --root=" + e.svc.d.RunscRoot + " kill --pgid=42 falak-sbx-" + sid + " 9") {
 		t.Fatal(e.run.Lines())
 	}
 	if m, _ := filepath.Glob(filepath.Join(e.svc.dir(sid), "exec-*.pid")); len(m) != 0 {

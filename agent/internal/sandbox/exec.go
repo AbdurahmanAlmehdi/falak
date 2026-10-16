@@ -104,8 +104,23 @@ func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, er
 	}
 	tctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	// The sandbox holds runsc exec's stdio until every process that inherited it has exited, so killing runsc exec
+	// (the runner does on timeout) doesn't end the call: the process group is killed inside the sandbox as soon as
+	// the time is up, children included.
+	finished, killed := make(chan struct{}), make(chan bool, 1)
+	go func() {
+		select {
+		case <-finished:
+			killed <- false
+		case <-tctx.Done():
+			s.killGroup(ctx, id, pidFile)
+			killed <- true
+		}
+	}()
 	start := time.Now()
 	res, err := s.d.Runner.Run(tctx, cmd)
+	close(finished)
+	didKill := <-killed
 	o := execOut{code: res.ExitCode, stdout: out.buf.Bytes(), stderr: errw.buf.Bytes(), truncated: out.over || errw.over,
 		duration: time.Since(start)}
 	if err != nil {
@@ -113,15 +128,27 @@ func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, er
 			return o, err
 		}
 		o.timedOut, o.code = true, -1
-		if b, rerr := os.ReadFile(pidFile); rerr == nil {
-			if pid, perr := strconv.Atoi(strings.TrimSpace(string(b))); perr == nil {
-				kctx, kcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-				_, _ = s.d.Runner.Run(kctx, runner.Cmd{Name: "runsc", Args: s.runscArgs("kill", "--pid="+strconv.Itoa(pid), cid(id), "9")})
-				kcancel()
-			}
+		if !didKill {
+			s.killGroup(ctx, id, pidFile)
 		}
 	}
 	return o, nil
+}
+
+// killGroup SIGKILLs the process group of the exec whose in-sandbox pid is in pidFile (runsc exec makes each exec its
+// own group leader).
+func (s *Service) killGroup(ctx context.Context, id, pidFile string) {
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid < 2 {
+		return
+	}
+	kctx, kcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer kcancel()
+	_, _ = s.d.Runner.Run(kctx, runner.Cmd{Name: "runsc", Args: s.runscArgs("kill", "--pgid="+strconv.Itoa(pid), cid(id), "9")})
 }
 
 // ---- sandbox.exec
