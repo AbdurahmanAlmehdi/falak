@@ -315,9 +315,8 @@ func (c *Client) ImageRepoDigests(ctx context.Context, ref string) ([]string, bo
 // ImageConfig is the subset of GET /images/{ref}/json sandboxes use: the image id (its content digest) and its
 // default environment.
 type ImageConfig struct {
-	ID          string   `json:"Id"`
-	RepoDigests []string `json:"RepoDigests"`
-	Config      struct {
+	ID     string `json:"Id"`
+	Config struct {
 		Env    []string          `json:"Env"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`

@@ -635,20 +635,22 @@ type image struct {
 	Env        []string
 }
 
-// baseImage pulls ref when it isn't local and exports it once per image id into images/<hex>/rootfs (a stopped
-// container's filesystem, extracted by tar). Concurrent creates of one image wait for the same export.
+// baseImage exports an image once per image id into images/<hex>/rootfs (a stopped container's filesystem, extracted
+// by tar). Concurrent creates of one image wait for the same export. An image without a base rootfs yet is pulled
+// first, without credentials, even when it is local: one built on this server, or pulled with the server's registry
+// credentials, may have secrets baked in, and only images anyone can pull become base rootfs trees.
 func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream) (image, error) {
 	cfg, ok, err := s.d.Docker.ImageConfigOf(ctx, ref)
 	if err != nil {
 		return image{}, err
 	}
-	if !ok {
+	if !ok || !s.haveRootfs(cfg.ID) {
 		var w io.Writer
 		if st != nil {
 			w = st.Stdout()
 		}
 		if err := s.d.Docker.ImagePull(ctx, ref, nil, w); err != nil {
-			return image{}, fmt.Errorf("pull %s: %w", ref, err)
+			return image{}, fmt.Errorf("pull %s (sandboxes use images anyone can pull from a registry): %w", ref, err)
 		}
 		if cfg, ok, err = s.d.Docker.ImageConfigOf(ctx, ref); err != nil || !ok {
 			return image{}, fmt.Errorf("image %s missing after pull: %v", ref, err)
@@ -657,11 +659,6 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 	hex := strings.TrimPrefix(cfg.ID, "sha256:")
 	if !hexRe.MatchString(hex) {
 		return image{}, fmt.Errorf("unexpected image id %q", cfg.ID)
-	}
-	// Images built on this server (sites, functions) may have secrets baked in: only images that came from a
-	// registry, and none of Falak's own.
-	if len(cfg.RepoDigests) == 0 {
-		return image{}, fmt.Errorf("image %s was built on this server, not pulled from a registry: not allowed in a sandbox", ref)
 	}
 	for k := range cfg.Config.Labels {
 		if strings.HasPrefix(k, "falak.") {
@@ -712,6 +709,16 @@ func (s *Service) baseImage(ctx context.Context, ref string, st commands.Stream)
 		return image{}, err
 	}
 	return img, nil
+}
+
+// haveRootfs reports whether image id has a base rootfs (it was pulled anonymously and exported).
+func (s *Service) haveRootfs(id string) bool {
+	hex := strings.TrimPrefix(id, "sha256:")
+	if !hexRe.MatchString(hex) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(s.d.Root, "images", hex, "rootfs"))
+	return err == nil
 }
 
 // repoName is the directory a repository is cloned into: /workspace/<name>.

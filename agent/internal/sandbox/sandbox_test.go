@@ -37,7 +37,7 @@ type fakeDocker struct {
 	removed []string
 	rmi     []string
 	have    bool
-	local   bool              // built here: no RepoDigests
+	pullErr error             // the registry refuses an anonymous pull
 	labels  map[string]string // the image's labels
 }
 
@@ -55,9 +55,6 @@ func (f *fakeDocker) ImageConfigOf(context.Context, string) (docker.ImageConfig,
 	c.ID = "sha256:" + strings.Repeat("ab", 32)
 	c.Config.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
 	c.Config.Labels = f.labels
-	if !f.local {
-		c.RepoDigests = []string{"ubuntu@sha256:" + strings.Repeat("cd", 32)}
-	}
 	return c, f.have, nil
 }
 
@@ -65,6 +62,9 @@ func (f *fakeDocker) ImagePull(_ context.Context, ref string, _ *docker.Auth, _ 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pulled = append(f.pulled, ref)
+	if f.pullErr != nil {
+		return f.pullErr
+	}
 	f.have = true
 	return nil
 }
@@ -1063,15 +1063,16 @@ func TestImageChecks(t *testing.T) {
 	}
 	ctx := context.Background()
 	for name, mod := range map[string]func(*fakeDocker){
-		"built here": func(f *fakeDocker) { f.local = true },
+		"built here": func(f *fakeDocker) { f.pullErr = errors.New("pull access denied") },
 		"falak":      func(f *fakeDocker) { f.labels = map[string]string{"falak.site": "shop"} },
 	} {
 		e := newEnv(t)
 		e.runscList(map[string]string{})
 		e.dock.have = true
 		mod(e.dock)
-		if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "not allowed in a sandbox") {
-			t.Fatal(name, err)
+		if _, err := e.svc.Create(ctx, createPayload(NetNone), nil); err == nil || !strings.Contains(err.Error(), "sandbox") ||
+			len(e.dock.pulled) != 1 {
+			t.Fatal(name, err, e.dock.pulled)
 		}
 	}
 }
