@@ -312,6 +312,34 @@ func (c *Client) ImageRepoDigests(ctx context.Context, ref string) ([]string, bo
 	return out.RepoDigests, err == nil, err
 }
 
+// ImageConfig is the subset of GET /images/{ref}/json sandboxes use: the image id (its content digest) and its
+// default environment.
+type ImageConfig struct {
+	ID     string `json:"Id"`
+	Config struct {
+		Env []string `json:"Env"`
+	} `json:"Config"`
+}
+
+// ImageConfigOf returns an image's id and config; exists=false on 404.
+func (c *Client) ImageConfigOf(ctx context.Context, ref string) (ImageConfig, bool, error) {
+	var out ImageConfig
+	_, err := c.do(ctx, http.MethodGet, "/images/"+ref+"/json", nil, nil, &out)
+	if IsNotFound(err) {
+		return out, false, nil
+	}
+	return out, err == nil, err
+}
+
+// ContainerExport streams a (created, not necessarily started) container's filesystem as a tar archive.
+func (c *Client) ContainerExport(ctx context.Context, id string) (io.ReadCloser, error) {
+	resp, err := c.raw(ctx, http.MethodGet, "/v"+c.apiVersion(ctx)+"/containers/"+id+"/export", nil, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
 // ContainerUpdate changes a running container's memory limit (swap at the same value: none) and CPUs in place.
 func (c *Client) ContainerUpdate(ctx context.Context, id string, memory, nanoCPUs int64) error {
 	body := map[string]any{"Memory": memory, "MemorySwap": memory, "NanoCpus": nanoCPUs}

@@ -41,6 +41,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/resources"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/runtime"
+	"github.com/OthmanHaba/falak/agent/internal/sandbox"
 	"github.com/OthmanHaba/falak/agent/internal/security"
 	"github.com/OthmanHaba/falak/agent/internal/supervisor"
 	"github.com/OthmanHaba/falak/agent/internal/system"
@@ -98,6 +99,8 @@ type Components struct {
 	Network *netobs.Collector
 	// EBPF is the opt-in eBPF collector (docs/plans/network/ebpf.md).
 	EBPF *ebpfobs.Collector
+	// Sandboxes runs sandbox.* and the sandbox reaper (docs/plans/SANDBOXES.md).
+	Sandboxes *sandbox.Service
 }
 
 // Build constructs every executor and registers the full v1 catalogue.
@@ -202,9 +205,12 @@ func Build(d Deps) *Components {
 		}})
 	nt.Register(reg)
 	nt.RegisterCapture(reg)
+	sbx := sandbox.New(sandbox.Deps{Runner: d.Runner, FS: d.FS, HTTP: d.HTTP, Docker: docker.NewClient(cfg.DockerSock), Requests: d.Requests,
+		Logger: log.With("component", "sandbox"), Root: d.FS.P(filepath.Join(cfg.StateDir, "sandboxes"))})
+	sbx.Register(reg)
 
 	return &Components{Registry: reg, Supervisor: sup, Cron: sched, PTY: terms, Docker: dock, Edge: edgeMgr, Deployer: dep, Functions: fns, DB: dbs, Volumes: vols,
-		Protection: prot, Events: &resources.Queue{}, Network: network, EBPF: probe}
+		Protection: prot, Events: &resources.Queue{}, Network: network, EBPF: probe, Sandboxes: sbx}
 }
 
 // ensureEnrolled enrolls only when there is no identity yet: `falak-agent run` never replaces one because
@@ -396,6 +402,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	// The opt-in eBPF probe (docs/plans/network/ebpf.md): detached when runCtx ends.
 	loops.Add(1)
 	go func() { defer loops.Done(); comps.EBPF.Run(runCtx) }()
+	// Sandboxes: TTLs enforced here even when the control plane is unreachable; recovery after a restart or reboot.
+	loops.Add(1)
+	go func() { defer loops.Done(); comps.Sandboxes.Run(runCtx) }()
 	// Protection (docs/plans/network/protection.md): block sets restored, sshd's auth failures, firewall counters.
 	protection := comps.Protection.NewObserver(client, tel.Relay())
 	loops.Add(1)

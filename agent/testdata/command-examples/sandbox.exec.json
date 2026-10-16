@@ -1,0 +1,9 @@
+{
+  "id": "01j9z8y7x6w5v4t3s2r1q0p9na",
+  "cmd": ["sh", "-lc", "cat > /tmp/in && wc -c /tmp/in"],
+  "cwd": "/workspace/shop",
+  "env": {"CI": "1"},
+  "stdin": "aGVsbG8=",
+  "timeout_s": 60,
+  "max_output": 262144
+}

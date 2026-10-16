@@ -53,6 +53,9 @@ var (
 const maxLabels = 8
 
 func (p OpenPayload) validate() error {
+	if p.Sandbox != nil {
+		return p.validateSandbox()
+	}
 	t := p.Container
 	if t == nil {
 		return nil

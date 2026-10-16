@@ -87,6 +87,9 @@ var Features = []string{
 	// net.observed workloads[].talks_to[].connects: the eBPF probe's outbound connects of the minute (a connection
 	// per request shows up although it is rarely open at a snapshot).
 	"net.ebpf.connects",
+	// Sandboxes (docs/plans/SANDBOXES.md): sandbox.* commands (gVisor runsc driven directly), the sandbox.reaped
+	// request, and terminal.open sandbox.
+	"sandbox.v1",
 }
 
 var (

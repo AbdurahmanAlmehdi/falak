@@ -20,6 +20,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/functions"
 	"github.com/OthmanHaba/falak/agent/internal/metrics"
 	"github.com/OthmanHaba/falak/agent/internal/resources"
+	"github.com/OthmanHaba/falak/agent/internal/sandbox"
 	"github.com/OthmanHaba/falak/agent/internal/security"
 	"github.com/OthmanHaba/falak/agent/internal/transport"
 	"github.com/OthmanHaba/falak/agent/internal/volumes"
@@ -43,6 +44,8 @@ var Catalogue = []string{
 	"volume.create", "volume.resize", "volume.delete", "volume.inventory", "volume.archive", "volume.restore", "volume.clone", "volume.browse", "volume.download", "volume.drill",
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close",
 	"security.audit", "security.fix", "security.undo",
+	"sandbox.prepare", "sandbox.create", "sandbox.exec", "sandbox.files.read", "sandbox.files.list", "sandbox.files.write", "sandbox.files.delete",
+	"sandbox.kill", "sandbox.inventory",
 }
 
 const (
@@ -219,6 +222,7 @@ func TestTerminalOpenV2Payloads(t *testing.T) {
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W",` + tok + `}`,
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W",` + tok + `,"container":{"name":"falak-db-01jdb000000000000000000000"}}`,
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","env":{"APP_ENV":"production"},"container":{"labels":{"com.docker.compose.project":"shop","com.docker.compose.service":"web"},"user":"www-data:www-data","workdir":"/app"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W",` + tok + `,"sandbox":{"id":"01j9z8y7x6w5v4t3s2r1q0p9na"}}`,
 	} {
 		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
 		if err := sch.Validate(v); err != nil {
@@ -237,6 +241,7 @@ func TestTerminalOpenV2Payloads(t *testing.T) {
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","user":"root -v"}}`,
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","workdir":"app"}}`,
 		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","container":{"name":"web","image":"x"}}`,
+		`{"session_id":"01J9ZT8K3M4N5P6Q7R8S9T0V1W","sandbox":{"id":"NOT-AN-ID"}}`,
 	} {
 		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(p))
 		if sch.Validate(v) == nil {
@@ -417,6 +422,55 @@ func TestDatabaseSchemas(t *testing.T) {
 	v, _ := jsonschema.UnmarshalJSON(bytes.NewReader(b))
 	if err := hbs.Validate(v); err != nil {
 		t.Fatalf("heartbeat with databases invalid: %v\n%s", err, b)
+	}
+}
+
+// Results of the sandbox.* executors validate against their schemas' $defs.result, and sandbox.reaped's body against
+// its request schema.
+func TestSandboxResultsValidate(t *testing.T) {
+	c := compiler(t)
+	for typ, res := range map[string]any{
+		"sandbox.prepare":      sandbox.PrepareResult{RunscVersion: "release-20261005.0", Platform: "systrap"},
+		"sandbox.create":       sandbox.CreateResult{Status: "running", IP: "10.88.0.2", ImageDigest: "sha256:" + strings.Repeat("a", 64), StartedAt: "2026-10-16T19:00:00Z"},
+		"sandbox.exec":         sandbox.ExecResult{ExitCode: 0, Stdout: "aGk=", Stderr: "", DurationMS: 70},
+		"sandbox.files.read":   sandbox.ReadResult{Content: "aGk=", Size: 2, Mode: "0644"},
+		"sandbox.files.list":   sandbox.ListResult{Entries: []sandbox.Entry{{Name: "a", Type: "dir", Size: 4096, Mode: "0755", MTime: 1760000000}}},
+		"sandbox.files.write":  sandbox.WriteResult{Size: 2},
+		"sandbox.files.delete": struct{}{},
+		"sandbox.kill":         struct{}{},
+		"sandbox.inventory": sandbox.InventoryResult{Sandboxes: []sandbox.InventoryItem{
+			{ID: "01j9z8y7x6w5v4t3s2r1q0p9na", Status: "running", StartedAt: "2026-10-16T19:00:00Z", ExpiresAt: 1760644800, MemoryBytes: 17 << 20, CPUSeconds: 1.5},
+			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nb", Status: "stopped", OOMKilled: true, ExpiresAt: 1760644800},
+		}},
+	} {
+		sch, err := c.Compile(idBase + "commands/" + typ + ".schema.json#/$defs/result")
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(res)
+		v, _ := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+		if err := sch.Validate(v); err != nil {
+			t.Errorf("%s result invalid: %v\n%s", typ, err, b)
+		}
+	}
+	f, err := os.Open(filepath.Join(contractsDir, "requests", "sandbox.reaped.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	doc, _ := jsonschema.UnmarshalJSON(f)
+	if err := c.AddResource(idBase+"requests/sandbox.reaped.schema.json", doc); err != nil {
+		t.Fatal(err)
+	}
+	sch, err := c.Compile(idBase + "requests/sandbox.reaped.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{sandbox.ReasonExpired, sandbox.ReasonOOM, sandbox.ReasonExited} {
+		v, _ := jsonschema.UnmarshalJSON(strings.NewReader(`{"id":"01j9z8y7x6w5v4t3s2r1q0p9na","reason":"` + reason + `"}`))
+		if err := sch.Validate(v); err != nil {
+			t.Errorf("sandbox.reaped %s: %v", reason, err)
+		}
 	}
 }
 

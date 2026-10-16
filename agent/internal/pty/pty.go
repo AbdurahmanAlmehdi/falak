@@ -40,6 +40,8 @@ type Options struct {
 	Docker ContainerLookup
 	// DockerCLI is the docker binary container sessions run (default "docker"; tests use a stand-in).
 	DockerCLI string
+	// Runsc is the runsc binary sandbox sessions run (default "runsc").
+	Runsc string
 	// ProcRoot is the host's /proc (default "/proc"), where a closed container session's processes are found;
 	// Signal signals one of them (default syscall.Kill). Tests fake both.
 	ProcRoot string
@@ -66,6 +68,9 @@ func New(o Options) *Manager {
 	if o.DockerCLI == "" {
 		o.DockerCLI = "docker"
 	}
+	if o.Runsc == "" {
+		o.Runsc = "runsc"
+	}
 	if o.ProcRoot == "" {
 		o.ProcRoot = "/proc"
 	}
@@ -91,6 +96,9 @@ type (
 		// Container (terminal.v2): a shell in a container (docker exec) instead of on the host; user, shell and cwd
 		// don't apply.
 		Container *ContainerTarget `json:"container,omitempty"`
+		// Sandbox (sandbox.v1): a shell in a sandbox (runsc exec on the pty), exclusive with Container; user, shell and cwd
+		// don't apply.
+		Sandbox *SandboxTarget `json:"sandbox,omitempty"`
 	}
 	OpenResult struct {
 		ExitCode *int   `json:"exit_code,omitempty"`
@@ -190,9 +198,12 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 		note string // printed before the shell's output
 		err  error
 	)
-	if p.Container != nil {
+	switch {
+	case p.Container != nil:
 		cmd, err = m.containerCmd(ctx, p)
-	} else {
+	case p.Sandbox != nil:
+		cmd = m.sandboxCmd(p)
+	default:
 		cmd, note, err = hostCmd(p)
 	}
 	if err != nil {
@@ -216,7 +227,7 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 	s := &session{id: p.SessionID, f: f, cmd: cmd, closeCh: make(chan struct{}), done: make(chan struct{}), activity: time.Now()}
 	m.sessions[p.SessionID] = s
 	m.mu.Unlock()
-	m.log.Info("terminal opened", "session", p.SessionID, "user", p.User, "container", p.Container != nil, "relay", p.RelayToken != "")
+	m.log.Info("terminal opened", "session", p.SessionID, "user", p.User, "container", p.Container != nil, "sandbox", p.Sandbox != nil, "relay", p.RelayToken != "")
 	link := m.startRelay(s, p.RelayToken)
 	if note != "" {
 		st.Emit("stdout", base64.StdEncoding.EncodeToString([]byte(note)))
