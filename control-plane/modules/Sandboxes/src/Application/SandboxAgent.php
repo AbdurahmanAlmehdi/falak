@@ -2,11 +2,16 @@
 
 namespace Falak\Sandboxes\Application;
 
+use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Data\CommandHandle;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Fleet\Contracts\Exceptions\CommandTimedOut;
+use Falak\Sandboxes\Contracts\SandboxDirectory;
 use Falak\Sandboxes\Domain\Models\Sandbox;
+use Falak\Sandboxes\Domain\Models\SandboxSnapshot;
+use Falak\Servers\Contracts\ServerDirectory;
+use Illuminate\Validation\ValidationException;
 
 /**
  * sandbox.* commands from HTTP handlers: exec and files wait for the agent's answer (dispatch + await, cancelled when
@@ -16,15 +21,33 @@ final class SandboxAgent
 {
     public const NOT_CONNECTED = 'The server agent is not connected.';
 
-    public function __construct(private readonly AgentGateway $agents) {}
+    public function __construct(
+        private readonly AgentGateway $agents,
+        private readonly AgentDirectory $directory,
+        private readonly ServerDirectory $servers,
+    ) {}
+
+    /**
+     * Snapshots, forks, pause/resume and database copies need an agent with sandbox.v2: a clear 422 otherwise.
+     *
+     * @throws ValidationException
+     */
+    public function requireV2(string $serverId): void
+    {
+        if (! ($this->directory->forServer($serverId)?->supports(SandboxDirectory::FEATURE_V2) ?? false)) {
+            $name = $this->servers->find($serverId)?->name ?? 'this server';
+
+            throw ValidationException::withMessages(['server' => "The agent on {$name} is too old for snapshots, forks, pause and database copies (they need sandbox.v2); update it first."]);
+        }
+    }
 
     /**
      * @param  array<string, mixed>  $payload
      */
-    public function tryDispatch(Sandbox $sandbox, string $type, array $payload, string $key, int $timeout = 600): ?CommandHandle
+    public function tryDispatch(Sandbox|SandboxSnapshot $on, string $type, array $payload, string $key, int $timeout = 600): ?CommandHandle
     {
         try {
-            return $this->agents->dispatch($sandbox->server_id, $type, $payload, $timeout, $key);
+            return $this->agents->dispatch($on->server_id, $type, $payload, $timeout, $key);
         } catch (AgentUnavailable) {
             return null;
         }

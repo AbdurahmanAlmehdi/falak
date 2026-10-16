@@ -10,6 +10,9 @@ use Falak\Databases\Contracts\Data\DatabaseInstanceData;
  */
 interface DatabaseDirectory
 {
+    /** What downloading a database backup needs (Sandboxes' database copies need the same: they hand out the data). */
+    public const BACKUP_DOWNLOAD_PERMISSION = 'databases.restore';
+
     public function find(string $databaseId): ?DatabaseData;
 
     /**

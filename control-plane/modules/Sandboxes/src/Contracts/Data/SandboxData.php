@@ -5,7 +5,7 @@ namespace Falak\Sandboxes\Contracts\Data;
 final readonly class SandboxData
 {
     /**
-     * @param  string  $status  creating | running | failed | killed
+     * @param  string  $status  creating | running | paused | failed | killed
      */
     public function __construct(
         public string $id,
