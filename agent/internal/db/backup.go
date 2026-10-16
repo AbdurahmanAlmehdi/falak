@@ -123,6 +123,36 @@ func (db *DB) Backup(ctx context.Context, p BackupPayload, st commands.Stream) (
 	return res, nil
 }
 
+// Dump streams a database's unencrypted logical dump (`falak-db backup logical`, as db.backup: pg_dump -Fc for
+// postgres, SQL for mysql/mariadb) into w, under the instance's lock: sandbox.db.import, which pipes it into a sandbox
+// so it never touches the host's disk. Redis and Valkey have no per-database dump.
+func (db *DB) Dump(ctx context.Context, instance, engine, database string, w io.Writer) error {
+	if err := checkID("instance", instance); err != nil {
+		return err
+	}
+	if err := checkEngine(engine); err != nil {
+		return err
+	}
+	if isKeyValue(engine) {
+		return payloadErr("engine %s has no database dump", engine)
+	}
+	if err := checkIdent("database", database); err != nil {
+		return err
+	}
+	defer db.lock(instance)()
+	_, stderr, err := db.exec(ctx, instance, nil, w, nil, "backup", "logical", "--database", database, "--out", "-")
+	if err == nil {
+		var r struct {
+			Bytes int64 `json:"bytes"`
+		}
+		err = streamResult(stderr, &r)
+	}
+	if err != nil {
+		return fmt.Errorf("dump %s: %w", database, err)
+	}
+	return nil
+}
+
 // containerCounts runs `falak-db table-counts` in a container: the row count of every table of the database (Redis /
 // Valkey: the keys of every logical database).
 func (db *DB) containerCounts(ctx context.Context, container, engine, database string) (map[string]int64, error) {
