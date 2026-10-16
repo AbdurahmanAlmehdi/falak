@@ -90,6 +90,9 @@ var Features = []string{
 	// Sandboxes (docs/plans/SANDBOXES.md): sandbox.* commands (gVisor runsc driven directly), the sandbox.reaped
 	// request, and terminal.open sandbox.
 	"sandbox.v1",
+	// Sandboxes v0.21: sandbox.snapshot, sandbox.snapshot.delete, sandbox.create from_snapshot (restore / fork),
+	// sandbox.pause, sandbox.resume, sandbox.db.import, and sandbox.inventory's snapshots.
+	"sandbox.v2",
 }
 
 var (

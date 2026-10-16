@@ -205,7 +205,7 @@ func Build(d Deps) *Components {
 		}})
 	nt.Register(reg)
 	nt.RegisterCapture(reg)
-	sbx := sandbox.New(sandbox.Deps{Runner: d.Runner, FS: d.FS, HTTP: d.HTTP, Docker: docker.NewClient(cfg.DockerSock), Requests: d.Requests,
+	sbx := sandbox.New(sandbox.Deps{Runner: d.Runner, FS: d.FS, HTTP: d.HTTP, Docker: docker.NewClient(cfg.DockerSock), Requests: d.Requests, DB: dbs,
 		Logger: log.With("component", "sandbox"), Root: d.FS.P(filepath.Join(cfg.StateDir, "sandboxes"))})
 	sbx.Register(reg)
 

@@ -238,13 +238,13 @@ func TestSpec(t *testing.T) {
 func TestRunArgs(t *testing.T) {
 	e := newEnv(t)
 	dir := e.svc.dir(sid)
-	got := e.svc.runArgs(sid, 2048, NetNone)
+	got := e.svc.runArgs(sid, 2048, NetNone, "run")
 	want := []string{"-c", `log=$1; shift; exec "$@" </dev/null >>"$log" 2>&1`, "sh", dir + "/runsc.log", "runsc", "--root=" + e.svc.d.RunscRoot,
 		"--overlay2=root:self,size=2048m", "--network=none", "run", "--detach", "--bundle", dir + "/bundle", "falak-sbx-" + sid}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
-	if slices.Contains(e.svc.runArgs(sid, 2048, NetInternet), "--network=none") {
+	if slices.Contains(e.svc.runArgs(sid, 2048, NetInternet, "run"), "--network=none") {
 		t.Fatal("internet sandbox without network")
 	}
 }

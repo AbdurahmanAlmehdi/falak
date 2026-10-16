@@ -56,6 +56,7 @@ type Deps struct {
 	HTTP     *http.Client
 	Docker   Docker
 	Requests Requester // nil: reaps aren't reported
+	DB       Dumper    // nil: no sandbox.db.import
 	Logger   *slog.Logger
 	// Root holds the state directories and base images (/var/lib/falak/sandboxes); RunscRoot is runsc's --root;
 	// CgroupRoot is the cgroup v2 mount (memory and CPU in inventory, OOM kills).
@@ -136,6 +137,11 @@ func (s *Service) Register(reg *commands.Registry) {
 	reg.Register("sandbox.extend", commands.Typed(s.Extend))
 	reg.Register("sandbox.kill", commands.Typed(s.Kill))
 	reg.Register("sandbox.inventory", commands.Typed(s.Inventory))
+	reg.Register("sandbox.snapshot", commands.Typed(s.Snapshot))
+	reg.Register("sandbox.snapshot.delete", commands.Typed(s.SnapshotDelete))
+	reg.Register("sandbox.pause", commands.Typed(s.Pause))
+	reg.Register("sandbox.resume", commands.Typed(s.Resume))
+	reg.Register("sandbox.db.import", commands.Typed(s.DBImport))
 }
 
 var (
@@ -242,6 +248,8 @@ type state struct {
 	IP          string   `json:"ip,omitempty"`
 	ExpiresAt   int64    `json:"expires_at"`
 	StartedAt   string   `json:"started_at,omitempty"`
+	// FromSnapshot is the snapshot the sandbox was restored from.
+	FromSnapshot string `json:"from_snapshot,omitempty"`
 	// Reaped is set when the agent removed the sandbox on its own and the control plane hasn't been told yet.
 	Reaped string `json:"reaped,omitempty"`
 }
@@ -340,7 +348,7 @@ func (s *Service) prepare(ctx context.Context, st commands.Stream) (PrepareResul
 // ensureDirs makes the state root and the base images root-only (every time: MkdirAll leaves an existing directory's
 // mode alone). Base rootfs trees come from untrusted images; no host user may reach them.
 func (s *Service) ensureDirs() error {
-	for _, d := range []string{s.d.Root, filepath.Join(s.d.Root, "images")} {
+	for _, d := range []string{s.d.Root, filepath.Join(s.d.Root, "images"), filepath.Join(s.d.Root, "snapshots")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return err
 		}
@@ -460,6 +468,9 @@ type CreatePayload struct {
 	Env        map[string]string `json:"env,omitempty"`
 	ExpiresAt  int64             `json:"expires_at"`
 	Repo       *Repo             `json:"repo,omitempty"`
+	// FromSnapshot restores the sandbox from a snapshot (v0.21): its limits and network must equal the snapshot's, env
+	// adds to the snapshot's, and no repo.
+	FromSnapshot string `json:"from_snapshot,omitempty"`
 }
 
 // Secrets keeps env values and the clone token out of the command's output and errors.
@@ -520,6 +531,14 @@ func (p *CreatePayload) validate() error {
 			return payloadErr("invalid repo ref %q", r.Ref)
 		}
 	}
+	if p.FromSnapshot != "" {
+		if err := checkSnapshotID(p.FromSnapshot); err != nil {
+			return err
+		}
+		if p.Repo != nil {
+			return payloadErr("repo is not allowed with from_snapshot")
+		}
+	}
 	if p.Pids == 0 {
 		p.Pids = 1024
 	}
@@ -552,7 +571,13 @@ func (s *Service) Create(ctx context.Context, p CreatePayload, st commands.Strea
 	if _, err := s.prepare(ctx, st); err != nil {
 		return nil, err
 	}
-	res, err := s.create(ctx, p, st)
+	var res CreateResult
+	var err error
+	if p.FromSnapshot != "" {
+		res, err = s.restore(ctx, p)
+	} else {
+		res, err = s.create(ctx, p, st)
+	}
 	if err != nil {
 		// Without a state file (it failed before writing one) the teardown still releases an allocated address.
 		old, _ := s.readState(p.ID)
@@ -597,32 +622,13 @@ func (s *Service) create(ctx context.Context, p CreatePayload, st commands.Strea
 	if p.Network == NetAllowlist {
 		env = append(env, proxyEnv()...)
 	}
-	in := specInput{Rootfs: img.Rootfs, Env: env, Resolv: filepath.Join(dir, "resolv.conf"), Hosts: filepath.Join(dir, "hosts"),
-		CPUs: p.CPUs, MemoryMB: p.MemoryMB, Pids: p.Pids, Cgroup: cgroupPath(p.ID)}
-	if p.Network != NetNone {
-		in.Netns = "/var/run/netns/" + netnsName(p.ID)
+	if err := s.writeBundle(sb, env); err != nil {
+		return CreateResult{}, err
 	}
-	spec, _ := json.MarshalIndent(buildSpec(in), "", "  ")
-	for name, data := range map[string][]byte{"resolv.conf": []byte(resolvConf(p.Network)), "hosts": []byte(hostsFile), "bundle/config.json": spec} {
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
-			return CreateResult{}, err
-		}
+	if err := s.setupNetwork(ctx, sb); err != nil {
+		return CreateResult{}, err
 	}
-	if p.Network != NetNone {
-		s.netMu.Lock()
-		err := s.ensureBridge(ctx)
-		if err == nil {
-			err = s.setupNetns(ctx, p.ID, sb.IP)
-		}
-		if err == nil {
-			err = s.syncNetLocked(ctx, "")
-		}
-		s.netMu.Unlock()
-		if err != nil {
-			return CreateResult{}, err
-		}
-	}
-	if err := s.run(ctx, p.ID, p.DiskMB, p.Network); err != nil {
+	if err := s.start(ctx, p.ID, p.DiskMB, p.Network, "run"); err != nil {
 		return CreateResult{}, err
 	}
 	sb.StartedAt = s.d.Now().UTC().Format(time.RFC3339)
@@ -637,6 +643,39 @@ func (s *Service) create(ctx context.Context, p CreatePayload, st commands.Strea
 	return CreateResult{Status: "running", IP: sb.IP, ImageDigest: sb.ImageDigest, StartedAt: sb.StartedAt}, nil
 }
 
+// writeBundle writes the sandbox's resolv.conf, hosts and bundle/config.json (its limits, network and env).
+func (s *Service) writeBundle(sb *state, env []string) error {
+	dir := s.dir(sb.ID)
+	in := specInput{Rootfs: sb.Rootfs, Env: env, Resolv: filepath.Join(dir, "resolv.conf"), Hosts: filepath.Join(dir, "hosts"),
+		CPUs: sb.CPUs, MemoryMB: sb.MemoryMB, Pids: sb.Pids, Cgroup: cgroupPath(sb.ID)}
+	if sb.Network != NetNone {
+		in.Netns = "/var/run/netns/" + netnsName(sb.ID)
+	}
+	spec, _ := json.MarshalIndent(buildSpec(in), "", "  ")
+	for name, data := range map[string][]byte{"resolv.conf": []byte(resolvConf(sb.Network)), "hosts": []byte(hostsFile), "bundle/config.json": spec} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setupNetwork gives a sandbox with a network its namespace, veth and rules.
+func (s *Service) setupNetwork(ctx context.Context, sb *state) error {
+	if sb.Network == NetNone {
+		return nil
+	}
+	s.netMu.Lock()
+	defer s.netMu.Unlock()
+	if err := s.ensureBridge(ctx); err != nil {
+		return err
+	}
+	if err := s.setupNetns(ctx, sb.ID, sb.IP); err != nil {
+		return err
+	}
+	return s.syncNetLocked(ctx, "")
+}
+
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -648,24 +687,26 @@ func sortedKeys(m map[string]string) []string {
 
 func cgroupPath(id string) string { return "/falak-sbx/" + cid(id) }
 
-// runArgs is `runsc run --detach` under sh, so runsc's stdio goes to the sandbox's log (a detached runsc otherwise
-// keeps the agent's pipes open).
-func (s *Service) runArgs(id string, diskMB int, network string) []string {
+// runArgs is `runsc run --detach` (or `restore --image-path=… --detach`: verb and extra) under sh, so runsc's stdio
+// goes to the sandbox's log (a detached runsc otherwise keeps the agent's pipes open).
+func (s *Service) runArgs(id string, diskMB int, network, verb string, extra ...string) []string {
 	args := []string{"-c", `log=$1; shift; exec "$@" </dev/null >>"$log" 2>&1`, "sh", filepath.Join(s.dir(id), "runsc.log"), "runsc",
 		"--root=" + s.d.RunscRoot, overlayFlag(diskMB)}
 	if network == NetNone {
 		args = append(args, "--network=none")
 	}
-	return append(args, "run", "--detach", "--bundle", filepath.Join(s.dir(id), "bundle"), cid(id))
+	args = append(append(append(args, verb), extra...), "--detach", "--bundle", filepath.Join(s.dir(id), "bundle"), cid(id))
+	return args
 }
 
-func (s *Service) run(ctx context.Context, id string, diskMB int, network string) error {
+// start runs (or restores) the sandbox from its bundle.
+func (s *Service) start(ctx context.Context, id string, diskMB int, network, verb string, extra ...string) error {
 	if err := os.MkdirAll(s.d.RunscRoot, 0o700); err != nil {
 		return err
 	}
-	res, err := s.d.Runner.Run(ctx, runner.Cmd{Name: "sh", Args: s.runArgs(id, diskMB, network)})
+	res, err := s.d.Runner.Run(ctx, runner.Cmd{Name: "sh", Args: s.runArgs(id, diskMB, network, verb, extra...)})
 	if err == nil && res.ExitCode != 0 {
-		err = fmt.Errorf("runsc run: exit status %d: %s", res.ExitCode, logTail(filepath.Join(s.dir(id), "runsc.log")))
+		err = fmt.Errorf("runsc "+verb+": exit status %d: %s", res.ExitCode, logTail(filepath.Join(s.dir(id), "runsc.log")))
 	}
 	return err
 }
@@ -1036,9 +1077,13 @@ type InventoryItem struct {
 // Inventory lists the sandboxes with a state directory, their runsc status and usage.
 func (s *Service) Inventory(ctx context.Context, _ InventoryPayload, _ commands.Stream) (any, error) {
 	out := []InventoryItem{}
+	snaps := []InventorySnapshot{}
+	for _, m := range s.snapshots() {
+		snaps = append(snaps, InventorySnapshot{SnapshotID: m.SnapshotID, SizeBytes: m.SizeBytes})
+	}
 	states := s.states()
 	if len(states) == 0 {
-		return InventoryResult{Sandboxes: out}, nil // runsc may not even be installed
+		return InventoryResult{Sandboxes: out, Snapshots: snaps}, nil // runsc may not even be installed
 	}
 	list, err := s.list(ctx)
 	if err != nil {
@@ -1059,12 +1104,19 @@ func (s *Service) Inventory(ctx context.Context, _ InventoryPayload, _ commands.
 		}
 		out = append(out, it)
 	}
-	return InventoryResult{Sandboxes: out}, nil
+	return InventoryResult{Sandboxes: out, Snapshots: snaps}, nil
 }
 
 // InventoryResult is sandbox.inventory's result.
 type InventoryResult struct {
-	Sandboxes []InventoryItem `json:"sandboxes"`
+	Sandboxes []InventoryItem     `json:"sandboxes"`
+	Snapshots []InventorySnapshot `json:"snapshots"`
+}
+
+// InventorySnapshot is one snapshot on the server (v0.21).
+type InventorySnapshot struct {
+	SnapshotID string `json:"snapshot_id"`
+	SizeBytes  int64  `json:"size_bytes"`
 }
 
 // list returns runsc's containers (id → status: created, running, paused, stopped).

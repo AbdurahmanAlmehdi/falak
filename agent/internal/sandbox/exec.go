@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +26,7 @@ type execReq struct {
 	cwd     string
 	env     []string // added to the sandbox's env (later wins)
 	stdin   []byte
+	in      io.Reader // streamed stdin (in place of stdin)
 	timeout time.Duration
 	max     int // bytes kept per stream
 }
@@ -101,6 +103,9 @@ func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, er
 	cmd := runner.Cmd{Name: "runsc", Args: args, Stdout: out, Stderr: errw}
 	if r.stdin != nil {
 		cmd.Stdin = bytes.NewReader(r.stdin)
+	}
+	if r.in != nil {
+		cmd.Stdin = r.in
 	}
 	tctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()

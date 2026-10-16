@@ -62,18 +62,22 @@ func (s *Service) ReapOnce(ctx context.Context) {
 		s.reapOne(ctx, st)
 		mu.Unlock()
 	}
+	s.gcSnapshotTemps()
 	s.gcImages(ctx)
 }
 
 // imageTTL is how long an unused base rootfs is kept (its directory's mtime is its last use).
 const imageTTL = 6 * time.Hour
 
-// gcImages removes the base rootfs of images no sandbox uses and none used for imageTTL, and the Docker image too
-// (without force: Docker keeps it while a container uses it or another tag points at it).
+// gcImages removes the base rootfs of images no sandbox or snapshot uses and none used for imageTTL, and the Docker
+// image too (without force: Docker keeps it while a container uses it or another tag points at it).
 func (s *Service) gcImages(ctx context.Context) {
 	used := map[string]bool{}
 	for _, st := range s.states() {
 		used[filepath.Base(filepath.Dir(st.Rootfs))] = true
+	}
+	for _, m := range s.snapshots() {
+		used[filepath.Base(filepath.Dir(m.Rootfs))] = true
 	}
 	root := filepath.Join(s.d.Root, "images")
 	ents, _ := os.ReadDir(root)
