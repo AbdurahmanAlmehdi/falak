@@ -556,7 +556,8 @@ func TestConfigExport(t *testing.T) {
 	if code := h.run("config", "export", projectID, "--format", "json", "--json"); code != 0 || !strings.Contains(h.out.String(), `"environment": "staging"`) {
 		t.Fatalf("json: %d %s", code, h.out.String())
 	}
-	if q := f.queries[len(f.queries)-1]; q != "format=json" {
+	// Without -e: the project's production environment (the endpoint requires one).
+	if q := f.queries[len(f.queries)-1]; q != "environment=production&format=json" {
 		t.Fatalf("query %q", q)
 	}
 	if code := h.run("config", "export"); code != ExitUsage {

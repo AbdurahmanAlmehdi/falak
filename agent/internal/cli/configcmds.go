@@ -513,9 +513,10 @@ func (p prefixWriter) Write(b []byte) (int, error) {
 func cmdConfigExport(ctx context.Context, a *App, args []string) error {
 	fs := a.flagSet("config export")
 	var env, project, output string
-	envFlag(fs, &env)
+	fs.StringVar(&env, "e", "", "environment (slug; default: the project's production environment)")
+	fs.StringVar(&env, "env", "", "environment (slug; default: the project's production environment)")
 	projectFlag(fs, &project)
-	fs.StringVar(&output, "o", "", "write to this file (default: stdout)")
+	fs.StringVar(&output, "o","", "write to this file (default: stdout)")
 	fs.StringVar(&output, "output", "", "write to this file (default: stdout)")
 	format := fs.String("format", "", "yaml or json (default: from -o's name, else yaml)")
 	pos, err := a.parse(fs, args, 0, 1, "[project] [-e ENV] [-o FILE] [--format yaml|json]")
@@ -544,6 +545,12 @@ func cmdConfigExport(ctx context.Context, a *App, args []string) error {
 	id, err := a.requireProject(ctx, c, project, "")
 	if err != nil {
 		return err
+	}
+	if env == "" {
+		// The endpoint requires an environment: default to the project's production one, as plan and apply do.
+		if env, err = productionSlug(ctx, c, id); err != nil {
+			return err
+		}
 	}
 	x, err := c.ConfigExport(ctx, id, env, *format)
 	if err != nil {

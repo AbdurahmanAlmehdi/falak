@@ -735,7 +735,7 @@ whose `branch` is the current git branch (production for a file without environm
 | `falak runs list` / `falak runs show <run>` | Runs newest first (`--limit`); one run's plan, approval and deployments |
 | `falak approve <run>` / `falak reject <run>` | Decide a waiting run. `--comment`, `--yes` |
 | `falak drift` | The environment against its last applied file. `--check` checks now |
-| `falak config export [project]` | Today's state as a file. `-e`, `-o FILE`, `--format yaml\|json` |
+| `falak config export [project]` | Today's state as a file. `-e` (default: the production environment), `-o FILE`, `--format yaml\|json` |
 | `falak config unmanaged` | What runs detached |
 | `falak secret set NAME` / `list` / `delete NAME` | The project's secrets (`-e ENV`: one environment's). `set` reads the value from a hidden prompt or stdin, never an argument, and adds a version when the secret exists; `--from-env FILE` imports every `KEY=VALUE` line. `list` shows names, never values; `delete` needs `--yes` without a terminal |
 | `falak config source show` / `falak config source set` | The file the project follows. `set` changes only what its flags name: `--repo owner/name`, `--connection <id>`, `--path falak.yaml`, `--enable` / `--disable` (a new source is enabled), `--allow-server NAME` (repeatable; replaces the list, `""` clears it; admins only) |

@@ -155,7 +155,7 @@ environments, and for `drift`). File: the `[file]` argument, else `falak.yaml`, 
 | `falak approve <run> [--comment TEXT] [--yes]` | Approve a run waiting for an approval (sends the shown plan's hash; if the plan changed, nothing is approved and it shows the new one: exit `6` without a terminal) |
 | `falak reject <run> [--comment TEXT] [--yes]` | Reject (cancel) a waiting run |
 | `falak drift [-e ENV] [-p PROJECT] [--check]` | The environment against its last applied file (`--check`: check now). Exit `7` if drifted; `unknown` is not drift |
-| `falak config export [project] [-e ENV] [-o FILE] [--format yaml\|json]` | Today's state of an environment as a file (stdout, or `-o`/`--output`) |
+| `falak config export [project] [-e ENV] [-o FILE] [--format yaml\|json]` | Today's state of an environment (default: production) as a file (stdout, or `-o`/`--output`) |
 | `falak config unmanaged [-e ENV] [-p PROJECT]` | What runs detached (removed from the file, kept). Columns `ENVIRONMENT UNIT TYPE RESOURCE REASON DETACHED` |
 | `falak config source show [-p PROJECT]` | The repository file the project follows |
 | `falak config source set [-p PROJECT] [--repo OWNER/NAME] [--connection ID] [--path FILE] [--enable\|--disable] [--allow-server NAME]…` | Change only what the flags name. `--path` default `falak.yaml`. `--disable` keeps every resource and cancels waiting runs. `--allow-server` (repeatable) replaces the list of servers the file may place units on (`""` clears; admins only). Connection ids: `GET /api/v1/source-control/connections` |
