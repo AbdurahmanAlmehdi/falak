@@ -237,6 +237,13 @@ func TestParsingAndUsage(t *testing.T) {
 			t.Errorf("%v: code %d, out %q err %q", tc.args, code, h.out.String(), h.err.String())
 		}
 	}
+	// The command list stays compact: the summary column follows the longest name, not the longest argument list.
+	h.run("help")
+	for _, line := range strings.Split(h.out.String()+h.err.String(), "\n") {
+		if strings.HasPrefix(line, "  ") && (len(line) > 120 || strings.Index(line, "  list servers") > 30) {
+			t.Errorf("help line too wide: %q", line)
+		}
+	}
 	// Group default: `falak servers` == `falak servers list`; global flags before or after.
 	for _, args := range [][]string{{"servers"}, {"--json", "servers", "list"}, {"servers", "list", "--json"}} {
 		if code := h.run(args...); code != 0 {

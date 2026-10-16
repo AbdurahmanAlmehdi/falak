@@ -244,17 +244,19 @@ func (a *App) usage(w io.Writer, cmds []*command, _ string) {
 	fmt.Fprintln(w, "falak — Falak control-plane CLI")
 	fmt.Fprintln(w, "\nusage: falak [--json] [--url URL] [--token TOKEN] <command> [args]")
 	fmt.Fprintln(w, "\ncommands:")
+	// Names only: a command's arguments (some run past 200 columns) would push every summary off screen; `-h` shows them.
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, c := range cmds {
 		if len(c.subs) > 0 {
 			for _, s := range c.subs {
-				fmt.Fprintf(tw, "  %s %s %s\t%s\n", c.name, s.name, s.args, s.summary)
+				fmt.Fprintf(tw, "  %s %s\t%s\n", c.name, s.name, s.summary)
 			}
 			continue
 		}
-		fmt.Fprintf(tw, "  %s %s\t%s\n", c.name, c.args, c.summary)
+		fmt.Fprintf(tw, "  %s\t%s\n", c.name, c.summary)
 	}
 	tw.Flush()
+	fmt.Fprintln(w, "\nfalak <command> -h shows a command's arguments and flags.")
 	fmt.Fprintln(w, "\nenvironment: FALAK_URL, FALAK_TOKEN (override stored credentials; for CI), FALAK_CONFIG_DIR, FALAK_PROJECT (plan, apply, runs, drift, export)")
 	fmt.Fprintln(w, "exit codes: 0 ok, 1 error, 2 usage, 3 deployment failed, 4 newer function version (fn deploy), 5 invalid falak.yaml, 6 waits for an approval (apply, approve), 7 drifted (drift)")
 }
