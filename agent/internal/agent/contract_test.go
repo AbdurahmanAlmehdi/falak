@@ -45,7 +45,7 @@ var Catalogue = []string{
 	"terminal.open", "terminal.input", "terminal.resize", "terminal.close",
 	"security.audit", "security.fix", "security.undo",
 	"sandbox.prepare", "sandbox.create", "sandbox.exec", "sandbox.files.read", "sandbox.files.list", "sandbox.files.write", "sandbox.files.delete",
-	"sandbox.kill", "sandbox.inventory",
+	"sandbox.extend", "sandbox.kill", "sandbox.inventory",
 }
 
 const (
@@ -437,10 +437,12 @@ func TestSandboxResultsValidate(t *testing.T) {
 		"sandbox.files.list":   sandbox.ListResult{Entries: []sandbox.Entry{{Name: "a", Type: "dir", Size: 4096, Mode: "0755", MTime: 1760000000}}},
 		"sandbox.files.write":  sandbox.WriteResult{Size: 2},
 		"sandbox.files.delete": struct{}{},
+		"sandbox.extend":       sandbox.ExtendResult{ExpiresAt: 1760648400},
 		"sandbox.kill":         struct{}{},
 		"sandbox.inventory": sandbox.InventoryResult{Sandboxes: []sandbox.InventoryItem{
 			{ID: "01j9z8y7x6w5v4t3s2r1q0p9na", Status: "running", StartedAt: "2026-10-16T19:00:00Z", ExpiresAt: 1760644800, MemoryBytes: 17 << 20, CPUSeconds: 1.5},
 			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nb", Status: "stopped", OOMKilled: true, ExpiresAt: 1760644800},
+			{ID: "01j9z8y7x6w5v4t3s2r1q0p9nc", Status: "creating", ExpiresAt: 1760644800},
 		}},
 	} {
 		sch, err := c.Compile(idBase + "commands/" + typ + ".schema.json#/$defs/result")
