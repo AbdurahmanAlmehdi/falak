@@ -35,7 +35,6 @@ use Falak\Databases\Domain\Models\Database;
 use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Kernel\Security\BackupKeys;
-use Falak\Projects\Contracts\Data\ServiceData;
 use Falak\Projects\Contracts\PreviewEnvironments;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Contracts\ServiceKind;
@@ -733,11 +732,6 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
         $current = null;
         $instances = $this->instances($scope);
         $storage = null;
-        $services = [];
-
-        foreach ($this->projects->servicesIn($scope->environmentId) as $service) {
-            $services[ServiceData::handle($service->name)] = $service->kind;
-        }
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
             $type = $body['type'] ?? null;
@@ -751,7 +745,7 @@ final class DatabasesReconciler implements Reconcilable, ValidatesConfig
             $instance = $instances[$unit] ?? null;
             $engine = isset($body['engine']) ? Engine::tryFrom((string) $body['engine']) : ($instance?->engine ?? ($type === 'redis' ? Engine::Redis : null));
 
-            if ($instance === null && ($services[$unit] ?? null) === ServiceKind::Site) {
+            if ($instance === null && ($scope->services[$unit]['kind'] ?? null) === ServiceKind::Site->value) {
                 $issues[] = ConfigIssue::error('value.conflict', $base, "The service \"{$unit}\" of this environment is a site, not a database: rename the unit.");
             }
 

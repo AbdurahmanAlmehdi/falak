@@ -43,10 +43,14 @@ final class SemanticValidator
             }
         }
 
+        // By handle, as references match services; by ref id for the unit's own service (the scope maps units through
+        // the file's ownership).
         $services = [];
+        $byRef = [];
 
         foreach ($this->projects->servicesIn($scope->environmentId) as $service) {
             $services[ServiceData::handle($service->name)] = $service;
+            $byRef[$service->refId] = $service;
         }
 
         foreach ((array) ($resolved['units'] ?? []) as $unit => $body) {
@@ -77,7 +81,7 @@ final class SemanticValidator
             }
 
             if ($names !== []) {
-                $service = $services[(string) $unit] ?? null;
+                $service = $byRef[$scope->refId((string) $unit) ?? ''] ?? null;
                 $checked = $this->secrets->check(new ScopeChain($scope->organizationId, $scope->projectId, $scope->environmentId, $service?->id), array_values(array_unique($names)));
 
                 foreach ($checked->errors as $name => $reason) {

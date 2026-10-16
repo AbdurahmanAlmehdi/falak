@@ -19,6 +19,8 @@ use Falak\Processes\Domain\Models\Schedule;
 use Falak\Processes\Domain\Models\Worker;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Projects\Domain\Models\Service;
+use Falak\Secrets\Application\Actions\CreateSecret;
+use Falak\Secrets\Contracts\SecretScope;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Domain\Models\EnvironmentVersion;
 use Falak\Sites\Domain\Models\Site;
@@ -218,6 +220,37 @@ it('exports dashboard names as keys that validate, and planning the export maps 
     expect($yaml)->toContain("  storefront-app:\n")->toContain("Nightly-report:\n")
         ->and($validation->errors)->toBe([])
         ->and($plan?->changes->actionable())->toBe([]);
+});
+
+it('a service whose name is already a unit key is that unit, not its handle', function () {
+    $world = config_world();
+    Service::query()->where('ref_id', $world->deploy->site->id)->update(['name' => 'web--app']);
+
+    $environment = app(ProjectDirectory::class)->environment($world->environment->id);
+    $exporter = app(Exporter::class);
+    $yaml = $exporter->render($exporter->document($environment, $world->source), 'yaml');
+    [$validation, $plan] = app(PlanFile::class)($world->source, $environment, $yaml, 'yaml');
+
+    expect($yaml)->toContain("  web--app:\n")
+        ->and($validation->errors)->toBe([])
+        ->and($plan?->changes->actionable())->toBe([]);
+});
+
+it('checks a unit\'s secrets against the service the file manages it as, after the service is renamed', function () {
+    $world = config_world();
+    $site = $world->deploy->site;
+    $world->file(config_e2e_file());
+    $world->push(config_sha('b'));
+    $world->settle();
+    $service = Service::query()->where('ref_id', $site->id)->sole();
+    $service->forceFill(['name' => 'Shop'])->save();
+    app(CreateSecret::class)($site->organization_id, SecretScope::Service, $service->id, ['name' => 'STRIPE_KEY', 'value' => 'sk'], null);
+
+    $environment = app(ProjectDirectory::class)->environment($world->environment->id);
+    $file = str_replace('FEATURE: "on"', 'FEATURE: "${{ secrets.STRIPE_KEY }}"', config_e2e_file());
+    [$validation] = app(PlanFile::class)($world->source, $environment, $file, 'yaml');
+
+    expect($validation->errors)->toBe([]);
 });
 
 it('a unit the file adds becomes a site through the Laravel preset: APP_KEY is generated', function () {

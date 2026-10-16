@@ -89,7 +89,7 @@ final class ScopeFactory
         $byRef = [];
 
         foreach ($this->projects->servicesIn($environmentId) as $service) {
-            $services[ServiceData::handle($service->name)] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
+            $services[self::unitKey($service->name)] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
             $byRef[$service->refId] = $service;
         }
 
@@ -109,16 +109,25 @@ final class ScopeFactory
                 continue;
             }
 
-            $handle = ServiceData::handle($service->name);
+            $key = self::unitKey($service->name);
 
-            if (isset($services[$handle]) && $services[$handle]['ref_id'] === $service->refId && $handle !== $owned->unit) {
-                unset($services[$handle]);
+            if (isset($services[$key]) && $services[$key]['ref_id'] === $service->refId && $key !== $owned->unit) {
+                unset($services[$key]);
             }
 
             $services[(string) $owned->unit] = ['kind' => $service->kind->value, 'ref_id' => $service->refId];
         }
 
         return $services;
+    }
+
+    /**
+     * A service's unit key: its name when that is a key already (`a--b`, which a file may name before any apply), else
+     * its handle. Both are unique in an environment (services' handles are).
+     */
+    private static function unitKey(string $name): string
+    {
+        return preg_match('/^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/', $name) === 1 ? $name : ServiceData::handle($name);
     }
 
     /**
