@@ -40,8 +40,10 @@ type Options struct {
 	Docker ContainerLookup
 	// DockerCLI is the docker binary container sessions run (default "docker"; tests use a stand-in).
 	DockerCLI string
-	// Runsc is the runsc binary sandbox sessions run (default "runsc").
-	Runsc string
+	// Runsc is the runsc binary sandbox sessions run (default "runsc"). SandboxPIDDir holds their pid files (default
+	// /run/falak/terminals, root-only).
+	Runsc         string
+	SandboxPIDDir string
 	// ProcRoot is the host's /proc (default "/proc"), where a closed container session's processes are found;
 	// Signal signals one of them (default syscall.Kill). Tests fake both.
 	ProcRoot string
@@ -70,6 +72,9 @@ func New(o Options) *Manager {
 	}
 	if o.Runsc == "" {
 		o.Runsc = "runsc"
+	}
+	if o.SandboxPIDDir == "" {
+		o.SandboxPIDDir = "/run/falak/terminals"
 	}
 	if o.ProcRoot == "" {
 		o.ProcRoot = "/proc"
@@ -202,7 +207,7 @@ func (m *Manager) Open(ctx context.Context, p OpenPayload, st commands.Stream) (
 	case p.Container != nil:
 		cmd, err = m.containerCmd(ctx, p)
 	case p.Sandbox != nil:
-		cmd = m.sandboxCmd(p)
+		cmd, err = m.sandboxCmd(p)
 	default:
 		cmd, note, err = hostCmd(p)
 	}
