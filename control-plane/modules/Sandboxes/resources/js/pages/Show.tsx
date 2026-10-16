@@ -4,11 +4,15 @@ import {
     Callout,
     ConfirmDestructive,
     DataTable,
+    Dialog,
     EmptyState,
+    Field,
+    Input,
     KeyValue,
     PageHeader,
     RelativeTime,
     Section,
+    Segmented,
     Select,
     SkeletonRows,
     StatusBadge,
@@ -18,17 +22,39 @@ import {
     TabsTrigger,
     toast,
 } from '@/components/falak';
-import { errorMessage, requestJson } from '@/lib/http';
+import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { formatBytes } from '@/lib/utils';
 import { Head, router, usePoll } from '@inertiajs/react';
-import { Box, ChevronUp, Clock, File, Folder, Skull, SquareTerminal } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
-import { formatMemory, formatTimeLeft, isLive, sandboxBadge, secondsLeft, useNow, type FileEntry, type Sandbox, type SandboxExec } from '../types';
+import { Box, Camera, ChevronUp, Clock, Database, File, Folder, Pause, Play, Skull, SquareTerminal } from 'lucide-react';
+import { useCallback, useEffect, useState, type FormEventHandler } from 'react';
+import { SnapshotsTable } from '../snapshots';
+import {
+    formatMemory,
+    formatTimeLeft,
+    isLive,
+    sandboxBadge,
+    secondsLeft,
+    useNow,
+    type FileEntry,
+    type Sandbox,
+    type SandboxExec,
+    type Snapshot,
+} from '../types';
+
+interface DatabaseChoice {
+    instance: string;
+    name: string;
+    engine: string;
+    databases: string[];
+}
 
 interface Props {
     sandbox: Sandbox;
     execs: SandboxExec[];
-    can: { update: boolean; operate: boolean; kill: boolean };
+    snapshots: Snapshot[];
+    databases: DatabaseChoice[];
+    limits: { max_ttl: number; default_ttl: number; max_fork_count: number };
+    can: { update: boolean; operate: boolean; kill: boolean; db: boolean };
 }
 
 const EXTENSIONS = [
@@ -38,15 +64,33 @@ const EXTENSIONS = [
 ];
 
 /** /sandboxes/{id}: one sandbox — time left, console, the exec log and a read-only file browser. */
-export default function Show({ sandbox, execs, can }: Props) {
+export default function Show({ sandbox, execs, snapshots, databases, limits, can }: Props) {
     const now = useNow();
     const [killing, setKilling] = useState(false);
     const [extendBy, setExtendBy] = useState('1800');
     const [busy, setBusy] = useState(false);
     const badge = sandboxBadge(sandbox);
     const running = sandbox.status === 'running';
+    const started = running || sandbox.status === 'paused';
+    const [snapshotting, setSnapshotting] = useState(false);
+    const [copying, setCopying] = useState(false);
 
-    usePoll(sandbox.status === 'creating' ? 3_000 : 15_000, { only: ['sandbox', 'execs'] });
+    usePoll(sandbox.status === 'creating' || snapshots.some((snapshot) => snapshot.status === 'creating') ? 3_000 : 15_000, {
+        only: ['sandbox', 'execs', 'snapshots'],
+    });
+
+    const pauseOrResume = async () => {
+        setBusy(true);
+        try {
+            await requestJson(`/sandboxes/${sandbox.id}/${running ? 'pause' : 'resume'}`, 'POST');
+            toast.success(running ? 'Paused' : 'Resumed');
+            router.reload({ only: ['sandbox'] });
+        } catch (error) {
+            toast.error(running ? 'Could not pause the sandbox' : 'Could not resume the sandbox', errorMessage(error));
+        } finally {
+            setBusy(false);
+        }
+    };
 
     const extend = async () => {
         setBusy(true);
@@ -119,6 +163,16 @@ export default function Show({ sandbox, execs, can }: Props) {
                                         </Button>
                                     </>
                                 )}
+                                {can.operate && started && (
+                                    <Button icon={running ? <Pause /> : <Play />} onClick={() => void pauseOrResume()} loading={busy}>
+                                        {running ? 'Pause' : 'Resume'}
+                                    </Button>
+                                )}
+                                {can.db && started && (
+                                    <Button icon={<Database />} onClick={() => setCopying(true)}>
+                                        Copy database
+                                    </Button>
+                                )}
                                 {can.kill && (
                                     <Button variant="danger" icon={<Skull />} onClick={() => setKilling(true)}>
                                         Kill
@@ -132,6 +186,11 @@ export default function Show({ sandbox, execs, can }: Props) {
                 {sandbox.status === 'failed' && (
                     <Callout tone="danger" title="The sandbox could not be created">
                         {sandbox.error ?? sandbox.kill_reason}
+                    </Callout>
+                )}
+                {sandbox.status === 'paused' && (
+                    <Callout tone="info" title="Paused">
+                        It uses no CPU; its memory stays allocated and its time keeps running. An exec, file call or console resumes it.
                     </Callout>
                 )}
                 {sandbox.status === 'killed' && sandbox.kill_reason && (
@@ -159,6 +218,14 @@ export default function Show({ sandbox, execs, can }: Props) {
                                 label: 'Created by',
                                 value: `${sandbox.created_by.name ?? '—'}${sandbox.created_by.type === 'token' ? ' (token)' : ''}`,
                             },
+                            {
+                                label: 'Idle pause',
+                                value: sandbox.idle_pause_seconds ? `after ${Math.round(sandbox.idle_pause_seconds / 60)} min` : 'never',
+                            },
+                            ...(sandbox.last_activity_at ? [{ label: 'Last used', value: <RelativeTime value={sandbox.last_activity_at} /> }] : []),
+                            ...(sandbox.from_snapshot
+                                ? [{ label: 'From snapshot', value: sandbox.from_snapshot.name ?? sandbox.from_snapshot.id, mono: true }]
+                                : []),
                             ...(sandbox.env_keys.length > 0 ? [{ label: 'Environment', value: sandbox.env_keys.join(', '), mono: true }] : []),
                             ...(sandbox.repo
                                 ? [{ label: 'Repository', value: sandbox.repo.url + (sandbox.repo.ref ? `@${sandbox.repo.ref}` : ''), mono: true }]
@@ -167,22 +234,25 @@ export default function Show({ sandbox, execs, can }: Props) {
                     />
                 </Section>
 
-                <Tabs defaultValue={running && can.operate ? 'console' : 'activity'}>
+                <Tabs defaultValue={started && can.operate ? 'console' : 'activity'}>
                     <TabsList>
                         <TabsTrigger value="console">Console</TabsTrigger>
                         <TabsTrigger value="activity" badge={execs.length > 0 ? execs.length : undefined}>
                             Activity
                         </TabsTrigger>
                         <TabsTrigger value="files">Files</TabsTrigger>
+                        <TabsTrigger value="snapshots" badge={snapshots.length > 0 ? snapshots.length : undefined}>
+                            Snapshots
+                        </TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="console" className="pt-4">
                         <EmptyState
                             icon={<SquareTerminal />}
-                            title={running ? 'A root shell inside the sandbox' : 'The console opens once the sandbox runs'}
+                            title={started ? 'A root shell inside the sandbox' : 'The console opens once the sandbox runs'}
                             description="Everything you type stays inside the sandbox. From a terminal: falak sandbox ssh."
                             action={
-                                can.operate && running ? (
+                                can.operate && started ? (
                                     <Button variant="primary" icon={<SquareTerminal />} onClick={openConsole}>
                                         Open console
                                     </Button>
@@ -242,8 +312,25 @@ export default function Show({ sandbox, execs, can }: Props) {
                         />
                     </TabsContent>
 
+                    <TabsContent value="snapshots" className="grid gap-3 pt-4">
+                        {can.operate && started && (
+                            <div>
+                                <Button variant="primary" icon={<Camera />} onClick={() => setSnapshotting(true)}>
+                                    Take snapshot
+                                </Button>
+                            </div>
+                        )}
+                        <SnapshotsTable
+                            snapshots={snapshots}
+                            maxTtl={limits.max_ttl}
+                            defaultTtl={limits.default_ttl}
+                            maxForkCount={limits.max_fork_count}
+                            empty="A snapshot keeps this sandbox's memory, processes and files; fork it into new sandboxes later."
+                        />
+                    </TabsContent>
+
                     <TabsContent value="files" className="pt-4">
-                        {running && can.operate ? (
+                        {started && can.operate ? (
                             <FileBrowser sandbox={sandbox} />
                         ) : (
                             <EmptyState icon={<Folder />} title="Files can be browsed while the sandbox runs" size="sm" />
@@ -261,6 +348,9 @@ export default function Show({ sandbox, execs, can }: Props) {
                 confirmLabel="Kill sandbox"
                 onConfirm={kill}
             />
+
+            {snapshotting && <SnapshotDialog sandbox={sandbox} onOpenChange={setSnapshotting} />}
+            {copying && <DatabaseCopyDialog sandbox={sandbox} databases={databases} onOpenChange={setCopying} />}
         </AppShell>
     );
 }
@@ -350,5 +440,146 @@ function FileBrowser({ sandbox }: { sandbox: Sandbox }) {
             )}
             {truncated && <p className="text-fg-muted text-xs">Only the first 1000 entries are shown.</p>}
         </div>
+    );
+}
+
+/** Take a snapshot (sandbox.snapshot): name it to use it as a template; stop removes the sandbox afterwards. */
+function SnapshotDialog({ sandbox, onOpenChange }: { sandbox: Sandbox; onOpenChange: (open: boolean) => void }) {
+    const [name, setName] = useState('');
+    const [stop, setStop] = useState<'keep' | 'stop'>('keep');
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [busy, setBusy] = useState(false);
+
+    const submit: FormEventHandler = async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setErrors({});
+        try {
+            await requestJson(`/sandboxes/${sandbox.id}/snapshots`, 'POST', { name: name.trim() || null, stop: stop === 'stop' });
+            toast.success('Taking the snapshot');
+            onOpenChange(false);
+            router.reload();
+        } catch (error) {
+            if (error instanceof HttpError && Object.keys(error.errors).length > 0) {
+                setErrors(error.errors);
+            } else {
+                toast.error('Could not take the snapshot', errorMessage(error));
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <Dialog
+            open
+            onOpenChange={onOpenChange}
+            title={`Snapshot ${sandbox.name}`}
+            description="Its memory, running processes and files, frozen on its server. Snapshots never expire; delete them when done."
+            footer={
+                <>
+                    <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                        Cancel
+                    </Button>
+                    <Button variant="primary" type="submit" form="take-snapshot" loading={busy}>
+                        Take snapshot
+                    </Button>
+                </>
+            }
+        >
+            <form id="take-snapshot" onSubmit={submit} className="grid gap-4">
+                <Field label="Name" error={errors.name} hint="Optional; a named snapshot is a template (falak sandbox create --from NAME).">
+                    <Input mono value={name} placeholder="node-ready" onChange={(event) => setName(event.target.value)} />
+                </Field>
+                <Field label="Afterwards">
+                    <Segmented
+                        label="Afterwards"
+                        size="md"
+                        value={stop}
+                        onValueChange={setStop}
+                        options={[
+                            { value: 'keep', label: 'Keep running' },
+                            { value: 'stop', label: 'Stop the sandbox' },
+                        ]}
+                    />
+                </Field>
+                {(errors.snapshot ?? errors.server) && <p className="text-danger text-sm">{errors.snapshot ?? errors.server}</p>}
+            </form>
+        </Dialog>
+    );
+}
+
+/** Copy a database of an instance on the sandbox's server into /workspace/db (sandbox.db.import). */
+function DatabaseCopyDialog({
+    sandbox,
+    databases,
+    onOpenChange,
+}: {
+    sandbox: Sandbox;
+    databases: DatabaseChoice[];
+    onOpenChange: (open: boolean) => void;
+}) {
+    const choices = databases.flatMap((instance) =>
+        instance.databases.map((database) => ({
+            value: `${instance.instance}/${database}`,
+            label: `${instance.name} / ${database}`,
+            description: instance.engine,
+        })),
+    );
+    const [choice, setChoice] = useState(choices[0]?.value ?? '');
+    const [errors, setErrors] = useState<Record<string, string>>({});
+    const [busy, setBusy] = useState(false);
+
+    const submit: FormEventHandler = async (event) => {
+        event.preventDefault();
+        const [instance, database] = choice.split('/');
+        setBusy(true);
+        setErrors({});
+        try {
+            const { data } = await requestJson<{ data: { path: string; size_bytes: number } }>(`/sandboxes/${sandbox.id}/db`, 'POST', {
+                instance,
+                database,
+            });
+            toast.success(`Copied to ${data.path}`, formatBytes(data.size_bytes));
+            onOpenChange(false);
+            router.reload({ only: ['sandbox', 'execs'] });
+        } catch (error) {
+            if (error instanceof HttpError && Object.keys(error.errors).length > 0) {
+                setErrors(error.errors);
+            } else {
+                toast.error('Could not copy the database', errorMessage(error));
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <Dialog
+            open
+            onOpenChange={onOpenChange}
+            title="Copy a database"
+            description="A dump of the database lands in /workspace/db (PostgreSQL: .dump for pg_restore; MySQL/MariaDB: .sql). The sandbox gets a copy of the data, never a connection."
+            footer={
+                <>
+                    <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                        Cancel
+                    </Button>
+                    <Button variant="primary" type="submit" form="copy-database" loading={busy} disabled={choices.length === 0}>
+                        Copy
+                    </Button>
+                </>
+            }
+        >
+            <form id="copy-database" onSubmit={submit} className="grid gap-4">
+                {choices.length === 0 ? (
+                    <EmptyState icon={<Database />} title="No databases on this server" size="sm" />
+                ) : (
+                    <Field label="Database" error={errors.instance ?? errors.database ?? errors.server}>
+                        <Select value={choice} onValueChange={setChoice} options={choices} />
+                    </Field>
+                )}
+            </form>
+        </Dialog>
     );
 }

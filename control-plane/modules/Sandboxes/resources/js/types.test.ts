@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMemory, formatTimeLeft, sandboxBadge, ttlLabel } from './types';
+import { formatMemory, formatTimeLeft, isLive, sandboxBadge, snapshotBadge, snapshotLabel, ttlLabel } from './types';
 
 describe('sandbox helpers', () => {
     it('formats the time left', () => {
@@ -16,5 +16,14 @@ describe('sandbox helpers', () => {
         expect(ttlLabel(7200)).toBe('2 hours');
         expect(sandboxBadge({ status: 'running' })).toEqual({ status: 'active', label: 'Running' });
         expect(sandboxBadge({ status: 'killed' }).label).toBe('Killed');
+    });
+
+    it('labels paused sandboxes and snapshots', () => {
+        expect(sandboxBadge({ status: 'paused' })).toEqual({ status: 'inactive', label: 'Paused' });
+        expect(isLive({ status: 'paused' })).toBe(true);
+        expect(snapshotBadge({ status: 'creating' }).label).toBe('Taking');
+        expect(snapshotBadge({ status: 'ready' }).status).toBe('active');
+        expect(snapshotLabel({ id: '01jabcdefghijklmnopqrstuvw', name: null })).toBe('01jabcdefg');
+        expect(snapshotLabel({ id: 'x', name: 'node-ready' })).toBe('node-ready');
     });
 });

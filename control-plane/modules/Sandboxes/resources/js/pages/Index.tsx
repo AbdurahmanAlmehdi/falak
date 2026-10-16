@@ -7,6 +7,7 @@ import {
     Field,
     Input,
     PageHeader,
+    Section,
     Segmented,
     Select,
     StatusBadge,
@@ -17,7 +18,20 @@ import { HttpError, errorMessage, requestJson } from '@/lib/http';
 import { Head, Link, router, usePoll } from '@inertiajs/react';
 import { Box, Plus, Skull } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
-import { formatMemory, formatTimeLeft, isLive, sandboxBadge, secondsLeft, ttlLabel, useNow, type Sandbox } from '../types';
+import { SnapshotsTable } from '../snapshots';
+import {
+    IDLE_PAUSES,
+    formatMemory,
+    formatTimeLeft,
+    isLive,
+    sandboxBadge,
+    secondsLeft,
+    snapshotLabel,
+    ttlLabel,
+    useNow,
+    type Sandbox,
+    type Snapshot,
+} from '../types';
 
 interface Limits {
     max_running: number;
@@ -26,10 +40,12 @@ interface Limits {
     max_cpus: number;
     max_memory_mb: number;
     max_disk_mb: number;
+    max_fork_count: number;
 }
 
 interface Props {
     sandboxes: Sandbox[];
+    snapshots: Snapshot[];
     servers: { id: string; name: string }[];
     limits: Limits;
     can: { use: boolean };
@@ -48,12 +64,15 @@ type Size = keyof typeof SIZES;
 const TTLS = [1800, 3600, 7200, 14400, 28800, 86400];
 
 /** /sandboxes: the organization's sandboxes (live ones and those killed in the last day). */
-export default function Index({ sandboxes, servers, limits, can }: Props) {
+export default function Index({ sandboxes, snapshots, servers, limits, can }: Props) {
     const [creating, setCreating] = useState(false);
     const [killing, setKilling] = useState<Sandbox | null>(null);
     const now = useNow();
 
-    usePoll(sandboxes.some((sandbox) => sandbox.status === 'creating') ? 3_000 : 30_000, { only: ['sandboxes'] });
+    usePoll(
+        sandboxes.some((sandbox) => sandbox.status === 'creating') || snapshots.some((snapshot) => snapshot.status === 'creating') ? 3_000 : 30_000,
+        { only: ['sandboxes', 'snapshots'] },
+    );
 
     const kill = async (sandbox: Sandbox) => {
         try {
@@ -166,9 +185,31 @@ export default function Index({ sandboxes, servers, limits, can }: Props) {
                         },
                     ]}
                 />
+
+                <Section
+                    title="Snapshots"
+                    description="Frozen copies of a sandbox (memory, processes, files). Fork one into new sandboxes; a named snapshot is a template."
+                >
+                    <SnapshotsTable
+                        snapshots={snapshots}
+                        showSource
+                        maxTtl={limits.max_ttl}
+                        defaultTtl={limits.default_ttl}
+                        maxForkCount={limits.max_fork_count}
+                        empty="Take one from a sandbox's Snapshots tab, or with falak sandbox snapshot."
+                    />
+                </Section>
             </div>
 
-            {can.use && <CreateSandboxDialog open={creating} onOpenChange={setCreating} servers={servers} limits={limits} />}
+            {can.use && (
+                <CreateSandboxDialog
+                    open={creating}
+                    onOpenChange={setCreating}
+                    servers={servers}
+                    limits={limits}
+                    snapshots={snapshots.filter((snapshot) => snapshot.status === 'ready' && snapshot.can_operate)}
+                />
+            )}
 
             <ConfirmDestructive
                 open={killing !== null}
@@ -188,12 +229,17 @@ function CreateSandboxDialog({
     onOpenChange,
     servers,
     limits,
+    snapshots,
 }: {
     open: boolean;
     onOpenChange: (open: boolean) => void;
     servers: Props['servers'];
     limits: Limits;
+    snapshots: Snapshot[];
 }) {
+    const [source, setSource] = useState<'image' | 'snapshot'>('image');
+    const [snapshot, setSnapshot] = useState(snapshots[0]?.id ?? '');
+    const [idlePause, setIdlePause] = useState('0');
     const [image, setImage] = useState<string>(IMAGES[0]);
     const [customImage, setCustomImage] = useState('');
     const [size, setSize] = useState<Size>('small');
@@ -211,17 +257,23 @@ function CreateSandboxDialog({
         setErrors({});
 
         try {
-            const { data } = await requestJson<{ data: Sandbox }>('/sandboxes', 'POST', {
-                image: image === 'custom' ? customImage.trim() : image,
-                name: name.trim() || null,
-                server: server === 'auto' ? null : server,
-                cpus: SIZES[size].cpus,
-                memory_mb: SIZES[size].memory_mb,
-                disk_mb: SIZES[size].disk_mb,
-                ttl: Number(ttl),
-                network,
-                allow_hosts: network === 'allowlist' ? allowHosts.split(/[\s,]+/).filter(Boolean) : [],
-            });
+            const common = { name: name.trim() || null, ttl: Number(ttl), idle_pause: Number(idlePause) || null };
+            const { data } = await requestJson<{ data: Sandbox }>(
+                '/sandboxes',
+                'POST',
+                source === 'snapshot'
+                    ? { ...common, snapshot }
+                    : {
+                          ...common,
+                          image: image === 'custom' ? customImage.trim() : image,
+                          server: server === 'auto' ? null : server,
+                          cpus: SIZES[size].cpus,
+                          memory_mb: SIZES[size].memory_mb,
+                          disk_mb: SIZES[size].disk_mb,
+                          network,
+                          allow_hosts: network === 'allowlist' ? allowHosts.split(/[\s,]+/).filter(Boolean) : [],
+                      },
+            );
             toast.success(`Creating ${data.name}`);
             onOpenChange(false);
             router.visit(`/sandboxes/${data.id}`);
@@ -236,7 +288,7 @@ function CreateSandboxDialog({
         }
     };
 
-    const formError = errors.sandbox ?? errors.server;
+    const formError = errors.sandbox ?? (source === 'snapshot' ? errors.server : undefined);
 
     return (
         <Dialog
@@ -256,33 +308,92 @@ function CreateSandboxDialog({
             }
         >
             <form id="create-sandbox" onSubmit={submit} className="grid gap-4">
-                <Field label="Image" error={errors.image}>
-                    <Select
-                        value={image}
-                        onValueChange={setImage}
-                        options={[...IMAGES.map((value) => ({ value, label: value })), { value: 'custom', label: 'Other image…' }]}
-                    />
-                </Field>
-                {image === 'custom' && (
-                    <Field label="Image reference" error={errors.image}>
-                        <Input mono value={customImage} placeholder="golang:1.23" onChange={(event) => setCustomImage(event.target.value)} />
+                {snapshots.length > 0 && (
+                    <Field label="Start from">
+                        <Segmented
+                            label="Start from"
+                            size="md"
+                            value={source}
+                            onValueChange={setSource}
+                            options={[
+                                { value: 'image', label: 'Image' },
+                                { value: 'snapshot', label: 'From snapshot' },
+                            ]}
+                        />
                     </Field>
                 )}
-                <Field
-                    label="Size"
-                    error={errors.cpus ?? errors.memory_mb ?? errors.disk_mb}
-                    hint={`${SIZES[size].cpus} CPU · ${formatMemory(SIZES[size].memory_mb)} RAM · ${formatMemory(SIZES[size].disk_mb)} disk`}
-                >
-                    <Segmented
-                        label="Size"
-                        size="md"
-                        value={size}
-                        onValueChange={setSize}
-                        options={(Object.keys(SIZES) as Size[])
-                            .filter((key) => SIZES[key].cpus <= limits.max_cpus && SIZES[key].memory_mb <= limits.max_memory_mb)
-                            .map((key) => ({ value: key, label: SIZES[key].label }))}
-                    />
-                </Field>
+                {source === 'snapshot' ? (
+                    <Field label="Snapshot" error={errors.snapshot} hint="It runs on the snapshot's server with its size and network.">
+                        <Select
+                            value={snapshot}
+                            onValueChange={setSnapshot}
+                            options={snapshots.map((s) => ({
+                                value: s.id,
+                                label: snapshotLabel(s),
+                                description: `${s.image} · ${s.cpus} CPU · ${formatMemory(s.memory_mb)} · ${s.server.name ?? ''}`,
+                            }))}
+                        />
+                    </Field>
+                ) : (
+                    <>
+                        <Field label="Image" error={errors.image}>
+                            <Select
+                                value={image}
+                                onValueChange={setImage}
+                                options={[...IMAGES.map((value) => ({ value, label: value })), { value: 'custom', label: 'Other image…' }]}
+                            />
+                        </Field>
+                        {image === 'custom' && (
+                            <Field label="Image reference" error={errors.image}>
+                                <Input mono value={customImage} placeholder="golang:1.23" onChange={(event) => setCustomImage(event.target.value)} />
+                            </Field>
+                        )}
+                        <Field
+                            label="Size"
+                            error={errors.cpus ?? errors.memory_mb ?? errors.disk_mb}
+                            hint={`${SIZES[size].cpus} CPU · ${formatMemory(SIZES[size].memory_mb)} RAM · ${formatMemory(SIZES[size].disk_mb)} disk`}
+                        >
+                            <Segmented
+                                label="Size"
+                                size="md"
+                                value={size}
+                                onValueChange={setSize}
+                                options={(Object.keys(SIZES) as Size[])
+                                    .filter((key) => SIZES[key].cpus <= limits.max_cpus && SIZES[key].memory_mb <= limits.max_memory_mb)
+                                    .map((key) => ({ value: key, label: SIZES[key].label }))}
+                            />
+                        </Field>
+                        <Field label="Network" error={errors.network}>
+                            <Select
+                                value={network}
+                                onValueChange={setNetwork}
+                                options={[
+                                    { value: 'internet', label: 'Internet', description: 'Not your servers or private networks' },
+                                    { value: 'allowlist', label: 'Allowlist', description: 'Only the hosts you list' },
+                                    { value: 'none', label: 'None', description: 'No network at all' },
+                                ]}
+                            />
+                        </Field>
+                        {network === 'allowlist' && (
+                            <Field label="Allowed hosts" error={errors.allow_hosts} hint="One per line; *.example.com covers its subdomains.">
+                                <Textarea
+                                    mono
+                                    rows={3}
+                                    value={allowHosts}
+                                    placeholder={'github.com\nregistry.npmjs.org'}
+                                    onChange={(event) => setAllowHosts(event.target.value)}
+                                />
+                            </Field>
+                        )}
+                        <Field label="Server" error={errors.server}>
+                            <Select
+                                value={server}
+                                onValueChange={setServer}
+                                options={[{ value: 'auto', label: 'Most free memory' }, ...servers.map((s) => ({ value: s.id, label: s.name }))]}
+                            />
+                        </Field>
+                    </>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Time to live" error={errors.ttl}>
                         <Select
@@ -294,42 +405,14 @@ function CreateSandboxDialog({
                             }))}
                         />
                     </Field>
-                    <Field label="Network" error={errors.network}>
-                        <Select
-                            value={network}
-                            onValueChange={setNetwork}
-                            options={[
-                                { value: 'internet', label: 'Internet', description: 'Not your servers or private networks' },
-                                { value: 'allowlist', label: 'Allowlist', description: 'Only the hosts you list' },
-                                { value: 'none', label: 'None', description: 'No network at all' },
-                            ]}
-                        />
+                    <Field label="Idle pause" error={errors.idle_pause} hint="Paused when nothing used it for that long; any call resumes it.">
+                        <Select value={idlePause} onValueChange={setIdlePause} options={IDLE_PAUSES} />
                     </Field>
                 </div>
-                {network === 'allowlist' && (
-                    <Field label="Allowed hosts" error={errors.allow_hosts} hint="One per line; *.example.com covers its subdomains.">
-                        <Textarea
-                            mono
-                            rows={3}
-                            value={allowHosts}
-                            placeholder={'github.com\nregistry.npmjs.org'}
-                            onChange={(event) => setAllowHosts(event.target.value)}
-                        />
-                    </Field>
-                )}
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Server" error={errors.server}>
-                        <Select
-                            value={server}
-                            onValueChange={setServer}
-                            options={[{ value: 'auto', label: 'Most free memory' }, ...servers.map((s) => ({ value: s.id, label: s.name }))]}
-                        />
-                    </Field>
-                    <Field label="Name" error={errors.name} hint="Optional; one is made up.">
-                        <Input mono value={name} placeholder="brave-otter" onChange={(event) => setName(event.target.value)} />
-                    </Field>
-                </div>
-                {formError && formError !== errors.server && <p className="text-danger text-sm">{formError}</p>}
+                <Field label="Name" error={errors.name} hint="Optional; one is made up.">
+                    <Input mono value={name} placeholder="brave-otter" onChange={(event) => setName(event.target.value)} />
+                </Field>
+                {formError && <p className="text-danger text-sm">{formError}</p>}
             </form>
         </Dialog>
     );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type SandboxStatus = 'creating' | 'running' | 'failed' | 'killed';
+export type SandboxStatus = 'creating' | 'running' | 'paused' | 'failed' | 'killed';
 
 /** The API resource (docs/plans/SANDBOXES.md "HTTP API"). */
 export interface Sandbox {
@@ -23,7 +23,39 @@ export interface Sandbox {
     ip: string | null;
     kill_reason: string | null;
     error: string | null;
+    idle_pause_seconds: number | null;
+    last_activity_at: string | null;
+    from_snapshot: { id: string; name: string | null } | null;
 }
+
+/** A snapshot (docs/plans/SANDBOXES.md "Contracts (v0.21)"); can_operate: fork, rename, delete. */
+export interface Snapshot {
+    id: string;
+    name: string | null;
+    status: 'creating' | 'ready' | 'failed' | 'deleted';
+    sandbox: { id: string; name: string | null };
+    server: { id: string; name: string | null };
+    image: string;
+    cpus: number;
+    memory_mb: number;
+    disk_mb: number;
+    network: Sandbox['network'];
+    env_keys: string[];
+    size_bytes: number | null;
+    error: string | null;
+    created_at: string;
+    created_by: { type: 'user' | 'token'; name: string | null };
+    can_operate?: boolean;
+}
+
+/** Idle pause choices of the create and fork dialogs (seconds; 0 = never). */
+export const IDLE_PAUSES = [
+    { value: '0', label: 'Never' },
+    { value: '300', label: 'After 5 minutes' },
+    { value: '600', label: 'After 10 minutes' },
+    { value: '1800', label: 'After 30 minutes' },
+    { value: '3600', label: 'After 1 hour' },
+];
 
 export interface SandboxExec {
     id: string;
@@ -52,6 +84,8 @@ export function sandboxBadge(sandbox: Pick<Sandbox, 'status'>): { status: string
             return { status: 'provisioning', label: 'Creating' };
         case 'running':
             return { status: 'active', label: 'Running' };
+        case 'paused':
+            return { status: 'inactive', label: 'Paused' };
         case 'failed':
             return { status: 'failed', label: 'Failed' };
         default:
@@ -60,7 +94,25 @@ export function sandboxBadge(sandbox: Pick<Sandbox, 'status'>): { status: string
 }
 
 export function isLive(sandbox: Pick<Sandbox, 'status'>): boolean {
-    return sandbox.status === 'creating' || sandbox.status === 'running';
+    return sandbox.status === 'creating' || sandbox.status === 'running' || sandbox.status === 'paused';
+}
+
+export function snapshotBadge(snapshot: Pick<Snapshot, 'status'>): { status: string; label: string } {
+    switch (snapshot.status) {
+        case 'creating':
+            return { status: 'provisioning', label: 'Taking' };
+        case 'ready':
+            return { status: 'active', label: 'Ready' };
+        case 'failed':
+            return { status: 'failed', label: 'Failed' };
+        default:
+            return { status: 'removed', label: 'Deleted' };
+    }
+}
+
+/** A snapshot's name, or its id's start. */
+export function snapshotLabel(snapshot: Pick<Snapshot, 'id' | 'name'>): string {
+    return snapshot.name ?? snapshot.id.slice(0, 10);
 }
 
 /** "42m 10s", "1h 05m"; "expired" at zero. */

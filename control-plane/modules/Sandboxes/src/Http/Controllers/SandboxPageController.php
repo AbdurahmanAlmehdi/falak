@@ -93,6 +93,7 @@ final class SandboxPageController extends Controller
                 ->map(fn (SandboxSnapshot $snapshot) => [...$snapshot->present($serverName), 'can_operate' => $user?->can('operate', $snapshot) ?? false])->values(),
             // The database copy dialog's choices: SQL databases of instances on the sandbox's server.
             'databases' => $db ? $this->databases($organizationId, $model->server_id) : [],
+            'limits' => ['max_ttl' => (int) config('sandboxes.max_ttl'), 'default_ttl' => (int) config('sandboxes.default_ttl'), 'max_fork_count' => CreateSandbox::MAX_FORK_COUNT],
             'execs' => SandboxExec::query()->where('sandbox_id', $model->id)->latest('started_at')->latest('id')->limit(200)->get()
                 ->map(fn (SandboxExec $exec) => $exec->present())->values(),
             'can' => [
