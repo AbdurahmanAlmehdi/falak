@@ -29,6 +29,7 @@ use Illuminate\Support\Carbon;
  * @property ?array{url: string, ref?: string} $repo
  * @property int $ttl_seconds
  * @property Carbon $expires_at
+ * @property ?Carbon $agent_expires_at the expiry the agent was last given
  * @property ?string $ip
  * @property string $created_by_type user | token
  * @property ?string $created_by_id
@@ -37,6 +38,7 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $started_at
  * @property ?Carbon $last_activity_at
  * @property ?Carbon $killed_at
+ * @property ?Carbon $kill_confirmed_at
  * @property ?string $kill_reason
  * @property Carbon $created_at
  */
@@ -81,9 +83,11 @@ class Sandbox extends Model
             'repo' => 'array',
             'ttl_seconds' => 'integer',
             'expires_at' => 'datetime',
+            'agent_expires_at' => 'datetime',
             'started_at' => 'datetime',
             'last_activity_at' => 'datetime',
             'killed_at' => 'datetime',
+            'kill_confirmed_at' => 'datetime',
         ];
     }
 

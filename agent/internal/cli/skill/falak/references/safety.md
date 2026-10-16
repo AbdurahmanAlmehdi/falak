@@ -46,7 +46,8 @@ reach the host, its sites, private networks or cloud metadata, and everything in
 - Ask before killing a sandbox someone else created (`created_by` in `falak sandbox show`), and before
   `--network internet` work that sends the human's code or data somewhere.
 - Don't put long-lived secrets into a sandbox (`--env`, files). For a private repository use `--repo-secret NAME`:
-  the token is used for the clone and not kept in the sandbox's environment.
+  the token is used for the clone and not kept in the sandbox's environment. It needs `secrets.reveal` (the value
+  reaches the sandbox) and a secret that is not sensitive; don't ask for that ability just to get around a refusal.
 - Copy results out (`falak sandbox cp`, `git diff`) before killing it.
 
 ## Never print secrets

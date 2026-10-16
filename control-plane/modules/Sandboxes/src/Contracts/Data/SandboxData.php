@@ -13,6 +13,7 @@ final readonly class SandboxData
         public string $serverId,
         public string $name,
         public string $status,
+        public ?string $createdById = null,
     ) {}
 
     public function isRunning(): bool

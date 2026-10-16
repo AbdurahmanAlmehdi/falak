@@ -51,7 +51,7 @@ falak sandbox create --server main-1 --json     # pick the server; --json prints
 | `--allow HOST` | | Repeatable, with `--network allowlist` |
 | `--env K=V` | | Repeatable |
 | `--repo URL[@REF]` | | Clone a git repository into the sandbox |
-| `--repo-secret NAME` | | A secret (`falak secret set NAME`) holding a token for a private repository. It is used for the clone and not kept in the sandbox's environment |
+| `--repo-secret NAME` | | An organization secret holding a token for a private repository. It is used for the clone, offered only to the repository's host and not kept in the sandbox's environment. Handing a secret's value to a sandbox is revealing it: it needs `secrets.reveal` (a token created with that ability by name, `*` is not enough), and a sensitive (write-only) secret is refused, so create the token's secret with Sensitive off |
 | `--wait=false` | waits | Return at once (status `creating`) instead of waiting up to 60 s for `running` |
 
 `falak sandbox ls` lists your organization's sandboxes (`NAME STATUS IMAGE SERVER CPU MEM EXPIRES IN`; `--status
@@ -131,8 +131,10 @@ Per sandbox: CPUs, memory and disk as created (defaults above; at most 4 CPUs, 8
 Per organization (defaults): 5 running sandboxes, 8 GB of memory in total, 1 h default time limit, 24 h maximum.
 Administrators can change these, and a server can opt out of running sandboxes (to keep production servers clean).
 
-Permissions (also token abilities): `sandboxes.view` (list, show), `sandboxes.use` (create, exec, files, shell,
-extend, kill), `sandboxes.manage` (organization settings).
+Permissions (also token abilities): `sandboxes.view` (list, show), `sandboxes.use` (create, extend; exec, files,
+shell and kill on your own sandboxes), `sandboxes.manage` (the same on anyone's sandboxes, organization settings).
+`--repo-secret` also needs `secrets.reveal`. Exec output and file contents pass through the control plane and are not
+kept there; the exec log keeps each command (redacted), who ran it, its exit code or error.
 
 ## For AI agents: MCP
 

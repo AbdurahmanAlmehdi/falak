@@ -21,6 +21,7 @@ use Illuminate\Support\Carbon;
  * @property int $stdout_bytes
  * @property int $stderr_bytes
  * @property bool $timed_out
+ * @property ?string $error why the call failed (no exit code then)
  * @property Carbon $started_at
  */
 class SandboxExec extends Model
@@ -61,6 +62,7 @@ class SandboxExec extends Model
             'exit_code' => $this->exit_code,
             'duration_ms' => $this->duration_ms,
             'timed_out' => $this->timed_out,
+            'error' => $this->error,
             'actor' => $this->actor,
             'actor_type' => $this->actor_type,
             'started_at' => $this->started_at->toIso8601String(),

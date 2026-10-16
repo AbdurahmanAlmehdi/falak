@@ -8,8 +8,8 @@ use Illuminate\Auth\Access\Response;
 use Illuminate\Contracts\Auth\Authenticatable;
 
 /**
- * Sandboxes of other organizations are hidden (404), never merely forbidden. `use` covers create, exec, files, console
- * and killing your own; killing someone else's sandbox needs `manage`.
+ * Sandboxes of other organizations are hidden (404), never merely forbidden. `use` covers creating sandboxes and seeing
+ * them; exec, files, console and kill are for its creator (`use`), or someone with `manage` on anyone's sandbox.
  */
 final class SandboxPolicy
 {
@@ -31,7 +31,18 @@ final class SandboxPolicy
         return $this->check($user, $sandbox, self::USE);
     }
 
+    /** Exec, files and consoles: what runs inside the sandbox, with its creator's data. */
+    public function operate(Authenticatable $user, Sandbox $sandbox): Response
+    {
+        return $this->ownOrManage($user, $sandbox, 'Only its creator (or someone with sandboxes.manage) can use this sandbox.');
+    }
+
     public function kill(Authenticatable $user, Sandbox $sandbox): Response
+    {
+        return $this->ownOrManage($user, $sandbox, 'Only its creator (or someone with sandboxes.manage) can kill this sandbox.');
+    }
+
+    private function ownOrManage(Authenticatable $user, Sandbox $sandbox, string $denied): Response
     {
         $response = $this->check($user, $sandbox, self::USE);
 
@@ -39,9 +50,7 @@ final class SandboxPolicy
             return $response;
         }
 
-        return $this->access->can($user, $sandbox->organization_id, self::MANAGE)
-            ? Response::allow()
-            : Response::deny('Only its creator (or someone with sandboxes.manage) can kill this sandbox.');
+        return $this->access->can($user, $sandbox->organization_id, self::MANAGE) ? Response::allow() : Response::deny($denied);
     }
 
     private function check(Authenticatable $user, Sandbox $sandbox, string $permission): Response

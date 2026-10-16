@@ -3,6 +3,7 @@
 namespace Falak\Sandboxes\Http\Controllers\Api;
 
 use Falak\Fleet\Contracts\AgentGateway;
+use Falak\Fleet\Contracts\Exceptions\CommandTimedOut;
 use Falak\Identity\Contracts\CurrentOrganization;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
@@ -19,11 +20,15 @@ use Falak\Sandboxes\Infrastructure\EloquentSandboxDirectory;
 use Falak\Secrets\Contracts\Secrets;
 use Falak\Servers\Contracts\Data\ServerData;
 use Falak\Servers\Contracts\ServerDirectory;
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Laravel\Sanctum\PersonalAccessToken;
+use Throwable;
 
 /**
  * Sandboxes API v1 (docs/plans/SANDBOXES.md "HTTP API"), used by `falak sandbox`, `falak mcp` and the dashboard (the
@@ -34,9 +39,13 @@ final class SandboxApiController extends Controller
 {
     private const HOST = '/^(\*\.)?[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/';
 
-    private const IMAGE = '/^[a-zA-Z0-9][a-zA-Z0-9._\/:@-]*$/';
+    /** An image reference: no "..", no trailing dot (the schema's pattern too). */
+    private const IMAGE = '/^[a-zA-Z0-9](\.?[a-zA-Z0-9_\/:@-])*$/';
 
     private const ENV_KEY = '/^[A-Za-z_][A-Za-z0-9_]*$/';
+
+    /** What revealing a secret needs; repo.secret hands its value to the sandbox. */
+    private const SECRETS_REVEAL = 'secrets.reveal';
 
     public function __construct(
         private readonly CurrentOrganization $organization,
@@ -66,7 +75,11 @@ final class SandboxApiController extends Controller
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, SandboxPolicy::USE);
         $input = $request->validate([
-            'image' => ['nullable', 'string', 'max:255', 'regex:'.self::IMAGE],
+            'image' => ['nullable', 'string', 'max:255', 'regex:'.self::IMAGE, function (string $attribute, mixed $value, \Closure $fail) {
+                if (is_string($value) && self::privateRegistry($value)) {
+                    $fail('Images come from a public registry, not localhost or a private or loopback address.');
+                }
+            }],
             'name' => ['nullable', 'string', 'max:63', 'regex:'.Sandbox::NAME],
             'server' => ['nullable', 'string', 'max:255'],
             'cpus' => ['nullable', 'numeric'],
@@ -90,10 +103,20 @@ final class SandboxApiController extends Controller
             throw ValidationException::withMessages(['ttl' => 'Give a number of seconds or a duration like 30m, 2h or 1h30m.']);
         }
 
+        if (isset($input['repo']['secret'])) {
+            $this->authorizeSecretRead($request, $organizationId);
+        }
+
         $sandbox = $create($organizationId, Actor::of($request->user()), $input);
 
         if ($request->boolean('wait') && $sandbox->command_id !== null) {
-            $result = $agents->await($sandbox->command_id, 60);
+            try {
+                $result = $agents->await($sandbox->command_id, 60);
+            } catch (CommandTimedOut) {
+                // Still creating: the answer is the sandbox as it is (HandleCommandOutcome settles it).
+                return response()->json(['data' => $this->present([$sandbox->refresh()], $organizationId)[0]], 201);
+            }
+
             $sandbox->refresh();
 
             if ($result->isFinished() && $sandbox->status === Sandbox::CREATING) {
@@ -131,7 +154,11 @@ final class SandboxApiController extends Controller
                 throw ValidationException::withMessages(['name' => "A sandbox called {$data['name']} already exists."]);
             }
 
-            $model->forceFill(['name' => $data['name']])->save();
+            try {
+                $model->forceFill(['name' => $data['name']])->save();
+            } catch (UniqueConstraintViolationException) {
+                throw ValidationException::withMessages(['name' => "A sandbox called {$data['name']} already exists."]);
+            }
         }
 
         if (isset($data['extend'])) {
@@ -217,8 +244,17 @@ final class SandboxApiController extends Controller
         abort_if(strlen($content) > (int) config('sandboxes.max_file_bytes'), 413, 'Files are limited to 5 MB.');
 
         $startedAt = now();
-        $result = $this->agent->ask($model, 'sandbox.files.write', array_filter(['id' => $model->id, 'path' => $path, 'content' => base64_encode($content), 'mode' => $mode], fn ($v) => $v !== null), 60);
-        $exec->record($model, Actor::of($request->user()), 'files.write '.$path.' ('.strlen($content).' bytes)', null, [], $startedAt, ['exit_code' => 0]);
+        $cmd = 'files.write '.$path.' ('.strlen($content).' bytes)';
+
+        try {
+            $result = $this->agent->ask($model, 'sandbox.files.write', array_filter(['id' => $model->id, 'path' => $path, 'content' => base64_encode($content), 'mode' => $mode], fn ($v) => $v !== null), 60);
+        } catch (Throwable $e) {
+            $exec->recordFailure($model, Actor::of($request->user()), $cmd, null, [], $startedAt, $e);
+
+            throw $e;
+        }
+
+        $exec->record($model, Actor::of($request->user()), $cmd, null, [], $startedAt, ['exit_code' => 0]);
 
         return response()->json(['data' => ['size' => (int) ($result['size'] ?? strlen($content))]]);
     }
@@ -231,8 +267,17 @@ final class SandboxApiController extends Controller
         $recursive = $request->boolean('recursive');
 
         $startedAt = now();
-        $this->agent->ask($model, 'sandbox.files.delete', ['id' => $model->id, 'path' => $path, 'recursive' => $recursive], 60);
-        $exec->record($model, Actor::of($request->user()), 'files.delete '.($recursive ? '-r ' : '').$path, null, [], $startedAt, ['exit_code' => 0]);
+        $cmd = 'files.delete '.($recursive ? '-r ' : '').$path;
+
+        try {
+            $this->agent->ask($model, 'sandbox.files.delete', ['id' => $model->id, 'path' => $path, 'recursive' => $recursive], 60);
+        } catch (Throwable $e) {
+            $exec->recordFailure($model, Actor::of($request->user()), $cmd, null, [], $startedAt, $e);
+
+            throw $e;
+        }
+
+        $exec->record($model, Actor::of($request->user()), $cmd, null, [], $startedAt, ['exit_code' => 0]);
 
         return response()->noContent();
     }
@@ -247,8 +292,9 @@ final class SandboxApiController extends Controller
     }
 
     /**
-     * Extend the time to live: the sandbox's whole lifetime stays within `sandboxes.max_ttl`. The agent learns the new
-     * expires_at from sandbox.create sent again (idempotent by id: an existing sandbox only takes the new expiry).
+     * Extend the time to live: the sandbox's whole lifetime stays within `sandboxes.max_ttl`. A running sandbox's agent
+     * takes the new expiry first (sandbox.extend; when it can't, nothing changes); one still being created takes it
+     * once the create succeeded (HandleCommandOutcome).
      */
     private function extend(Sandbox $sandbox, int|string $by): void
     {
@@ -262,11 +308,50 @@ final class SandboxApiController extends Controller
             throw ValidationException::withMessages(['extend' => 'A sandbox lives at most '.intdiv($max, 60).' minutes in all.']);
         }
 
-        $sandbox->forceFill(['expires_at' => $expires, 'ttl_seconds' => (int) $sandbox->created_at->diffInSeconds($expires)])->save();
-
         if ($sandbox->isRunning()) {
-            $this->agent->tryDispatch($sandbox, 'sandbox.create', CreateSandbox::payload($sandbox), "sandbox.create:{$sandbox->id}:expires:{$expires->getTimestamp()}");
+            $this->agent->ask($sandbox, 'sandbox.extend', ['id' => $sandbox->id, 'expires_at' => $expires->getTimestamp()], 15);
+            $sandbox->agent_expires_at = $expires;
         }
+
+        $sandbox->forceFill(['expires_at' => $expires, 'ttl_seconds' => (int) $sandbox->created_at->diffInSeconds($expires)])->save();
+    }
+
+    /**
+     * repo.secret reads a secret's value into the sandbox: what revealing it takes (secrets.reveal; a token must have
+     * been created with that ability itself, `*` is not enough, as POST /api/v1/secrets/{secret}/reveal).
+     */
+    private function authorizeSecretRead(Request $request, string $organizationId): void
+    {
+        $token = $request->user()?->currentAccessToken();
+
+        if (($token instanceof PersonalAccessToken && ! in_array(self::SECRETS_REVEAL, (array) $token->abilities, true))
+            || ! $this->access->can($request->user(), $organizationId, self::SECRETS_REVEAL)) {
+            throw new AuthorizationException('repo.secret hands the secret to the sandbox: it needs the secrets.reveal permission (a token created with the secrets.reveal ability itself).');
+        }
+    }
+
+    /** A registry host that is localhost, or a loopback, private, link-local or reserved address (also in short forms). */
+    private static function privateRegistry(string $image): bool
+    {
+        $first = explode('/', $image, 2)[0];
+
+        // Only a first component with a dot or a port, or localhost, names a registry (else: docker.io/library).
+        if (! str_contains($image, '/') || (! str_contains($first, '.') && ! str_contains($first, ':') && strtolower($first) !== 'localhost')) {
+            return false;
+        }
+
+        $host = strtolower((string) preg_replace('/:\d*$/', '', $first));
+
+        if ($host === 'localhost' || str_ends_with($host, '.localhost')) {
+            return true;
+        }
+
+        // 127.1, 0x7f.0.0.1, 2130706433: what inet_aton would take as an address.
+        if (preg_match('/^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+)){0,3}$/', $host) === 1) {
+            return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+        }
+
+        return false;
     }
 
     /**
@@ -301,7 +386,7 @@ final class SandboxApiController extends Controller
 
     private function running(Request $request, string $ref): Sandbox
     {
-        $sandbox = $this->resolve($request, $ref, 'use');
+        $sandbox = $this->resolve($request, $ref, 'operate');
         abort_unless($sandbox->isRunning(), 409, $sandbox->status === Sandbox::CREATING ? 'The sandbox is still starting.' : "The sandbox is {$sandbox->status}.");
 
         return $sandbox;

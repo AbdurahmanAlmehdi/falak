@@ -234,7 +234,8 @@ These are fixed before the three lanes (agent, control plane, CLI) start, so the
 | `sandbox.files.write` | `{id, path, content (base64, ≤ 5 MB decoded), mode? (octal string, default "0644"), mkdirs? (default true)}` | `{size}` |
 | `sandbox.files.delete` | `{id, path, recursive?}` | `{}` |
 | `sandbox.kill` (redeliverable, idempotent) | `{id, reason?}` | `{}` |
-| `sandbox.inventory` | `{}` | `{sandboxes: [{id, status: "running"\|"paused"\|"stopped", oom_killed, started_at, expires_at, memory_bytes, cpu_seconds}]}` |
+| `sandbox.extend` (redeliverable, idempotent) | `{id, expires_at (unix s)}` | `{expires_at}`; error `sandbox <id> not found` |
+| `sandbox.inventory` | `{}` | `{sandboxes: [{id, status: "creating"\|"running"\|"paused"\|"stopped", oom_killed, started_at, expires_at, memory_bytes, cpu_seconds}]}` |
 
 `sandbox.create` runs `sandbox.prepare` itself when needed. Errors use the usual failed-command shape; `stdout` /
 `stderr` are base64 so binary output survives. The agent reaps sandboxes past `expires_at` on its own every minute
@@ -276,8 +277,13 @@ Statuses: `creating`, `running`, `failed`, `killed`. (`paused`/`stopped` arrive 
 | `GET /sandboxes/{id}/execs` | | `{data: [{id, cmd, exit_code, duration_ms, actor, started_at}]}` |
 | `POST /sandboxes/{id}/console` | | console session body (as the other console routes) |
 
-Permissions: `sandboxes.view` (GET), `sandboxes.use` (everything else on your organization's sandboxes),
-`sandboxes.manage` (organization settings). Throttles: create 30/min, exec 120/min per token.
+Permissions: `sandboxes.view` (GET), `sandboxes.use` (create, extend; exec, files, console and kill on the sandboxes
+you created), `sandboxes.manage` (the same on anyone's, organization settings). `repo.secret` hands a secret's value to
+the sandbox, so it also needs `secrets.reveal` (by name on a token, as revealing it) and refuses sensitive secrets.
+Images are refused with `..` or a localhost / loopback / private registry address. Extending a running sandbox sends
+`sandbox.extend` and changes nothing when the agent can't be told (503); one still creating takes the new expiry once
+its create succeeded. Exec, files.read and files.list results are forgotten in the control plane once the request read
+them (`x-falak-forget-result`). Throttles: create 30/min, exec 120/min per token.
 
 ### Quotas (`config/sandboxes.php`, defaults)
 

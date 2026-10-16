@@ -75,6 +75,7 @@ final class SandboxPageController extends Controller
                 ->map(fn (SandboxExec $exec) => $exec->present())->values(),
             'can' => [
                 'use' => $user?->can('use', $model) ?? false,
+                'operate' => $user?->can('operate', $model) ?? false,
                 'kill' => $user?->can('kill', $model) ?? false,
             ],
         ]);

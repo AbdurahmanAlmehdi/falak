@@ -16,6 +16,9 @@ use Falak\Secrets\Contracts\Secrets;
 use Falak\Servers\Contracts\Data\ServerData;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Servers\Contracts\ServerType;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -55,7 +58,7 @@ final class CreateSandbox
         $network = (string) ($input['network'] ?? $defaults['network']);
         $allowHosts = array_values(array_unique((array) ($input['allow_hosts'] ?? [])));
 
-        $this->checkQuotas($organizationId, $cpus, $memory, $disk, $ttl);
+        $this->checkSizes($cpus, $memory, $disk, $ttl);
 
         if ($network === 'allowlist' && $allowHosts === []) {
             throw ValidationException::withMessages(['allow_hosts' => 'List the hosts an allowlist sandbox may reach.']);
@@ -63,56 +66,78 @@ final class CreateSandbox
 
         $server = $this->place($organizationId, $input['server'] ?? null, $memory);
         $this->checkServerLimits($server, $cpus, $memory);
-        $name = $this->name($organizationId, $input['name'] ?? null);
         $repo = isset($input['repo']['url']) ? array_filter(['url' => $input['repo']['url'], 'ref' => $input['repo']['ref'] ?? null]) : null;
-        $token = isset($input['repo']['secret']) ? $this->secret($organizationId, (string) $input['repo']['secret'], $actor) : null;
+        $secret = isset($input['repo']['secret']) ? (string) $input['repo']['secret'] : null;
 
-        return DB::transaction(function () use ($organizationId, $actor, $input, $defaults, $cpus, $memory, $disk, $ttl, $network, $allowHosts, $server, $name, $repo, $token) {
-            $sandbox = Sandbox::query()->create([
-                'organization_id' => $organizationId,
-                'server_id' => $server->id,
-                'name' => $name,
-                'image' => (string) ($input['image'] ?? $defaults['image']),
-                'status' => Sandbox::CREATING,
-                'cpus' => $cpus,
-                'memory_mb' => $memory,
-                'disk_mb' => $disk,
-                'network' => $network,
-                'allow_hosts' => $allowHosts,
-                'env' => $input['env'] ?? [],
-                'repo' => $repo,
-                'ttl_seconds' => $ttl,
-                'expires_at' => now()->addSeconds($ttl),
-                'created_by_type' => $actor->type,
-                'created_by_id' => $actor->id,
-                'created_by_name' => $actor->name,
-                'last_activity_at' => now(),
-            ]);
+        // The organization's quotas and names, checked and taken under one lock (two creates at once can't both pass).
+        try {
+            return Cache::lock("sandboxes:create:{$organizationId}", 60)->block((int) config('sandboxes.create_lock_wait', 10), fn () => DB::transaction(
+                fn () => $this->insert($organizationId, $actor, $input, $defaults, $cpus, $memory, $disk, $ttl, $network, $allowHosts, $server, $repo, $secret),
+            ));
+        } catch (LockTimeoutException) {
+            abort(429, 'Another sandbox of your organization is being created; try again.');
+        } catch (UniqueConstraintViolationException) {
+            throw ValidationException::withMessages(['name' => 'A sandbox of that name was created meanwhile; try again.']);
+        }
+    }
 
-            try {
-                $handle = $this->agents->dispatch($server->id, 'sandbox.create', self::payload($sandbox, $token), (int) config('sandboxes.create_timeout', 300) + 300, "sandbox.create:{$sandbox->id}");
-            } catch (AgentUnavailable) {
-                throw ValidationException::withMessages(['server' => "The agent on {$server->name} is not connected."]);
-            }
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  array<string, mixed>  $defaults
+     * @param  list<string>  $allowHosts
+     * @param  ?array<string, string>  $repo
+     */
+    private function insert(string $organizationId, Actor $actor, array $input, array $defaults, float $cpus, int $memory, int $disk, int $ttl, string $network, array $allowHosts, ServerData $server, ?array $repo, ?string $secret): Sandbox
+    {
+        $this->checkQuotas($organizationId, $memory);
+        $name = $this->name($organizationId, $input['name'] ?? null);
+        $token = $secret !== null ? $this->secret($organizationId, $secret, $actor) : null;
 
-            $sandbox->forceFill(['command_id' => $handle->id])->save();
+        $sandbox = Sandbox::query()->create([
+            'organization_id' => $organizationId,
+            'server_id' => $server->id,
+            'name' => $name,
+            'image' => (string) ($input['image'] ?? $defaults['image']),
+            'status' => Sandbox::CREATING,
+            'cpus' => $cpus,
+            'memory_mb' => $memory,
+            'disk_mb' => $disk,
+            'network' => $network,
+            'allow_hosts' => $allowHosts,
+            'env' => $input['env'] ?? [],
+            'repo' => $repo,
+            'ttl_seconds' => $ttl,
+            'expires_at' => $expires = now()->addSeconds($ttl),
+            'agent_expires_at' => $expires,
+            'created_by_type' => $actor->type,
+            'created_by_id' => $actor->id,
+            'created_by_name' => $actor->name,
+            'last_activity_at' => now(),
+        ]);
 
-            $this->audit->record('sandbox.created', 'sandbox', $sandbox->id, array_filter([
-                'name' => $name,
-                'image' => $sandbox->image,
-                'server_id' => $server->id,
-                'server_name' => $server->name,
-                'cpus' => $cpus,
-                'memory_mb' => $memory,
-                'disk_mb' => $disk,
-                'network' => $network,
-                'ttl_seconds' => $ttl,
-                'repo' => $repo['url'] ?? null,
-                'via_token' => $actor->type === 'token' ? $actor->name : null,
-            ], fn ($value) => $value !== null), $organizationId);
+        try {
+            $handle = $this->agents->dispatch($server->id, 'sandbox.create', self::payload($sandbox, $token), (int) config('sandboxes.create_timeout', 300) + 300, "sandbox.create:{$sandbox->id}");
+        } catch (AgentUnavailable) {
+            throw ValidationException::withMessages(['server' => "The agent on {$server->name} is not connected."]);
+        }
 
-            return $sandbox;
-        });
+        $sandbox->forceFill(['command_id' => $handle->id])->save();
+
+        $this->audit->record('sandbox.created', 'sandbox', $sandbox->id, array_filter([
+            'name' => $name,
+            'image' => $sandbox->image,
+            'server_id' => $server->id,
+            'server_name' => $server->name,
+            'cpus' => $cpus,
+            'memory_mb' => $memory,
+            'disk_mb' => $disk,
+            'network' => $network,
+            'ttl_seconds' => $ttl,
+            'repo' => $repo['url'] ?? null,
+            'via_token' => $actor->type === 'token' ? $actor->name : null,
+        ], fn ($value) => $value !== null), $organizationId);
+
+        return $sandbox;
     }
 
     /**
@@ -163,7 +188,8 @@ final class CreateSandbox
         throw ValidationException::withMessages([$field => 'Give a number of seconds or a duration like 30m, 2h or 1h30m.']);
     }
 
-    private function checkQuotas(string $organizationId, float $cpus, int $memory, int $disk, int $ttl): void
+    /** One sandbox's size and time to live. */
+    private function checkSizes(float $cpus, int $memory, int $disk, int $ttl): void
     {
         $maxTtl = (int) config('sandboxes.max_ttl');
         $errors = array_filter([
@@ -176,7 +202,11 @@ final class CreateSandbox
         if ($errors !== []) {
             throw ValidationException::withMessages($errors);
         }
+    }
 
+    /** The organization's running sandboxes and their memory (under the create lock). */
+    private function checkQuotas(string $organizationId, int $memory): void
+    {
         $live = Sandbox::query()->where('organization_id', $organizationId)->live();
         $running = (clone $live)->count();
         $max = (int) config('sandboxes.max_running');
@@ -286,13 +316,24 @@ final class CreateSandbox
         return 'sandbox-'.strtolower(bin2hex(random_bytes(3)));
     }
 
-    /** repo.secret: an organization secret's value, sent to the agent as the clone token and never stored. */
+    /**
+     * repo.secret: an organization secret's value, sent to the agent as the clone token and never stored. Whoever asks
+     * may reveal it (the API checks secrets.reveal); a sensitive (write-only) secret is refused.
+     */
     private function secret(string $organizationId, string $name, Actor $actor): string
     {
+        if ($this->secrets->check(new ScopeChain($organizationId), [$name])->isSensitive($name)) {
+            throw ValidationException::withMessages(['repo.secret' => "{$name} is a sensitive secret: its value is write-only and never handed to a sandbox. Use a secret created with Sensitive off for the clone token."]);
+        }
+
         $accessor = $actor->tokenId !== null
             ? SecretAccessor::apiToken($actor->tokenId, $actor->id, 'Sandbox repository clone')
             : ($actor->id !== null ? SecretAccessor::user($actor->id, 'Sandbox repository clone') : SecretAccessor::system('Sandbox repository clone'));
         $resolved = $this->secrets->resolve(new ScopeChain($organizationId), [$name], $accessor);
+
+        if ($resolved->isSensitive($name)) {
+            throw ValidationException::withMessages(['repo.secret' => "{$name} is a sensitive secret: its value is write-only and never handed to a sandbox. Use a secret created with Sensitive off for the clone token."]);
+        }
 
         if (! isset($resolved->values[$name])) {
             throw ValidationException::withMessages(['repo.secret' => $resolved->errors[$name] ?? "No organization secret is called {$name}."]);

@@ -12,7 +12,7 @@ final class EloquentSandboxDirectory implements SandboxDirectory
     {
         $sandbox = self::lookup($organizationId, $ref);
 
-        return $sandbox === null ? null : new SandboxData($sandbox->id, $sandbox->organization_id, $sandbox->server_id, $sandbox->name, $sandbox->status);
+        return $sandbox === null ? null : new SandboxData($sandbox->id, $sandbox->organization_id, $sandbox->server_id, $sandbox->name, $sandbox->status, $sandbox->created_by_id);
     }
 
     /** By id, else by name among those not killed (names are unique there). */

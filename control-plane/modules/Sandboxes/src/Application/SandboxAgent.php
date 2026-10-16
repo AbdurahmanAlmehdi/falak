@@ -5,6 +5,7 @@ namespace Falak\Sandboxes\Application;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Data\CommandHandle;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
+use Falak\Fleet\Contracts\Exceptions\CommandTimedOut;
 use Falak\Sandboxes\Domain\Models\Sandbox;
 
 /**
@@ -43,7 +44,12 @@ final class SandboxAgent
             abort(503, self::NOT_CONNECTED);
         }
 
-        $result = $this->agents->await($handle, $wait);
+        try {
+            $result = $this->agents->await($handle, $wait);
+        } catch (CommandTimedOut) {
+            $this->agents->cancel($handle);
+            abort(504, 'The server did not answer in time.');
+        }
 
         if (! $result->isFinished()) {
             $this->agents->cancel($handle);

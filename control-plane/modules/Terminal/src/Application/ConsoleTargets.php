@@ -68,12 +68,20 @@ final class ConsoleTargets
         return $instance;
     }
 
-    /** A sandbox of the organization the user may use (sandboxes.use), by id or name; 404 otherwise. */
+    /**
+     * A sandbox of the organization the user may use (sandboxes.use), by id or name; 404 otherwise. Someone else's
+     * sandbox needs sandboxes.manage (403).
+     */
     public function sandbox(?Authenticatable $user, string $organizationId, string $ref): SandboxData
     {
         $sandbox = $this->sandboxes->find($organizationId, $ref);
 
         abort_if($sandbox === null || ! $this->access->can($user, $organizationId, SandboxDirectory::USE_PERMISSION), 404, 'Sandbox not found.');
+        abort_unless(
+            $sandbox->createdById === (string) $user?->getAuthIdentifier() || $this->access->can($user, $organizationId, SandboxDirectory::MANAGE_PERMISSION),
+            403,
+            'Only its creator (or someone with sandboxes.manage) can open a console in this sandbox.',
+        );
 
         return $sandbox;
     }

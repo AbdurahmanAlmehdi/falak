@@ -4,6 +4,7 @@ use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Data\CommandHandle;
 use Falak\Fleet\Contracts\Data\CommandOutput;
 use Falak\Fleet\Contracts\Data\CommandResult;
+use Falak\Fleet\Contracts\Exceptions\CommandTimedOut;
 use Falak\Fleet\Domain\Models\Agent;
 use Falak\Fleet\Infrastructure\ProtocolSchemas;
 use Falak\Identity\Application\Actions\CreateApiToken;
@@ -17,12 +18,17 @@ use Falak\Sandboxes\Application\Actions\ExecInSandbox;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
 use Falak\Sandboxes\Application\Jobs\SweepSandboxes;
 use Falak\Sandboxes\Application\Jobs\SyncSandboxes;
+use Falak\Sandboxes\Application\Listeners\HandleCommandOutcome;
 use Falak\Sandboxes\Domain\Models\Sandbox;
 use Falak\Sandboxes\Domain\Models\SandboxExec;
+use Falak\Secrets\Application\Actions\CreateSecret;
+use Falak\Secrets\Contracts\SecretScope;
 use Falak\Servers\Contracts\ServerType;
 use Falak\Servers\Domain\Models\Server;
 use Falak\Terminal\Domain\Models\TerminalSession;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\TestCase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -369,7 +375,31 @@ it('maps agent errors: a directory is 422, a missing file 404, anything else 502
 
     $failing->errors['sandbox.exec'] = 'runsc: container not running';
     sbx_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/exec", ['cmd' => 'ls'])->assertStatus(502)->assertJsonPath('message', 'runsc: container not running');
-    expect(SandboxExec::query()->count())->toBe(0);
+
+    $failing->errors['sandbox.files.write'] = 'no space left on device';
+    sbx_api()->call('PUT', "/api/v1/sandboxes/{$sandbox->id}/files?path=/big", [], [], [], ['HTTP_ACCEPT' => 'application/json'], 'data')->assertStatus(502);
+
+    // Failed calls are in the audit trail too: no exit code, the error.
+    expect(SandboxExec::query()->orderBy('id')->get(['cmd', 'exit_code', 'error'])->toArray())->toBe([
+        ['cmd' => 'ls', 'exit_code' => null, 'error' => 'The sandbox is not running.'],
+        ['cmd' => 'ls', 'exit_code' => null, 'error' => 'runsc: container not running'],
+        ['cmd' => 'files.write /big (4 bytes)', 'exit_code' => null, 'error' => 'no space left on device'],
+    ]);
+});
+
+it('answers 504 and cancels the command when the gateway gives up waiting, and ?wait=1 then answers the sandbox still creating', function () {
+    $sandbox = sbx_sandbox($this->organization, $this->server);
+    $failing = new SbxFailingGateway($this->agents);
+    app()->instance(AgentGateway::class, $failing);
+    $failing->timeouts = ['sandbox.exec', 'sandbox.create'];
+
+    sbx_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/exec", ['cmd' => 'sleep 1'])->assertStatus(504)
+        ->assertJsonPath('message', 'The server did not answer in time.');
+    expect($this->agents->status($this->agents->last('sandbox.exec')['handle'])->status->value)->toBe('cancelled')
+        ->and(SandboxExec::query()->sole()->error)->toBe('The server did not answer in time.');
+
+    sbx_api()->postJson('/api/v1/sandboxes?wait=1', ['name' => 'slow'])->assertCreated()->assertJsonPath('data.status', 'creating');
+    expect($this->agents->status($this->agents->last('sandbox.create')['handle'])->status->value)->toBe('queued');
 });
 
 /** Commands of the types in $errors fail at once (what await() then returns). */
@@ -377,6 +407,9 @@ final class SbxFailingGateway implements AgentGateway
 {
     /** @var array<string, string> */
     public array $errors = [];
+
+    /** @var list<string> types whose await() gives up (as the real gateway past its deadline) */
+    public array $timeouts = [];
 
     public function __construct(private readonly FakeAgentGateway $fake) {}
 
@@ -393,7 +426,13 @@ final class SbxFailingGateway implements AgentGateway
 
     public function await(CommandHandle|string $command, int $waitSeconds = 600): CommandResult
     {
-        return $this->fake->await($command, $waitSeconds);
+        $result = $this->fake->await($command, $waitSeconds);
+
+        if (in_array($result->type, $this->timeouts, true)) {
+            throw CommandTimedOut::waiting($result->id, $waitSeconds);
+        }
+
+        return $result;
     }
 
     public function status(CommandHandle|string $command): CommandResult
@@ -446,19 +485,27 @@ it('kills a sandbox once, and killing it again does nothing', function () {
     sbx_api()->postJson('/api/v1/sandboxes', ['name' => 'calm-otter'])->assertUnprocessable()->assertJsonValidationErrors('name');
 });
 
-it('extends the time to live within max_ttl and tells the agent the new expiry', function () {
+it('extends the time to live within max_ttl and tells the agent the new expiry with sandbox.extend', function () {
     $sandbox = sbx_sandbox($this->organization, $this->server);
     $expires = $sandbox->expires_at->getTimestamp();
+    $this->agents->answer('sandbox.extend', fn (array $payload) => ['expires_at' => $payload['expires_at']]);
 
     sbx_api()->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['extend' => '30m', 'name' => 'renamed'])->assertOk()
         ->assertJsonPath('data.name', 'renamed')
         ->assertJsonPath('data.ttl_seconds', 5400);
-    expect($sandbox->refresh()->expires_at->getTimestamp())->toBe($expires + 1800);
+    expect($sandbox->refresh()->expires_at->getTimestamp())->toBe($expires + 1800)
+        ->and($sandbox->agent_expires_at->getTimestamp())->toBe($expires + 1800);
 
-    $create = $this->agents->last('sandbox.create');
-    expect(sbx_schema_errors($create))->toBe([])
-        ->and($create['payload']['expires_at'])->toBe($expires + 1800)
-        ->and($create['payload']['env'])->toBe(['API_KEY' => 'hunter2-secret']);
+    $extend = $this->agents->last('sandbox.extend');
+    expect(sbx_schema_errors($extend))->toBe([])
+        ->and($extend['payload'])->toBe(['id' => $sandbox->id, 'expires_at' => $expires + 1800])
+        ->and($this->agents->dispatched('sandbox.create'))->toBe([]);
+
+    // The agent can't be told: nothing changes.
+    $this->agents->unavailable($this->server->id);
+    sbx_api()->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['extend' => '30m'])->assertStatus(503);
+    expect($sandbox->refresh()->expires_at->getTimestamp())->toBe($expires + 1800);
+    $this->agents->available($this->server->id);
 
     sbx_api()->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['extend' => 86400])->assertUnprocessable()->assertJsonValidationErrors('extend');
     $sandbox->forceFill(['status' => Sandbox::KILLED])->save();
@@ -508,10 +555,11 @@ it('reconciles with sandbox.inventory', function () {
     $lost->forceFill(['created_at' => now()->subMinutes(10)])->save();
     $young = sbx_sandbox($this->organization, $this->server, ['name' => 'young']);
     $stopped = sbx_sandbox($this->organization, $this->server, ['name' => 'stopped']);
+    $stopped->forceFill(['created_at' => now()->subMinutes(10)])->save();
     $killed = sbx_sandbox($this->organization, $this->server, ['name' => 'dead', 'status' => Sandbox::KILLED, 'kill_reason' => 'killed']);
     $orphan = strtolower((string) Str::ulid());
 
-    (new SyncSandboxes)->handle($this->agents);
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
     $inventory = $this->agents->last('sandbox.inventory');
     expect(sbx_schema_errors($inventory))->toBe([]);
 
@@ -542,8 +590,13 @@ it('counts live sandboxes in the server capacity', function () {
 it('opens a console in a running sandbox', function () {
     Http::fake(['relay:8080/*' => Http::response(null, 204)]);
     config(['app.key' => 'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', 'app.url' => 'https://panel.example.com', 'terminal.relay.enabled' => true]);
-    $sandbox = sbx_sandbox($this->organization, $this->server);
     [$developer] = memberOf($this->organization, Role::Developer);
+    $sandbox = sbx_sandbox($this->organization, $this->server, ['created_by_id' => $developer->id]);
+
+    // Someone else's sandbox: only with sandboxes.manage.
+    [$other] = memberOf($this->organization, Role::Developer);
+    $this->withToken(sbx_token($other, $this->organization))->postJson("/api/v1/sandboxes/{$sandbox->id}/console")->assertForbidden();
+    expect($this->agents->dispatched('terminal.open'))->toBe([]);
 
     // sandboxes.use opens it (terminal.open is admin-only).
     $this->withToken(sbx_token($developer, $this->organization))->postJson("/api/v1/sandboxes/{$sandbox->name}/console")->assertCreated()
@@ -558,6 +611,7 @@ it('opens a console in a running sandbox', function () {
         ->and($open['payload'])->not->toHaveKeys(['user', 'shell', 'container'])
         ->and(TerminalSession::query()->sole()->target_type)->toBe(TerminalSession::TARGET_SANDBOX);
 
+    auth()->forgetGuards();
     $creating = sbx_sandbox($this->organization, $this->server, ['name' => 'starting', 'status' => Sandbox::CREATING]);
     sbx_api()->postJson("/api/v1/sandboxes/{$creating->id}/console")->assertStatus(409);
     $this->withToken(sbx_token(...memberOf()))->postJson("/api/v1/sandboxes/{$sandbox->id}/console")->assertNotFound();
@@ -586,4 +640,148 @@ it('lets servers opt out of sandboxes from their settings', function () {
     $this->actingAs($this->user);
     $this->patch("/servers/{$this->server->id}", ['sandboxes_enabled' => false])->assertSessionHasNoErrors();
     expect($this->server->refresh()->sandboxes_enabled)->toBeFalse();
+});
+
+// ---- security review fixes -----------------------------------------------------------------------------------
+
+it('hands repo.secret to a sandbox only for who may reveal it, and never a sensitive secret', function () {
+    app(CreateSecret::class)($this->organization->id, SecretScope::Organization, $this->organization->id, ['name' => 'GH_TOKEN', 'value' => 'ghp_clone', 'sensitive' => false], null);
+    app(CreateSecret::class)($this->organization->id, SecretScope::Organization, $this->organization->id, ['name' => 'DB_PASS', 'value' => 'hunter2', 'sensitive' => true], null);
+    $repo = ['url' => 'https://github.com/acme/shop', 'secret' => 'GH_TOKEN'];
+
+    // A "*" token, or one for sandboxes only, is not enough: secrets.reveal must be granted by name.
+    sbx_api()->postJson('/api/v1/sandboxes', ['repo' => $repo])->assertForbidden();
+    $this->withToken(sbx_token($this->user, $this->organization, ['sandboxes.use']))->postJson('/api/v1/sandboxes', ['repo' => $repo])->assertForbidden();
+    expect(Sandbox::query()->count())->toBe(0);
+
+    $revealer = sbx_token($this->user, $this->organization, ['sandboxes.use', 'secrets.reveal']);
+    $this->withToken($revealer)->postJson('/api/v1/sandboxes', ['repo' => $repo])->assertCreated();
+    $create = $this->agents->last('sandbox.create');
+    expect(sbx_schema_errors($create))->toBe([])
+        ->and($create['payload']['repo'])->toBe(['url' => 'https://github.com/acme/shop', 'token' => 'ghp_clone']);
+
+    $this->withToken($revealer)->postJson('/api/v1/sandboxes', ['repo' => [...$repo, 'secret' => 'DB_PASS']])->assertUnprocessable()
+        ->assertJsonValidationErrors(['repo.secret' => 'sensitive']);
+    expect(Sandbox::query()->count())->toBe(1);
+});
+
+it('lets a create that finishes after the sandbox already runs complete it, and undoes one killed meanwhile', function () {
+    sbx_api()->postJson('/api/v1/sandboxes', ['name' => 'quick'])->assertCreated();
+    $sandbox = Sandbox::query()->sole();
+    HandleCommandOutcome::started($sandbox, []); // what ?wait=1 does when it sees the result first
+
+    $this->agents->succeed($this->agents->last('sandbox.create')['handle'], ['status' => 'running', 'ip' => '10.88.0.7', 'image_digest' => 'sha256:d', 'started_at' => now()->toIso8601String()]);
+    expect($sandbox->refresh()->status)->toBe(Sandbox::RUNNING)
+        ->and($sandbox->ip)->toBe('10.88.0.7')
+        ->and($sandbox->image_digest)->toBe('sha256:d')
+        ->and($this->agents->dispatched('sandbox.kill'))->toBe([])
+        ->and($this->agents->dispatched('sandbox.extend'))->toBe([]);
+
+    sbx_api()->postJson('/api/v1/sandboxes', ['name' => 'late'])->assertCreated();
+    $late = Sandbox::query()->where('name', 'late')->sole();
+    sbx_api()->deleteJson('/api/v1/sandboxes/late')->assertNoContent();
+    $this->agents->succeed($this->agents->last('sandbox.create')['handle'], ['status' => 'running', 'image_digest' => 'sha256:d', 'started_at' => now()->toIso8601String()]);
+    expect($this->agents->last('sandbox.kill')['handle']->idempotencyKey)->toBe("sandbox.kill:{$late->id}:late");
+});
+
+it('leaves sandboxes still being created to their create when reconciling', function () {
+    $creating = sbx_sandbox($this->organization, $this->server, ['name' => 'creating', 'status' => Sandbox::CREATING]);
+    $starting = sbx_sandbox($this->organization, $this->server, ['name' => 'starting', 'status' => Sandbox::CREATING]);
+    Sandbox::query()->whereKey([$creating->id, $starting->id])->update(['created_at' => now()->subMinutes(4)]);
+    $young = sbx_sandbox($this->organization, $this->server, ['name' => 'young']);
+
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    $this->agents->succeed($this->agents->last('sandbox.inventory')['handle'], ['sandboxes' => [
+        ['id' => $creating->id, 'status' => 'creating'],
+        ['id' => $starting->id, 'status' => 'stopped'],
+        ['id' => $young->id, 'status' => 'stopped'],
+    ]]);
+
+    expect($creating->refresh()->status)->toBe(Sandbox::CREATING)
+        ->and($starting->refresh()->status)->toBe(Sandbox::CREATING)
+        ->and($young->refresh()->status)->toBe(Sandbox::RUNNING)
+        ->and($this->agents->dispatched('sandbox.kill'))->toBe([]);
+});
+
+it('extends a sandbox still being created once its create succeeded', function () {
+    sbx_api()->postJson('/api/v1/sandboxes', ['name' => 'slow'])->assertCreated();
+    $sandbox = Sandbox::query()->sole();
+    $expires = $sandbox->expires_at->getTimestamp();
+
+    sbx_api()->patchJson('/api/v1/sandboxes/slow', ['extend' => '1h'])->assertOk()->assertJsonPath('data.ttl_seconds', 7200);
+    expect($this->agents->dispatched('sandbox.extend'))->toBe([]);
+
+    $this->agents->succeed($this->agents->last('sandbox.create')['handle'], ['status' => 'running', 'image_digest' => 'sha256:d', 'started_at' => now()->toIso8601String()]);
+    $extend = $this->agents->last('sandbox.extend');
+    expect(sbx_schema_errors($extend))->toBe([])
+        ->and($extend['payload'])->toBe(['id' => $sandbox->id, 'expires_at' => $expires + 3600])
+        ->and($sandbox->refresh()->agent_expires_at->getTimestamp())->toBe($expires + 3600);
+});
+
+it('keeps names unique among live sandboxes and creates one sandbox at a time per organization', function () {
+    sbx_sandbox($this->organization, $this->server, ['name' => 'dup']);
+    sbx_sandbox($this->organization, $this->server, ['name' => 'dup', 'status' => Sandbox::KILLED]);
+    sbx_sandbox($this->organization, $this->server, ['name' => 'dup', 'status' => Sandbox::FAILED]);
+    expect(fn () => sbx_sandbox($this->organization, $this->server, ['name' => 'dup', 'status' => Sandbox::CREATING]))->toThrow(UniqueConstraintViolationException::class);
+
+    // Another create holds the organization's lock: this one gives up rather than race its quota and name checks.
+    config(['sandboxes.create_lock_wait' => 0]);
+    $lock = Cache::lock("sandboxes:create:{$this->organization->id}", 60);
+    $lock->get();
+    sbx_api()->postJson('/api/v1/sandboxes')->assertStatus(429);
+    $lock->release();
+    sbx_api()->postJson('/api/v1/sandboxes')->assertCreated();
+});
+
+it('keeps exec, files and consoles of a sandbox to its creator and sandboxes.manage', function () {
+    $sandbox = sbx_sandbox($this->organization, $this->server);
+    [$developer] = memberOf($this->organization, Role::Developer);
+    $dev = sbx_token($developer, $this->organization);
+
+    $this->withToken($dev)->postJson("/api/v1/sandboxes/{$sandbox->id}/exec", ['cmd' => 'ls'])->assertForbidden();
+    $this->withToken($dev)->getJson("/api/v1/sandboxes/{$sandbox->id}/files?path=/etc/hosts")->assertForbidden();
+    $this->withToken($dev)->getJson("/api/v1/sandboxes/{$sandbox->id}/files?path=/&list=1")->assertForbidden();
+    $this->withToken($dev)->call('PUT', "/api/v1/sandboxes/{$sandbox->id}/files?path=/x", [], [], [], ['HTTP_ACCEPT' => 'application/json'], 'x')->assertForbidden();
+    $this->withToken($dev)->deleteJson("/api/v1/sandboxes/{$sandbox->id}/files?path=/x")->assertForbidden();
+    $this->withToken($dev)->getJson("/api/v1/sandboxes/{$sandbox->id}")->assertOk();
+    expect($this->agents->dispatched())->toBe([]);
+
+    [$admin] = memberOf($this->organization, Role::Admin);
+    $this->agents->answer('sandbox.exec', fn () => ['exit_code' => 0, 'stdout' => '', 'stderr' => '', 'truncated' => false, 'duration_ms' => 1, 'timed_out' => false]);
+    $this->withToken(sbx_token($admin, $this->organization))->postJson("/api/v1/sandboxes/{$sandbox->id}/exec", ['cmd' => 'ls'])->assertOk();
+});
+
+it('refuses images with "..", a trailing dot or a local registry', function () {
+    $refused = ['../etc', 'a..b/c', 'ubuntu.', 'localhost:5000/x', 'localhost/x', 'LOCALHOST/x', 'reg.localhost/x', '127.0.0.1:5000/x', '127.1/x',
+        '10.0.0.5/x', '192.168.1.2:443/x', '169.254.169.254/x', '0x7f.1/x', '2130706433:80/x', str_repeat('a', 256)];
+
+    foreach ($refused as $image) {
+        sbx_api()->postJson('/api/v1/sandboxes', ['image' => $image])->assertUnprocessable()->assertJsonValidationErrors('image');
+    }
+
+    foreach (['ubuntu:24.04', 'ghcr.io/acme/app:1.2', 'node@sha256:abc', '8.8.8.8/x', 'registry.example.com:5000/team/app'] as $image) {
+        sbx_api()->postJson('/api/v1/sandboxes', ['image' => $image])->assertCreated();
+        expect(sbx_schema_errors($this->agents->last('sandbox.create')))->toBe([]);
+    }
+});
+
+it('sends a kill again until the agent confirms it', function () {
+    $sandbox = sbx_sandbox($this->organization, $this->server);
+    $this->agents->unavailable($this->server->id);
+    sbx_api()->deleteJson("/api/v1/sandboxes/{$sandbox->id}")->assertNoContent();
+    expect($sandbox->refresh()->status)->toBe(Sandbox::KILLED)
+        ->and($sandbox->kill_confirmed_at)->toBeNull()
+        ->and($this->agents->dispatched('sandbox.kill'))->toBe([]);
+
+    $this->agents->available($this->server->id);
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    $kill = $this->agents->last('sandbox.kill');
+    expect($kill['payload']['id'])->toBe($sandbox->id)
+        ->and($this->agents->last('sandbox.inventory')['handle']->serverId)->toBe($this->server->id);
+
+    $this->agents->succeed($kill['handle'], []);
+    expect($sandbox->refresh()->kill_confirmed_at)->not->toBeNull();
+
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    expect($this->agents->dispatched('sandbox.kill'))->toHaveCount(1);
 });

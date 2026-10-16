@@ -28,7 +28,7 @@ import { formatMemory, formatTimeLeft, isLive, sandboxBadge, secondsLeft, useNow
 interface Props {
     sandbox: Sandbox;
     execs: SandboxExec[];
-    can: { use: boolean; kill: boolean };
+    can: { use: boolean; operate: boolean; kill: boolean };
 }
 
 const EXTENSIONS = [
@@ -167,7 +167,7 @@ export default function Show({ sandbox, execs, can }: Props) {
                     />
                 </Section>
 
-                <Tabs defaultValue={running && can.use ? 'console' : 'activity'}>
+                <Tabs defaultValue={running && can.operate ? 'console' : 'activity'}>
                     <TabsList>
                         <TabsTrigger value="console">Console</TabsTrigger>
                         <TabsTrigger value="activity" badge={execs.length > 0 ? execs.length : undefined}>
@@ -182,7 +182,7 @@ export default function Show({ sandbox, execs, can }: Props) {
                             title={running ? 'A root shell inside the sandbox' : 'The console opens once the sandbox runs'}
                             description="Everything you type stays inside the sandbox. From a terminal: falak sandbox ssh."
                             action={
-                                can.use && running ? (
+                                can.operate && running ? (
                                     <Button variant="primary" icon={<SquareTerminal />} onClick={openConsole}>
                                         Open console
                                     </Button>
@@ -243,7 +243,7 @@ export default function Show({ sandbox, execs, can }: Props) {
                     </TabsContent>
 
                     <TabsContent value="files" className="pt-4">
-                        {running && can.use ? (
+                        {running && can.operate ? (
                             <FileBrowser sandbox={sandbox} />
                         ) : (
                             <EmptyState icon={<Folder />} title="Files can be browsed while the sandbox runs" size="sm" />

@@ -6,10 +6,13 @@ use Falak\Sandboxes\Application\Actor;
 use Falak\Sandboxes\Application\SandboxAgent;
 use Falak\Sandboxes\Domain\Models\Sandbox;
 use Falak\Sandboxes\Domain\Models\SandboxExec;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
+use Throwable;
 
 /**
  * Run a command in a running sandbox and wait for it (sandbox.exec; up to 120 s, the request waits 10 s longer). Every
- * exec is a sandboxes_execs row with the command redacted: env values, URL credentials and token-looking strings.
+ * exec is a sandboxes_execs row with the command redacted: env values, URL credentials and token-looking strings; one
+ * that failed (the agent's error, no answer) too, with the error and no exit code.
  */
 final class ExecInSandbox
 {
@@ -26,17 +29,24 @@ final class ExecInSandbox
     public function __invoke(Sandbox $sandbox, Actor $actor, string|array $cmd, ?string $cwd = null, array $env = [], ?string $stdin = null, int $timeout = 60): array
     {
         $argv = is_string($cmd) ? ['sh', '-lc', $cmd] : array_values($cmd);
+        $shown = is_string($cmd) ? $cmd : self::join($argv);
         $startedAt = now();
 
-        $result = $this->agent->ask($sandbox, 'sandbox.exec', array_filter([
-            'id' => $sandbox->id,
-            'cmd' => $argv,
-            'cwd' => $cwd,
-            'env' => $env === [] ? null : (object) $env,
-            'stdin' => $stdin !== null && $stdin !== '' ? base64_encode($stdin) : null,
-            'timeout_s' => $timeout,
-            'max_output' => 262144,
-        ], fn ($value) => $value !== null), $timeout + 10);
+        try {
+            $result = $this->agent->ask($sandbox, 'sandbox.exec', array_filter([
+                'id' => $sandbox->id,
+                'cmd' => $argv,
+                'cwd' => $cwd,
+                'env' => $env === [] ? null : (object) $env,
+                'stdin' => $stdin !== null && $stdin !== '' ? base64_encode($stdin) : null,
+                'timeout_s' => $timeout,
+                'max_output' => 262144,
+            ], fn ($value) => $value !== null), $timeout + 10);
+        } catch (Throwable $e) {
+            $this->recordFailure($sandbox, $actor, $shown, $cwd, $env, $startedAt, $e);
+
+            throw $e;
+        }
 
         $out = [
             'exit_code' => (int) ($result['exit_code'] ?? -1),
@@ -47,7 +57,7 @@ final class ExecInSandbox
             'duration_ms' => (int) ($result['duration_ms'] ?? 0),
         ];
 
-        $this->record($sandbox, $actor, is_string($cmd) ? $cmd : self::join($argv), $cwd, $env, $startedAt, $out);
+        $this->record($sandbox, $actor, $shown, $cwd, $env, $startedAt, $out);
 
         return $out;
     }
@@ -56,7 +66,7 @@ final class ExecInSandbox
      * An audit row for an exec, a file write or delete.
      *
      * @param  array<string, string>  $env
-     * @param  array{exit_code?: ?int, stdout?: string, stderr?: string, timed_out?: bool, duration_ms?: ?int}  $out
+     * @param  array{exit_code?: ?int, stdout?: string, stderr?: string, timed_out?: bool, duration_ms?: ?int, error?: string}  $out
      */
     public function record(Sandbox $sandbox, Actor $actor, string $cmd, ?string $cwd, array $env, \DateTimeInterface $startedAt, array $out): SandboxExec
     {
@@ -74,8 +84,21 @@ final class ExecInSandbox
             'stdout_bytes' => strlen($out['stdout'] ?? ''),
             'stderr_bytes' => strlen($out['stderr'] ?? ''),
             'timed_out' => $out['timed_out'] ?? false,
+            'error' => isset($out['error']) ? mb_substr($out['error'], 0, 255) : null,
             'started_at' => $startedAt,
         ]);
+    }
+
+    /**
+     * The audit row of a call that failed: no exit code, the error (an HTTP error's message, as the caller saw it).
+     *
+     * @param  array<string, string>  $env
+     */
+    public function recordFailure(Sandbox $sandbox, Actor $actor, string $cmd, ?string $cwd, array $env, \DateTimeInterface $startedAt, Throwable $e): SandboxExec
+    {
+        $error = $e instanceof HttpExceptionInterface && $e->getMessage() !== '' ? $e->getMessage() : 'The call failed.';
+
+        return $this->record($sandbox, $actor, $cmd, $cwd, $env, $startedAt, ['error' => $error]);
     }
 
     /**

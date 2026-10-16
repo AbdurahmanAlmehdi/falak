@@ -27,7 +27,7 @@ final class KillSandbox
         }
 
         $this->remove($sandbox, "sandbox.kill:{$sandbox->id}", $reason);
-        $this->markKilled($sandbox, $reason);
+        $this->markKilled($sandbox, $reason, confirmed: false);
     }
 
     /**
@@ -40,14 +40,19 @@ final class KillSandbox
         $this->agent->tryDispatch($sandbox, 'sandbox.kill', array_filter(['id' => $sandbox->id, 'reason' => $reason]), $key);
     }
 
-    /** The agent removed it (or is told to): killed, with the reason. */
-    public function markKilled(Sandbox $sandbox, string $reason): void
+    /**
+     * The agent removed it (or is told to): killed, with the reason.
+     *
+     * @param  bool  $confirmed  the agent doesn't run it (reaped, lost, its server deleted); otherwise SyncSandboxes
+     *                           sends sandbox.kill again until a kill finishes
+     */
+    public function markKilled(Sandbox $sandbox, string $reason, bool $confirmed = true): void
     {
         if ($sandbox->status === Sandbox::KILLED) {
             return;
         }
 
-        $sandbox->forceFill(['status' => Sandbox::KILLED, 'killed_at' => now(), 'kill_reason' => $reason])->save();
+        $sandbox->forceFill(['status' => Sandbox::KILLED, 'killed_at' => now(), 'kill_reason' => $reason, 'kill_confirmed_at' => $confirmed ? now() : null])->save();
 
         $this->audit->record('sandbox.killed', 'sandbox', $sandbox->id, ['name' => $sandbox->name, 'reason' => $reason], $sandbox->organization_id);
     }
