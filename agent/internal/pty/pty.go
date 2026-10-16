@@ -305,6 +305,10 @@ loop:
 			m.hangUpContainer(p.SessionID)
 		}
 	}
+	if p.Sandbox != nil {
+		// Also when the shell exited: a background job still holding the pty would keep the session open.
+		m.hangUpSandbox(p)
+	}
 	// Drain remaining output briefly, then close the master.
 	select {
 	case <-readDone:
