@@ -8,7 +8,7 @@ namespace Falak\Limits\Contracts\Data;
 final readonly class CapacityItem
 {
     /**
-     * @param  string  $kind  site | compose_service | worker | daemon | database | function
+     * @param  string  $kind  site | compose_service | worker | daemon | database | function | sandbox
      * @param  string  $id  the service's id (a compose service: "<site id>:<service>")
      */
     public function __construct(

@@ -31,6 +31,8 @@ final readonly class ServerData
         // Provider servers: the credential (account) Falak created it with, and its region.
         public ?string $providerCredentialId = null,
         public ?string $region = null,
+        /** Sandboxes may run here (a server can opt out). */
+        public bool $sandboxesEnabled = true,
     ) {}
 
     public function isActive(): bool

@@ -5,6 +5,8 @@ namespace Falak\Terminal\Application;
 use Falak\Databases\Contracts\Data\DatabaseInstanceData;
 use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Identity\Contracts\OrganizationAccess;
+use Falak\Sandboxes\Contracts\Data\SandboxData;
+use Falak\Sandboxes\Contracts\SandboxDirectory;
 use Falak\Servers\Contracts\Data\ServerData;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\ComposeInspector;
@@ -33,6 +35,7 @@ final class ConsoleTargets
         private readonly DatabaseDirectory $databases,
         private readonly ServerDirectory $servers,
         private readonly OrganizationAccess $access,
+        private readonly SandboxDirectory $sandboxes,
     ) {}
 
     // ---- lookups --------------------------------------------------------------------------------------
@@ -63,6 +66,16 @@ final class ConsoleTargets
         abort_if($instance === null || ! $this->access->can($user, $organizationId, 'databases.view'), 404, 'Database not found.');
 
         return $instance;
+    }
+
+    /** A sandbox of the organization the user may use (sandboxes.use), by id or name; 404 otherwise. */
+    public function sandbox(?Authenticatable $user, string $organizationId, string $ref): SandboxData
+    {
+        $sandbox = $this->sandboxes->find($organizationId, $ref);
+
+        abort_if($sandbox === null || ! $this->access->can($user, $organizationId, SandboxDirectory::USE_PERMISSION), 404, 'Sandbox not found.');
+
+        return $sandbox;
     }
 
     /** A server of the organization, by id or name; 404 otherwise. */
@@ -134,6 +147,25 @@ final class ConsoleTargets
             $instance->name,
             container: ['name' => $instance->container],
             containerLabel: "docker:{$instance->container}",
+        );
+    }
+
+    /** A shell in a running sandbox (`runsc exec`, as root). */
+    public function forSandbox(SandboxData $sandbox): ConsoleTarget
+    {
+        abort_unless($sandbox->isRunning(), 409, 'Consoles can be opened once the sandbox is running.');
+        $server = $this->servers->find($sandbox->serverId);
+
+        abort_if($server === null, 404, 'Sandbox not found.');
+
+        return new ConsoleTarget(
+            TerminalSession::TARGET_SANDBOX,
+            $server->id,
+            $server->name,
+            $sandbox->id,
+            $sandbox->name,
+            containerLabel: "sandbox:{$sandbox->name}",
+            sandbox: ['id' => $sandbox->id],
         );
     }
 

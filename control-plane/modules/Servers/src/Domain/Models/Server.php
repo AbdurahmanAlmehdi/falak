@@ -50,6 +50,7 @@ use Illuminate\Support\Carbon;
  * @property ?string $ssh_sync_command_id
  * @property ?Carbon $provisioned_at
  * @property ?string $created_by
+ * @property bool $sandboxes_enabled
  * @property Carbon $created_at
  */
 #[UseFactory(ServerFactory::class)]
@@ -77,6 +78,7 @@ class Server extends Model
             'type' => ServerType::class,
             'status' => ServerStatus::class,
             'facts' => 'array',
+            'sandboxes_enabled' => 'boolean',
             'install_command' => Sealed::class,
             'provisioned_at' => 'datetime',
             'ssh_port' => 'integer',
@@ -193,6 +195,7 @@ class Server extends Model
             unixUser: (string) config('servers.unix_user', 'falak'),
             providerCredentialId: $this->provider_credential_id,
             region: $this->region,
+            sandboxesEnabled: (bool) ($this->sandboxes_enabled ?? true),
         );
     }
 }

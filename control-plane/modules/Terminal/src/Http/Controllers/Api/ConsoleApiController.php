@@ -72,6 +72,16 @@ final class ConsoleApiController extends Controller
         return $this->opened($request, $organizationId, $this->targets->forServer($this->targets->server($organizationId, $server), $data['user'] ?? null), $data);
     }
 
+    /** POST /api/v1/sandboxes/{sandbox}/console {cols?, rows?}: 201 (sandboxes.use, not terminal.open) */
+    public function sandbox(Request $request, string $sandbox): JsonResponse
+    {
+        abort_unless(RelayTokens::enabled(), 409, self::RELAY_OFF);
+        $organizationId = $this->organization->requireId();
+        $data = $request->validate(ConsoleController::sizeRules());
+
+        return $this->opened($request, $organizationId, $this->targets->forSandbox($this->targets->sandbox($request->user(), $organizationId, $sandbox)), $data);
+    }
+
     /** POST /api/v1/terminal/sessions/{session}/ticket: {data: {url, writable}} (reconnect) */
     public function ticket(Request $request, TerminalSession $session): JsonResponse
     {

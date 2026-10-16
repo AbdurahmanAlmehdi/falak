@@ -191,9 +191,14 @@ final class ServerController extends Controller
         $this->authorize('update', $server);
 
         $data = $request->validate([
-            'name' => ['required_without:timezone', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/', Rule::unique('servers_servers')->where('organization_id', $server->organization_id)->ignore($server->id)],
+            'name' => ['required_without_all:timezone,sandboxes_enabled', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/', Rule::unique('servers_servers')->where('organization_id', $server->organization_id)->ignore($server->id)],
             'timezone' => ['sometimes', 'required', 'timezone:all'],
+            'sandboxes_enabled' => ['sometimes', 'boolean'],
         ]);
+
+        if (array_key_exists('sandboxes_enabled', $data)) {
+            $server->forceFill(['sandboxes_enabled' => (bool) $data['sandboxes_enabled']])->save();
+        }
 
         if (isset($data['name']) && $data['name'] !== $server->name) {
             $rename($server, $data['name']);

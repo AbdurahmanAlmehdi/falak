@@ -36,6 +36,7 @@ final class Modules
         'Uptime',
         'Security',
         'Previews',
+        'Sandboxes',
         'Terminal',
         'Recovery',
         'Config',

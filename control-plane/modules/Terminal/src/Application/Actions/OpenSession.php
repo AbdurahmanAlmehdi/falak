@@ -6,6 +6,7 @@ use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentGateway;
 use Falak\Fleet\Contracts\Exceptions\AgentUnavailable;
 use Falak\Identity\Contracts\AuditLog;
+use Falak\Sandboxes\Contracts\SandboxDirectory;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Terminal\Domain\Data\ConsoleTarget;
 use Falak\Terminal\Domain\Enums\SessionStatus;
@@ -66,6 +67,10 @@ final class OpenSession
 
         if (! $v2 && ($target->inContainer() || $requireRelay)) {
             throw ValidationException::withMessages(['server' => self::AGENT_TOO_OLD]);
+        }
+
+        if ($target->sandbox !== null && ! $agent?->supports(SandboxDirectory::FEATURE)) {
+            throw ValidationException::withMessages(['server' => 'The Falak agent on this server is too old for sandboxes; update it first.']);
         }
 
         $relayed = $v2 && RelayTokens::enabled();
@@ -152,6 +157,8 @@ final class OpenSession
 
         if ($target->container !== null) {
             $payload['container'] = $target->container;
+        } elseif ($target->sandbox !== null) {
+            $payload['sandbox'] = $target->sandbox;
         }
 
         if ($session->relayed) {

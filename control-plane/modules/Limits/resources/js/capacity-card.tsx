@@ -28,6 +28,7 @@ const KINDS: Record<string, string> = {
     daemon: 'Daemon',
     database: 'Database',
     function: 'Function',
+    sandbox: 'Sandbox',
 };
 
 function Meter({

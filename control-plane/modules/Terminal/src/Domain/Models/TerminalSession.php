@@ -49,6 +49,8 @@ class TerminalSession extends Model
 
     public const TARGET_DATABASE = 'database';
 
+    public const TARGET_SANDBOX = 'sandbox';
+
     protected $table = 'terminal_sessions';
 
     /** Millisecond precision: recording offsets are computed against started_at. */

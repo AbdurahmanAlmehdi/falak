@@ -112,6 +112,7 @@ final class ServerTabController extends Controller
                 'ssh_port' => $server->ssh_port,
                 'provider_server_id' => $server->provider_server_id,
                 'install_command' => $canManageAgents ? $server->install_command : null,
+                'sandboxes_enabled' => (bool) $server->sandboxes_enabled,
             ],
             'can' => [
                 'update' => $request->user()?->can('update', $server) ?? false,

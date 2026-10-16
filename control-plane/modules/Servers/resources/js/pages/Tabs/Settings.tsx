@@ -8,6 +8,7 @@ import { Field } from '@/components/falak/field';
 import { Input } from '@/components/falak/input';
 import { KeyValue } from '@/components/falak/key-value';
 import { Section } from '@/components/falak/section';
+import { Switch } from '@/components/falak/switch';
 import { toast } from '@/components/falak/toast';
 import ServerLayout, { type ServerHeader } from '@/layouts/server-layout';
 import { router, useForm } from '@inertiajs/react';
@@ -15,7 +16,13 @@ import { KeyRound, Trash2 } from 'lucide-react';
 import { useMemo, useState, type FormEventHandler } from 'react';
 
 interface Props {
-    server: ServerHeader & { timezone: string; ssh_port: number; provider_server_id: string | null; install_command: string | null };
+    server: ServerHeader & {
+        timezone: string;
+        ssh_port: number;
+        provider_server_id: string | null;
+        install_command: string | null;
+        sandboxes_enabled: boolean;
+    };
     can: { update: boolean; delete: boolean; regenerateInstallCommand: boolean };
 }
 
@@ -31,6 +38,7 @@ function timezones(): string[] {
 
 const SECTIONS = [
     { id: 'general', label: 'General' },
+    { id: 'sandboxes', label: 'Sandboxes' },
     { id: 'agent', label: 'Agent' },
     { id: 'danger', label: 'Danger zone' },
 ];
@@ -175,6 +183,30 @@ export default function Settings({ server, can }: Props) {
                             />
                         </Section>
                     </form>
+
+                    <Section
+                        id="sandboxes"
+                        title="Sandboxes"
+                        description="Disposable gVisor sandboxes for agents and scripts may be placed on this server. Turn them off to keep it for your sites."
+                    >
+                        <label className="text-fg-muted flex items-center gap-2 text-sm">
+                            <Switch
+                                checked={server.sandboxes_enabled}
+                                disabled={!can.update}
+                                onCheckedChange={(checked) =>
+                                    router.patch(
+                                        route('servers.update', server.id),
+                                        { sandboxes_enabled: checked },
+                                        {
+                                            preserveScroll: true,
+                                            onError: (errors) => toast.error('Could not save', Object.values(errors)[0]),
+                                        },
+                                    )
+                                }
+                            />
+                            Allow sandboxes on this server
+                        </label>
+                    </Section>
 
                     <Section
                         id="agent"

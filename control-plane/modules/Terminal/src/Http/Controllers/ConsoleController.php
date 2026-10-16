@@ -62,6 +62,18 @@ final class ConsoleController extends Controller
         return to_route('terminal.sessions.show', $session);
     }
 
+    /** POST sandboxes/{sandbox}/console: a shell in a running sandbox (sandboxes.use opens it) */
+    public function sandbox(Request $request, string $sandbox, OpenSession $open): RedirectResponse
+    {
+        $organizationId = $this->organization->requireId();
+        $data = $request->validate(self::sizeRules());
+
+        $target = $this->targets->forSandbox($this->targets->sandbox($request->user(), $organizationId, $sandbox));
+        $session = $open->open($organizationId, (string) $request->user()?->getAuthIdentifier(), $target, (int) ($data['cols'] ?? 80), (int) ($data['rows'] ?? 24));
+
+        return to_route('terminal.sessions.show', $session);
+    }
+
     /** POST terminal/sessions/{session}/ticket: {url, writable} for a relayed, live session the user may view. */
     public function ticket(Request $request, TerminalSession $session, RelayTokens $tokens, TerminalSessionPolicy $policy): JsonResponse
     {

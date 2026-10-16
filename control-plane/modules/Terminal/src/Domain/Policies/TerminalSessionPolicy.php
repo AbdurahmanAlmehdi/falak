@@ -3,6 +3,7 @@
 namespace Falak\Terminal\Domain\Policies;
 
 use Falak\Identity\Contracts\OrganizationAccess;
+use Falak\Sandboxes\Contracts\SandboxDirectory;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Illuminate\Auth\Access\Response;
 use Illuminate\Contracts\Auth\Authenticatable;
@@ -38,7 +39,7 @@ final class TerminalSessionPolicy
             return $denied;
         }
 
-        $allowed = ($this->owns($user, $session) && $this->can($user, $session, 'terminal.open')) || $this->can($user, $session, 'terminal.control');
+        $allowed = ($this->owns($user, $session) && $this->ownerMayOpen($user, $session)) || $this->can($user, $session, 'terminal.control');
 
         return $allowed ? Response::allow() : Response::deny();
     }
@@ -49,7 +50,7 @@ final class TerminalSessionPolicy
             return $denied;
         }
 
-        return $this->owns($user, $session) && $this->can($user, $session, 'terminal.open') ? Response::allow() : Response::deny('Only the session owner can share it.');
+        return $this->owns($user, $session) && $this->ownerMayOpen($user, $session) ? Response::allow() : Response::deny('Only the session owner can share it.');
     }
 
     public function replay(Authenticatable $user, TerminalSession $session): Response
@@ -64,7 +65,7 @@ final class TerminalSessionPolicy
     public function canView(Authenticatable $user, TerminalSession $session): bool
     {
         if ($this->owns($user, $session)) {
-            return $this->can($user, $session, 'terminal.open');
+            return $this->ownerMayOpen($user, $session);
         }
 
         return $session->shared && $this->can($user, $session, 'terminal.attach');
@@ -73,7 +74,7 @@ final class TerminalSessionPolicy
     public function canType(Authenticatable $user, TerminalSession $session): bool
     {
         if ($this->owns($user, $session)) {
-            return $this->can($user, $session, 'terminal.open');
+            return $this->ownerMayOpen($user, $session);
         }
 
         return $this->canView($user, $session) && $this->can($user, $session, 'terminal.control');
@@ -91,6 +92,13 @@ final class TerminalSessionPolicy
         return $this->owns($user, $session) && $this->access->isMember((string) $user->getAuthIdentifier(), $session->organization_id)
             ? null
             : Response::denyAsNotFound();
+    }
+
+    /** What lets the owner keep using a session: terminal.open, or sandboxes.use for a sandbox console. */
+    private function ownerMayOpen(Authenticatable $user, TerminalSession $session): bool
+    {
+        return $this->can($user, $session, 'terminal.open')
+            || ($session->targetType() === TerminalSession::TARGET_SANDBOX && $this->can($user, $session, SandboxDirectory::USE_PERMISSION));
     }
 
     private function owns(Authenticatable $user, TerminalSession $session): bool

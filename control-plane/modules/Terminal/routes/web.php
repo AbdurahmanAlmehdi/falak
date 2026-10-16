@@ -25,6 +25,7 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::get('sites/{site}/console', [ConsoleController::class, 'siteOptions'])->name('terminal.consoles.site.options');
     Route::post('sites/{site}/console', [ConsoleController::class, 'site'])->name('terminal.consoles.site');
     Route::post('databases/instances/{instance}/console', [ConsoleController::class, 'database'])->name('terminal.consoles.database');
+    Route::post('sandboxes/{sandbox}/console', [ConsoleController::class, 'sandbox'])->name('terminal.consoles.sandbox');
 
     Route::get('terminal/sessions/{session}/recording', [RecordingController::class, 'show'])->name('terminal.sessions.recording');
     Route::get('terminal/sessions/{session}/recording.cast', [RecordingController::class, 'download'])->name('terminal.sessions.recording.cast');
