@@ -10,6 +10,7 @@
         "lint": "eslint . --fix",
         "lint:check": "eslint .",
         "types": "tsc --noEmit",
+        "test": "vitest run --exclude 'tests/Browser/**'",
         "test:browser": "playwright test -c tests/Browser/playwright.config.ts"
     },
     "devDependencies": {

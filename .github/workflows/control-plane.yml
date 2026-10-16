@@ -68,5 +68,8 @@ jobs:
       - name: TypeScript
         run: bun run types
 
+      - name: Vitest
+        run: bun run test
+
       - name: Build
         run: bun run build
