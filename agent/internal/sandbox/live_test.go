@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/OthmanHaba/falak/agent/internal/db"
 	"github.com/OthmanHaba/falak/agent/internal/docker"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 	"github.com/OthmanHaba/falak/agent/internal/netcfg"
@@ -85,7 +86,8 @@ type live struct {
 }
 
 func newLiveService(req *captureRequests) *Service {
-	return New(Deps{Runner: runner.Exec{}, FS: hostfs.FS{}, Docker: docker.NewClient(""), Requests: req, Root: "/var/lib/falak/sandboxes"})
+	return New(Deps{Runner: runner.Exec{}, FS: hostfs.FS{}, Docker: docker.NewClient(""), Requests: req, Root: "/var/lib/falak/sandboxes",
+		DB: db.New(db.Deps{Runner: runner.Exec{}, FS: hostfs.FS{}})})
 }
 
 func (l *live) check(name string, ok bool, format string, a ...any) bool {
@@ -816,6 +818,302 @@ else{const s=net.connect({host,port:+port});s.on('connect',()=>done('DIRECT conn
 	l.check("m7.image-gc", os.IsNotExist(statErr) && sh("docker", "images", "-q", "ubuntu:24.04") == "", "dir-removed=%v docker=%q", os.IsNotExist(statErr), sh("docker", "images", "-q", "ubuntu:24.04"))
 	fresh, _ := os.ReadDir(filepath.Join(l.s.d.Root, "images"))
 	l.check("m7.recent-images-kept", len(fresh) > 0, "%d left", len(fresh))
+}
+
+// ---- v0.21 (sandbox.v2): snapshots, restore and fork, pause/resume, database import
+
+func (l *live) snapshot(id, snap string, leave bool) (SnapshotResult, time.Duration, error) {
+	start := time.Now()
+	res, err := l.s.Snapshot(l.ctx, SnapshotPayload{ID: id, SnapshotID: snap, LeaveRunning: &leave}, nil)
+	if err != nil {
+		return SnapshotResult{}, time.Since(start), err
+	}
+	return res.(SnapshotResult), time.Since(start), nil
+}
+
+// counter reads /tmp/c, the counter the background loop of a counting sandbox writes every second.
+func (l *live) counter(id string) int {
+	n := -1
+	_, _ = fmt.Sscan(strings.TrimSpace(l.sh(id, "cat /tmp/c").out), &n)
+	return n
+}
+
+const counterLoop = "nohup sh -c 'i=0; while :; do i=$((i+1)); echo $i > /tmp/c; sleep 1; done' </dev/null >/dev/null 2>&1 &"
+
+// nodeServer serves {n, pid, ip, id}: a counter, its pid, its eth0 address and /app/id.
+const nodeServer = `const http=require('http'),os=require('os'),fs=require('fs');let n=0;setInterval(()=>n++,1000);
+http.createServer((q,r)=>{const ip=((os.networkInterfaces().eth0)||[]).filter(a=>a.family==='IPv4').map(a=>a.address).join(',');
+r.end(JSON.stringify({n,pid:process.pid,ip,id:fs.readFileSync('/app/id','utf8').trim()}))}).listen(3000);`
+
+type served struct {
+	N   int    `json:"n"`
+	PID int    `json:"pid"`
+	IP  string `json:"ip"`
+	ID  string `json:"id"`
+}
+
+func (l *live) serve(id string) (served, string) {
+	r := l.sh(id, "wget -qO- -T 5 http://127.0.0.1:3000/")
+	var s served
+	_ = json.Unmarshal([]byte(r.out), &s)
+	return s, strings.TrimSpace(r.out + r.errOut)
+}
+
+func freeBytes(path string) uint64 {
+	f, _, _ := diskSpace(path)
+	return f
+}
+
+// TestLiveV2 checks v0.21 against real runsc, Docker and a database container. LIVE_FALAK_DB is a linux build of
+// cmd/falak-db (copied into a postgres:17 container named like an instance's, as the agent's db code expects).
+func TestLiveV2(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root")
+	}
+	req := &captureRequests{}
+	ctx := context.Background()
+	l := &live{t: t, ctx: ctx, s: newLiveService(req), req: req}
+	for _, st := range l.s.states() {
+		l.kill(st.ID)
+	}
+	for _, m := range l.s.snapshots() {
+		_, _ = l.s.SnapshotDelete(ctx, SnapshotDeletePayload{SnapshotID: m.SnapshotID}, nil)
+	}
+	if _, err := l.s.Prepare(ctx, PreparePayload{}, &liveStream{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("runsc %s", sh("runsc", "--version"))
+
+	// ---- snapshot with leave_running: the counter goes on in the source and in the restore
+	A := newID()
+	ca, _, err := l.create(CreatePayload{ID: A, Image: "alpine:3.20", Env: map[string]string{"FOO": "from-create"}})
+	if !l.check("v2.create.A", err == nil, "ip=%s err=%v", ca.IP, err) {
+		t.FailNow()
+	}
+	l.sh(A, "echo marker-A > /root/marker; head -c 20000000 /dev/urandom > /root/blob; "+counterLoop)
+	time.Sleep(3 * time.Second)
+	S1 := newID()
+	before := l.counter(A)
+	s1, d, err := l.snapshot(A, S1, true)
+	l.check("v2.snapshot.leave-running", err == nil && s1.SnapshotID == S1 && s1.SizeBytes > 20_000_000 && s1.ImageDigest == ca.ImageDigest && s1.CreatedAt != "",
+		"%s %+v err=%v", d.Round(time.Millisecond), s1, err)
+	fi, _ := os.Stat(l.s.snapDir(S1))
+	mi, _ := os.Stat(filepath.Join(l.s.snapDir(S1), "meta.json"))
+	l.check("v2.snapshot.root-only", fi != nil && fi.Mode().Perm() == 0o700 && mi != nil && mi.Mode().Perm() == 0o600 &&
+		strings.Contains(sh("stat", "-c", "%a", filepath.Join(l.s.d.Root, "snapshots")), "700"), "dir=%v meta=%v", fi.Mode(), mi.Mode())
+	l.check("v2.snapshot.files", true, "%s", sh("sh", "-c", "ls -la "+l.s.snapImage(S1)+" | tail -n +2"))
+	again, _, err := l.snapshot(A, S1, true)
+	l.check("v2.snapshot.idempotent", err == nil && again == s1, "%+v err=%v", again, err)
+	time.Sleep(3 * time.Second)
+	afterA := l.counter(A)
+	l.check("v2.snapshot.source-continues", afterA >= before+3, "before=%d after=%d", before, afterA)
+
+	R1 := newID()
+	cr, d, err := l.create(CreatePayload{ID: R1, Image: "alpine:3.20", FromSnapshot: S1, Env: map[string]string{"FORK": "1"}})
+	l.check("v2.restore", err == nil && cr.Status == "running" && cr.IP != "" && cr.IP != ca.IP && cr.ImageDigest == ca.ImageDigest,
+		"%s ip=%s (source %s) err=%v", d.Round(time.Millisecond), cr.IP, ca.IP, err)
+	c0 := l.counter(R1)
+	time.Sleep(3 * time.Second)
+	c1 := l.counter(R1)
+	l.check("v2.restore.counter-continues", c0 >= before && c0 <= before+3 && c1 >= c0+2, "snapshot≈%d restored=%d after 3s=%d", before, c0, c1)
+	r := l.sh(R1, "cat /root/marker; wc -c < /root/blob; echo $FOO $FORK")
+	l.check("v2.restore.files-and-env", r.out == "marker-A\n20000000\nfrom-create 1\n", "%q %q", r.out, r.errOut)
+	r = l.sh(R1, "wget -q -T 8 -O /dev/null http://example.com && echo internet-ok")
+	l.check("v2.restore.internet", strings.Contains(r.out, "internet-ok"), "%q %q", r.out, r.errOut)
+	l.sh(R1, "echo changed > /root/marker")
+	l.check("v2.restore.independent", l.sh(A, "cat /root/marker").out == "marker-A\n", "source sees %q", l.sh(A, "cat /root/marker").out)
+
+	_, _, err = l.create(CreatePayload{ID: newID(), Image: "alpine:3.20", FromSnapshot: S1, MemoryMB: 1024})
+	l.check("v2.restore.limit-mismatch", err != nil && strings.Contains(err.Error(), "must equal"), "err=%v", err)
+	missing := newID()
+	_, _, err = l.create(CreatePayload{ID: newID(), Image: "alpine:3.20", FromSnapshot: missing})
+	l.check("v2.restore.unknown-snapshot", err != nil && err.Error() == "snapshot "+missing+" not found", "err=%v", err)
+	_, err = l.s.Snapshot(ctx, SnapshotPayload{ID: newID(), SnapshotID: newID()}, nil)
+	l.check("v2.snapshot.unknown-sandbox", err != nil && strings.Contains(err.Error(), "not found"), "err=%v", err)
+
+	// ---- node server: snapshot, kill the source, fork x3; each serves on its own address
+	N := newID()
+	cn, _, err := l.create(CreatePayload{ID: N, Image: "node:22-alpine"})
+	l.check("v2.create.node", err == nil, "ip=%s err=%v", cn.IP, err)
+	_, err = l.s.WriteFile(ctx, WritePayload{ID: N, Path: "/app/server.js", Content: base64.StdEncoding.EncodeToString([]byte(nodeServer))}, nil)
+	l.sh(N, "echo source > /app/id; cd /app && nohup node server.js </dev/null >/app/log 2>&1 &")
+	var sv served
+	var raw string
+	for i := 0; i < 30; i++ {
+		if sv, raw = l.serve(N); sv.PID != 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	l.check("v2.node.serves", err == nil && sv.PID != 0 && sv.IP == cn.IP, "%s", raw)
+	S2 := newID()
+	s2, d, err := l.snapshot(N, S2, true)
+	l.check("v2.node.snapshot", err == nil, "%s size=%d MB err=%v", d.Round(time.Millisecond), s2.SizeBytes>>20, err)
+	l.kill(N)
+	leftover, _ := filepath.Glob(filepath.Join(l.s.d.Root, "images", "*", "rootfs", ".gvisor.filestore."+cid(N)+"*"))
+	l.check("v2.node.source-gone", len(leftover) == 0 && l.s.states() != nil, "filestores left %v", leftover)
+	forks := []string{newID(), newID(), newID()}
+	start := time.Now()
+	var wg sync.WaitGroup
+	fres := make([]CreateResult, 3)
+	ferr := make([]error, 3)
+	for i, id := range forks {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fres[i], _, ferr[i] = l.create(CreatePayload{ID: id, Image: "node:22-alpine", FromSnapshot: S2})
+		}()
+	}
+	wg.Wait()
+	l.check("v2.fork3", ferr[0] == nil && ferr[1] == nil && ferr[2] == nil, "%s errs=%v", time.Since(start).Round(time.Millisecond), ferr)
+	ips := map[string]bool{cn.IP: true}
+	for i, id := range forks {
+		l.sh(id, fmt.Sprintf("echo fork-%d > /app/id", i))
+	}
+	for i, id := range forks {
+		s, raw := l.serve(id)
+		ok := s.PID == sv.PID && s.N >= sv.N && s.IP == fres[i].IP && !ips[s.IP] && s.ID == fmt.Sprintf("fork-%d", i)
+		ips[s.IP] = true
+		l.check(fmt.Sprintf("v2.fork.%d.serves", i), ok, "%s (result ip %s)", raw, fres[i].IP)
+		r := l.sh(id, "wget -q -T 8 -O /dev/null http://example.com && echo internet-ok")
+		l.check(fmt.Sprintf("v2.fork.%d.internet", i), strings.Contains(r.out, "internet-ok"), "%q %q", r.out, r.errOut)
+	}
+	l.check("v2.fork.own-ips", len(ips) == 4, "%v", ips)
+
+	// ---- leave_running false: checkpoint, then removed as by a kill; the snapshot restores
+	B := newID()
+	_, _, err = l.create(CreatePayload{ID: B, Image: "alpine:3.20"})
+	l.sh(B, "echo marker-B > /root/marker; "+counterLoop)
+	time.Sleep(2 * time.Second)
+	S3 := newID()
+	_, d, err = l.snapshot(B, S3, false)
+	stB, _ := l.s.readState(B)
+	l.check("v2.snapshot.stop", err == nil && stB == nil && !strings.Contains(sh("runsc", "--root="+l.s.d.RunscRoot, "list"), cid(B)) &&
+		!strings.Contains(sh("ip", "netns", "list"), netnsName(B)), "%s err=%v state=%v", d.Round(time.Millisecond), err, stB)
+	RB := newID()
+	_, _, err = l.create(CreatePayload{ID: RB, Image: "alpine:3.20", FromSnapshot: S3})
+	l.check("v2.snapshot.stop.restores", err == nil && l.sh(RB, "cat /root/marker").out == "marker-B\n" && l.counter(RB) > 0, "err=%v", err)
+
+	// ---- pause / resume: no CPU while paused; the reaper only expires paused sandboxes
+	P := newID()
+	_, _, err = l.create(CreatePayload{ID: P, Image: "alpine:3.20"})
+	l.sh(P, "nohup sh -c 'while :; do :; done' </dev/null >/dev/null 2>&1 &")
+	time.Sleep(2 * time.Second)
+	res, err := l.s.Pause(ctx, IDPayload{ID: P}, nil)
+	_, cpu0 := l.s.usage(P)
+	time.Sleep(3 * time.Second)
+	_, cpu1 := l.s.usage(P)
+	l.check("v2.pause", err == nil && res.(StatusResult).Status == "paused" && cpu1-cpu0 < 0.05, "cpu while paused %.3fs in 3s err=%v", cpu1-cpu0, err)
+	res, err = l.s.Pause(ctx, IDPayload{ID: P}, nil)
+	l.check("v2.pause.idempotent", err == nil && res.(StatusResult).Status == "paused", "err=%v", err)
+	inv, _ := l.s.Inventory(ctx, InventoryPayload{}, nil)
+	pst := ""
+	for _, it := range inv.(InventoryResult).Sandboxes {
+		if it.ID == P {
+			pst = it.Status
+		}
+	}
+	l.check("v2.pause.inventory", pst == "paused", "status=%s", pst)
+	_, err = l.s.Snapshot(ctx, SnapshotPayload{ID: P, SnapshotID: newID()}, nil)
+	l.check("v2.snapshot.paused-refused", err != nil && strings.Contains(err.Error(), "paused"), "err=%v", err)
+	l.s.ReapOnce(ctx)
+	stP, _ := l.s.readState(P)
+	l.check("v2.pause.survives-reaper", stP != nil && stP.Reaped == "", "state=%+v", stP)
+	res, err = l.s.Resume(ctx, IDPayload{ID: P}, nil)
+	_, cpu2 := l.s.usage(P)
+	time.Sleep(2 * time.Second)
+	_, cpu3 := l.s.usage(P)
+	l.check("v2.resume", err == nil && res.(StatusResult).Status == "running" && cpu3-cpu2 > 1, "cpu after resume %.2fs in 2s err=%v", cpu3-cpu2, err)
+	_, _ = l.s.Pause(ctx, IDPayload{ID: P}, nil)
+	_, _ = l.s.Extend(ctx, ExtendPayload{ID: P, ExpiresAt: time.Now().Unix() - 1}, nil)
+	l.s.ReapOnce(ctx)
+	l.check("v2.pause.expires", req.find(P)["reason"] == "expired", "%v", req.find(P))
+	_, err = l.s.Resume(ctx, IDPayload{ID: P}, nil)
+	l.check("v2.resume.unknown", err != nil && err.Error() == "sandbox "+P+" not found", "err=%v", err)
+
+	// ---- database import from a postgres:17 instance container (falak-db inside, as db.instance.create makes it)
+	if bin := os.Getenv("LIVE_FALAK_DB"); bin != "" {
+		inst := newID()
+		ctr := db.Container(inst)
+		sh("docker", "rm", "-f", ctr)
+		sh("docker", "run", "-d", "--name", ctr, "-e", "POSTGRES_PASSWORD=live-only", "-e", "FALAK_DB_ENGINE=postgres", "postgres:17")
+		sh("docker", "cp", bin, ctr+":/usr/local/bin/falak-db")
+		for i := 0; i < 60 && sh("docker", "exec", ctr, "pg_isready", "-h", "/var/run/postgresql") != "/var/run/postgresql:5432 - accepting connections"; i++ {
+			time.Sleep(time.Second)
+		}
+		time.Sleep(2 * time.Second)
+		sh("docker", "exec", ctr, "psql", "-U", "postgres", "-c", "CREATE DATABASE shop")
+		sh("docker", "exec", ctr, "psql", "-U", "postgres", "-d", "shop", "-c", "CREATE TABLE orders(id int, note text); INSERT INTO orders SELECT g, md5(g::text) FROM generate_series(1,50000) g")
+		D := newID()
+		_, _, err := l.create(CreatePayload{ID: D, Image: "postgres:17", Network: NetNone})
+		l.check("v2.db.sandbox", err == nil, "err=%v", err)
+		free0 := freeBytes(l.s.d.Root)
+		start := time.Now()
+		res, err := l.s.DBImport(ctx, DBImportPayload{ID: D, Instance: inst, Engine: "postgres", Database: "shop", Path: "/workspace/db/shop.dump"}, nil)
+		var ir DBImportResult
+		if err == nil {
+			ir = res.(DBImportResult)
+		}
+		r := l.sh(D, "head -c 5 /workspace/db/shop.dump; echo; stat -c %s /workspace/db/shop.dump; pg_restore -l /workspace/db/shop.dump | grep -c 'TABLE DATA public orders'")
+		l.check("v2.db.import", err == nil && ir.Path == "/workspace/db/shop.dump" && ir.SizeBytes > 100000 && r.out == fmt.Sprintf("PGDMP\n%d\n1\n", ir.SizeBytes),
+			"%s %+v %q %q err=%v (host free %d→%d MB)", time.Since(start).Round(time.Millisecond), ir, r.out, r.errOut, err, free0>>20, freeBytes(l.s.d.Root)>>20)
+		r = l.sh(D, "mkdir -p /tmp/pg && chown postgres /tmp/pg && su postgres -c 'initdb -D /tmp/pg >/dev/null && pg_ctl -D /tmp/pg -o \"-k /tmp\" -w start >/dev/null && createdb -h /tmp shop && pg_restore -h /tmp -d shop /workspace/db/shop.dump && psql -h /tmp -d shop -tAc \"select count(*) from orders\"'")
+		l.check("v2.db.restores-in-sandbox", strings.TrimSpace(r.out) == "50000", "%q %q", r.out, r.errOut)
+		_, err = l.s.DBImport(ctx, DBImportPayload{ID: D, Instance: inst, Engine: "postgres", Database: "nosuchdb", Path: "/workspace/db/nosuchdb.dump"}, nil)
+		r = l.sh(D, "ls /workspace/db")
+		l.check("v2.db.failed-import-leaves-nothing", err != nil && r.out == "shop.dump\n", "err=%v ls=%q", err, r.out)
+		l.kill(D)
+		sh("docker", "rm", "-f", ctr)
+	} else {
+		l.check("v2.db.import", false, "LIVE_FALAK_DB not set")
+	}
+
+	// ---- agent restart: snapshots are kept and restore from a new service
+	l2 := &live{t: t, ctx: ctx, s: newLiveService(req), req: req}
+	inv, err = l2.s.Inventory(ctx, InventoryPayload{}, nil)
+	got := map[string]int64{}
+	for _, sn := range inv.(InventoryResult).Snapshots {
+		got[sn.SnapshotID] = sn.SizeBytes
+	}
+	l.check("v2.restart.inventory", err == nil && got[S1] == s1.SizeBytes && got[S2] > 0 && got[S3] > 0, "%v err=%v", got, err)
+	R2 := newID()
+	_, _, err = l2.create(CreatePayload{ID: R2, Image: "alpine:3.20", FromSnapshot: S1})
+	l.check("v2.restart.restores", err == nil && l2.sh(R2, "cat /root/marker").out == "marker-A\n", "err=%v", err)
+
+	// ---- snapshot delete frees its disk; restored sandboxes don't need it
+	free0 := freeBytes(l.s.d.Root)
+	_, err = l.s.SnapshotDelete(ctx, SnapshotDeletePayload{SnapshotID: S2}, nil)
+	free1 := freeBytes(l.s.d.Root)
+	_, statErr := os.Stat(l.s.snapDir(S2))
+	s, raw := l.serve(forks[0])
+	l.check("v2.snapshot.delete", err == nil && os.IsNotExist(statErr) && int64(free1-free0) > s2.SizeBytes/2 && s.PID != 0,
+		"freed %d MB (snapshot %d MB); fork still serves %s", int64(free1-free0)>>20, s2.SizeBytes>>20, raw)
+	_, err = l.s.SnapshotDelete(ctx, SnapshotDeletePayload{SnapshotID: S2}, nil)
+	l.check("v2.snapshot.delete.idempotent", err == nil, "err=%v", err)
+
+	// ---- kill with snapshots present: sandboxes go, snapshots stay
+	for _, st := range l.s.states() {
+		l.kill(st.ID)
+	}
+	l.check("v2.kill.cleanup", len(l.s.states()) == 0 && len(l.s.snapshots()) == 2 && strings.TrimSpace(sh("sh", "-c", "ip netns list | grep -c falak-sbx")) == "0" &&
+		perSandboxRules(sh("iptables-save")) == 0 && !strings.Contains(sh("runsc", "--root="+l.s.d.RunscRoot, "list"), "falak-sbx-"),
+		"states=%d snapshots=%d", len(l.s.states()), len(l.s.snapshots()))
+
+	// ---- the image GC keeps a snapshot's base image, and removes it once the last snapshot is gone
+	m1, _ := l.s.readMeta(S1)
+	imgDir := filepath.Dir(m1.Rootfs)
+	old := time.Now().Add(-7 * time.Hour)
+	_ = os.Chtimes(imgDir, old, old)
+	l.s.ReapOnce(ctx)
+	_, statErr = os.Stat(imgDir)
+	l.check("v2.gc.keeps-snapshot-image", statErr == nil, "err=%v", statErr)
+	for _, sn := range []string{S1, S3} {
+		_, _ = l.s.SnapshotDelete(ctx, SnapshotDeletePayload{SnapshotID: sn}, nil)
+	}
+	_ = os.Chtimes(imgDir, old, old)
+	l.s.ReapOnce(ctx)
+	_, statErr = os.Stat(imgDir)
+	l.check("v2.gc.after-snapshots-deleted", os.IsNotExist(statErr), "err=%v", statErr)
 }
 
 type failRequests struct{}
