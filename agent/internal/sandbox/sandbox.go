@@ -436,6 +436,13 @@ func (s *Service) Create(ctx context.Context, p CreatePayload, st commands.Strea
 		return nil, err
 	} else if old != nil {
 		if status, known := s.status(ctx, p.ID); known && status == "running" && old.Reaped == "" {
+			// A repeated create is also how the control plane extends a sandbox: take the new expiry, nothing else.
+			if p.ExpiresAt != old.ExpiresAt {
+				old.ExpiresAt = p.ExpiresAt
+				if err := s.writeState(old); err != nil {
+					return nil, err
+				}
+			}
 			return CreateResult{Status: "running", IP: old.IP, ImageDigest: old.ImageDigest, StartedAt: old.StartedAt}, nil
 		}
 		s.teardown(ctx, old)

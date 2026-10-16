@@ -185,7 +185,7 @@ New package `agent/internal/sandbox`, registered in `agent.go`, feature `sandbox
 | `sandbox.restore/fork` (v0.21) | `runsc restore` into a new bundle + netns per fork (forks get their own IPs) |
 | `sandbox.pause/resume` (v0.21) | `runsc pause/resume` |
 
-Terminal: a new console target `sandbox`. The agent's pty package gains a runsc target (`runsc exec -t` in place of
+Terminal: a new console target `sandbox`. The agent's pty package gains a runsc target (`runsc exec`, terminal mode from the pty, in place of
 `docker exec -it`); the relay and CLI are unchanged.
 
 ## Control plane
@@ -244,7 +244,7 @@ These are fixed before the three lanes (agent, control plane, CLI) start, so the
 ### Terminal
 
 `terminal.open` gains an optional `sandbox: {id}` target (exclusive with `container`). The agent runs
-`runsc --root=/run/falak-sbx exec -t falak-sbx-<id> /bin/sh -lc 'exec bash -l 2>/dev/null || exec sh -l'` under the
+`runsc --root=/run/falak-sbx exec falak-sbx-<id> /bin/sh -lc 'exec bash -l 2>/dev/null || exec sh -l'` under the
 existing pty + relay code. Control plane: `TerminalSession::TARGET_SANDBOX`, `ConsoleTargets::forSandbox`, route
 `POST /api/v1/sandboxes/{sandbox}/console` (returns the same body as the other console routes).
 

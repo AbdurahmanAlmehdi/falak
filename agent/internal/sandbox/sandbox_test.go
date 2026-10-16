@@ -393,12 +393,19 @@ func TestCreateKillAndRedelivery(t *testing.T) {
 		t.Fatal("re-ran runsc run")
 	}
 
+	// Redelivered with a later expiry (extend): the expiry moves, nothing re-runs.
+	ext := createPayload(NetInternet)
+	ext.ExpiresAt += 1800
+	if _, err := e.svc.Create(ctx, ext, nil); err != nil || e.run.Ran("sh -c") {
+		t.Fatal("extend", err)
+	}
+
 	// Inventory.
 	inv, err := e.svc.Inventory(ctx, InventoryPayload{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if it := inv.(InventoryResult).Sandboxes; len(it) != 1 || it[0].Status != "running" || it[0].ExpiresAt != 1760003600 {
+	if it := inv.(InventoryResult).Sandboxes; len(it) != 1 || it[0].Status != "running" || it[0].ExpiresAt != 1760005400 {
 		t.Fatalf("%+v", it)
 	}
 
