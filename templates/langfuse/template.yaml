@@ -1,0 +1,75 @@
+name: Langfuse
+slug: langfuse
+version: 1.0.0
+description: LLM engineering platform — tracing, evals, prompt management and metrics. ClickHouse inside; needs 4 GB RAM.
+category: ai
+icon: ./icon.svg
+docs: https://langfuse.com/self-hosting
+stateful: true
+min_memory_mb: 4096
+tags: [llm, observability, tracing, evals, prompts]
+public:
+  - service: langfuse-web
+    port: 3000
+    health_check_path: /api/public/health
+  - service: minio
+    port: 9000
+    health_check_path: /minio/health/live
+inputs:
+  - key: ADMIN_EMAIL
+    type: email
+    label: Admin email
+    description: Sign in with this email and the admin password. Sign-up is disabled; invite others from the organization settings.
+  - key: ADMIN_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Admin password
+    description: Set on first start only; change it later in Langfuse.
+  - key: LANGFUSE_ORG_NAME
+    type: string
+    label: Organization name
+    default: My Organization
+  - key: LANGFUSE_PROJECT_NAME
+    type: string
+    label: Project name
+    default: My Project
+  - key: LANGFUSE_PUBLIC_KEY
+    type: secret
+    generate: hex(16)
+    label: Project public key
+    description: The first project's API public key is pk-lf- followed by this value.
+  - key: LANGFUSE_SECRET_KEY
+    type: secret
+    generate: hex(32)
+    label: Project secret key
+    description: The first project's API secret key is sk-lf- followed by this value.
+  - key: NEXTAUTH_SECRET
+    type: secret
+    generate: secret(48)
+    label: Session secret
+  - key: SALT
+    type: secret
+    generate: secret(32)
+    label: API key salt
+    description: Hashes API keys. Keep it — existing API keys stop working without it.
+  - key: ENCRYPTION_KEY
+    type: secret
+    generate: hex(64)
+    label: Encryption key
+    description: Encrypts stored LLM provider keys (64 hex characters). Keep it.
+  - key: POSTGRES_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password
+  - key: CLICKHOUSE_PASSWORD
+    type: secret
+    generate: password(32)
+    label: ClickHouse password
+  - key: REDIS_PASSWORD
+    type: secret
+    generate: password(32)
+    label: Redis password
+  - key: MINIO_ROOT_PASSWORD
+    type: secret
+    generate: password(32)
+    label: MinIO password

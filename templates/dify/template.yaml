@@ -1,0 +1,46 @@
+name: Dify
+slug: dify
+version: 1.0.0
+description: Build LLM apps, agents, RAG pipelines and workflows visually, then serve them as APIs. Needs 4 GB RAM.
+category: ai
+icon: dify
+docs: https://docs.dify.ai/en/self-host/quick-start/docker-compose
+stateful: true
+min_memory_mb: 4096
+popular: true
+tags: [llm, agents, rag, workflows, low-code]
+public:
+  - service: nginx
+    port: 80
+    health_check_path: /console/api/ping
+inputs:
+  - key: INIT_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Setup password
+    description: Open /install and enter this password to create the admin account. Only the first visitor with it can set Dify up.
+  - key: SECRET_KEY
+    type: secret
+    generate: secret(48)
+    label: Secret key
+    description: Signs sessions and encrypts stored provider credentials. Keep it.
+  - key: DB_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password
+  - key: REDIS_PASSWORD
+    type: secret
+    generate: password(32)
+    label: Redis password
+  - key: SANDBOX_API_KEY
+    type: secret
+    generate: secret(42)
+    label: Sandbox API key
+  - key: PLUGIN_DAEMON_KEY
+    type: secret
+    generate: secret(48)
+    label: Plugin daemon key
+  - key: PLUGIN_INNER_API_KEY
+    type: secret
+    generate: secret(48)
+    label: Plugin inner API key
