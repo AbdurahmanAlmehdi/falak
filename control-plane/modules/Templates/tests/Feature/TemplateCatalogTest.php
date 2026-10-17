@@ -12,18 +12,19 @@ use Falak\Templates\Infrastructure\FilesystemCatalog;
  */
 
 const CATALOG_V1 = [
-    'adminer', 'appsmith', 'bookstack', 'changedetection', 'code-server', 'directus', 'erpnext', 'excalidraw', 'forgejo',
-    'ghost', 'gitea', 'grafana', 'langflow', 'listmonk', 'mailpit', 'matomo', 'meilisearch', 'metabase', 'minio', 'n8n',
-    'nextcloud', 'nocodb', 'ntfy', 'odoo', 'ollama', 'paperless-ngx', 'plausible', 'qdrant', 'redis-stack', 'umami',
-    'uptime-kuma', 'vaultwarden', 'wikijs', 'wordpress',
+    '9router', 'adminer', 'anythingllm', 'appsmith', 'bookstack', 'changedetection', 'cliproxyapi', 'code-server',
+    'dify', 'directus', 'erpnext', 'excalidraw', 'flowise', 'forgejo', 'ghost', 'gitea', 'grafana', 'hermes-agent',
+    'langflow', 'langfuse', 'librechat', 'listmonk', 'litellm', 'mailpit', 'matomo', 'meilisearch', 'metabase', 'minio',
+    'n8n', 'nextcloud', 'nocodb', 'ntfy', 'odoo', 'ollama', 'omniroute', 'openclaw', 'paperless-ngx', 'plausible',
+    'qdrant', 'redis-stack', 'searxng', 'umami', 'uptime-kuma', 'vaultwarden', 'wikijs', 'wordpress',
 ];
 
 /** Brand icons the UI ships (modules/Templates/resources/js/components/template-icon.tsx). */
 const CATALOG_BRAND_ICONS = [
-    'adminer', 'appsmith', 'bookstack', 'changedetection', 'clickhouse', 'coder', 'directus', 'docker', 'erpnext',
+    'adminer', 'appsmith', 'bookstack', 'changedetection', 'clickhouse', 'coder', 'dify', 'directus', 'docker', 'erpnext',
     'excalidraw', 'forgejo', 'ghost', 'gitea', 'grafana', 'langflow', 'listmonk', 'mariadb', 'matomo', 'meilisearch',
     'metabase', 'minio', 'mysql', 'n8n', 'nextcloud', 'ntfy', 'odoo', 'ollama', 'paperlessngx', 'plausibleanalytics',
-    'postgresql', 'qdrant', 'redis', 'umami', 'uptimekuma', 'vaultwarden', 'wikidotjs', 'wordpress',
+    'postgresql', 'qdrant', 'redis', 'searxng', 'umami', 'uptimekuma', 'vaultwarden', 'wikidotjs', 'wordpress',
 ];
 
 function catalog_files(): array
@@ -98,4 +99,11 @@ it('runs Odoo threaded so /websocket is served on its public port', function () 
     expect($services['odoo']['command'][0])->toContain('workers = 0', 'proxy_mode = True', 'admin_passwd = %s')
         // The database password is in the config file, not on odoo's argv.
         ->toContain('db_password = %s', 'exec odoo -c /tmp/odoo.conf')->not->toContain('/entrypoint.sh');
+});
+
+it('keeps Dify\'s code sandbox off the environment network, behind the SSRF proxy', function () {
+    $services = ComposeDocument::parse(catalog_files()['dify']['compose'])->services();
+
+    expect($services['sandbox']['labels']['falak.environment_network'])->toBe('none')
+        ->and($services['sandbox']['networks'])->toBe(['ssrf_proxy_network']);
 });
