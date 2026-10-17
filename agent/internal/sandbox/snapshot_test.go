@@ -460,3 +460,37 @@ func TestDBImport(t *testing.T) {
 		t.Fatal("no dumper accepted")
 	}
 }
+
+// A checkpoint being taken reserves the sandbox's memory: a create (or another snapshot) at the same time can't pass
+// the disk floor check against the same free space; once it is written the reservation goes.
+func TestSnapshotReservesDiskWhileCheckpointing(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.running(t)
+	started, finish := make(chan struct{}), make(chan struct{})
+	e.run.OnFunc("runsc --root="+e.svc.d.RunscRoot+" checkpoint", func(runnertest.Call) (runner.Result, error) {
+		close(started)
+		<-finish
+		return runner.Result{}, nil
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.svc.Snapshot(ctx, SnapshotPayload{ID: sid, SnapshotID: snap}, nil)
+		done <- err
+	}()
+	<-started
+	// 5 GiB floor + 2.25 GiB: enough for sid2's 2 GiB disk alone, not with the checkpoint's 512 MiB reserved.
+	e.setFree(5<<30 + 2304<<20)
+	p := createPayload(NetNone)
+	p.ID = sid2
+	if _, err := e.svc.Create(ctx, p, nil); err == nil || !strings.Contains(err.Error(), "0.5 GiB reserved for snapshots being taken") {
+		t.Fatal(err)
+	}
+	close(finish)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Create(ctx, p, nil); err != nil {
+		t.Fatal(err)
+	}
+}

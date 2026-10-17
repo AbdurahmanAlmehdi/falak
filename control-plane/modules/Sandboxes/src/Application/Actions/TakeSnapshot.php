@@ -67,8 +67,10 @@ final class TakeSnapshot
             throw ValidationException::withMessages(['snapshot' => "Your organization keeps {$count} of its {$max} snapshots. Delete one first."]);
         }
 
-        // ponytail: a snapshot's size is known once taken, so only what is already on disk counts (one may overshoot).
-        $usedMb = (int) ceil((int) (clone $kept)->sum('size_bytes') / 1024 / 1024);
+        // A snapshot's size is known once taken: one still being taken reserves its sandbox's memory and disk (what a
+        // checkpoint can hold at most), so snapshots taken at the same time can't pass the quota together.
+        $usedMb = (int) ceil((int) (clone $kept)->where('status', SandboxSnapshot::READY)->sum('size_bytes') / 1024 / 1024)
+            + (int) (clone $kept)->where('status', SandboxSnapshot::CREATING)->sum(DB::raw('memory_mb + disk_mb'));
         $maxMb = (int) config('sandboxes.max_snapshot_storage_mb');
 
         if ($usedMb >= $maxMb) {

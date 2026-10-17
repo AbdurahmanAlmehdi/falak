@@ -181,10 +181,12 @@ func (s *Service) Snapshot(ctx context.Context, p SnapshotPayload, _ commands.St
 	if err := json.Unmarshal(b, &spec); err != nil {
 		return nil, err
 	}
-	// The checkpoint holds the sandbox's memory and what it wrote.
-	if err := s.checkDisk(uint64(st.MemoryMB)<<20+filestoreBytes(st), "a snapshot of sandbox "+p.ID); err != nil {
+	// The checkpoint holds the sandbox's memory and what it wrote: reserved until it is written.
+	release, err := s.reserveDisk(uint64(st.MemoryMB)<<20+filestoreBytes(st), "a snapshot of sandbox "+p.ID)
+	if err != nil {
 		return nil, err
 	}
+	defer release()
 	if err := s.ensureDirs(); err != nil {
 		return nil, err
 	}

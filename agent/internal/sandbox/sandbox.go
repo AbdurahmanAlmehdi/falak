@@ -80,6 +80,9 @@ type Service struct {
 	imgLocks sync.Map   // image id → *sync.Mutex
 	netMu    sync.Mutex // the allocator, the chains and the proxy's listener
 
+	diskMu   sync.Mutex
+	reserved uint64 // bytes checkpoints being taken may still write (diskMu): every disk check counts them as used
+
 	prepMu   sync.Mutex
 	prepared *PrepareResult
 	proxyLn  net.Listener
@@ -845,14 +848,41 @@ var diskPoll = time.Second
 // diskFloor is the free space sandboxes leave on a filesystem of total bytes: 10% of it or 5 GiB, whichever is smaller.
 func diskFloor(total uint64) uint64 { return min(total/10, diskFloorMax) }
 
-// checkDisk refuses when need more bytes under Root would leave less than the floor free.
+// checkDisk refuses when need more bytes under Root (and what checkpoints being taken reserved) would leave less than
+// the floor free.
 func (s *Service) checkDisk(need uint64, what string) error {
+	s.diskMu.Lock()
+	defer s.diskMu.Unlock()
+	return s.checkDiskLocked(need, what)
+}
+
+// reserveDisk is checkDisk that also reserves need until release is called: snapshots taken at the same time can't
+// each pass the check against the same free space.
+func (s *Service) reserveDisk(need uint64, what string) (release func(), err error) {
+	s.diskMu.Lock()
+	defer s.diskMu.Unlock()
+	if err := s.checkDiskLocked(need, what); err != nil {
+		return nil, err
+	}
+	s.reserved += need
+	return func() {
+		s.diskMu.Lock()
+		s.reserved -= need
+		s.diskMu.Unlock()
+	}, nil
+}
+
+func (s *Service) checkDiskLocked(need uint64, what string) error {
 	free, total, err := s.d.DiskSpace(s.d.Root)
 	if err != nil {
 		return fmt.Errorf("free space under %s: %w", s.d.Root, err)
 	}
-	if floor := diskFloor(total); free < floor || free-floor < need {
-		return fmt.Errorf("not enough disk space for %s: %s free under %s, %s needed and %s kept free", what, gib(free), s.d.Root, gib(need), gib(floor))
+	if floor := diskFloor(total); free < floor || free-floor < need+s.reserved {
+		held := ""
+		if s.reserved > 0 {
+			held = ", " + gib(s.reserved) + " reserved for snapshots being taken"
+		}
+		return fmt.Errorf("not enough disk space for %s: %s free under %s, %s needed%s and %s kept free", what, gib(free), s.d.Root, gib(need), held, gib(floor))
 	}
 	return nil
 }

@@ -252,9 +252,24 @@ it('enforces the snapshot quotas', function () {
         ->assertJsonValidationErrors(['snapshot' => 'keeps 2 of its 2 snapshots']);
 
     config(['sandboxes.max_snapshots' => 10]);
+    SandboxSnapshot::query()->where('status', SandboxSnapshot::CREATING)->delete();
     SandboxSnapshot::query()->where('name', 'a')->update(['size_bytes' => 11 * 1024 ** 2]);
     snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertUnprocessable()
         ->assertJsonValidationErrors(['snapshot' => 'may take 10 MB in all; 11 MB are taken']);
+});
+
+it('counts snapshots still being taken against the storage quota with their sandbox\'s memory and disk', function () {
+    $sandbox = snap_sandbox();
+    config(['sandboxes.max_snapshot_storage_mb' => 20000]);
+
+    // The first is being taken (size unknown): it reserves 2048 + 20480 MB, so a second one at the same time is refused.
+    snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertCreated();
+    snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertUnprocessable()
+        ->assertJsonValidationErrors(['snapshot' => 'may take 20000 MB in all; 22528 MB are taken']);
+
+    // Once taken, only its size counts.
+    SandboxSnapshot::query()->update(['status' => SandboxSnapshot::READY, 'size_bytes' => 1024 ** 2]);
+    snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertCreated();
 });
 
 it('deletes snapshots and sends sandbox.snapshot.delete until the agent confirmed it', function () {
