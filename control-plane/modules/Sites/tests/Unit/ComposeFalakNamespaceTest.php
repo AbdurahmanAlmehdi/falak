@@ -30,9 +30,10 @@ it('refuses namespaces of containers outside the stack, and service: names that 
         ->and(compose_errors("services:\n  app:\n    image: nginx\n  sidecar:\n    image: busybox\n    network_mode: service:app\n"))->toBe([]);
 });
 
-it('refuses falak.* labels set by the file, except the leader command', function () {
+it('refuses falak.* labels set by the file, except the leader command and the environment network opt-out', function () {
     expect(implode(' ', compose_errors("services:\n  app:\n    image: nginx\n    labels:\n      falak.db.instance: 01hzyinst00000000000000001\n")))->toContain("sets Falak's labels (falak.db.instance)")
         ->and(implode(' ', compose_errors("services:\n  app:\n    image: nginx\n    labels: [\"falak.managed=true\"]\n")))->toContain('falak.managed')
         ->and(implode(' ', compose_errors("services:\n  app:\n    image: nginx\nvolumes:\n  data:\n    labels: {falak.volume.id: x}\n")))->toContain("Volume data sets Falak's labels")
-        ->and(compose_errors("services:\n  app:\n    image: nginx\n    labels:\n      falak.deploy.leader_command: php artisan migrate --force\n      com.example.team: web\n"))->toBe([]);
+        ->and(compose_errors("services:\n  app:\n    image: nginx\n    labels:\n      falak.deploy.leader_command: php artisan migrate --force\n      com.example.team: web\n"))->toBe([])
+        ->and(compose_errors("services:\n  sandbox:\n    image: nginx\n    labels:\n      falak.environment_network: none\n"))->toBe([]);
 });

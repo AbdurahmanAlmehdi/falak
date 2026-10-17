@@ -18,6 +18,9 @@ final class YamlComposeInspector implements ComposeInspector
 {
     public const LEADER_COMMAND_LABEL = 'falak.deploy.leader_command';
 
+    /** "none" keeps a service off the environment network, where the environment's databases answer (agent). */
+    public const ENVIRONMENT_NETWORK_LABEL = 'falak.environment_network';
+
     public function parse(string $yaml): ComposeSummary
     {
         $max = (int) config('sites.compose.max_bytes', 262144);
@@ -217,14 +220,14 @@ final class YamlComposeInspector implements ComposeInspector
     }
 
     /**
-     * Labels in Falak's namespace (falak.*) a compose file may not set. falak.deploy.leader_command is the stack's own;
-     * falak.site, falak.release and falak.service are the ones Falak's rendering sets (and overwrites).
+     * Labels in Falak's namespace (falak.*) a compose file may not set. falak.deploy.leader_command and
+     * falak.environment_network are the stack's own; falak.site, falak.release and falak.service are the ones Falak's rendering sets (and overwrites).
      *
      * @return list<string>
      */
     public static function falakLabels(mixed $labels): array
     {
-        return array_values(array_filter(array_keys(self::labels($labels)), fn (string $key) => str_starts_with(strtolower($key), 'falak.') && ! in_array($key, [self::LEADER_COMMAND_LABEL, 'falak.site', 'falak.release', 'falak.service'], true)));
+        return array_values(array_filter(array_keys(self::labels($labels)), fn (string $key) => str_starts_with(strtolower($key), 'falak.') && ! in_array($key, [self::LEADER_COMMAND_LABEL, self::ENVIRONMENT_NETWORK_LABEL, 'falak.site', 'falak.release', 'falak.service'], true)));
     }
 
     /**

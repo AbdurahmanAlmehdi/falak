@@ -31,6 +31,9 @@ const (
 	LabelComposeOneOff  = "com.docker.compose.oneoff"
 )
 
+// LabelEnvironmentNetwork "none" keeps a compose service off the environment networks (a template's label).
+const LabelEnvironmentNetwork = "falak.environment_network"
+
 type ComposeFile struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
@@ -418,7 +421,8 @@ func (s *Service) composeUp(ctx context.Context, p ComposeUpPayload, st commands
 }
 
 // joinEnvironmentNetworks connects every container of the project to the environment networks (compose recreates
-// containers on its own networks only, so this runs after every `up`).
+// containers on its own networks only, so this runs after every `up`), except services labelled
+// falak.environment_network=none (a code sandbox kept on an internal network must not reach the databases).
 func (s *Service) joinEnvironmentNetworks(ctx context.Context, project string, networks []string, st commands.Stream) error {
 	if len(networks) == 0 {
 		return nil
@@ -431,12 +435,17 @@ func (s *Service) joinEnvironmentNetworks(ctx context.Context, project string, n
 		if err := s.ensureEnvironmentNetwork(ctx, n); err != nil {
 			return err
 		}
+		joined := 0
 		for _, c := range list {
+			if c.Labels[LabelEnvironmentNetwork] == "none" {
+				continue
+			}
+			joined++
 			if err := s.c.NetworkConnect(ctx, n, c.ID, nil); err != nil {
 				return fmt.Errorf("joining %s to %s: %w", containerName(c), n, err)
 			}
 		}
-		fmt.Fprintf(st.Stdout(), "%d container(s) of %s joined %s\n", len(list), project, n)
+		fmt.Fprintf(st.Stdout(), "%d container(s) of %s joined %s\n", joined, project, n)
 	}
 	return nil
 }

@@ -12,6 +12,7 @@ const envNet = "falak-env-01hzy0000000000000000000ab"
 func TestComposeUpJoinsEnvironmentNetworks(t *testing.T) {
 	s, e, _, _, _ := newSvc(t)
 	e.containers["x1"] = &fcont{id: "x1", name: "shop-web-1", running: true, body: CreateBody{Labels: map[string]string{LabelComposeProject: "shop"}}}
+	e.containers["x3"] = &fcont{id: "x3", name: "shop-sandbox-1", running: true, body: CreateBody{Labels: map[string]string{LabelComposeProject: "shop", LabelEnvironmentNetwork: "none"}}}
 	e.containers["x2"] = &fcont{id: "x2", name: "other-web-1", running: true, body: CreateBody{Labels: map[string]string{LabelComposeProject: "other"}}}
 	fin, col := exec1(t, s, "docker.compose.up", ComposeUpPayload{Project: "shop", Directory: "/srv/falak/compose/shop",
 		Files: []ComposeFile{{Name: "compose.yaml", Content: "services: {}\n"}}, JoinNetworks: []string{envNet}})
