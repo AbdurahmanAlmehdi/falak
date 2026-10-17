@@ -15,6 +15,8 @@ use Falak\Sandboxes\Domain\Models\Sandbox;
 use Falak\Sandboxes\Domain\Models\SandboxSnapshot;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Symfony\Component\Uid\Ulid;
 
 /**
  * sandbox.create settles a creating sandbox (running with its IP, or failed) and starts the database copy it asked for;
@@ -260,8 +262,20 @@ final class HandleCommandOutcome
     }
 
     /**
-     * Ready here but gone on the agent: failed. On the agent but deleted, failed or unknown here: removed. Deleted here
-     * and gone there: confirmed. A snapshot still being taken is its command's to settle (SweepSandboxes fails it late).
+     * When the inventory command was sent (its id is a ULID): what the agent reports may predate anything changed after
+     * that. Seconds only, as the rows' timestamps are: a change within the same second counts as after.
+     */
+    public static function sentAt(string $commandId): Carbon
+    {
+        return Str::isUlid($commandId)
+            ? Carbon::createFromInterface(Ulid::fromString($commandId)->getDateTime())->setTimezone(now()->getTimezone())->startOfSecond()
+            : now()->subSeconds(self::GRACE_SECONDS);
+    }
+
+    /**
+     * Ready here (since before the inventory was sent) but gone on the agent: failed. On the agent but deleted, failed
+     * or unknown here: removed. Deleted here and gone there: confirmed. A snapshot still being taken is its command's to
+     * settle (SweepSandboxes fails it late); one that became ready after the inventory was sent is left to the next one.
      *
      * @param  array<mixed>  $reported
      */
@@ -285,7 +299,9 @@ final class HandleCommandOutcome
             }
         }
 
+        // After the removals above: a snapshot failed here is only removed by a later inventory that still reports it.
         SandboxSnapshot::query()->where('server_id', $serverId)->where('status', SandboxSnapshot::READY)->whereNotIn('id', $ids ?: [''])
+            ->where('updated_at', '<', self::sentAt($commandId))
             ->update(['status' => SandboxSnapshot::FAILED, 'error' => 'The snapshot is gone from its server.', 'updated_at' => now()]);
 
         SandboxSnapshot::query()->where('server_id', $serverId)->where('status', SandboxSnapshot::DELETED)->whereNull('delete_confirmed_at')

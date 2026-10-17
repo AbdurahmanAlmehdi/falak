@@ -24,6 +24,7 @@ use Falak\Terminal\Domain\Models\TerminalSession;
 use Illuminate\Foundation\Testing\TestCase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Symfony\Component\Uid\Ulid;
 use Tests\Support\FakeAgentGateway;
 
 require_once __DIR__.'/../../../../tests/Support/FakeAgentGateway.php';
@@ -506,6 +507,7 @@ it('reconciles paused sandboxes and snapshots with sandbox.inventory', function 
     $source = Sandbox::query()->where('name', 'paused')->sole();
     $kept = snap_snapshot($source, ['name' => 'kept']);
     $gone = snap_snapshot($source, ['name' => 'gone']);
+    $gone->forceFill(['updated_at' => now()->subMinutes(5)])->saveQuietly();
     $taking = snap_snapshot($source, ['name' => 'taking', 'status' => SandboxSnapshot::CREATING]);
     $deleted = snap_snapshot($source, ['name' => 'deleted', 'status' => SandboxSnapshot::DELETED, 'deleted_at' => now()]);
     $deletedGone = snap_snapshot($source, ['name' => 'deleted-gone', 'status' => SandboxSnapshot::DELETED, 'deleted_at' => now()]);
@@ -534,6 +536,29 @@ it('reconciles paused sandboxes and snapshots with sandbox.inventory', function 
     (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
     $this->agents->succeed($this->agents->last('sandbox.inventory')['handle'], ['sandboxes' => [['id' => $paused->id, 'status' => 'paused']]]);
     expect($kept->refresh()->status)->toBe(SandboxSnapshot::READY);
+});
+
+it('leaves a snapshot that became ready after the inventory was sent to the next inventory', function () {
+    $sandbox = snap_sandbox();
+    Sandbox::query()->update(['created_at' => now()->subMinutes(10)]);
+    snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertCreated();
+    $snapshot = SandboxSnapshot::query()->sole();
+    $take = $this->agents->last('sandbox.snapshot')['handle'];
+
+    // The inventory is sent, the snapshot finishes, then the (stale) inventory arrives without it.
+    Str::createUlidsUsing(fn () => new Ulid(Ulid::generate(now()->subSeconds(5))));
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    Str::createUlidsNormally();
+    $inventory = $this->agents->last('sandbox.inventory')['handle'];
+    $this->agents->succeed($take, ['snapshot_id' => $snapshot->id, 'size_bytes' => 1, 'image_digest' => 'x', 'created_at' => now()->toIso8601String()]);
+    $this->agents->succeed($inventory, ['sandboxes' => [['id' => $sandbox->id, 'status' => 'running']], 'snapshots' => []]);
+    expect($snapshot->refresh()->status)->toBe(SandboxSnapshot::READY);
+
+    // The next one reports it: kept, nothing deleted.
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    $this->agents->succeed($this->agents->last('sandbox.inventory')['handle'], ['sandboxes' => [['id' => $sandbox->id, 'status' => 'running']], 'snapshots' => [['snapshot_id' => $snapshot->id, 'size_bytes' => 1]]]);
+    expect($snapshot->refresh()->status)->toBe(SandboxSnapshot::READY)
+        ->and($this->agents->dispatched('sandbox.snapshot.delete'))->toBe([]);
 });
 
 it('fails snapshots stuck being taken', function () {
