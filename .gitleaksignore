@@ -22,3 +22,4 @@ b58b575af808c59e43087b887472dc4135c1dd3c:agent/internal/db/redis_test.go:generic
 17270cfe4525e885219256a73c109fb39385b74b:agent/internal/db/redis_integration_test.go:generic-api-key:490
 # Fake bearer token in the Sandboxes exec redaction test (checks the audit row masks it).
 5fbd96ffddf04bbccb583aa866cf31f679c68318:control-plane/modules/Sandboxes/tests/Feature/SandboxesTest.php:curl-auth-header:252
+7b1b7d669b77de34f068b9853706dee418fb4e28:templates/searxng/compose.yaml:generic-api-key:36
