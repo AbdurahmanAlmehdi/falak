@@ -464,6 +464,10 @@ final class CreateSandbox
         $taken = fn (string $candidate) => Sandbox::query()->where('organization_id', $organizationId)->where('status', '!=', Sandbox::KILLED)->where('name', $candidate)->exists();
 
         if ($name !== null && $name !== '') {
+            if (in_array($name, Sandbox::RESERVED_NAMES, true)) {
+                throw ValidationException::withMessages(['name' => str_replace(':name', $name, Sandbox::RESERVED_NAME_MESSAGE)]);
+            }
+
             if ($taken($name)) {
                 throw ValidationException::withMessages(['name' => "A sandbox called {$name} already exists."]);
             }

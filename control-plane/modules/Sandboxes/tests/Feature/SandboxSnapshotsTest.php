@@ -527,6 +527,16 @@ it('resumes a paused sandbox to open a console, and an open console keeps it act
     expect($this->agents->dispatched('sandbox.pause'))->toBe([]);
 });
 
+it('reserves the name snapshots for sandboxes', function () {
+    snap_api()->postJson('/api/v1/sandboxes', ['name' => 'snapshots'])->assertUnprocessable()
+        ->assertJsonValidationErrors(['name' => '"snapshots" is reserved']);
+    $sandbox = snap_sandbox();
+    snap_api()->patchJson("/api/v1/sandboxes/{$sandbox->id}", ['name' => 'snapshots'])->assertUnprocessable()
+        ->assertJsonValidationErrors(['name' => '"snapshots" is reserved']);
+    expect($sandbox->refresh()->name)->toBe('calm-otter');
+    snap_api()->postJson('/api/v1/sandboxes', ['name' => 'snapshots-1'])->assertCreated();
+});
+
 it('creates sandboxes with idle_pause (at least a minute)', function () {
     snap_api()->postJson('/api/v1/sandboxes', ['idle_pause' => '10m'])->assertCreated()->assertJsonPath('data.idle_pause_seconds', 600)->assertJsonPath('data.from_snapshot', null);
     snap_api()->postJson('/api/v1/sandboxes', ['idle_pause' => 59])->assertUnprocessable()->assertJsonValidationErrors('idle_pause');

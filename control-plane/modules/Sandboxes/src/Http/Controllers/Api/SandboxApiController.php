@@ -396,6 +396,10 @@ final class SandboxApiController extends Controller
         ]);
 
         if (isset($data['name']) && $data['name'] !== $model->name) {
+            if (in_array($data['name'], Sandbox::RESERVED_NAMES, true)) {
+                throw ValidationException::withMessages(['name' => str_replace(':name', $data['name'], Sandbox::RESERVED_NAME_MESSAGE)]);
+            }
+
             $taken = Sandbox::query()->where('organization_id', $model->organization_id)->where('status', '!=', Sandbox::KILLED)
                 ->where('name', $data['name'])->whereKeyNot($model->id)->exists();
 

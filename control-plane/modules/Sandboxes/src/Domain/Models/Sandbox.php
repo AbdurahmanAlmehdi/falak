@@ -69,6 +69,11 @@ class Sandbox extends Model
 
     public const NAME = '/^[a-z0-9][a-z0-9-]{0,62}$/';
 
+    /** Names a sandbox can't have: /sandboxes/snapshots is the snapshots' route, not a sandbox's. */
+    public const RESERVED_NAMES = ['snapshots'];
+
+    public const RESERVED_NAME_MESSAGE = '":name" is reserved (it is a route under /sandboxes); choose another name.';
+
     protected $table = 'sandboxes_sandboxes';
 
     /** @var list<string> */
