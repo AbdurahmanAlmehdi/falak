@@ -1,0 +1,32 @@
+# Log in with the dashboard password, connect providers, then create an API key under Endpoint: remote /v1 calls need
+# one. The OpenAI-compatible endpoint is <url>/v1.
+services:
+  9router:
+    image: decolua/9router:0.5.104
+    restart: unless-stopped
+    expose: ["20128"]
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      API_KEY_SECRET: ${API_KEY_SECRET}
+      MACHINE_ID_SALT: ${MACHINE_ID_SALT}
+      AUTH_COOKIE_SECURE: "true"
+      ENABLE_REQUEST_LOGS: "false"
+      BASE_URL: http://localhost:20128
+      NEXT_PUBLIC_BASE_URL: ${{ falak.url(9router) }}
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - 9router-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:20128/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  9router-data:

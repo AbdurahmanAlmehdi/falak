@@ -1,0 +1,37 @@
+name: LiteLLM
+slug: litellm
+version: 1.0.0
+description: LLM gateway with an admin UI — 100+ providers behind one OpenAI-compatible API, with virtual keys and spend tracking.
+category: ai
+icon: ./icon.svg
+docs: https://docs.litellm.ai/docs/proxy/deploy
+stateful: true
+min_memory_mb: 1024
+tags: [llm, gateway, proxy, openai-compatible]
+public:
+  - service: litellm
+    port: 4000
+    health_check_path: /health/liveliness
+inputs:
+  - key: LITELLM_MASTER_KEY
+    type: secret
+    generate: secret(48)
+    label: Master key (after sk-)
+    description: The master key is sk- followed by this value. It is the admin API key and opens the admin UI.
+  - key: LITELLM_SALT_KEY
+    type: secret
+    generate: secret(48)
+    label: Salt key
+    description: Encrypts the provider API keys stored in the database. Never change it once models are added.
+  - key: UI_USERNAME
+    type: string
+    label: Admin UI username
+    default: admin
+  - key: UI_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Admin UI password
+  - key: POSTGRES_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password

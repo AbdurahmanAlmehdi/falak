@@ -1,0 +1,34 @@
+# Log in with the dashboard password, connect providers, then create an API key under API Keys: every /v1 call
+# needs one (REQUIRE_API_KEY). The OpenAI-compatible endpoint is <url>/v1.
+services:
+  omniroute:
+    image: diegosouzapw/omniroute:3.8.51
+    restart: unless-stopped
+    stop_grace_period: 40s
+    expose: ["20128"]
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      API_KEY_SECRET: ${API_KEY_SECRET}
+      STORAGE_ENCRYPTION_KEY: ${STORAGE_ENCRYPTION_KEY}
+      MACHINE_ID_SALT: ${MACHINE_ID_SALT}
+      REQUIRE_API_KEY: "true"
+      ALLOW_API_KEY_REVEAL: "false"
+      AUTH_COOKIE_SECURE: "true"
+      BASE_URL: http://localhost:20128
+      NEXT_PUBLIC_BASE_URL: ${{ falak.url(omniroute) }}
+      OMNIROUTE_PUBLIC_BASE_URL: ${{ falak.url(omniroute) }}
+      NEXT_TELEMETRY_DISABLED: "1"
+    volumes:
+      - omniroute-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "healthcheck.mjs"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  omniroute-data:

@@ -1,0 +1,44 @@
+# Admin UI at <url>/ui (username and password above). Add models under Models (STORE_MODEL_IN_DB) and issue virtual
+# keys under Virtual Keys; clients call <url>/v1 with a virtual key or the master key.
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.105.1
+    restart: unless-stopped
+    expose: ["4000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD}@db:5432/litellm
+      LITELLM_MASTER_KEY: sk-${LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY}
+      UI_USERNAME: ${UI_USERNAME}
+      UI_PASSWORD: ${UI_PASSWORD}
+      STORE_MODEL_IN_DB: "True"
+      PROXY_BASE_URL: ${{ falak.url(litellm) }}
+      LITELLM_MODE: PRODUCTION
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+  db:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - litellm-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  litellm-db:

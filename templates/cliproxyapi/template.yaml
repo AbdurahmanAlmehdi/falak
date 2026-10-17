@@ -1,0 +1,26 @@
+name: CLIProxyAPI
+slug: cliproxyapi
+version: 1.0.0
+description: Turn Claude Code, Codex and other CLI subscriptions into an OpenAI-compatible API, with a web management console.
+category: ai
+icon: ./icon.svg
+docs: https://help.router-for.me
+stateful: true
+min_memory_mb: 256
+popular: true
+tags: [llm, gateway, proxy, openai-compatible, oauth]
+public:
+  - service: cliproxyapi
+    port: 8317
+    health_check_path: /healthz
+inputs:
+  - key: MANAGEMENT_PASSWORD
+    type: secret
+    generate: password(32)
+    label: Management key
+    description: Log in to the management console at /management.html with it.
+  - key: PROXY_API_KEY
+    type: secret
+    generate: secret(48)
+    label: Client API key
+    description: Clients send it as the Bearer token on /v1. Add more keys in the console.

@@ -1,0 +1,33 @@
+name: 9Router
+slug: 9router
+version: 1.0.0
+description: AI router with a dashboard — one OpenAI-compatible endpoint over subscriptions, API keys and free tiers.
+category: ai
+icon: ./icon.svg
+docs: https://github.com/decolua/9router
+stateful: true
+min_memory_mb: 512
+tags: [llm, gateway, router, openai-compatible]
+public:
+  - service: 9router
+    port: 20128
+    health_check_path: /api/health
+inputs:
+  - key: INITIAL_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Dashboard password
+    description: The dashboard login until you change it in Settings.
+  - key: JWT_SECRET
+    type: secret
+    generate: secret(64)
+    label: Session signing key
+  - key: API_KEY_SECRET
+    type: secret
+    generate: secret(48)
+    label: API key signing secret
+    description: Signs the API keys 9Router issues. Changing it invalidates them.
+  - key: MACHINE_ID_SALT
+    type: secret
+    generate: secret(32)
+    label: Machine ID salt

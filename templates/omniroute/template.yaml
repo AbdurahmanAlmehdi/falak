@@ -1,0 +1,38 @@
+name: OmniRoute
+slug: omniroute
+version: 1.0.0
+description: AI gateway with a dashboard — one OpenAI-compatible endpoint with routing and fallback across many providers.
+category: ai
+icon: ./icon.svg
+docs: https://github.com/diegosouzapw/OmniRoute
+stateful: true
+min_memory_mb: 1024
+popular: true
+tags: [llm, gateway, router, openai-compatible]
+public:
+  - service: omniroute
+    port: 20128
+    health_check_path: /healthz
+inputs:
+  - key: INITIAL_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Dashboard password
+    description: Sets the dashboard password on first start; change it later in Settings → Security.
+  - key: JWT_SECRET
+    type: secret
+    generate: secret(64)
+    label: Session signing key
+  - key: API_KEY_SECRET
+    type: secret
+    generate: hex(64)
+    label: API key encryption key
+  - key: STORAGE_ENCRYPTION_KEY
+    type: secret
+    generate: hex(64)
+    label: Database encryption key
+    description: Encrypts the stored provider credentials. Keep it — they cannot be decrypted without it.
+  - key: MACHINE_ID_SALT
+    type: secret
+    generate: secret(32)
+    label: Machine ID salt
