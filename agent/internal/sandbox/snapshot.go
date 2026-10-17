@@ -468,18 +468,42 @@ type DBImportResult struct {
 // importScript writes stdin to $1 inside the sandbox, making its directory.
 const importScript = `mkdir -p "$(dirname "$1")" && cat > "$1"`
 
-// importTimeout bounds a database import (the control plane waits 10 minutes).
-var importTimeout = 10 * time.Minute
+// importTimeout bounds a database import (the control plane waits 10 minutes); importStall is how long a write into
+// the sandbox may block (it stopped reading) before the import is aborted, so it can't hold the instance's lock.
+var (
+	importTimeout = 10 * time.Minute
+	importStall   = 30 * time.Second
+)
 
 type countWriter struct {
-	w io.Writer
-	n atomic.Int64
+	w       io.Writer
+	n       atomic.Int64
+	blocked atomic.Int64 // unix nanoseconds a Write has been waiting since (0: none)
 }
 
 func (c *countWriter) Write(p []byte) (int, error) {
+	c.blocked.Store(time.Now().UnixNano())
 	n, err := c.w.Write(p)
+	c.blocked.Store(0)
 	c.n.Add(int64(n))
 	return n, err
+}
+
+// watchStall aborts the import (stop) once a write has blocked for importStall, until done is closed.
+func (c *countWriter) watchStall(done <-chan struct{}, stop func()) {
+	t := time.NewTicker(importStall / 4)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			if since := c.blocked.Load(); since != 0 && time.Since(time.Unix(0, since)) >= importStall {
+				stop()
+				return
+			}
+		}
+	}
 }
 
 // DBImport streams an instance's logical dump of one database (unencrypted, as db.backup makes it) into a file inside
@@ -523,12 +547,24 @@ func (s *Service) DBImport(ctx context.Context, p DBImportPayload, _ commands.St
 		_ = pw.CloseWithError(err) // nil: the sandbox side sees EOF
 		dumped <- err
 	}()
+	errStalled := fmt.Errorf("the sandbox read nothing of the dump for %s", importStall)
+	var stalled atomic.Bool
+	watching := make(chan struct{})
+	go cw.watchStall(watching, func() {
+		stalled.Store(true)
+		_ = pr.CloseWithError(errStalled) // the blocked write fails: the dump ends and frees the instance's lock
+		cancel()
+	})
 	o, err := s.execIn(ictx, p.ID, execReq{argv: []string{"sh", "-c", importScript, "_", p.Path}, in: pr, timeout: importTimeout, max: 64 << 10})
+	close(watching)
 	_ = pr.CloseWithError(errors.New("the sandbox stopped reading")) // a dump still writing fails instead of blocking
 	if err != nil || o.timedOut || o.code != 0 {
 		cancel()
 	}
 	dumpErr := <-dumped
+	if stalled.Load() {
+		err, dumpErr = errStalled, nil
+	}
 	switch {
 	case err != nil:
 	case o.timedOut:

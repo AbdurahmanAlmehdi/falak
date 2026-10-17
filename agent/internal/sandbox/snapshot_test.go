@@ -530,3 +530,35 @@ func TestPauseRefusedWhileBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// stallRunner is a sandbox that never reads its stdin: runsc exec with stdin blocks until cancelled.
+type stallRunner struct{ runner.Runner }
+
+func (r stallRunner) Run(ctx context.Context, c runner.Cmd) (runner.Result, error) {
+	if c.Stdin != nil && slices.Contains(c.Args, "exec") {
+		<-ctx.Done()
+		return runner.Result{ExitCode: -1}, ctx.Err()
+	}
+	return r.Runner.Run(ctx, c)
+}
+
+// A sandbox that stops reading the dump aborts the import after importStall (the dump ends, freeing the instance's
+// lock), well before the overall timeout.
+func TestDBImportAbortsWhenTheSandboxStopsReading(t *testing.T) {
+	old := importStall
+	importStall = 100 * time.Millisecond
+	t.Cleanup(func() { importStall = old })
+	e := newEnv(t)
+	e.running(t)
+	dump := &fakeDumper{data: "PGDMP"}
+	e.svc.d.DB = dump
+	e.svc.d.Runner = stallRunner{e.run}
+	start := time.Now()
+	_, err := e.svc.DBImport(context.Background(), DBImportPayload{ID: sid, Instance: "01hzyinst00000000000000001", Engine: "postgres", Database: "shop", Path: "/workspace/db/shop.dump"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "read nothing of the dump") || time.Since(start) > 5*time.Second {
+		t.Fatal(err, time.Since(start))
+	}
+	if !e.run.Ran("runsc --root=" + e.svc.d.RunscRoot + " exec") { // the cleanup's rm
+		t.Fatal(e.run.Lines())
+	}
+}
