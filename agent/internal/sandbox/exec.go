@@ -86,6 +86,9 @@ func (s *Service) execProcess(id string, r execReq) (ociProcess, error) {
 // written to are removed afterwards; a timeout kills the process inside the sandbox (runsc kill --pid) as well as
 // runsc exec, and reports exit code -1.
 func (s *Service) execIn(ctx context.Context, id string, r execReq) (execOut, error) {
+	inflight := s.busy(id)
+	inflight.RLock()
+	defer inflight.RUnlock()
 	base := filepath.Join(s.dir(id), fmt.Sprintf("exec-%d", execSeq.Add(1)))
 	procFile, pidFile := base+".json", base+".pid"
 	defer os.Remove(procFile)

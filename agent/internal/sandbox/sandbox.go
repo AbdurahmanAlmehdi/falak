@@ -77,6 +77,7 @@ type Service struct {
 	proxy *proxy
 
 	locks    sync.Map   // id → *sync.Mutex
+	inflight sync.Map   // id → *sync.RWMutex (busy)
 	imgLocks sync.Map   // image id → *sync.Mutex
 	netMu    sync.Mutex // the allocator, the chains and the proxy's listener
 
@@ -298,6 +299,13 @@ func (s *Service) states() []*state {
 func (s *Service) lock(id string) *sync.Mutex {
 	m, _ := s.locks.LoadOrStore(id, &sync.Mutex{}) // ponytail: one mutex per id ever seen, a few bytes each
 	return m.(*sync.Mutex)
+}
+
+// busy is a sandbox's in-flight lock: execs and database imports hold it shared while they run, and pause only
+// TryLocks it (it never waits, so shared holders may nest): a sandbox isn't paused under a running command.
+func (s *Service) busy(id string) *sync.RWMutex {
+	m, _ := s.inflight.LoadOrStore(id, &sync.RWMutex{})
+	return m.(*sync.RWMutex)
 }
 
 func (s *Service) runscArgs(args ...string) []string {

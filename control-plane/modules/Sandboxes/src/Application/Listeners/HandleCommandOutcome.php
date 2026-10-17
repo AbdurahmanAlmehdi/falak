@@ -134,7 +134,7 @@ final class HandleCommandOutcome
     }
 
     /**
-     * A sandbox.create result: running.
+     * A sandbox.create result: running, and active from now (idle pause doesn't count the time it took to start).
      *
      * @param  array<string, mixed>  $result
      */
@@ -143,6 +143,7 @@ final class HandleCommandOutcome
         $sandbox->forceFill([
             'status' => Sandbox::RUNNING,
             'error' => null,
+            'last_activity_at' => now(),
             'ip' => isset($result['ip']) ? (string) $result['ip'] : $sandbox->ip,
             'image_digest' => isset($result['image_digest']) ? mb_substr((string) $result['image_digest'], 0, 200) : $sandbox->image_digest,
             'started_at' => isset($result['started_at']) && is_string($result['started_at']) ? Carbon::parse($result['started_at']) : ($sandbox->started_at ?? now()),

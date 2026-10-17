@@ -494,3 +494,39 @@ func TestSnapshotReservesDiskWhileCheckpointing(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Pause refuses while an exec or a database import runs in the sandbox (the import holds it until its cleanup ran),
+// and an import into a paused sandbox is refused.
+func TestPauseRefusedWhileBusy(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	e.running(t)
+	started, finish := make(chan struct{}), make(chan struct{})
+	e.svc.d.DB = &fakeDumper{data: "x"}
+	e.run.OnFunc("runsc --root="+e.svc.d.RunscRoot+" exec", func(runnertest.Call) (runner.Result, error) {
+		close(started)
+		<-finish
+		return runner.Result{}, nil
+	})
+	p := DBImportPayload{ID: sid, Instance: "01hzyinst00000000000000001", Engine: "postgres", Database: "shop", Path: "/workspace/db/shop.dump"}
+	done := make(chan error, 1)
+	go func() {
+		_, err := e.svc.DBImport(ctx, p, nil)
+		done <- err
+	}()
+	<-started
+	if _, err := e.svc.Pause(ctx, IDPayload{ID: sid}, nil); err == nil || !strings.HasPrefix(err.Error(), "busy: a command is running") || e.run.Ran("runsc --root="+e.svc.d.RunscRoot+" pause") {
+		t.Fatal(err)
+	}
+	close(finish)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Pause(ctx, IDPayload{ID: sid}, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.runscList(map[string]string{cid(sid): "paused"})
+	if _, err := e.svc.DBImport(ctx, p, nil); err == nil || !strings.Contains(err.Error(), "is paused") {
+		t.Fatal(err)
+	}
+}

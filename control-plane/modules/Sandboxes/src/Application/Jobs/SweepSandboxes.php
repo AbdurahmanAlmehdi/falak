@@ -43,7 +43,8 @@ final class SweepSandboxes implements ShouldQueue
             ->update(['status' => SandboxSnapshot::FAILED, 'error' => 'The snapshot was not taken within '.intdiv(self::SNAPSHOT_TIMEOUT, 60).' minutes.', 'updated_at' => now()]);
 
         // Idle: no exec, file call, console or API call on it for idle_pause_seconds (an open console keeps it active:
-        // Terminal marks those every minute through SandboxDirectory::markActive).
+        // Terminal marks those every minute through SandboxDirectory::markActive). An agent busy with an exec or a
+        // database copy in it refuses ("busy: …"): nothing settles, and a later sweep tries again.
         $slot = intdiv(now()->getTimestamp(), 60);
         Sandbox::query()->where('status', Sandbox::RUNNING)->whereNotNull('idle_pause_seconds')->limit(500)->get()
             ->filter(fn (Sandbox $sandbox) => ($sandbox->last_activity_at ?? $sandbox->started_at ?? $sandbox->created_at)->lte(now()->subSeconds((int) $sandbox->idle_pause_seconds)))

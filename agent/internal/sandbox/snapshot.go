@@ -434,6 +434,14 @@ func (s *Service) setPaused(ctx context.Context, id string, pause bool) (any, er
 	case status != from:
 		return nil, fmt.Errorf("sandbox %s is not running (%s)", id, orUnknown(status))
 	}
+	if pause {
+		// An exec or a database import in flight: refused, the control plane's idle pause tries again later.
+		b := s.busy(id)
+		if !b.TryLock() {
+			return nil, fmt.Errorf("busy: a command is running in sandbox %s", id)
+		}
+		defer b.Unlock()
+	}
 	if _, err := runner.Check(ctx, s.d.Runner, runner.Cmd{Name: "runsc", Args: s.runscArgs(verb, cid(id))}); err != nil {
 		return nil, fmt.Errorf("runsc %s: %w", verb, err)
 	}
@@ -496,6 +504,14 @@ func (s *Service) DBImport(ctx context.Context, p DBImportPayload, _ commands.St
 		return nil, err
 	} else if st == nil || st.Reaped != "" || st.StartedAt == "" {
 		return nil, fmt.Errorf("sandbox %s not found", p.ID)
+	}
+	// Held until the cleanup ran: the sandbox can't be paused under the import (or its cleanup), and one paused already
+	// is refused instead of hanging.
+	b := s.busy(p.ID)
+	b.RLock()
+	defer b.RUnlock()
+	if status, known := s.status(ctx, p.ID); known && status == "paused" {
+		return nil, fmt.Errorf("sandbox %s is paused: resume it first", p.ID)
 	}
 	ictx, cancel := context.WithTimeout(ctx, importTimeout)
 	defer cancel()

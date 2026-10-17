@@ -5,6 +5,7 @@ use Falak\Databases\Contracts\Data\DatabaseInstanceData;
 use Falak\Databases\Contracts\DatabaseDirectory;
 use Falak\Databases\Domain\Policies\DatabasesPolicy;
 use Falak\Fleet\Domain\Models\Agent;
+use Falak\Fleet\Events\CommandFinished;
 use Falak\Fleet\Infrastructure\ProtocolSchemas;
 use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Identity\Contracts\Role;
@@ -467,6 +468,33 @@ it('pauses idle sandboxes and resumes them for exec, files and consoles', functi
     $this->agents->unavailable($this->server->id);
     snap_api()->postJson("/api/v1/sandboxes/{$idle->id}/exec", ['cmd' => 'ls'])->assertStatus(503);
     expect($this->agents->dispatched('sandbox.exec'))->toHaveCount(1);
+});
+
+it('counts idle time from when a call finished or the sandbox started, and skips a pause the agent refuses as busy', function () {
+    // A long call: activity is its end, not its start.
+    $sandbox = snap_sandbox(['idle_pause_seconds' => 600]);
+    $this->agents->answer('sandbox.files.list', function () {
+        $this->travel(11)->minutes();
+
+        return ['entries' => [], 'truncated' => false];
+    });
+    snap_api()->getJson("/api/v1/sandboxes/{$sandbox->id}/files?path=/&list=1")->assertOk();
+    (new SweepSandboxes)->handle(app(KillSandbox::class));
+    expect($this->agents->dispatched('sandbox.pause'))->toBe([]);
+
+    // A create that took long: active from when it runs.
+    $starting = snap_sandbox(['name' => 'starting', 'status' => Sandbox::CREATING, 'idle_pause_seconds' => 600, 'last_activity_at' => now()->subMinutes(20), 'command_id' => strtolower((string) Str::ulid())]);
+    event(new CommandFinished($starting->command_id, $starting->organization_id, $starting->server_id, 'sandbox.create', 'sandbox.create:x', 0, snap_running()));
+    expect($starting->refresh()->status)->toBe(Sandbox::RUNNING)->and($starting->last_activity_at->gt(now()->subMinute()))->toBeTrue();
+
+    // An exec running in it: the agent refuses ("busy: …"), it stays running and a later sweep tries again.
+    $this->travel(11)->minutes();
+    (new SweepSandboxes)->handle(app(KillSandbox::class));
+    $this->agents->fail(collect($this->agents->dispatched('sandbox.pause'))->firstWhere('payload.id', $sandbox->id)['handle'], "busy: a command is running in sandbox {$sandbox->id}");
+    expect($sandbox->refresh()->status)->toBe(Sandbox::RUNNING);
+    $this->travel(1)->minutes();
+    (new SweepSandboxes)->handle(app(KillSandbox::class));
+    expect(collect($this->agents->dispatched('sandbox.pause'))->where('payload.id', $sandbox->id))->toHaveCount(2);
 });
 
 it('resumes a paused sandbox to open a console, and an open console keeps it active', function () {

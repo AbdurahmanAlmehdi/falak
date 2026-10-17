@@ -72,6 +72,9 @@ final class SandboxAgent
         } catch (CommandTimedOut) {
             $this->agents->cancel($handle);
             abort(504, 'The server did not answer in time.');
+        } finally {
+            // A call's end is activity too: idle pause counts from it, not from when a long exec or copy started.
+            Sandbox::query()->whereKey($sandbox->id)->update(['last_activity_at' => now()]);
         }
 
         if (! $result->isFinished()) {
@@ -89,6 +92,11 @@ final class SandboxAgent
 
             if (str_contains($lower, 'not_directory') || str_contains($lower, 'not a directory')) {
                 abort(422, 'The path is not a directory.');
+            }
+
+            // sandbox.pause while an exec or a database copy runs in it.
+            if (str_starts_with($lower, 'busy:')) {
+                abort(409, 'The sandbox is running a command; pause it once that finished.');
             }
 
             // The agent doesn't know the sandbox (reaped, or gone with a reboot).
