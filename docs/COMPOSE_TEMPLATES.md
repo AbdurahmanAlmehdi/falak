@@ -231,6 +231,14 @@ lives in `/tmp`, removed first, so it never outlives a restart. `create-site` mi
 installed again. It sets Administrator's password from `ADMIN_PASSWORD` on every start. Odoo's database credentials are
 written to its config file (0600) rather than passed on `odoo`'s argv.
 
+
+Catalog v4 (v0.22.0) adds AI: gateways OmniRoute · CLIProxyAPI (with its management console at `/management.html`) ·
+9router · LiteLLM (+Postgres); agents Hermes Agent (Nous' dashboard, password login) · OpenClaw (gateway token +
+device pairing); apps AnythingLLM · Flowise (+Postgres; a `setup` service registers the owner) · LibreChat (+MongoDB,
+Meilisearch) · Dify (nginx as the one public service; api, workers, web, plugin daemon, sandbox, SSRF proxy, pgvector,
+Redis) · Langfuse v4 (+ClickHouse, Redis, MinIO, Postgres; MinIO is public for presigned uploads) · SearXNG (+Valkey;
+no accounts). A service labelled `falak.environment_network: none` (Dify's code sandbox) is not joined to the
+environment network, where the environment's databases answer.
 ---
 
 ## 3. Template UX (lane B)

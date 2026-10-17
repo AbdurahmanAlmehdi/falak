@@ -1,4 +1,4 @@
-# Sandboxes (plan, v0.20.0 → v0.22.0)
+# Sandboxes (plan, v0.20.0 → v0.23.0)
 
 A sandbox is a disposable Linux machine on one of your servers, built for code you don't trust: an AI agent with no
 permission prompts, a user's script, an install script from the internet, an upgrade you're not sure about. Inside it
@@ -211,7 +211,7 @@ job (TTL, stuck `creating`), `HandleCommandOutcome` listener, `SandboxPolicy`, A
 |---|---|
 | v0.20.0 | Create (image), exec, files, console, kill, TTL + reaper, network modes, limits + quotas, exec audit, `falak sandbox`, `falak mcp`, skill, dashboard list + detail |
 | v0.21.0 | Snapshot (disk + memory), fork, pause/resume, idle pause, templates (snapshot of a prepared image), database fork into a sandbox |
-| v0.22.0 | Diff vs snapshot, open a PR, promote to site |
+| v0.23.0 | Diff vs snapshot, open a PR, promote to site (v0.22.0 shipped the AI templates) |
 | Later | Preview URLs (expose a port through Edge): deferred by the user, 2026-10-17 |
 
 Each release: tests (PHP, Go, Vitest), a live check on a real server, signed tag, website changelog + docs page.

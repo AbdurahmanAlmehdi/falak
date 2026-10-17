@@ -334,8 +334,8 @@ api -X DELETE "$FALAK_URL/api/v1/sandboxes/01jsbx0example000000000000"
 
 ## Coming next
 
-Preview URLs for a port in a sandbox, diffs against a snapshot, opening a PR from a sandbox and promoting a sandbox's
-result (v0.22).
+Diffs against a snapshot, opening a PR from a sandbox and promoting a sandbox's result (v0.23). Preview URLs for a
+port in a sandbox come later.
 
 ## Known gaps
 
