@@ -1,0 +1,53 @@
+# OpenClaw gateway + Control UI. Sign in with the gateway token (the site's OPENCLAW_GATEWAY_TOKEN variable). A new
+# browser then waits for a one-time pairing approval: open a console on the openclaw service and run the
+# `openclaw devices approve <requestId>` the page shows (`openclaw devices list` lists pending requests).
+# The first start writes a minimal openclaw.json (local mode, LAN bind, token auth, the public origin as the allowed
+# browser origin, the edge's Docker networks as trusted proxies); after that the file is yours (Settings in the UI or
+# `openclaw config set …`). Add a custom domain later? Also add it to gateway.controlUi.allowedOrigins.
+services:
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:2026.10.4
+    restart: unless-stopped
+    init: true
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /home/node/.openclaw/openclaw.json ]; then
+          umask 077
+          mkdir -p /home/node/.openclaw/workspace
+          printf '{\n  "gateway": {\n    "mode": "local",\n    "bind": "lan",\n    "port": 18789,\n    "publicOrigin": "%s",\n    "auth": { "mode": "token" },\n    "trustedProxies": ["172.16.0.0/12", "192.168.0.0/16"]\n  }\n}\n' "$$OPENCLAW_PUBLIC_ORIGIN" > /home/node/.openclaw/openclaw.json
+        fi
+        exec node /app/docker-entrypoint.mjs node openclaw.mjs gateway --bind lan --port 18789
+    expose: ["18789"]
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_PUBLIC_ORIGIN: ${{ falak.url(openclaw) }}
+      OPENCLAW_DISABLE_BONJOUR: "1"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      TZ: UTC
+    volumes:
+      - openclaw-state:/home/node/.openclaw
+      - openclaw-auth:/home/node/.config/openclaw
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  openclaw-state:
+  openclaw-auth:

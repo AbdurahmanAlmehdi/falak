@@ -1,0 +1,42 @@
+# Hermes Agent (Nous Research) with its web dashboard. The image's s6 init supervises the gateway and, with
+# HERMES_DASHBOARD=1, the dashboard; a non-loopback dashboard always requires a login (the username/password
+# provider below). Model providers: add an API key here or in the dashboard (Keys); Nous Portal and other OAuth
+# logins run in a console: `hermes model`.
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v0.22.2
+    restart: unless-stopped
+    # The edge reaches the dashboard from the Docker network: trust its X-Forwarded-* (secure cookies, per-client
+    # login rate limit). The dashboard reads config.yaml when it starts, so the first boot restarts it once.
+    command:
+      - sh
+      - -c
+      - |
+        if ! grep -q '172.16.0.0/12' /opt/data/config.yaml 2>/dev/null; then
+          hermes config set dashboard.trusted_proxies '["172.16.0.0/12", "192.168.0.0/16"]'
+          pkill -f '[d]ashboard --host' || true
+        fi
+        exec hermes gateway run
+    expose: ["9119"]
+    environment:
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_HOST: 0.0.0.0
+      HERMES_DASHBOARD_PORT: "9119"
+      HERMES_DASHBOARD_PUBLIC_URL: ${{ falak.url(hermes) }}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_ADMIN_USERNAME}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_ADMIN_PASSWORD}
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_SESSION_SECRET}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - hermes-data:/opt/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:9119/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+volumes:
+  hermes-data:

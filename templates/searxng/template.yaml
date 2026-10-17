@@ -1,0 +1,24 @@
+name: SearXNG
+slug: searxng
+version: 1.0.0
+description: Private metasearch engine with a JSON API for AI agents. No user accounts; protect it with basic auth.
+category: ai
+icon: searxng
+docs: https://docs.searxng.org
+stateful: false
+min_memory_mb: 512
+tags: [search, metasearch, privacy, ai tools]
+public:
+  - service: searxng
+    port: 8080
+    health_check_path: /healthz
+inputs:
+  - key: SEARXNG_SECRET
+    type: secret
+    generate: secret(48)
+    label: Secret key
+  - key: SEARXNG_LIMITER
+    type: boolean
+    label: Rate limiter
+    description: Throttles bots and floods per client IP, for a public instance. It refuses API clients (curl, AI tools' format=json requests), so leave it off when agents use this instance.
+    default: false

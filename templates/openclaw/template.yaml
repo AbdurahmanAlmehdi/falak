@@ -1,0 +1,36 @@
+name: OpenClaw
+slug: openclaw
+version: 1.0.0
+description: Personal AI assistant gateway with its Control UI; chat, agents and channels like Telegram or Slack.
+category: ai
+icon: ./icon.svg
+docs: https://docs.openclaw.ai
+stateful: true
+min_memory_mb: 2048
+popular: true
+tags: [ai, agents, assistant, llm]
+public:
+  - service: openclaw
+    port: 18789
+    health_check_path: /healthz
+inputs:
+  - key: OPENCLAW_GATEWAY_TOKEN
+    type: secret
+    generate: hex(32)
+    label: Gateway token
+    description: Paste it into the Control UI's Gateway secret field to sign in; each new browser then needs a one-time approval.
+  - key: OPENAI_API_KEY
+    type: secret
+    label: OpenAI API key
+    description: Optional. You can also add providers later in the Control UI.
+    required: false
+  - key: ANTHROPIC_API_KEY
+    type: secret
+    label: Anthropic API key
+    description: Optional.
+    required: false
+  - key: OPENROUTER_API_KEY
+    type: secret
+    label: OpenRouter API key
+    description: Optional.
+    required: false

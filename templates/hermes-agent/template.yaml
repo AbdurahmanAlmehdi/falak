@@ -1,0 +1,43 @@
+name: Hermes Agent
+slug: hermes-agent
+version: 1.0.0
+description: Nous Research's self-improving AI agent with memory, skills and a password-protected web dashboard.
+category: ai
+icon: ./icon.svg
+docs: https://hermes-agent.nousresearch.com/docs/user-guide/docker
+stateful: true
+min_memory_mb: 2048
+popular: true
+tags: [ai, agents, assistant, llm]
+public:
+  - service: hermes
+    port: 9119
+    health_check_path: /api/status
+inputs:
+  - key: HERMES_ADMIN_USERNAME
+    type: string
+    label: Dashboard username
+    default: admin
+  - key: HERMES_ADMIN_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Dashboard password
+  - key: HERMES_SESSION_SECRET
+    type: secret
+    generate: secret(48)
+    label: Session signing secret
+  - key: OPENROUTER_API_KEY
+    type: secret
+    label: OpenRouter API key
+    description: Optional. You can also add keys later in the dashboard, or log in to Nous Portal with `hermes model` in a console.
+    required: false
+  - key: OPENAI_API_KEY
+    type: secret
+    label: OpenAI API key
+    description: Optional.
+    required: false
+  - key: ANTHROPIC_API_KEY
+    type: secret
+    label: Anthropic API key
+    description: Optional.
+    required: false

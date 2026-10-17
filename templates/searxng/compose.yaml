@@ -1,0 +1,50 @@
+# SearXNG has no user accounts: anyone with the URL can search. Add basic auth or an IP allow list on the site's
+# networking settings to keep it private. The JSON API is on: GET /search?q=…&format=json (for AI agents).
+# settings.yml and limiter.toml are written on every start; the rest comes from SEARXNG_* variables.
+services:
+  searxng:
+    image: searxng/searxng:2026.10.16-8252c0bf6
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        printf 'use_default_settings: true\nsearch:\n  formats: [html, json]\n' > /etc/searxng/settings.yml
+        # The edge reaches the container from a private address: take the client IP from X-Forwarded-For.
+        printf "[botdetection]\ntrusted_proxies = ['127.0.0.0/8', '::1', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fd00::/8']\n" > /etc/searxng/limiter.toml
+        exec /usr/local/searxng/entrypoint.sh
+    expose: ["8080"]
+    depends_on:
+      valkey:
+        condition: service_healthy
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+      SEARXNG_BASE_URL: ${{ falak.url(searxng) }}/
+      SEARXNG_VALKEY_URL: valkey://valkey:6379/0
+      SEARXNG_LIMITER: ${SEARXNG_LIMITER}
+      SEARXNG_IMAGE_PROXY: "true"
+    volumes:
+      - searxng-cache:/var/cache/searxng
+    healthcheck:
+      test: ["CMD", "/usr/local/searxng/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  valkey:
+    image: valkey/valkey:9.0.6-alpine3.24
+    restart: unless-stopped
+    command: ["valkey-server", "--save", "30", "1", "--loglevel", "warning"]
+    volumes:
+      - searxng-valkey:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  searxng-cache:
+  searxng-valkey:
