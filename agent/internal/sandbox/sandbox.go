@@ -901,8 +901,9 @@ func (s *Service) pull(ctx context.Context, ref string, w io.Writer) error {
 	defer cancel(nil)
 	done := make(chan struct{})
 	defer close(done)
+	poll := diskPoll // read here: the goroutine may outlive pull
 	go func() {
-		t := time.NewTicker(diskPoll)
+		t := time.NewTicker(poll)
 		defer t.Stop()
 		for {
 			select {
