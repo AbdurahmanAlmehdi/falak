@@ -12,6 +12,7 @@ use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
 use Falak\Identity\Domain\Models\Organization;
 use Falak\Identity\Domain\Models\User;
+use Falak\Identity\Events\OrganizationDeleted;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
 use Falak\Sandboxes\Application\Jobs\SweepSandboxes;
 use Falak\Sandboxes\Application\Jobs\SyncSandboxes;
@@ -20,6 +21,7 @@ use Falak\Sandboxes\Domain\Models\SandboxExec;
 use Falak\Sandboxes\Domain\Models\SandboxSnapshot;
 use Falak\Servers\Contracts\ServerType;
 use Falak\Servers\Domain\Models\Server;
+use Falak\Servers\Events\ServerDeleted;
 use Falak\Terminal\Application\Jobs\SweepTerminalSessions;
 use Falak\Terminal\Domain\Models\TerminalSession;
 use Illuminate\Foundation\Testing\TestCase;
@@ -607,6 +609,30 @@ it('leaves a snapshot that became ready after the inventory was sent to the next
     $this->agents->succeed($this->agents->last('sandbox.inventory')['handle'], ['sandboxes' => [['id' => $sandbox->id, 'status' => 'running']], 'snapshots' => [['snapshot_id' => $snapshot->id, 'size_bytes' => 1]]]);
     expect($snapshot->refresh()->status)->toBe(SandboxSnapshot::READY)
         ->and($this->agents->dispatched('sandbox.snapshot.delete'))->toBe([]);
+});
+
+it('removes snapshots from their server, best effort, when the server or the organization is deleted', function () {
+    $sandbox = snap_sandbox();
+    $a = snap_snapshot($sandbox, ['name' => 'a']);
+    $done = snap_snapshot($sandbox, ['name' => 'done', 'status' => SandboxSnapshot::DELETED, 'deleted_at' => now(), 'delete_confirmed_at' => now()]);
+    $other = snap_server($this->organization, 'main-2');
+    snap_snapshot(snap_sandbox(['name' => 'b', 'server_id' => $other->id]), ['name' => 'b', 'server_id' => $other->id]);
+
+    event(new ServerDeleted($this->server->id, $this->organization->id, 'app', 'main-1'));
+    expect(collect($this->agents->dispatched('sandbox.snapshot.delete'))->pluck('payload.snapshot_id')->all())->toBe([$a->id])
+        ->and($a->refresh()->status)->toBe(SandboxSnapshot::DELETED)
+        ->and($done->refresh()->status)->toBe(SandboxSnapshot::DELETED);
+
+    // An agent that isn't connected: nothing sent, the rows still go.
+    $this->agents->unavailable($other->id);
+    event(new OrganizationDeleted($this->organization->id));
+    expect(SandboxSnapshot::query()->count())->toBe(0);
+
+    $this->agents = FakeAgentGateway::install();
+    $c = snap_snapshot(snap_sandbox(['name' => 'c']), ['name' => 'c']);
+    event(new OrganizationDeleted($this->organization->id));
+    expect(collect($this->agents->dispatched('sandbox.snapshot.delete'))->pluck('payload.snapshot_id')->all())->toBe([$c->id])
+        ->and(SandboxSnapshot::query()->count())->toBe(0);
 });
 
 it('fails snapshots stuck being taken', function () {

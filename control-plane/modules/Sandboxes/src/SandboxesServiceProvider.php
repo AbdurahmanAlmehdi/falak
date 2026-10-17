@@ -10,6 +10,7 @@ use Falak\Identity\Contracts\Role;
 use Falak\Identity\Events\OrganizationDeleted;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Limits\Contracts\CapacitySources;
+use Falak\Sandboxes\Application\Actions\DeleteSnapshot;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
 use Falak\Sandboxes\Application\Jobs\SweepSandboxes;
 use Falak\Sandboxes\Application\Jobs\SyncSandboxes;
@@ -57,13 +58,22 @@ class SandboxesServiceProvider extends ModuleServiceProvider
 
         Event::listen(CommandFinished::class, [HandleCommandOutcome::class, 'handleFinished']);
         Event::listen(CommandFailed::class, [HandleCommandOutcome::class, 'handleFailed']);
-        Event::listen(ServerDeleted::class, function (ServerDeleted $event) {
+        // Snapshots hold disk (and env values) on their server: sandbox.snapshot.delete for each first, best effort (a
+        // deleted server's agent may be gone already; then nothing is sent).
+        $removeSnapshots = function ($query) {
+            $delete = $this->app->make(DeleteSnapshot::class);
+            (clone $query)->where(fn ($q) => $q->where('status', '!=', SandboxSnapshot::DELETED)->orWhereNull('delete_confirmed_at'))->get()
+                ->each(fn (SandboxSnapshot $snapshot) => $delete->remove($snapshot, "sandbox.snapshot.delete:{$snapshot->id}:gone"));
+        };
+        Event::listen(ServerDeleted::class, function (ServerDeleted $event) use ($removeSnapshots) {
             $kill = $this->app->make(KillSandbox::class);
             Sandbox::query()->where('server_id', $event->serverId)->live()->get()->each(fn (Sandbox $sandbox) => $kill->markKilled($sandbox, 'server_deleted'));
+            $removeSnapshots(SandboxSnapshot::query()->where('server_id', $event->serverId));
             SandboxSnapshot::query()->where('server_id', $event->serverId)->where('status', '!=', SandboxSnapshot::DELETED)
                 ->update(['status' => SandboxSnapshot::DELETED, 'deleted_at' => now(), 'delete_confirmed_at' => now()]);
         });
-        Event::listen(OrganizationDeleted::class, function (OrganizationDeleted $event) {
+        Event::listen(OrganizationDeleted::class, function (OrganizationDeleted $event) use ($removeSnapshots) {
+            $removeSnapshots(SandboxSnapshot::query()->where('organization_id', $event->organizationId));
             SandboxSnapshot::query()->where('organization_id', $event->organizationId)->delete();
             Sandbox::query()->where('organization_id', $event->organizationId)->delete();
         });
