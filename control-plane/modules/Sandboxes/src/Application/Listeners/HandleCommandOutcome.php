@@ -234,6 +234,7 @@ final class HandleCommandOutcome
 
         $known = Sandbox::query()->where('server_id', $serverId)->whereIn('id', array_keys($byId) ?: [''])->get()->keyBy('id');
         $settled = now()->subSeconds(self::GRACE_SECONDS);
+        $sent = self::sentAt($commandId);
 
         foreach ($byId as $id => $item) {
             $sandbox = $known->get($id);
@@ -243,8 +244,9 @@ final class HandleCommandOutcome
             } elseif (in_array($sandbox->status, [Sandbox::RUNNING, Sandbox::PAUSED], true) && $sandbox->created_at->lt($settled)) {
                 match ($item['status'] ?? null) {
                     'stopped' => $this->kill->__invoke($sandbox, ($item['oom_killed'] ?? false) ? 'oom' : 'exited'),
-                    'paused' => PauseSandbox::settle($sandbox->id, Sandbox::PAUSED),
-                    'running' => PauseSandbox::settle($sandbox->id, Sandbox::RUNNING),
+                    // Paused or resumed here after the inventory was sent (updated_at): the report predates it.
+                    'paused' => $sandbox->updated_at->lt($sent) ? PauseSandbox::settle($sandbox->id, Sandbox::PAUSED) : null,
+                    'running' => $sandbox->updated_at->lt($sent) ? PauseSandbox::settle($sandbox->id, Sandbox::RUNNING) : null,
                     default => null,
                 };
             }

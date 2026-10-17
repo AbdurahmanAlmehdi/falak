@@ -14,6 +14,7 @@ use Falak\Identity\Domain\Models\Organization;
 use Falak\Identity\Domain\Models\User;
 use Falak\Identity\Events\OrganizationDeleted;
 use Falak\Sandboxes\Application\Actions\KillSandbox;
+use Falak\Sandboxes\Application\Actions\PauseSandbox;
 use Falak\Sandboxes\Application\Jobs\SweepSandboxes;
 use Falak\Sandboxes\Application\Jobs\SyncSandboxes;
 use Falak\Sandboxes\Domain\Models\Sandbox;
@@ -552,7 +553,7 @@ it('reconciles paused sandboxes and snapshots with sandbox.inventory', function 
     $paused = snap_sandbox(['name' => 'paused']);
     $resumed = snap_sandbox(['name' => 'resumed', 'status' => Sandbox::PAUSED]);
     $lostPaused = snap_sandbox(['name' => 'lost', 'status' => Sandbox::PAUSED]);
-    Sandbox::query()->update(['created_at' => now()->subMinutes(10)]);
+    Sandbox::query()->update(['created_at' => now()->subMinutes(10), 'updated_at' => now()->subMinutes(10)]);
 
     $source = Sandbox::query()->where('name', 'paused')->sole();
     $kept = snap_snapshot($source, ['name' => 'kept']);
@@ -633,6 +634,24 @@ it('removes snapshots from their server, best effort, when the server or the org
     event(new OrganizationDeleted($this->organization->id));
     expect(collect($this->agents->dispatched('sandbox.snapshot.delete'))->pluck('payload.snapshot_id')->all())->toBe([$c->id])
         ->and(SandboxSnapshot::query()->count())->toBe(0);
+});
+
+it('ignores a stale inventory\'s paused or running for a sandbox paused or resumed after it was sent', function () {
+    $resumed = snap_sandbox(['name' => 'resumed', 'status' => Sandbox::PAUSED]);
+    $paused = snap_sandbox(['name' => 'paused']);
+    Sandbox::query()->update(['created_at' => now()->subMinutes(10), 'updated_at' => now()->subMinutes(10)]);
+
+    Str::createUlidsUsing(fn () => new Ulid(Ulid::generate(now()->subSeconds(5))));
+    (new SyncSandboxes)->handle($this->agents, app(KillSandbox::class));
+    Str::createUlidsNormally();
+    $inventory = $this->agents->last('sandbox.inventory')['handle'];
+
+    // Meanwhile: one resumed, one paused here.
+    PauseSandbox::settle($resumed->id, Sandbox::RUNNING);
+    PauseSandbox::settle($paused->id, Sandbox::PAUSED);
+    $this->agents->succeed($inventory, ['sandboxes' => [['id' => $resumed->id, 'status' => 'paused'], ['id' => $paused->id, 'status' => 'running']], 'snapshots' => []]);
+    expect($resumed->refresh()->status)->toBe(Sandbox::RUNNING)
+        ->and($paused->refresh()->status)->toBe(Sandbox::PAUSED);
 });
 
 it('fails snapshots stuck being taken', function () {
