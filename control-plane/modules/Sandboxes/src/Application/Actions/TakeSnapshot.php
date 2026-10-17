@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Snapshot a running or paused sandbox (sandbox.snapshot, sandbox.v2): the row starts `creating`, HandleCommandOutcome
+ * Snapshot a running or paused sandbox (resumed first; sandbox.snapshot, sandbox.v2): the row starts `creating`, HandleCommandOutcome
  * makes it ready (or failed). With $stop the agent removes the sandbox after the checkpoint and the sandbox is killed
  * with reason "snapshot" once the snapshot is ready. Quotas (max_snapshots, max_snapshot_storage_mb) and the name are
  * checked under the organization's lock.
@@ -27,12 +27,15 @@ final class TakeSnapshot
         private readonly SandboxAgent $agent,
         private readonly AgentGateway $agents,
         private readonly AuditLog $audit,
+        private readonly PauseSandbox $pauses,
     ) {}
 
     public function __invoke(Sandbox $sandbox, Actor $actor, ?string $name, bool $stop = false): SandboxSnapshot
     {
         abort_unless(in_array($sandbox->status, [Sandbox::RUNNING, Sandbox::PAUSED], true), 409, $sandbox->status === Sandbox::CREATING ? 'The sandbox is still starting.' : "The sandbox is {$sandbox->status}.");
         $this->agent->requireV2($sandbox->server_id);
+        // The agent checkpoints running sandboxes only: a paused one is resumed first, as for an exec.
+        $sandbox = $this->pauses->resume($sandbox);
         $organizationId = $sandbox->organization_id;
 
         try {

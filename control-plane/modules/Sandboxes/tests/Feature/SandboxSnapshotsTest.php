@@ -242,6 +242,16 @@ it('stops the sandbox with stop, waits with ?wait=1 and fails a snapshot the age
         ->and($other->refresh()->status)->toBe(Sandbox::RUNNING);
 });
 
+it('resumes a paused sandbox before snapshotting it', function () {
+    $sandbox = snap_sandbox(['status' => Sandbox::PAUSED]);
+    $this->agents->answer('sandbox.resume', fn () => ['status' => 'running']);
+
+    snap_api()->postJson("/api/v1/sandboxes/{$sandbox->id}/snapshots")->assertCreated();
+    $types = collect($this->agents->dispatched())->pluck('handle.type')->all();
+    expect($types)->toBe(['sandbox.resume', 'sandbox.snapshot'])
+        ->and($sandbox->refresh()->status)->toBe(Sandbox::RUNNING);
+});
+
 it('enforces the snapshot quotas', function () {
     expect(config('sandboxes.max_snapshots'))->toBe(20)->and(config('sandboxes.max_snapshot_storage_mb'))->toBe(51200);
     $sandbox = snap_sandbox();
