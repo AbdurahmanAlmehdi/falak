@@ -1,0 +1,108 @@
+# Flowise lets the first visitor create the owner account. `setup` creates it from the admin inputs as soon as
+# Flowise answers, then stays up idle. Flowise wants a symbol in passwords and the generated one has none, so the
+# account is registered with the password plus a fixed suffix and its hash is then set to the plain password.
+# Every start re-checks and finishes a setup cut short; a password changed in the UI is left alone.
+services:
+  flowise:
+    image: flowiseai/flowise:3.1.4
+    restart: unless-stopped
+    expose: ["3000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: "3000"
+      APP_URL: ${{ falak.url(flowise) }}
+      NUMBER_OF_PROXIES: "1"
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: flowise
+      DATABASE_USER: flowise
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      SECRETKEY_PATH: /home/node/.flowise
+      FLOWISE_SECRETKEY_OVERWRITE: ${FLOWISE_SECRETKEY}
+      JWT_AUTH_TOKEN_SECRET: ${JWT_AUTH_TOKEN_SECRET}
+      JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET}
+      EXPRESS_SESSION_SECRET: ${EXPRESS_SESSION_SECRET}
+      TOKEN_HASH_SECRET: ${TOKEN_HASH_SECRET}
+      BLOB_STORAGE_PATH: /home/node/.flowise/storage
+      LOG_PATH: /home/node/.flowise/logs
+      DISABLE_FLOWISE_TELEMETRY: "true"
+    volumes:
+      - flowise-data:/home/node
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:3000/api/v1/ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 90s
+
+  setup:
+    image: flowiseai/flowise:3.1.4
+    restart: unless-stopped
+    working_dir: /usr/local/lib/node_modules/flowise
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -f /tmp/setup-done
+        node -e '
+          const { Client } = require("pg");
+          const bcrypt = require("bcryptjs");
+          const env = process.env;
+          const email = env.ADMIN_EMAIL.trim().toLowerCase();
+          const temp = env.ADMIN_PASSWORD + "!Aa1";
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          (async () => {
+            while (!(await fetch("http://flowise:3000/api/v1/ping").then((r) => r.ok, () => false))) await sleep(2000);
+            const res = await fetch("http://flowise:3000/api/v1/account/register", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user: { name: "Admin", email, credential: temp } }),
+            });
+            console.log("register:", res.status, (await res.text()).slice(0, 200));
+            const db = new Client({ host: "db", user: "flowise", database: "flowise", password: env.DB_PASSWORD });
+            await db.connect();
+            const { rows } = await db.query("SELECT id, credential FROM \"user\" WHERE email = $$1", [email]);
+            if (rows[0] && rows[0].credential && bcrypt.compareSync(temp, rows[0].credential)) {
+              await db.query("UPDATE \"user\" SET credential = $$1 WHERE id = $$2", [bcrypt.hashSync(env.ADMIN_PASSWORD, 10), rows[0].id]);
+              console.log("admin password set");
+            }
+            await db.end();
+          })().catch((e) => { console.error(e); process.exit(1); });
+        ' || exit 1
+        touch /tmp/setup-done
+        exec sleep infinity
+    depends_on:
+      flowise:
+        condition: service_started
+    environment:
+      ADMIN_EMAIL: ${FLOWISE_ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${FLOWISE_ADMIN_PASSWORD}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/setup-done"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  db:
+    image: postgres:17.11-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: flowise
+      POSTGRES_USER: flowise
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - flowise-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flowise -d flowise"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  flowise-data:
+  flowise-db:

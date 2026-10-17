@@ -1,0 +1,33 @@
+name: AnythingLLM
+slug: anythingllm
+version: 1.0.0
+description: All-in-one AI workspace — chat with your documents, run agents and use any LLM provider, with built-in RAG.
+category: ai
+icon: ./icon.svg
+docs: https://docs.anythingllm.com
+stateful: true
+min_memory_mb: 2048
+popular: true
+tags: [llm, chat, rag, documents, agents]
+public:
+  - service: anythingllm
+    port: 3001
+    health_check_path: /api/ping
+inputs:
+  - key: AUTH_TOKEN
+    type: secret
+    generate: password(24)
+    label: Password
+    description: The instance's password. Switch to multi-user mode under Settings → Security to give people their own accounts.
+  - key: JWT_SECRET
+    type: secret
+    generate: secret(48)
+    label: Session secret
+  - key: SIG_KEY
+    type: secret
+    generate: secret(48)
+    label: Signing key
+  - key: SIG_SALT
+    type: secret
+    generate: secret(48)
+    label: Signing salt

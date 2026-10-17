@@ -1,0 +1,60 @@
+name: LibreChat
+slug: librechat
+version: 1.0.0
+description: ChatGPT-style chat for OpenAI, Anthropic, Google and more, with agents, multi-user accounts and search.
+category: ai
+icon: ./icon.svg
+docs: https://www.librechat.ai/docs
+stateful: true
+min_memory_mb: 1536
+popular: true
+tags: [llm, chat, ai, agents, openai, anthropic]
+public:
+  - service: librechat
+    port: 3080
+    health_check_path: /health
+inputs:
+  - key: ALLOW_REGISTRATION
+    type: boolean
+    label: Allow sign-ups
+    description: The first account becomes the admin. Turn this off once your team has joined.
+    default: true
+  - key: OPENAI_API_KEY
+    type: secret
+    label: OpenAI API key
+    description: Optional. Leave empty to let each user enter their own key.
+    required: false
+  - key: ANTHROPIC_API_KEY
+    type: secret
+    label: Anthropic API key
+    description: Optional. Leave empty to let each user enter their own key.
+    required: false
+  - key: GOOGLE_KEY
+    type: secret
+    label: Google Gemini API key
+    description: Optional. Leave empty to let each user enter their own key.
+    required: false
+  - key: CREDS_KEY
+    type: secret
+    generate: hex(64)
+    label: Credentials encryption key
+  - key: CREDS_IV
+    type: secret
+    generate: hex(32)
+    label: Credentials encryption IV
+  - key: JWT_SECRET
+    type: secret
+    generate: secret(48)
+    label: Session secret
+  - key: JWT_REFRESH_SECRET
+    type: secret
+    generate: secret(48)
+    label: Refresh token secret
+  - key: MEILI_MASTER_KEY
+    type: secret
+    generate: secret(32)
+    label: Meilisearch master key
+  - key: MONGO_PASSWORD
+    type: secret
+    generate: password(32)
+    label: MongoDB password

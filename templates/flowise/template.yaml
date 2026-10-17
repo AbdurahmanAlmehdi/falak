@@ -1,0 +1,47 @@
+name: Flowise
+slug: flowise
+version: 1.0.0
+description: Drag-and-drop builder for LLM apps, AI agents and RAG chatbots, served as APIs and embeddable chat.
+category: ai
+icon: ./icon.svg
+docs: https://docs.flowiseai.com
+stateful: true
+min_memory_mb: 1536
+tags: [llm, agents, rag, low-code, chatbot]
+public:
+  - service: flowise
+    port: 3000
+    health_check_path: /api/v1/ping
+inputs:
+  - key: FLOWISE_ADMIN_EMAIL
+    type: email
+    label: Admin email
+    description: Sign in with this email and the admin password. The account is created at the first start.
+  - key: FLOWISE_ADMIN_PASSWORD
+    type: secret
+    generate: password(24)
+    label: Admin password
+  - key: FLOWISE_SECRETKEY
+    type: secret
+    generate: secret(48)
+    label: Credentials encryption key
+  - key: JWT_AUTH_TOKEN_SECRET
+    type: secret
+    generate: hex(64)
+    label: Session token secret
+  - key: JWT_REFRESH_TOKEN_SECRET
+    type: secret
+    generate: hex(64)
+    label: Refresh token secret
+  - key: EXPRESS_SESSION_SECRET
+    type: secret
+    generate: hex(64)
+    label: Cookie session secret
+  - key: TOKEN_HASH_SECRET
+    type: secret
+    generate: hex(64)
+    label: Token hash secret
+  - key: POSTGRES_PASSWORD
+    type: secret
+    generate: password(32)
+    label: PostgreSQL password

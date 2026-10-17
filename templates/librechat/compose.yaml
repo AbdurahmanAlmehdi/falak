@@ -1,0 +1,86 @@
+# No librechat.yaml: the built-in OpenAI, Anthropic and Google endpoints are on. A key left empty is entered by each
+# user in the model picker. File chat (RAG API + pgvector) isn't included.
+services:
+  librechat:
+    image: registry.librechat.ai/librechat-ai/librechat:v0.8.8
+    restart: unless-stopped
+    expose: ["3080"]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3080"
+      DOMAIN_CLIENT: ${{ falak.url(librechat) }}
+      DOMAIN_SERVER: ${{ falak.url(librechat) }}
+      TRUST_PROXY: "1"
+      NO_INDEX: "true"
+      SCHEDULES_SINGLE_PROCESS: "true"
+      MONGO_URI: mongodb://librechat:${MONGO_PASSWORD}@mongodb:27017/LibreChat?authSource=admin
+      SEARCH: "true"
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+      CREDS_KEY: ${CREDS_KEY}
+      CREDS_IV: ${CREDS_IV}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ALLOW_EMAIL_LOGIN: "true"
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION}
+      ALLOW_SOCIAL_LOGIN: "false"
+      ALLOW_SOCIAL_REGISTRATION: "false"
+      ALLOW_PASSWORD_RESET: "false"
+      ALLOW_UNVERIFIED_EMAIL_LOGIN: "true"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-user_provided}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-user_provided}
+      GOOGLE_KEY: ${GOOGLE_KEY:-user_provided}
+    volumes:
+      - librechat-uploads:/app/uploads
+      - librechat-images:/app/client/public/images
+      - librechat-data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+  mongodb:
+    image: mongo:8.0.20
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: librechat
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    volumes:
+      - librechat-mongo:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.35.1
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: production
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - librechat-meili:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:7700/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  librechat-uploads:
+  librechat-images:
+  librechat-data:
+  librechat-mongo:
+  librechat-meili:

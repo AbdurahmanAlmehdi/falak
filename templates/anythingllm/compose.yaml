@@ -1,0 +1,33 @@
+# Pick the LLM and embedding provider on first sign-in (or under Settings); those settings are kept in the storage
+# volume (/app/server/.env is linked there). Upstream suggests cap_add SYS_ADMIN for the scraper's Chromium; the
+# compose policy doesn't allow it. Fetching links works without it; sites that need a headless browser may not.
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:1.18.0
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        touch /app/server/storage/.env
+        ln -sf /app/server/storage/.env /app/server/.env
+        exec /bin/bash /usr/local/bin/docker-entrypoint.sh
+    expose: ["3001"]
+    environment:
+      SERVER_PORT: "3001"
+      STORAGE_DIR: /app/server/storage
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      JWT_SECRET: ${JWT_SECRET}
+      SIG_KEY: ${SIG_KEY}
+      SIG_SALT: ${SIG_SALT}
+      DISABLE_TELEMETRY: "true"
+    volumes:
+      - anythingllm-storage:/app/server/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:3001/api/ping || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  anythingllm-storage:
