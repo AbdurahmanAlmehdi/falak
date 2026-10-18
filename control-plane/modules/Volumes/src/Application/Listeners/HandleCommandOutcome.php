@@ -240,7 +240,9 @@ final class HandleCommandOutcome implements ShouldHandleEventsAfterCommit, Shoul
         $target->forceFill(['status' => VolumeStatus::Active, 'status_message' => null, 'used_bytes' => isset($result['bytes']) ? (int) $result['bytes'] : $target->used_bytes, 'used_at' => now()])->save();
         $this->transfers->discard(VolumeBackup::query()->find($operation->meta('backup_id')));
 
-        $from = $operation->meta('swap_from') ?? ($operation->kind === OperationKind::Move ? $operation->meta('source_id') : null);
+        // A compose volume's move (a site moving) hands nothing over: its stack switches when it deploys on the target.
+        $composeMove = $operation->kind === OperationKind::Move && $operation->meta('compose') === true;
+        $from = $operation->meta('swap_from') ?? ($operation->kind === OperationKind::Move && ! $composeMove ? $operation->meta('source_id') : null);
         $source = is_string($from) ? Volume::query()->find($from) : null;
         $redeployed = [];
 

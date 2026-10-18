@@ -8,6 +8,8 @@ use Falak\Databases\Application\Actions\DecidePitrRestore;
 use Falak\Databases\Application\Actions\RelocateInstance;
 use Falak\Databases\Application\Actions\RestoreBackup;
 use Falak\Databases\Application\Actions\RestoreToTime;
+use Falak\Databases\Application\Actions\RunBackup;
+use Falak\Databases\Application\AgentCommands;
 use Falak\Databases\Application\PitrTimeline;
 use Falak\Databases\Contracts\Data\DatabaseRecoveryPoint;
 use Falak\Databases\Contracts\Data\InstanceRecoveryPoint;
@@ -22,6 +24,7 @@ use Falak\Databases\Domain\Models\Database;
 use Falak\Databases\Domain\Models\DatabaseInstance;
 use Falak\Databases\Domain\Models\PitrSegment;
 use Falak\Databases\Domain\Models\Restore;
+use Falak\Databases\Domain\Models\StorageProvider;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -35,6 +38,8 @@ final class EloquentDatabaseRecovery implements DatabaseRecovery
         private readonly DecidePitrRestore $decide,
         private readonly ConfigurePitr $configurePitr,
         private readonly PitrTimeline $timeline,
+        private readonly RunBackup $backup,
+        private readonly AgentCommands $commands,
     ) {}
 
     public function instancesOn(string $serverId): array
@@ -224,6 +229,34 @@ final class EloquentDatabaseRecovery implements DatabaseRecovery
             $restores->count() === count($restoreIds) && $restores->every(fn (Restore $restore) => $restore->status === RestoreStatus::Succeeded) => ['state' => 'succeeded', 'message' => null],
             default => ['state' => 'running', 'message' => null],
         };
+    }
+
+    public function backUp(string $instanceId, string $storageProviderId, ?string $actorId = null): array
+    {
+        $instance = $this->instance($instanceId);
+        $provider = StorageProvider::query()->where('organization_id', $instance->organization_id)->find($storageProviderId)
+            ?? throw ValidationException::withMessages(['storage_provider_id' => 'Choose a storage provider of this organization.']);
+
+        return $instance->databases()->get()->map(fn (Database $database) => ($this->backup)($database, $provider, 'manual', null, $actorId)->id)->values()->all();
+    }
+
+    public function backupProgress(array $backupIds): array
+    {
+        /** @var Collection<int, Backup> $backups */
+        $backups = Backup::query()->whereIn('id', $backupIds)->get();
+        $failed = $backups->first(fn (Backup $backup) => in_array($backup->status, [BackupStatus::Failed, BackupStatus::Pruned], true));
+
+        return match (true) {
+            $failed !== null => ['state' => 'failed', 'message' => "Backing up {$failed->database_name} failed: ".($failed->error ?: $failed->status->value)],
+            $backups->count() === count($backupIds) && $backups->every(fn (Backup $backup) => $backup->status === BackupStatus::Succeeded) => ['state' => 'succeeded', 'message' => null],
+            default => ['state' => 'running', 'message' => 'Backing up.'],
+        };
+    }
+
+    public function removeLeftover(string $instanceId, string $serverId): bool
+    {
+        // HandleCommandOutcome finds the (moved, active) instance by the key and leaves it alone.
+        return $this->commands->tryDispatch($serverId, 'db.instance.delete', ['id' => $instanceId], (int) config('databases.timeouts.ddl', 300), "db.instance.delete:{$instanceId}:moved") !== null;
     }
 
     private function instance(string $instanceId): DatabaseInstance

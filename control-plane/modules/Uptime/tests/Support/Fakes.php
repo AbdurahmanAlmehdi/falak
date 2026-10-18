@@ -139,4 +139,9 @@ final class FakeDomainRecords implements DomainRecords
             array_filter($this->domains, fn (array $domain) => in_array($domain['site_id'], $siteIds, true)),
         ));
     }
+
+    public function followServer(string $siteId, string $fromIpv4, string $toIpv4): array
+    {
+        return [];
+    }
 }

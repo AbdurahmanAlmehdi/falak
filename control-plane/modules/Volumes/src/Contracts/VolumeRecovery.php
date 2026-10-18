@@ -42,4 +42,25 @@ interface VolumeRecovery
      * @return array{state: string, message: ?string} running | succeeded | failed
      */
     public function progress(string $operationId): array;
+
+    /**
+     * Moving a site (Recovery's "Move to another server"): the volume moves to $targetServerId through object storage,
+     * its services stopped from the snapshot on. A plain volume is handed over (its services redeploy) and its source
+     * deleted right away; a compose stack's volume becomes the copy of the same Docker name there, the stack is left
+     * alone (it switches when it deploys there) and the source stays until {@see finishMove()}. A failure redeploys
+     * the services where they were.
+     *
+     * @return string the volume operation id ({@see progress()})
+     *
+     * @throws ValidationException
+     */
+    public function move(string $volumeId, string $targetServerId, string $storageProviderId, ?string $actorId = null): string;
+
+    /**
+     * After the site runs on the new server: a compose volume's source (on the old server) is detached and deleted;
+     * a plain move's source is already gone.
+     *
+     * @return ?string what was done, for the move's log
+     */
+    public function finishMove(string $operationId, ?string $actorId = null): ?string;
 }

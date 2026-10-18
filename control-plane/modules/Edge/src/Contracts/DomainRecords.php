@@ -15,4 +15,12 @@ interface DomainRecords
      *                                                                                    worst state (pending | synced | conflict | error)
      */
     public function forSites(array $siteIds): array;
+
+    /**
+     * A site moved from the server at $fromIpv4 to $toIpv4: its generated names (`<label>.<ip-with-dashes>.<suffix>`,
+     * sslip.io …) embed the old IP, so each is replaced by the same name for the new IP (primary kept, TLS issued anew).
+     *
+     * @return array<string, string> old name => new name
+     */
+    public function followServer(string $siteId, string $fromIpv4, string $toIpv4): array;
 }
