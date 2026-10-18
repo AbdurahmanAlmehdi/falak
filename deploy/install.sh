@@ -627,6 +627,8 @@ main() {
   write_env
   write_kek
   check_subnet
+  # state/host + falak-host.path (the panel's update button), falakcp.slice (the panel's reserved share).
+  kctl ensure-host || die "falak-ctl ensure-host failed (see above)"
   if [ "$FROM_SOURCE" = 1 ]; then build_images; fi
   if [ -n "$RESTORE_FROM" ]; then
     restore_control_plane

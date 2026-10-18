@@ -32,6 +32,11 @@
 #   falak-ctl artisan <args...>             run php artisan in the control-plane container
 #   falak-ctl compose <args...>             raw docker compose with the install's settings
 #   falak-ctl reload-configs                recreate services whose mounted config files changed on disk
+#   falak-ctl local-server enable --install-url URL | disable | status
+#                                           sites on this machine: enrol its agent, the edge passes it every host the
+#                                           panel does not serve; the panel keeps FALAK_CP_RESERVE_MB and one core
+#   falak-ctl ensure-host                   (re)write the host units (falak-host.path) and resource slices
+#   falak-ctl host-run                      run the panel's host request (falak-host.service; update, local-server)
 #   falak-ctl version
 #
 # Environment: FALAK_DIR (default /opt/falak), FALAK_PROJECT (compose project, default falak).
@@ -575,9 +580,12 @@ fetch_bundle() { # fetch_bundle VERSION DEST_DIR
   tmp="$(tmpdir)"
   curl -fsSL --retry 3 -o "$tmp/falak-deploy.tar.gz" "https://github.com/$repo/releases/download/$version/falak-deploy.tar.gz" \
     || { rm -rf "$tmp"; die "could not download falak-deploy.tar.gz for $version from github.com/$repo"; }
-  if curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "https://github.com/$repo/releases/download/$version/SHA256SUMS" 2>/dev/null; then
-    (cd "$tmp" && grep ' falak-deploy.tar.gz$' SHA256SUMS | sha256sum -c --quiet -) || { rm -rf "$tmp"; die "checksum mismatch for falak-deploy.tar.gz"; }
-  fi
+  # Fail closed: a bundle is never installed unverified (FALAK_DEPLOY_SOURCE copies above are the operator's own).
+  curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "https://github.com/$repo/releases/download/$version/SHA256SUMS" \
+    || { rm -rf "$tmp"; die "could not download SHA256SUMS for $version from github.com/$repo: refusing to install an unverified bundle"; }
+  grep -q ' falak-deploy.tar.gz$' "$tmp/SHA256SUMS" \
+    || { rm -rf "$tmp"; die "SHA256SUMS of $version lists no falak-deploy.tar.gz: refusing to install an unverified bundle"; }
+  (cd "$tmp" && grep ' falak-deploy.tar.gz$' SHA256SUMS | sha256sum -c --quiet -) || { rm -rf "$tmp"; die "checksum mismatch for falak-deploy.tar.gz"; }
   tar -xzf "$tmp/falak-deploy.tar.gz" -C "$dest"
   rm -rf "$tmp"
 }
@@ -1582,6 +1590,351 @@ WantedBy=timers.target" && changed=1
   ok "backups every $every h (falak-backup.timer)$([ "$drill" = monthly ] && echo ', restore drill monthly (falak-drill.timer)')"
 }
 
+# --- host channel: the panel asks, root on the host acts (docs/INSTALL.md, "Updating from the panel") -------------
+# state/host (root:www-data 1770, mounted read-write into control-plane, horizon and scheduler only at /falak/host): the
+# panel writes request.json atomically; falak-host.path starts falak-host.service (`falak-ctl host-run`), which takes
+# the file away and runs only what its allowlist describes:
+#   {"id":"<26 letters/digits>","action":"update","version":"vX.Y.Z"}            -> falak-ctl update --version vX.Y.Z
+#   {"id":"…","action":"local-server","install_url":"$FALAK_URL/install/<token>"} -> falak-ctl local-server enable
+# status.json ({"id","action","state":"running|succeeded|failed","started_at","finished_at","exit_code","log"}) and
+# <id>.log (last 20 kept) are written by root, 0644. The sticky bit keeps the panel from removing or renaming them;
+# every file root creates there is a fresh mktemp name renamed into place (never opened by a guessable path).
+HOST_DIR="$STATE_DIR/host"
+HOST_LOCK="$STATE_DIR/.host.lock"
+LOCAL_EDGE_ENV="${FALAK_LOCAL_EDGE_ENV:-/etc/falak/local-edge.env}"
+HOST_KEEP_LOGS=20
+
+ensure_host_dir() {
+  install -d -m 0755 "$STATE_DIR"
+  mkdir -p "$HOST_DIR"
+  chown "0:$(app_uid)" "$HOST_DIR" 2>/dev/null || [ "$(id -u)" != 0 ] || warn "could not chown $HOST_DIR to root:$(app_uid)"
+  chmod 1770 "$HOST_DIR"
+}
+
+host_new_file() { # host_new_file NAME : prints a fresh 0644 temp file in HOST_DIR; `mv -f` it to NAME when written
+  local tmp
+  tmp="$(mktemp "$HOST_DIR/.$1.XXXXXX")"
+  chmod 644 "$tmp"
+  printf '%s' "$tmp"
+}
+
+host_prune_logs() { # host_prune_logs REGEX : keep the newest HOST_KEEP_LOGS logs whose name matches
+  local old
+  # Only names this script writes (no newline or slash can sneak into the list).
+  # shellcheck disable=SC2010,SC2012  # ls -t: names are checked against REGEX
+  old="$(ls -1t "$HOST_DIR" 2>/dev/null | grep -E "^$1\$" | tail -n +$((HOST_KEEP_LOGS + 1)) || true)"
+  [ -z "$old" ] || printf '%s\n' "$old" | while read -r f; do rm -f "${HOST_DIR:?}/$f"; done
+}
+
+host_status() { # host_status ID ACTION STATE STARTED FINISHED EXIT [ERROR]
+  local tmp log=""
+  [ -z "$1" ] || log="$1.log"
+  tmp="$(host_new_file status.json)"
+  printf '{"id":%s,"action":%s,"state":%s,"started_at":%s,"finished_at":%s,"exit_code":%s,"log":%s,"error":%s}\n' \
+    "$(json_str "$1")" "$(json_str "$2")" "$(json_str "$3")" "$(json_str "$4")" "$(json_str "$5")" "$(json_int "$6")" \
+    "$(json_str "$log")" "$(json_str "${7:-}")" > "$tmp"
+  mv -f "$tmp" "$HOST_DIR/status.json"
+}
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# json_field KEY JSON -> the string value of "KEY" when it occurs exactly once and holds no escapes but \/ (PHP's
+# json_encode writes https:\/\/…). Every value is then checked against a strict pattern, so no general parser is needed.
+json_field() {
+  local m
+  m="$(printf '%s' "$2" | grep -oE "\"$1\"[[:space:]]*:[[:space:]]*\"([^\"\\\\]|\\\\/)*\"" || true)"
+  [ -n "$m" ] && [ "$(printf '%s\n' "$m" | wc -l | tr -d ' ')" = 1 ] || return 1
+  printf '%s' "$m" | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//; s#\\/#/#g'
+}
+
+valid_request_id() { [[ "$1" =~ ^[0-9A-Za-z]{26}$ ]]; }
+valid_version() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+valid_install_url() { # FALAK_URL/install/<token>, token [A-Za-z0-9_-]+
+  local base
+  base="$(env_get FALAK_URL)"; base="${base%/}"
+  [ -n "$base" ] || return 1
+  case "$1" in "$base/install/"?*) ;; *) return 1 ;; esac
+  [[ "${1#"$base/install/"}" =~ ^[A-Za-z0-9_-]+$ ]]
+}
+
+# host_take : moves request.json out of the panel's reach, validates it and starts the job. 1 when rejected.
+host_take() {
+  local req raw id="" action version="" url="" arg
+  req="$(mktemp "$STATE_DIR/.host-request.XXXXXX")"
+  # rename moves a symlink itself, never its target; a directory (or anything mv can't move) is removed.
+  if ! mv -f "$HOST_DIR/request.json" "$req" 2>/dev/null; then
+    rm -rf "${HOST_DIR:?}/request.json"; rm -f "$req"
+    warn "host request: request.json could not be taken; removed"; return 1
+  fi
+  if [ -L "$req" ] || [ ! -f "$req" ]; then rm -rf "$req"; host_status "" "" failed "" "$(now_iso)" "" "request.json is not a regular file"; return 1; fi
+  raw="$(head -c 4096 "$req")"; rm -f "$req"
+  id="$(json_field id "$raw" || true)"
+  if ! valid_request_id "$id"; then host_status "" "" failed "" "$(now_iso)" "" "invalid request id"; warn "host request: invalid id"; return 1; fi
+  action="$(json_field action "$raw" || true)"
+  case "$action" in
+    update)
+      version="$(json_field version "$raw" || true)"
+      valid_version "$version" || { host_status "$id" update failed "" "$(now_iso)" "" "invalid version (vX.Y.Z)"; warn "host request $id: invalid version"; return 1; }
+      arg="$version" ;;
+    local-server)
+      url="$(json_field install_url "$raw" || true)"
+      valid_install_url "$url" || { host_status "$id" local-server failed "" "$(now_iso)" "" "install_url must be $(env_get FALAK_URL)/install/<token>"; warn "host request $id: invalid install_url"; return 1; }
+      arg="$url" ;;
+    *) host_status "$id" "" failed "" "$(now_iso)" "" "unknown action"; warn "host request $id: unknown action"; return 1 ;;
+  esac
+  info "host request $id: $action $([ "$action" = update ] && printf '%s' "$version")"
+  host_status "$id" "$action" running "$(now_iso)" "" ""
+  if [ "$action" = update ]; then
+    # The update restarts the control plane and replaces falak-ctl itself: run it in its own transient unit, so
+    # nothing tied to falak-host.service (its timeout, a restart of it) can cut it short.
+    if command -v systemd-run >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+      systemd-run --quiet --collect --unit "falak-update-$id" --setenv "FALAK_DIR=$FALAK_DIR" --setenv "FALAK_PROJECT=$FALAK_PROJECT" \
+        "$(ctl_path)" host-job "$id" update "$arg" \
+        || { host_status "$id" update failed "" "$(now_iso)" "" "systemd-run failed"; return 1; }
+    else
+      setsid "$(ctl_path)" host-job "$id" update "$arg" </dev/null >/dev/null 2>&1 &
+    fi
+    return 0
+  fi
+  cmd_host_job "$id" "$action" "$arg"
+}
+
+cmd_host_run() {
+  ensure_host_dir
+  if command -v flock >/dev/null 2>&1; then
+    exec 8>>"$HOST_LOCK"
+    flock -w 600 8 || die "another host-run is still busy after 600s"
+  fi
+  # Requests that land while one runs are taken in the same pass (PathChanged may not fire again for them).
+  while [ -e "$HOST_DIR/request.json" ] || [ -L "$HOST_DIR/request.json" ]; do
+    host_take || true
+  done
+}
+
+# cmd_host_job ID ACTION ARG : runs a request host-run validated (checked again here); output -> ID.log
+cmd_host_job() {
+  local id="${1:-}" action="${2:-}" arg="${3:-}" started rc tmp
+  valid_request_id "$id" || die "host-job: invalid id"
+  case "$action" in
+    update) valid_version "$arg" || die "host-job: invalid version" ;;
+    local-server) valid_install_url "$arg" || die "host-job: invalid install URL" ;;
+    *) die "host-job: unknown action" ;;
+  esac
+  ensure_host_dir
+  started="$(now_iso)"
+  tmp="$(host_new_file "$id.log")"
+  exec 3>>"$tmp"
+  mv -f "$tmp" "$HOST_DIR/$id.log"
+  host_status "$id" "$action" running "$started" "" ""
+  set +e
+  case "$action" in
+    update) FALAK_DIR="$FALAK_DIR" FALAK_PROJECT="$FALAK_PROJECT" "$(ctl_path)" update --version "$arg" >&3 2>&1 ;;
+    local-server) FALAK_DIR="$FALAK_DIR" FALAK_PROJECT="$FALAK_PROJECT" "$(ctl_path)" local-server enable --install-url "$arg" >&3 2>&1 ;;
+  esac
+  rc=$?
+  set -e
+  exec 3>&-
+  if [ "$rc" = 0 ]; then host_status "$id" "$action" succeeded "$started" "$(now_iso)" 0
+  else host_status "$id" "$action" failed "$started" "$(now_iso)" "$rc"; fi
+  host_prune_logs '[0-9A-Za-z]{26}\.log'
+  return "$rc"
+}
+
+host_install_units() {
+  local dir ctl changed=0
+  command -v systemctl >/dev/null 2>&1 || { warn "no systemctl here: the panel can't ask this host for updates"; return 0; }
+  dir="$(systemd_dir)"; ctl="$(ctl_path)"
+  mkdir -p "$dir"
+  write_unit "$dir/falak-host.path" "[Unit]
+Description=Falak panel requests to this host ($HOST_DIR/request.json)
+
+[Path]
+PathChanged=$HOST_DIR/request.json
+PathExists=$HOST_DIR/request.json
+Unit=falak-host.service
+
+[Install]
+WantedBy=multi-user.target" && changed=1
+  write_unit "$dir/falak-host.service" "[Unit]
+Description=Falak host request from the panel (falak-ctl host-run: update, local-server)
+After=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+Environment=FALAK_DIR=$FALAK_DIR FALAK_PROJECT=$FALAK_PROJECT
+ExecStart=$ctl host-run
+TimeoutStartSec=1h" && changed=1
+  if [ "$changed" = 1 ]; then systemctl daemon-reload || warn "systemctl daemon-reload failed"; fi
+  if ! systemctl enable --now falak-host.path >/dev/null 2>&1; then
+    warn "could not enable falak-host.path (systemctl status falak-host.path)"; return 0
+  fi
+  # The panel offers its host buttons (update, This machine) only once this exists.
+  local tmp
+  tmp="$(host_new_file channel.json)"
+  printf '{"version":%s,"units":true,"installed_at":%s}\n' "$(json_str "$(env_get FALAK_VERSION)")" "$(json_str "$(now_iso)")" > "$tmp"
+  mv -f "$tmp" "$HOST_DIR/channel.json"
+}
+
+# --- resource slices: the panel keeps its share of the machine (spec §4) --------------------------------------
+# falakcp.slice (top level: a dash would nest it under falak.slice) holds every control-plane container but the builder:
+# MemoryMin protects FALAK_CP_RESERVE_MB (default 1536) from reclaim, CPUWeight 1000 wins any CPU contention. With a
+# local server, falak.slice (the agent's workloads, and the builder) is capped at total - reserve and cores - 1.
+# Needs Docker's systemd cgroup driver (cgroup_parent names a slice); with another driver the slices are skipped.
+mem_total_mb() { awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null; }
+cpu_cores() { nproc 2>/dev/null || getconf _NPROCESSORS_ONLN; }
+cp_reserve_mb() {
+  local r total
+  r="$(env_get FALAK_CP_RESERVE_MB 1536)"; total="$(mem_total_mb)"
+  case "$r" in '' | *[!0-9]*) warn "FALAK_CP_RESERVE_MB=$r is not a number; using 1536"; r=1536 ;; esac
+  if [ -n "$total" ] && [ "$r" -ge "$total" ]; then r=$((total / 2)); fi
+  printf '%s' "$r"
+}
+env_put() { if [ "$(env_get "$1")" != "$2" ] || ! grep -qE "^$1=" "$ENV_FILE"; then env_set "$1" "$2"; fi; }
+local_edge_enabled() { [ "$(env_get FALAK_LOCAL_EDGE)" = 1 ]; }
+
+ensure_slices() {
+  local dir reserve total cores cpus driver changed=0 work
+  dir="$(systemd_dir)"; reserve="$(cp_reserve_mb)"; total="$(mem_total_mb)"; cores="$(cpu_cores)"
+  cpus=$((cores - 1)); [ "$cpus" -ge 1 ] || cpus=1
+  [ -n "$(env_get FALAK_BUILDER_CPUS)" ] || env_set FALAK_BUILDER_CPUS "$cpus"
+  driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
+  if [ "$driver" != systemd ]; then
+    warn "Docker's cgroup driver is ${driver:-unknown}, not systemd: no falakcp.slice / falak.slice (per-container limits still apply)"
+    env_put FALAK_CP_SLICE ""; env_put FALAK_BUILDER_SLICE ""
+    return 0
+  fi
+  mkdir -p "$dir"
+  write_unit "$dir/falakcp.slice" "[Unit]
+Description=Falak control plane (reserved share of this machine)
+Before=slices.target
+
+[Slice]
+MemoryMin=${reserve}M
+CPUWeight=1000
+ManagedOOMPreference=avoid" && changed=1
+  if local_edge_enabled; then
+    work=$((total - reserve))
+    mkdir -p "$dir/falak.slice.d"
+    write_unit "$dir/falak.slice.d/50-host-cap.conf" "# falak-ctl local-server: sites and builds on the control-plane machine leave it ${reserve} MB and one core.
+[Slice]
+MemoryMax=${work}M
+MemoryHigh=$((work * 95 / 100))M
+CPUQuota=$((cpus * 100))%
+CPUWeight=100" && changed=1
+    env_put FALAK_BUILDER_SLICE falak.slice
+  else
+    if [ -f "$dir/falak.slice.d/50-host-cap.conf" ]; then rm -f "$dir/falak.slice.d/50-host-cap.conf"; changed=1; fi
+    env_put FALAK_BUILDER_SLICE ""
+  fi
+  env_put FALAK_CP_SLICE falakcp.slice
+  if command -v systemctl >/dev/null 2>&1; then
+    if [ "$changed" = 1 ]; then systemctl daemon-reload || warn "systemctl daemon-reload failed"; fi
+    systemctl start falakcp.slice >/dev/null 2>&1 || warn "could not start falakcp.slice"
+  fi
+  ok "falakcp.slice reserves ${reserve} MB for the control plane$(local_edge_enabled && printf '; falak.slice capped at %s MB, %s%% CPU' "$((total - reserve))" "$((cpus * 100))")"
+}
+
+# ensure-host: host directory, units and slices, as this version of falak-ctl writes them (install, up, update).
+cmd_ensure_host() {
+  require_install
+  ensure_host_dir
+  ensure_slices
+  host_install_units
+}
+
+# --- local server: sites on the control-plane machine ------------------------------------------------------
+# The agent enrols like on any server; its edge listens on the edge network's gateway (8443/8080, PROXY protocol from
+# the edge network only), and the control-plane edge passes it every host it does not serve itself.
+cmd_local_server() {
+  require_install
+  local sub="${1:-status}" url=""
+  shift || true
+  case "$sub" in
+    enable)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --install-url) url="${2:-}"; shift ;;
+          --install-url=*) url="${1#--install-url=}" ;;
+          *) die "local-server enable: unknown option $1" ;;
+        esac
+        shift
+      done
+      valid_install_url "$url" || die "local-server enable: --install-url must be $(env_get FALAK_URL)/install/<token> (Servers → Add server → This machine)"
+      local_server_enable "$url" ;;
+    disable) local_server_disable ;;
+    status) local_server_status ;;
+    *) die "usage: falak-ctl local-server enable --install-url URL | disable | status" ;;
+  esac
+}
+
+edge_network() { # -> "GATEWAY SUBNET" of the compose edge network
+  local gw subnet
+  read -r gw subnet < <(docker network inspect --format '{{range .IPAM.Config}}{{.Gateway}} {{.Subnet}}{{"\n"}}{{end}}' "${FALAK_PROJECT}_edge" 2>/dev/null | grep -E '^[0-9.]* ?[0-9.]+/[0-9]+$' | head -1) || true
+  [ -n "${subnet:-}" ] || return 1
+  [ -n "${gw:-}" ] || gw="${subnet%.*}.1"
+  printf '%s %s' "$gw" "$subnet"
+}
+
+local_server_enable() {
+  local url="$1" net gw subnet tmp total reserve token
+  [ "$(id -u)" = 0 ] || die "local-server enable must run as root"
+  total="$(mem_total_mb)"; reserve="$(cp_reserve_mb)"
+  if [ -n "$total" ] && [ $((total - reserve)) -lt 512 ]; then
+    die "this machine has ${total} MB; with ${reserve} MB reserved for the control plane less than 512 MB is left for sites"
+  fi
+  net="$(edge_network)" || die "could not read the ${FALAK_PROJECT}_edge network (is the stack up? falak-ctl up)"
+  gw="${net% *}"; subnet="${net#* }"
+  [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "unexpected edge network gateway '$gw'"
+  info "Sites on this machine (edge network $subnet, local edge on $gw:8443 / $gw:8080)"
+  install -d -m 0755 "$(dirname "$LOCAL_EDGE_ENV")"
+  tmp="$(mktemp "$(dirname "$LOCAL_EDGE_ENV")/.local-edge.XXXXXX")"
+  printf '# Written by falak-ctl local-server enable: the agent on the control-plane machine (read by falak-agent).\nFALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=%s\nFALAK_LOCAL_EDGE_HTTP_PORT=8080\nFALAK_LOCAL_EDGE_HTTPS_PORT=8443\nFALAK_LOCAL_EDGE_TRUST=%s\nFALAK_WORKLOAD_SLICE=falak.slice\n' "$gw" "$subnet" > "$tmp"
+  chmod 644 "$tmp"; mv -f "$tmp" "$LOCAL_EDGE_ENV"
+  ok "wrote $LOCAL_EDGE_ENV"
+  env_set FALAK_LOCAL_EDGE 1
+  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTPS "$gw:8443"
+  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTP "$gw:8080"
+  ensure_slices
+  compose up -d --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
+  ok "edge passes every host it does not serve itself to the local edge"
+  info "Enrolling this machine's agent"
+  token="${url##*/install/}"
+  tmp="$(tmpdir)"
+  # Through the local edge (works before DNS, and with FALAK_TLS=internal).
+  edge_curl "$(env_get FALAK_DOMAIN)" "/install/$token" -f --retry 3 -o "$tmp/install.sh" || die "downloading the install script failed"
+  sh "$tmp/install.sh" </dev/null || die "the install script failed (see above); retry from the panel or: falak-ctl local-server enable --install-url …"
+  ok "this machine is a server now: deploy sites to it from the panel"
+}
+
+local_server_disable() {
+  [ "$(id -u)" = 0 ] || die "local-server disable must run as root"
+  rm -f "$LOCAL_EDGE_ENV"
+  env_set FALAK_LOCAL_EDGE ""
+  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTPS ""
+  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTP ""
+  ensure_slices
+  compose up -d --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
+  ok "the edge serves only the control plane again; $LOCAL_EDGE_ENV removed"
+  warn "the agent and its sites stay installed, but no request reaches them on 80/443 any more."
+  say "  Move the sites to another server, then delete this machine in the panel (Servers → this machine → Delete)."
+}
+
+local_server_status() {
+  if local_edge_enabled; then
+    say "local server: enabled (edge upstreams $(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTPS), $(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTP))"
+    if [ -f "$LOCAL_EDGE_ENV" ]; then grep -v '^#' "$LOCAL_EDGE_ENV" | sed 's/^/  /'; else warn "$LOCAL_EDGE_ENV is missing (falak-ctl local-server enable again)"; fi
+    if command -v systemctl >/dev/null 2>&1; then
+      say "  falak.slice: $(systemctl show falak.slice -p MemoryMax -p CPUQuotaPerSecUSec 2>/dev/null | tr '\n' ' ')"
+    fi
+  else
+    say "local server: disabled (enable: Servers → Add server → This machine, or falak-ctl local-server enable --install-url …)"
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    say "  falakcp.slice: $(systemctl show falakcp.slice -p MemoryMin -p CPUWeight 2>/dev/null | tr '\n' ' ')"
+  fi
+}
+
 ask() { # ask VAR PROMPT [default] : read a line from the terminal into VAR (default when empty)
   local answer
   printf '  %s%s: ' "$2" "${3:+ [$3]}" >&2
@@ -2017,6 +2370,14 @@ cmd_update() {
     esac
     shift
   done
+  # Everything also goes to state/host/update-<UTC>.log (the panel shows it; the newest 20 are kept).
+  local log tmp
+  ensure_host_dir
+  log="update-$(date -u +%Y%m%dT%H%M%SZ).log"
+  tmp="$(host_new_file "$log")"
+  exec 4>>"$tmp"; mv -f "$tmp" "$HOST_DIR/$log"
+  host_prune_logs 'update-[0-9]{8}T[0-9]{6}Z\.log'
+  exec > >(tee /dev/fd/4) 2>&1
   local prev
   prev="$(env_get FALAK_VERSION)"
   if [ -z "$target" ]; then
@@ -2041,6 +2402,9 @@ cmd_update() {
   env_set FALAK_VERSION "$target"
   ensure_registry_env
   ensure_kek --quiet
+  # The new falak-ctl (install_bundle just replaced it) writes its own host units and slices; this process is the
+  # old script.
+  env FALAK_DIR="$FALAK_DIR" FALAK_PROJECT="$FALAK_PROJECT" bash "$FALAK_DIR/deploy/falak-ctl" ensure-host || warn "falak-ctl ensure-host failed (run it again after the update)"
   if ! pull_images; then
     bad "pulling images for $target failed; nothing was changed"
     env_set FALAK_VERSION "$prev"; restore_prev_bundle
@@ -2298,14 +2662,14 @@ cmd_admin() {
   esac
 }
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; }
 
 main() {
   local cmd="${1:-help}"; shift || true
   case "$cmd" in
     status) cmd_status "$@" ;;
     logs) cmd_logs "$@" ;;
-    up) require_install; ensure_registry_env; ensure_kek --quiet; dr_write_json
+    up) require_install; ensure_registry_env; ensure_kek --quiet; dr_write_json; cmd_ensure_host
         pull_images missing || die "pulling images failed (see above); nothing was started"
         wait_healthy "${1:-420}" && health_check ;;
     down) require_install; compose down ;;
@@ -2324,6 +2688,12 @@ main() {
     compose) require_install; compose "$@" ;;
     health) require_install; health_check ;;
     reload-configs) require_install; recreate_drifted 300 ;;
+    local-server)
+      case "${1:-}" in enable|disable) ctl_lock ;; esac
+      cmd_local_server "$@" ;;
+    ensure-host) cmd_ensure_host ;;
+    host-run) require_install; cmd_host_run ;;
+    host-job) require_install; cmd_host_job "$@" ;;
     registry) cmd_registry "$@" ;;
     prune-images) cmd_prune_images "$@" ;;
     kek) cmd_kek "$@" ;;
