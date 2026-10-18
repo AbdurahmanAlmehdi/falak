@@ -115,19 +115,21 @@ func Build(d Deps) *Components {
 	}
 	reg := commands.NewRegistry()
 	sink := d.Telemetry.Sink()
-	// On the control-plane machine docker workloads run under the capped workload slice, never in the host's
-	// namespaces (falak-ctl's local-edge.env; see docker.Local).
-	if l, err := localedge.Load(d.FS, localedge.Path); err != nil {
+	// On the control-plane machine (falak-ctl's local-edge.env) every workload runs under the capped workload slice:
+	// docker containers (never in the host's namespaces, see docker.Local), programs and cron runs without a slice of
+	// their own (falak-<key>.slice ones are its children already).
+	local, err := localedge.Load(d.FS, localedge.Path)
+	if err != nil {
 		log.Error("local-edge.env ignored", "err", err)
-	} else if l.Enabled {
-		docker.Local = l
+	} else if local.Enabled {
+		docker.Local = local
 	}
 
 	// Programs' and cron jobs' secret env variables live on the tmpfs, never in their state files.
 	// Programs with limits run in their slices (falak-<key>.slice), converged by proc.apply.
 	sup := supervisor.New(supervisor.Options{StateDir: d.FS.P(cfg.StateDir), SecretsPath: d.FS.P(filepath.Join(cfg.RunDir, "state", "proc-secrets.json")),
 		LogDir: d.FS.P(cfg.LogDir), Sink: sink, Logger: log.With("component", "supervisor"),
-		Slices: &cgroup.Manager{Runner: d.Runner, FS: d.FS}, Systemd: d.Runner})
+		Slices: &cgroup.Manager{Runner: d.Runner, FS: d.FS}, Systemd: d.Runner, DefaultSlice: local.Slice()})
 	var insights cron.InsightsPoster
 	if d.Insights != nil {
 		insights = d.Insights
@@ -135,7 +137,7 @@ func Build(d Deps) *Components {
 	tel := d.Telemetry
 	sched := cron.New(cron.Options{
 		StateDir: d.FS.P(cfg.StateDir), SecretsPath: d.FS.P(filepath.Join(cfg.RunDir, "state", "cron-secrets.json")), Runner: d.Runner, Insights: insights, Sink: sink,
-		Logger: log.With("component", "cron"),
+		Logger: log.With("component", "cron"), Slice: local.Slice(),
 		SiteID: func(slug string) string {
 			for _, s := range tel.Relay().Config().Sites {
 				if s.Slug == slug {

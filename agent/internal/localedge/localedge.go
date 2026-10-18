@@ -35,6 +35,8 @@ type Config struct {
 	// Panel is the control plane's edge address: tenants may reach the panel through it (80/443), nothing else of the
 	// control plane's stack. Empty = no rule.
 	Panel string
+	// PanelPorts are the TCP ports of Panel tenants may reach (FALAK_LOCAL_EDGE_PANEL_PORTS, default 80 and 443).
+	PanelPorts []int
 	// Protect are the networks of the control plane's compose project (IPv4 CIDRs) tenants must never reach.
 	Protect []string
 	// ProjectName is the control plane's compose project (docker.prune never touches it); empty = unset.
@@ -108,6 +110,20 @@ func Parse(b []byte) (Config, error) {
 		if a, err := netip.ParseAddr(c.Panel); err != nil || !a.Is4() {
 			return Config{}, fmt.Errorf("local-edge.env: FALAK_LOCAL_EDGE_PANEL %q is not an IPv4 address", c.Panel)
 		}
+		c.PanelPorts = []int{80, 443}
+		if v := kv["FALAK_LOCAL_EDGE_PANEL_PORTS"]; v != "" {
+			c.PanelPorts = nil
+			for _, s := range strings.Split(v, ",") {
+				n, err := strconv.Atoi(strings.TrimSpace(s))
+				if err != nil || n < 1 || n > 65535 {
+					return Config{}, fmt.Errorf("local-edge.env: FALAK_LOCAL_EDGE_PANEL_PORTS %q: ports 1-65535", v)
+				}
+				c.PanelPorts = append(c.PanelPorts, n)
+			}
+			if len(c.PanelPorts) > 4 {
+				return Config{}, fmt.Errorf("local-edge.env: FALAK_LOCAL_EDGE_PANEL_PORTS %q: at most 4 ports", v)
+			}
+		}
 	}
 	if v := kv["FALAK_LOCAL_EDGE_PROTECT"]; v != "" {
 		for _, s := range strings.Split(v, ",") {
@@ -122,6 +138,18 @@ func Parse(b []byte) (Config, error) {
 		return Config{}, fmt.Errorf("local-edge.env: FALAK_PROJECT_NAME %q is not a compose project name", c.ProjectName)
 	}
 	return c, nil
+}
+
+// Slice is the systemd slice every workload (native or docker) and the edge run under on the control-plane machine:
+// FALAK_WORKLOAD_SLICE, falak.slice when unset (falak-ctl caps it). "" on other servers.
+func (c Config) Slice() string {
+	switch {
+	case !c.Enabled:
+		return ""
+	case c.WorkloadSlice != "":
+		return c.WorkloadSlice
+	}
+	return "falak.slice"
 }
 
 // HTTPListen and HTTPSListen are the edge's listen addresses.

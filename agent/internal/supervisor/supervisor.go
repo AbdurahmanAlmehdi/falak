@@ -43,6 +43,9 @@ type Options struct {
 	// cgroup.UserCanEnter.
 	LookPath func(string) (string, error)
 	CanEnter func(dir string, uid, gid uint32, groups []uint32) error
+	// DefaultSlice is the slice unit a program without a slice of its own runs in (falak.slice on the control-plane
+	// machine, so it is capped with every workload); "" = the agent's own cgroup.
+	DefaultSlice string
 }
 
 // Supervisor owns all supervised programs.

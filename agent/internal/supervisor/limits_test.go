@@ -125,6 +125,20 @@ func TestLaunchInSliceWrapsInScope(t *testing.T) {
 	if !cgroup.ScopeUnitRe.MatchString("falak-proc-shop.worker-2") {
 		t.Fatal("scope name")
 	}
+
+	// The control-plane machine: a program without limits still runs capped, in falak.slice; one with limits in its
+	// own slice (a child of falak.slice).
+	s.opts.DefaultSlice = "falak.slice"
+	argv, c, err = s.launch(Program{Name: "shop.worker", Command: []string{"php", "artisan", "queue:work"}}, 0, cred)
+	want = "systemd-run --scope --quiet --collect --slice=falak.slice --unit=falak-proc-shop.worker-0.scope -- " +
+		"setpriv --reuid=1001 --regid=1002 --init-groups -- php artisan queue:work"
+	if err != nil || strings.Join(argv, " ") != want || c != nil {
+		t.Fatalf("%s %v", strings.Join(argv, " "), err)
+	}
+	argv, _, _ = s.launch(Program{Name: "shop.worker", Command: []string{"php"}, Slice: "site_shop"}, 0, nil)
+	if !strings.Contains(strings.Join(argv, " "), "--slice=falak-site_shop.slice ") {
+		t.Fatalf("%v", argv)
+	}
 }
 
 // A launch that can't run the program is a launch error (state, status), never mistaken for the program's exit.

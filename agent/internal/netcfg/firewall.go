@@ -156,7 +156,11 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 		// (root) is unaffected; containers are kept off those networks by Docker's bridge isolation (forward path).
 		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n")
 		if l.Panel != "" {
-			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s tcp dport { 80, 443 } counter accept comment \"falak:protect-cp\"\n", l.Panel)
+			ports := make([]string, 0, len(l.PanelPorts))
+			for _, p := range l.PanelPorts {
+				ports = append(ports, strconv.Itoa(p))
+			}
+			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s tcp dport %s counter accept comment \"falak:protect-cp\"\n", l.Panel, set(ports))
 		}
 		if len(l.Protect) > 0 {
 			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s counter drop comment \"falak:protect-cp\"\n", set(l.Protect))

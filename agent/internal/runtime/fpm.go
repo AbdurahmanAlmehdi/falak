@@ -9,6 +9,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/cgroup"
 	"github.com/OthmanHaba/falak/agent/internal/commands"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
 
@@ -30,6 +31,9 @@ type FPMPoolPayload struct {
 	State           string            `json:"state"`
 	// Slice runs the pool in its own master inside falak-<slice>.slice (the site's limits).
 	Slice string `json:"slice"`
+	// SliceUnit is where a pool without a slice runs on the control-plane machine (set by the agent): its own master
+	// in falak.slice, capped with every workload, never the distro's shared master in system.slice.
+	SliceUnit string `json:"-"`
 	// OomScoreAdj is the own master's OOM preference (OOMScoreAdjust=).
 	OomScoreAdj int `json:"oom_score_adj"`
 	// SlowlogTimeout (seconds, 0 = off) writes the backtrace of a request running longer to FPMSlowlog(pool): a pool
@@ -176,7 +180,14 @@ func (rt *Runtime) FPMPool(ctx context.Context, p FPMPoolPayload, st commands.St
 	if _, err := rt.d.FS.WriteFile(fpmLogrotate, []byte(fpmLogrotateConf), 0o644); err != nil {
 		return nil, err
 	}
-	if p.Slice != "" {
+	if p.Slice == "" {
+		local, err := localedge.Load(rt.d.FS, localedge.Path)
+		if err != nil {
+			return nil, err
+		}
+		p.SliceUnit = local.Slice()
+	}
+	if p.Slice != "" || p.SliceUnit != "" {
 		return rt.ownFPM(ctx, st, p, shared, svc)
 	}
 	ownChanged, err := rt.removeOwnFPM(ctx, st, p.Pool)
@@ -217,6 +228,10 @@ func RenderOwnFPM(p FPMPoolPayload, listenGroup string) string {
 // RenderOwnFPMUnit renders falak-fpm-<pool>.service. OOMPolicy=continue: when the slice's memory limit OOM-kills a
 // worker, the master replaces it instead of systemd stopping the whole site.
 func RenderOwnFPMUnit(p FPMPoolPayload) string {
+	slice := p.SliceUnit
+	if p.Slice != "" {
+		slice = cgroup.Unit(p.Slice)
+	}
 	oom := ""
 	if p.OomScoreAdj != 0 {
 		oom = fmt.Sprintf("OOMScoreAdjust=%d\n", p.OomScoreAdj)
@@ -239,7 +254,7 @@ RestartSec=2s
 
 [Install]
 WantedBy=multi-user.target
-`, p.PHPVersion, p.Pool, cgroup.Unit(p.Slice), ownFPMConf(p.Pool), oom)
+`, p.PHPVersion, p.Pool, slice, ownFPMConf(p.Pool), oom)
 }
 
 func (rt *Runtime) ownFPM(ctx context.Context, st commands.Stream, p FPMPoolPayload, shared, svc string) (any, error) {
@@ -283,6 +298,10 @@ func (rt *Runtime) ownFPM(ctx context.Context, st commands.Stream, p FPMPoolPayl
 		}
 	case confChanged:
 		startErr = rt.run(ctx, st, "systemctl", "reload-or-restart", name)
+	}
+	if startErr != nil && p.SliceUnit != "" {
+		// The control-plane machine: never back into the uncapped shared master.
+		return nil, fmt.Errorf("own php-fpm master for %s (in %s) failed to start: %w", p.Pool, p.SliceUnit, startErr)
 	}
 	if startErr != nil {
 		// The site must keep being served: its pool goes back into the shared master.

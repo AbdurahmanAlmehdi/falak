@@ -243,7 +243,9 @@ func (m *Manager) run(ctx context.Context, name string, args ...string) error {
 
 // ScopeSpec is a supervised process started inside a slice.
 type ScopeSpec struct {
-	Slice string
+	// Slice is the key of the scope's slice (falak-<Slice>.slice); without one the scope goes into SliceUnit, a full
+	// slice unit name (falak.slice on the control-plane machine).
+	Slice, SliceUnit string
 	// Unit is the scope's name without .scope (deterministic, so a leftover of a crashed agent is found and stopped).
 	Unit    string
 	UID     uint32
@@ -330,7 +332,11 @@ var ScopeUnitRe = regexp.MustCompile(`^falak-proc-[a-z0-9_.-]+-[0-9]+$`)
 // OOMPolicy=continue: an OOM kill inside the scope takes that process only (a worker of Octane, say), and the
 // supervisor's restart policy handles the rest.
 func ScopeCommand(s ScopeSpec) []string {
-	argv := []string{"systemd-run", "--scope", "--quiet", "--collect", "--slice=" + Unit(s.Slice), "--unit=" + s.Unit + ".scope"}
+	slice := s.SliceUnit
+	if s.Slice != "" {
+		slice = Unit(s.Slice)
+	}
+	argv := []string{"systemd-run", "--scope", "--quiet", "--collect", "--slice=" + slice, "--unit=" + s.Unit + ".scope"}
 	if s.SystemdVersion >= 253 {
 		argv = append(argv, "--property=OOMPolicy=continue")
 	}

@@ -21,7 +21,7 @@ func TestLoad(t *testing.T) {
 		"FALAK_LOCAL_EDGE_PANEL=172.30.0.2\nFALAK_LOCAL_EDGE_PROTECT=172.30.0.0/16, 172.31.0.0/24\nFALAK_PROJECT_NAME=falak\n"), 0o644)
 	c, err := Load(f, Path)
 	want := Config{Enabled: true, Addr: "172.17.0.1", HTTPPort: 8080, HTTPSPort: 8443, Trust: "172.30.0.2/32", WorkloadSlice: "falak.slice",
-		Panel: "172.30.0.2", Protect: []string{"172.30.0.0/16", "172.31.0.0/24"}, ProjectName: "falak"}
+		Panel: "172.30.0.2", PanelPorts: []int{80, 443}, Protect: []string{"172.30.0.0/16", "172.31.0.0/24"}, ProjectName: "falak"}
 	if err != nil || !reflect.DeepEqual(c, want) {
 		t.Fatalf("got %+v %v", c, err)
 	}
@@ -49,6 +49,9 @@ func TestParse(t *testing.T) {
 		base + "FALAK_WORKLOAD_SLICE=../etc\n",
 		base + "garbage\n",
 		base + "FALAK_LOCAL_EDGE_PANEL=x\n",
+		base + "FALAK_LOCAL_EDGE_PANEL=10.0.0.2\nFALAK_LOCAL_EDGE_PANEL_PORTS=80,0\n",
+		base + "FALAK_LOCAL_EDGE_PANEL=10.0.0.2\nFALAK_LOCAL_EDGE_PANEL_PORTS=1,2,3,4,5\n",
+		base + "FALAK_LOCAL_EDGE_PANEL=10.0.0.2\nFALAK_LOCAL_EDGE_PANEL_PORTS=http\n",
 		base + "FALAK_LOCAL_EDGE_PROTECT=10.0.0.0/8,nope\n",
 		base + "FALAK_LOCAL_EDGE_PROTECT=fd00::/8\n",
 		base + "FALAK_PROJECT_NAME=Falak CP\n",
@@ -56,5 +59,13 @@ func TestParse(t *testing.T) {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+	c, err = Parse([]byte(base + "FALAK_LOCAL_EDGE_PANEL=10.0.0.2\nFALAK_LOCAL_EDGE_PANEL_PORTS=443, 8443\n"))
+	if err != nil || !reflect.DeepEqual(c.PanelPorts, []int{443, 8443}) {
+		t.Fatalf("panel ports: %v %v", c.PanelPorts, err)
+	}
+	// The workloads' slice: falak.slice unless set, none on other servers.
+	if c.Slice() != "falak.slice" || (Config{}).Slice() != "" || (Config{Enabled: true, WorkloadSlice: "x.slice"}).Slice() != "x.slice" {
+		t.Fatal("Slice()")
 	}
 }

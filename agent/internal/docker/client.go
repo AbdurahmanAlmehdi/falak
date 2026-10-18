@@ -534,12 +534,12 @@ type HostConfig struct {
 	SecurityOpt    []string          `json:"SecurityOpt,omitempty"`
 	PidsLimit      int64             `json:"PidsLimit,omitempty"`
 	AutoRemove     bool              `json:"AutoRemove,omitempty"`
-	// CgroupParent is Local.WorkloadSlice on the control-plane machine (set by ContainerCreate).
+	// CgroupParent is Local.Slice() on the control-plane machine (set by ContainerCreate).
 	CgroupParent string `json:"CgroupParent,omitempty"`
 }
 
 // Local is the control-plane machine's local-edge.env (zero elsewhere), set once at agent start (agent.Build):
-//   - every container the agent creates, and every compose service, is put under Local.WorkloadSlice (falak.slice,
+//   - every container the agent creates, and every compose service, is put under Local.Slice() (falak.slice,
 //     capped so workloads can never starve the panel);
 //   - workloads may not share the host's network or PID namespace, nor run privileged (they would reach the control
 //     plane's own services);
@@ -585,7 +585,7 @@ func (c *Client) ContainerCreate(ctx context.Context, name string, body CreateBo
 		return "", err
 	}
 	if body.HostConfig.CgroupParent == "" {
-		body.HostConfig.CgroupParent = Local.WorkloadSlice
+		body.HostConfig.CgroupParent = Local.Slice()
 	}
 	_, err := c.do(ctx, http.MethodPost, "/containers/create", url.Values{"name": {name}}, body, &out)
 	return out.ID, err

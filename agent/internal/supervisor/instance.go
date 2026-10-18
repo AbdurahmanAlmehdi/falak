@@ -306,11 +306,11 @@ func (in *instance) status() ProcessStatus {
 // (cgroup.ScopeCommand): systemd-run runs as root and setpriv drops to the user, so no credential is set on the
 // child; a leftover scope of the same name (the agent crashed while it ran) is stopped first.
 func (s *Supervisor) launch(spec Program, idx int, cred *syscall.Credential) ([]string, *syscall.Credential, error) {
-	if spec.Slice == "" {
+	if spec.Slice == "" && s.opts.DefaultSlice == "" {
 		return spec.Command, cred, nil
 	}
 	unit := "falak-proc-" + spec.Name + "-" + itoa(idx)
-	sp := cgroup.ScopeSpec{Slice: spec.Slice, Unit: unit, Command: spec.Command, SystemdVersion: s.systemdVersion(), OomScoreAdj: spec.OomScoreAdj}
+	sp := cgroup.ScopeSpec{Slice: spec.Slice, SliceUnit: s.opts.DefaultSlice, Unit: unit, Command: spec.Command, SystemdVersion: s.systemdVersion(), OomScoreAdj: spec.OomScoreAdj}
 	if cred != nil {
 		sp.AsUser, sp.UID, sp.GID = true, cred.Uid, cred.Gid
 		// The agent enters the directory as root (systemd-run runs as root): only where the user could itself.

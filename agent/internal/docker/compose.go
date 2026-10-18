@@ -293,9 +293,9 @@ func (s *Service) localCompose(ctx context.Context, project, dir string, env map
 	sort.Strings(names)
 	override := map[string]any{}
 	for _, name := range names {
-		override[name] = map[string]string{"cgroup_parent": Local.WorkloadSlice}
+		override[name] = map[string]string{"cgroup_parent": Local.Slice()}
 	}
-	if Local.WorkloadSlice == "" || len(names) == 0 {
+	if Local.Slice() == "" || len(names) == 0 {
 		return args, nil
 	}
 	b, _ := json.MarshalIndent(map[string]any{"services": override}, "", "  ") // JSON is YAML

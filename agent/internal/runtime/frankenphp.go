@@ -8,6 +8,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/system"
 )
@@ -108,6 +109,9 @@ type EdgeUnit struct {
 	Groups     []string // SupplementaryGroups (site users' groups)
 	// SkipValidate switches the binary without validating the config with it (a rollback to the binary that ran it).
 	SkipValidate bool `json:"skip_validate,omitempty"`
+	// Slice is falak.slice on the control-plane machine (set by EnsureEdgeUnit from local-edge.env): the edge serves
+	// the sites' traffic (FrankenPHP runs their PHP), so it is capped with them, away from the panel.
+	Slice string `json:"-"`
 }
 
 // RenderEdgeUnit renders the systemd unit.
@@ -121,6 +125,9 @@ func RenderEdgeUnit(u EdgeUnit) string {
 	}
 	if len(u.Groups) > 0 {
 		env += "SupplementaryGroups=" + strings.Join(u.Groups, " ") + "\n"
+	}
+	if u.Slice != "" {
+		env += "Slice=" + u.Slice + "\n"
 	}
 	return fmt.Sprintf(`# Managed by Falak
 [Unit]
@@ -221,6 +228,12 @@ func EnsureEdgeUnit(ctx context.Context, r runner.Runner, fs hostfs.FS, st comma
 		}
 	}
 	u.Groups = mergeGroups(fs, u.Groups)
+	local, err := localedge.Load(fs, localedge.Path)
+	if err != nil {
+		return false, err
+	}
+	u.Slice = local.Slice()
+	// Only the unit file is written: drop-ins (falak-edge.service.d/, falak-ctl's) stay as they are.
 	unitChanged, err := fs.WriteFile(EdgeUnitPath, []byte(RenderEdgeUnit(u)), 0o644)
 	if err != nil {
 		return false, err

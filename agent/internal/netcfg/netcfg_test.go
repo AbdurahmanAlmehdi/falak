@@ -126,6 +126,16 @@ func TestFirewallLocalEdge(t *testing.T) {
 	if !strings.HasSuffix(string(rs), "\t}\n"+out) {
 		t.Fatalf("output chain:\n%s", rs)
 	}
+	// The panel's ports from local-edge.env.
+	os.WriteFile(filepath.Join(root, "etc/falak/local-edge.env"), []byte("FALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=172.17.0.1\n"+
+		"FALAK_LOCAL_EDGE_TRUST=172.30.0.2/32\nFALAK_LOCAL_EDGE_PANEL=172.30.0.2\nFALAK_LOCAL_EDGE_PANEL_PORTS=443\n"), 0o644)
+	if _, err := n.FirewallApply(context.Background(), payload(), st); err != nil {
+		t.Fatal(err)
+	}
+	rs, _ = os.ReadFile(filepath.Join(root, RulesetPath))
+	if !strings.Contains(string(rs), "\t\tmeta skuid != 0 ip daddr 172.30.0.2 tcp dport 443 counter accept comment \"falak:protect-cp\"\n\t}\n}\n") {
+		t.Fatalf("panel ports:\n%s", rs)
+	}
 }
 
 func TestFirewallApply(t *testing.T) {

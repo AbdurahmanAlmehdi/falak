@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
 
@@ -13,10 +14,25 @@ import (
 // user, binary, FrankenPHP mode and groups. Only provisioning (and FrankenPHP installs) wrote the unit, so a server
 // provisioned before v0.10 kept a unit without RuntimeDirectory=falak-edge: /run/falak-edge never existed and Caddy
 // refused every config that moved its admin API to the unix socket there. Called at agent start, which follows every
-// agent upgrade. No unit, or one Falak doesn't manage: nothing to do. Restarts the edge only when the unit changed.
+// agent upgrade, and after falak-ctl made this the control-plane machine (the edge moves into falak.slice). No unit,
+// or one Falak doesn't manage: nothing to do. Restarts the edge only when the unit changed.
 func RefreshEdgeUnit(ctx context.Context, r runner.Runner, fs hostfs.FS) (bool, error) {
 	b, err := fs.ReadFile(EdgeUnitPath)
-	if err != nil || !strings.HasPrefix(string(b), "# Managed by Falak") || strings.Contains(string(b), "\nRuntimeDirectory=falak-edge\n") {
+	if err != nil || !strings.HasPrefix(string(b), "# Managed by Falak") {
+		return false, nil
+	}
+	// Also when the machine became (or stopped being) the control-plane host: the edge moves into or out of falak.slice.
+	local, err := localedge.Load(fs, localedge.Path)
+	if err != nil {
+		return false, err
+	}
+	slice := ""
+	for _, l := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(l, "Slice="); ok {
+			slice = strings.TrimSpace(v)
+		}
+	}
+	if strings.Contains(string(b), "\nRuntimeDirectory=falak-edge\n") && slice == local.Slice() {
 		return false, nil
 	}
 	u := EdgeUnit{FrankenPHP: strings.Contains(string(b), "PHPRC=")}
