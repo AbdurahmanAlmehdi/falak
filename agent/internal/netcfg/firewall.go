@@ -149,7 +149,21 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 			b.WriteString("\t\t" + l + "\n")
 		}
 	}
-	b.WriteString("\t}\n}\n")
+	b.WriteString("\t}\n")
+	if l := p.LocalEdge; l.Enabled && (l.Panel != "" || len(l.Protect) > 0) {
+		// The control-plane machine: host processes other than root (tenant sites run as their site users) reach the
+		// panel through its edge only, never the control plane's own containers (database, Redis, the app). The agent
+		// (root) is unaffected; containers are kept off those networks by Docker's bridge isolation (forward path).
+		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n")
+		if l.Panel != "" {
+			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s tcp dport { 80, 443 } counter accept comment \"falak:protect-cp\"\n", l.Panel)
+		}
+		if len(l.Protect) > 0 {
+			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s counter drop comment \"falak:protect-cp\"\n", set(l.Protect))
+		}
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("}\n")
 	return b.String(), nil
 }
 

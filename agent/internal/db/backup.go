@@ -478,8 +478,8 @@ func (db *DB) restoreKeyValue(ctx context.Context, name string, in io.Reader, st
 	fmt.Fprintf(st.Stdout(), "stopped %s\n", name)
 	var errBuf bytes.Buffer
 	args := []string{"run", "--rm", "-i", "--name", name + "-restore", "--network", "none", "--entrypoint", "falak-db"}
-	if docker.WorkloadSlice != "" {
-		args = append(args, "--cgroup-parent", docker.WorkloadSlice)
+	if docker.Local.WorkloadSlice != "" {
+		args = append(args, "--cgroup-parent", docker.Local.WorkloadSlice)
 	}
 	res, runErr := db.d.Runner.Run(ctx, runner.Cmd{Name: "docker", Args: append(args,
 		"--mount", "type=bind,source="+data+",target=/data", cur.Image, "restore", "logical", "--in", "-",

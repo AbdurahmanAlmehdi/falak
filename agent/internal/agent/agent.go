@@ -115,11 +115,12 @@ func Build(d Deps) *Components {
 	}
 	reg := commands.NewRegistry()
 	sink := d.Telemetry.Sink()
-	// On the control-plane machine docker workloads run under the capped workload slice (falak-ctl's local-edge.env).
+	// On the control-plane machine docker workloads run under the capped workload slice, never in the host's
+	// namespaces (falak-ctl's local-edge.env; see docker.Local).
 	if l, err := localedge.Load(d.FS, localedge.Path); err != nil {
-		log.Warn("local-edge.env ignored", "err", err)
-	} else if l.WorkloadSlice != "" {
-		docker.WorkloadSlice = l.WorkloadSlice
+		log.Error("local-edge.env ignored", "err", err)
+	} else if l.Enabled {
+		docker.Local = l
 	}
 
 	// Programs' and cron jobs' secret env variables live on the tmpfs, never in their state files.

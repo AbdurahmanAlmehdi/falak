@@ -20,7 +20,6 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/envlinks"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
-	"gopkg.in/yaml.v3"
 )
 
 // ---- docker.compose.* (docker compose CLI for up/pull/down; the Engine API for ps/restart) ----
@@ -227,14 +226,12 @@ func (s *Service) prepare(project, dir string, files []ComposeFile, envFile stri
 	}
 	args := []string{"compose", "-p", project}
 	envArg := envFile
-	var services []string
 	for _, f := range files {
 		if !strings.HasPrefix(f.Name, ".env") && f.Name != envFile {
 			if err := replaceFile(release, f.Name, []byte(f.Content), 0o640); err != nil {
 				return nil, err
 			}
 			args = append(args, "-f", f.Name)
-			services = append(services, composeServices(f.Content)...)
 			continue
 		}
 		// Env files hold secrets: on the tmpfs only (root, 0400); the release links to them, so `--env-file .env`
@@ -255,46 +252,73 @@ func (s *Service) prepare(project, dir string, files []ComposeFile, envFile stri
 			envArg = target
 		}
 	}
-	if WorkloadSlice != "" && len(services) > 0 {
-		if err := replaceFile(release, HostOverrideFile, hostOverride(services, WorkloadSlice), 0o640); err != nil {
-			return nil, err
-		}
-		args = append(args, "-f", HostOverrideFile)
-	}
 	if envArg != "" {
 		args = append(args[:3], append([]string{"--env-file", envArg}, args[3:]...)...)
 	}
 	return args, nil
 }
 
-// HostOverrideFile is the agent's own compose override, last of the -f files: this host's settings for every service
-// (today only cgroup_parent = WorkloadSlice on the control-plane machine).
-const HostOverrideFile = "compose.falak-host.yaml"
-
-// composeServices are the service names of one compose file; a file compose cannot parse yields none (compose itself
-// reports the error). ponytail: services pulled in through `include:` are not seen (and so not under the slice).
-func composeServices(content string) []string {
-	var doc struct {
-		Services map[string]any `yaml:"services"`
-	}
-	if yaml.Unmarshal([]byte(content), &doc) != nil {
-		return nil
-	}
-	out := make([]string, 0, len(doc.Services))
-	for name := range doc.Services {
-		out = append(out, name)
-	}
-	return out
+// HostOverrideFile is the agent's own compose override of a project, the last -f file: in the env directory (root
+// only, outside the release a container or a user file could write), compose-<project>.host.yaml.
+func (s *Service) HostOverrideFile(project string) string {
+	return filepath.Join(s.opts.EnvDir, "compose-"+project+".host.yaml")
 }
 
-// hostOverride renders the override (JSON is YAML) for the services, sorted and deduplicated.
-func hostOverride(services []string, slice string) []byte {
-	m := map[string]any{}
-	for _, s := range services {
-		m[s] = map[string]string{"cgroup_parent": slice}
+// localCompose runs on the control-plane machine before `up`. It resolves the project exactly as `up` will (compose
+// config: include, extends, profiles, interpolation), refuses services sharing the host's network or PID namespace or
+// running privileged, and puts every service under the workload slice with an override file. Any failure fails the
+// deploy: a service must never run outside the slice there.
+func (s *Service) localCompose(ctx context.Context, project, dir string, env map[string]string, args []string, st commands.Stream) ([]string, error) {
+	// Stdout is not streamed: the resolved config holds the interpolated secrets.
+	cmd := runner.Cmd{Name: "docker", Args: append(append([]string(nil), args...), "config", "--format", "json"), Dir: s.opts.FS.P(dir),
+		Env: composeEnv(env), Stderr: st.Stderr()}
+	res, err := s.opts.Runner.Run(ctx, cmd)
+	if err == nil && res.ExitCode != 0 {
+		err = fmt.Errorf("exit %d", res.ExitCode)
 	}
-	b, _ := json.MarshalIndent(map[string]any{"services": m}, "", "  ")
-	return append(b, '\n')
+	if err != nil {
+		return nil, fmt.Errorf("docker compose config (resolving the services of %s on the control-plane machine): %w", project, err)
+	}
+	var cfg struct {
+		Services map[string]struct {
+			NetworkMode string `json:"network_mode"`
+			Pid         string `json:"pid"`
+			Privileged  bool   `json:"privileged"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(res.Stdout, &cfg); err != nil {
+		return nil, fmt.Errorf("docker compose config of %s: %w", project, err)
+	}
+	names := make([]string, 0, len(cfg.Services))
+	for name := range cfg.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	override := map[string]any{}
+	for _, name := range names {
+		sv := cfg.Services[name]
+		switch {
+		case sv.NetworkMode == "host":
+			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: network_mode host is not allowed on the control-plane machine", name)}
+		case sv.Pid == "host":
+			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: pid host is not allowed on the control-plane machine", name)}
+		case sv.Privileged:
+			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: privileged is not allowed on the control-plane machine", name)}
+		}
+		override[name] = map[string]string{"cgroup_parent": Local.WorkloadSlice}
+	}
+	if Local.WorkloadSlice == "" || len(names) == 0 {
+		return args, nil
+	}
+	b, _ := json.MarshalIndent(map[string]any{"services": override}, "", "  ") // JSON is YAML
+	if err := envlinks.EnsureDir(s.opts.FS.P(s.opts.EnvDir)); err != nil {
+		return nil, err
+	}
+	f := s.HostOverrideFile(project)
+	if _, err := s.opts.FS.WriteFile(f, append(b, '\n'), 0o600); err != nil {
+		return nil, err
+	}
+	return append(args, "-f", s.opts.FS.P(f)), nil
 }
 
 // writeComposeEnv writes a compose env file to the tmpfs and returns its real path.
@@ -417,6 +441,11 @@ func (s *Service) composeUp(ctx context.Context, p ComposeUpPayload, st commands
 	if err != nil {
 		return nil, err
 	}
+	if Local.Enabled {
+		if args, err = s.localCompose(ctx, p.Project, p.Directory, p.Env, args, st); err != nil {
+			return nil, err
+		}
+	}
 	args = append(args, "up", "-d", "--pull", p.Pull)
 	if p.RemoveOrphans == nil || *p.RemoveOrphans {
 		args = append(args, "--remove-orphans")
@@ -530,7 +559,7 @@ func (s *Service) composeDown(ctx context.Context, p ComposeDownPayload, st comm
 // compose-<project>.<name>.env).
 func (s *Service) forgetComposeEnv(project string, st commands.Stream) {
 	dir := s.opts.FS.P(s.opts.EnvDir)
-	for _, pattern := range []string{"compose-" + project + ".env", "compose-" + project + ".*.env"} {
+	for _, pattern := range []string{"compose-" + project + ".env", "compose-" + project + ".*.env", "compose-" + project + ".host.yaml"} {
 		matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 		for _, m := range matches {
 			if err := os.Remove(m); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -743,15 +772,7 @@ func (s *Service) projectStatus(ctx context.Context, project string, withStats b
 }
 
 func (s *Service) compose(ctx context.Context, dir string, env map[string]string, auth *Auth, args []string, st commands.Stream) (runner.Result, error) {
-	var envs []string
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		envs = append(envs, k+"="+env[k])
-	}
+	envs := composeEnv(env)
 	if auth != nil && auth.Username != "" {
 		cfg, err := dockerConfigDir(auth)
 		if err != nil {
@@ -778,6 +799,20 @@ func (s *Service) compose(ctx context.Context, dir string, env map[string]string
 		return res, &commands.ExitError{Code: res.ExitCode, Err: fmt.Errorf("docker compose %s exited %d", sub, res.ExitCode)}
 	}
 	return res, nil
+}
+
+// composeEnv is a compose command's environment (KEY=value, sorted).
+func composeEnv(env map[string]string) []string {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var envs []string
+	for _, k := range keys {
+		envs = append(envs, k+"="+env[k])
+	}
+	return envs
 }
 
 // dockerConfigDir writes a throwaway DOCKER_CONFIG with registry credentials (removed after the command).

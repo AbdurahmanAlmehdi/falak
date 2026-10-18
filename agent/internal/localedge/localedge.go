@@ -32,9 +32,19 @@ type Config struct {
 	Trust string
 	// WorkloadSlice is the systemd slice docker workloads are put under (the capped falak.slice), empty = none.
 	WorkloadSlice string
+	// Panel is the control plane's edge address: tenants may reach the panel through it (80/443), nothing else of the
+	// control plane's stack. Empty = no rule.
+	Panel string
+	// Protect are the networks of the control plane's compose project (IPv4 CIDRs) tenants must never reach.
+	Protect []string
+	// ProjectName is the control plane's compose project (docker.prune never touches it); empty = unset.
+	ProjectName string
 }
 
-var sliceName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.slice$`)
+var (
+	sliceName   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.slice$`)
+	projectName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+)
 
 // Load reads the file at p (Path on a host). A missing file is the zero Config; a malformed one is an error, so a
 // half-written setup never puts the edge on the wrong ports.
@@ -93,6 +103,23 @@ func Parse(b []byte) (Config, error) {
 	}
 	if c.WorkloadSlice != "" && !sliceName.MatchString(c.WorkloadSlice) {
 		return Config{}, fmt.Errorf("local-edge.env: FALAK_WORKLOAD_SLICE %q is not a slice name", c.WorkloadSlice)
+	}
+	if c.Panel = kv["FALAK_LOCAL_EDGE_PANEL"]; c.Panel != "" {
+		if a, err := netip.ParseAddr(c.Panel); err != nil || !a.Is4() {
+			return Config{}, fmt.Errorf("local-edge.env: FALAK_LOCAL_EDGE_PANEL %q is not an IPv4 address", c.Panel)
+		}
+	}
+	if v := kv["FALAK_LOCAL_EDGE_PROTECT"]; v != "" {
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if p, err := netip.ParsePrefix(s); err != nil || !p.Addr().Is4() {
+				return Config{}, fmt.Errorf("local-edge.env: FALAK_LOCAL_EDGE_PROTECT %q is not an IPv4 CIDR", s)
+			}
+			c.Protect = append(c.Protect, s)
+		}
+	}
+	if c.ProjectName = kv["FALAK_PROJECT_NAME"]; c.ProjectName != "" && !projectName.MatchString(c.ProjectName) {
+		return Config{}, fmt.Errorf("local-edge.env: FALAK_PROJECT_NAME %q is not a compose project name", c.ProjectName)
 	}
 	return c, nil
 }

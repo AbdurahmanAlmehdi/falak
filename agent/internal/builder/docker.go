@@ -269,7 +269,7 @@ func buildxDriverOpts() ([]string, error) {
 	}
 	if v := os.Getenv("FALAK_BUILD_CPUS"); v != "" {
 		cpus, err := strconv.ParseFloat(v, 64)
-		if err != nil || cpus < 0.01 || cpus > 1024 {
+		if err != nil || !(cpus >= 0.01 && cpus <= 1024) { // also NaN; +Inf is above the bound
 			return nil, fmt.Errorf("FALAK_BUILD_CPUS %q: a number of CPUs", v)
 		}
 		opts = append(opts, "cpu-period=100000", "cpu-quota="+strconv.Itoa(int(math.Round(cpus*100000))))

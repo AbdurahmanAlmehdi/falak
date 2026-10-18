@@ -111,6 +111,9 @@ func (s *Service) swap(ctx context.Context, p SwapPayload, st commands.Stream) (
 	if err := p.Limits.validate(); err != nil {
 		return nil, &commands.PayloadError{Err: err}
 	}
+	if err := hostNamespaceAllowed(p.Site, p.Network); err != nil {
+		return nil, &commands.PayloadError{Err: err}
+	}
 	if p.Ports.Blue == p.Ports.Green {
 		return nil, &commands.PayloadError{Err: fmt.Errorf("blue and green ports must differ")}
 	}

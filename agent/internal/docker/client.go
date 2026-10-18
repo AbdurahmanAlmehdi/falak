@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 )
 
 // DefaultAPIVersion is the highest API version this client speaks (Docker Engine 24+).
@@ -532,15 +534,27 @@ type HostConfig struct {
 	SecurityOpt    []string          `json:"SecurityOpt,omitempty"`
 	PidsLimit      int64             `json:"PidsLimit,omitempty"`
 	AutoRemove     bool              `json:"AutoRemove,omitempty"`
-	// CgroupParent is WorkloadSlice on the control-plane machine (set by ContainerCreate).
+	// CgroupParent is Local.WorkloadSlice on the control-plane machine (set by ContainerCreate).
 	CgroupParent string `json:"CgroupParent,omitempty"`
 }
 
-// WorkloadSlice is the systemd slice every container the agent creates (and every compose service) is put under:
-// FALAK_WORKLOAD_SLICE of local-edge.env on the control-plane machine, whose falak.slice caps workloads so they can
-// never starve the panel. Empty elsewhere: Docker's default. Set once at agent start (agent.Build).
+// Local is the control-plane machine's local-edge.env (zero elsewhere), set once at agent start (agent.Build):
+//   - every container the agent creates, and every compose service, is put under Local.WorkloadSlice (falak.slice,
+//     capped so workloads can never starve the panel);
+//   - workloads may not share the host's network or PID namespace, nor run privileged (they would reach the control
+//     plane's own services);
+//   - docker.prune leaves Local.ProjectName (the control plane's stack) alone.
+//
 // ponytail: a package variable, not a Client field, because a dozen executors build their own Client.
-var WorkloadSlice string
+var Local localedge.Config
+
+// hostNamespaceAllowed refuses a workload sharing the host's namespaces on the control-plane machine.
+func hostNamespaceAllowed(what, network string) error {
+	if Local.Enabled && network == "host" {
+		return fmt.Errorf("%s: network mode host is not allowed on the control-plane machine", what)
+	}
+	return nil
+}
 
 // Mount is a bind mount.
 type Mount struct {
@@ -567,8 +581,11 @@ func (c *Client) ContainerCreate(ctx context.Context, name string, body CreateBo
 	var out struct {
 		ID string `json:"Id"`
 	}
+	if err := hostNamespaceAllowed(name, body.HostConfig.NetworkMode); err != nil {
+		return "", err
+	}
 	if body.HostConfig.CgroupParent == "" {
-		body.HostConfig.CgroupParent = WorkloadSlice
+		body.HostConfig.CgroupParent = Local.WorkloadSlice
 	}
 	_, err := c.do(ctx, http.MethodPost, "/containers/create", url.Values{"name": {name}}, body, &out)
 	return out.ID, err

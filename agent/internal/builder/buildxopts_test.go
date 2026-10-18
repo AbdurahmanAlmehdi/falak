@@ -23,8 +23,10 @@ func TestBuildxDriverOpts(t *testing.T) {
 	if err != nil || strings.Join(o, " ") != "memory=1536m memory-swap=1536m cpu-period=100000 cpu-quota=150000 cgroup-parent=falak.slice" {
 		t.Fatalf("%v %v", o, err)
 	}
-	for k, bad := range map[string]string{"FALAK_BUILD_MEMORY_MB": "1g", "FALAK_BUILD_CPUS": "0", "FALAK_BUILD_CGROUP_PARENT": "a,memory=1"} {
-		t.Run(k, func(t *testing.T) {
+	for _, kv := range [][2]string{{"FALAK_BUILD_MEMORY_MB", "1g"}, {"FALAK_BUILD_CPUS", "0"}, {"FALAK_BUILD_CPUS", "NaN"}, {"FALAK_BUILD_CPUS", "Inf"},
+		{"FALAK_BUILD_CPUS", "-Inf"}, {"FALAK_BUILD_CGROUP_PARENT", "a,memory=1"}} {
+		k, bad := kv[0], kv[1]
+		t.Run(k+"="+bad, func(t *testing.T) {
 			t.Setenv(k, bad)
 			if _, err := buildxDriverOpts(); err == nil {
 				t.Fatalf("%s=%s accepted", k, bad)

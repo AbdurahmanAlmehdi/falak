@@ -109,6 +109,23 @@ func TestFirewallLocalEdge(t *testing.T) {
 	if strings.Replace(string(rs), "\t\t"+w+"\n", "", 1) != string(plain) {
 		t.Fatalf("want exactly one more rule %q:\n%s", w, rs)
 	}
+	if strings.Contains(string(plain), "chain output") || strings.Contains(string(rs), "chain output") {
+		t.Fatal("output chain without panel / protect")
+	}
+
+	// With the control plane's networks: an output chain keeps non-root host processes off them, except the panel.
+	os.WriteFile(filepath.Join(root, "etc/falak/local-edge.env"), []byte("FALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=172.17.0.1\n"+
+		"FALAK_LOCAL_EDGE_TRUST=172.30.0.2/32\nFALAK_LOCAL_EDGE_PANEL=172.30.0.2\nFALAK_LOCAL_EDGE_PROTECT=172.30.0.0/16,172.31.0.0/24\n"), 0o644)
+	if _, err := n.FirewallApply(context.Background(), payload(), st); err != nil {
+		t.Fatal(err)
+	}
+	rs, _ = os.ReadFile(filepath.Join(root, RulesetPath))
+	out := "\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n" +
+		"\t\tmeta skuid != 0 ip daddr 172.30.0.2 tcp dport { 80, 443 } counter accept comment \"falak:protect-cp\"\n" +
+		"\t\tmeta skuid != 0 ip daddr { 172.30.0.0/16, 172.31.0.0/24 } counter drop comment \"falak:protect-cp\"\n\t}\n}\n"
+	if !strings.HasSuffix(string(rs), "\t}\n"+out) {
+		t.Fatalf("output chain:\n%s", rs)
+	}
 }
 
 func TestFirewallApply(t *testing.T) {
