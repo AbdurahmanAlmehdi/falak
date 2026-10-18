@@ -154,7 +154,8 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 		// The control-plane machine: host processes other than root (tenant sites run as their site users) reach the
 		// panel through its edge only, never the control plane's own containers (database, Redis, the app). The agent
 		// (root) is unaffected; containers are kept off those networks by Docker's bridge isolation (forward path).
-		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n")
+		// Replies go through: the agent edge (user caddy) answers the panel's edge on connections the edge opened.
+		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n\t\tct state established,related accept\n")
 		if l.Panel != "" {
 			ports := make([]string, 0, len(l.PanelPorts))
 			for _, p := range l.PanelPorts {

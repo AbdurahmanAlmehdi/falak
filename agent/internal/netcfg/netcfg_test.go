@@ -120,7 +120,7 @@ func TestFirewallLocalEdge(t *testing.T) {
 		t.Fatal(err)
 	}
 	rs, _ = os.ReadFile(filepath.Join(root, RulesetPath))
-	out := "\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n" +
+	out := "\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n\t\tct state established,related accept\n" +
 		"\t\tmeta skuid != 0 ip daddr 172.30.0.2 tcp dport { 80, 443 } counter accept comment \"falak:protect-cp\"\n" +
 		"\t\tmeta skuid != 0 ip daddr { 172.30.0.0/16, 172.31.0.0/24 } counter drop comment \"falak:protect-cp\"\n\t}\n}\n"
 	if !strings.HasSuffix(string(rs), "\t}\n"+out) {
