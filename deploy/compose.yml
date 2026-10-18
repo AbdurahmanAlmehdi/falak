@@ -254,16 +254,17 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER]
     security_opt: ["no-new-privileges:true"]
-    entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:33 /state/host && chmod 1770 /state/host && exec sleep infinity"]
+    # The group is the panel containers' www-data (FALAK_APP_UID, as falak-ctl uses it; 33 in the image).
+    entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:${FALAK_APP_UID:-33} /state/host && chmod 1770 /state/host && exec sleep infinity"]
     volumes:
       - ../state:/state
     healthcheck:
+      # 2 s: the panel services wait for it (start_interval would need Docker Engine 25+).
       test: ["CMD-SHELL", "test -k /state/host"]
-      interval: 30s
+      interval: 2s
       timeout: 3s
       retries: 3
       start_period: 5s
-      start_interval: 1s
     deploy:
       resources:
         limits: { memory: 16m }
@@ -463,6 +464,9 @@ services:
       FALAK_URL: ${FALAK_URL}
       FALAK_BUILDER_TOKEN: ${FALAK_BUILDER_TOKEN}
       FALAK_BUILDER_NAME: control-plane
+      # Disk guard floors in GiB (empty: the builder's defaults, 5 and 2).
+      FALAK_BUILD_MIN_FREE_GB: ${FALAK_BUILD_MIN_FREE_GB:-}
+      FALAK_BUILD_ABORT_FREE_GB: ${FALAK_BUILD_ABORT_FREE_GB:-}
       FALAK_TLS: ${FALAK_TLS:-acme}
     volumes:
       - builder-data:/var/lib/falak-builder

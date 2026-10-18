@@ -42,7 +42,7 @@ systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; }
 docker() {
   case "$1 ${2:-}" in
     "info --format") printf '%s\n' "${DOCKER_CGROUP_DRIVER:-systemd}" ;;
-    "network inspect") case "$*" in *Gateway*) printf '10.213.77.1 10.213.77.0/24\n' ;; *) printf '10.213.77.0/24\n172.30.1.0/24\nfd00:1::/64\n\n172.30.2.0/24\n' ;; esac ;;
+    "network inspect") case "$*" in *Gateway*) printf '10.213.77.1 10.213.77.0/24\n' ;; *) printf '10.213.77.0/24\n172.30.1.0/24\nfd00:1::/64\n\n%s\n' "${EXTRA_SUBNET:-172.30.2.0/24}" ;; esac ;;
     "network ls") printf 'n1\nn2\nn3\n' ;;
     *) printf 'docker %s\n' "$*" >> "$work/docker-calls" ;;
   esac
@@ -227,7 +227,7 @@ systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; [ "$1" != enable ]; }
 cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host failed when enabling the path unit fails"
 [ ! -e "$HOST/channel.json" ] || fail "channel.json written although falak-host.path could not be enabled"
 systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; }
-grep -qx 'MemoryMin=1536M' "$S/falakcp.slice" && grep -qx 'CPUWeight=1000' "$S/falakcp.slice" && grep -qx 'ManagedOOMPreference=avoid' "$S/falakcp.slice" || fail "falakcp.slice: $(cat "$S/falakcp.slice")"
+grep -qx 'MemoryMin=1536M' "$S/falakcp.slice" && grep -qx 'CPUWeight=1000' "$S/falakcp.slice" && grep -qx 'IOWeight=500' "$S/falakcp.slice" && grep -qx 'ManagedOOMPreference=avoid' "$S/falakcp.slice" || fail "falakcp.slice: $(cat "$S/falakcp.slice")"
 [ ! -e "$S/falak.slice.d/50-host-cap.conf" ] || fail "falak.slice cap without a local server"
 [ "$(env_get FALAK_CP_SLICE)" = falakcp.slice ] && [ "$(env_get FALAK_BUILDER_CPUS)" = 3 ] && [ -z "$(env_get FALAK_BUILDER_SLICE)" ] || fail "slice env: $(grep SLICE "$ENV_FILE")"
 DOCKER_CGROUP_DRIVER=cgroupfs cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host failed with cgroupfs"
@@ -235,12 +235,36 @@ grep -qx 'FALAK_CP_SLICE=' "$ENV_FILE" || fail "cgroupfs: FALAK_CP_SLICE should 
 [ "$(env_get FALAK_EDGE_IP)" = 10.213.77.250 ] || fail "FALAK_EDGE_IP: $(env_get FALAK_EDGE_IP)"
 [ "$(edge_ip_of 10.20.0.0/16)" = 10.20.0.250 ] && ! edge_ip_of 10.213.77.0/25 >/dev/null && ! edge_ip_of fd00::/64 >/dev/null || fail "edge_ip_of"
 (mem_total_mb() { :; }; ensure_slices) >/dev/null 2>&1 && fail "ensure_slices went on without the memory size"
-pass "ensure-host: falak-host.path/.service, channel.json, falakcp.slice (MemoryMin, CPUWeight 1000, oomd avoid), no falak.slice cap, FALAK_EDGE_IP=.250; cgroupfs skips slices; no MemTotal stops"
+pass "ensure-host: falak-host.path/.service, channel.json, falakcp.slice (MemoryMin, CPUWeight 1000, IOWeight 500, oomd avoid), no falak.slice cap, FALAK_EDGE_IP=.250; cgroupfs skips slices; no MemTotal stops"
+
+for pair in 99:3 0:3 x:3 2:2 3:3; do
+  env_set FALAK_BUILDER_CPUS "${pair%%:*}"
+  cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host (builder cpus ${pair%%:*})"
+  [ "$(env_get FALAK_BUILDER_CPUS)" = "${pair#*:}" ] || fail "FALAK_BUILDER_CPUS ${pair%%:*} became $(env_get FALAK_BUILDER_CPUS), want ${pair#*:}"
+done
+pass "FALAK_BUILDER_CPUS is recomputed when unset, invalid or above cores - 1; a smaller value stays"
+
+# A stuck "running" update (reboot, killed job) ends failed; one whose unit still runs is left alone.
+stuck() { printf '{"id":"%s","action":"update","state":"running","started_at":"2026-10-18T09:00:00Z","finished_at":null,"exit_code":null,"log":"%s.log","error":null}\n' "$ID" "$ID" > "$HOST/status.json"; }
+stuck
+systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; [ "$1" != is-active ]; }
+cmd_host_run >/dev/null 2>&1 || true
+[ "$(status_field state)" = '"failed"' ] && grep -q 'interrupted (the host restarted or the job died)' "$HOST/status.json" \
+  && [ "$(status_field started_at)" = '"2026-10-18T09:00:00Z"' ] || fail "stuck update not reaped: $(cat "$HOST/status.json")"
+stuck
+cmd_ensure_host >/dev/null 2>&1 || true
+[ "$(status_field state)" = '"failed"' ] || fail "ensure-host did not reap a stuck update"
+stuck
+systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; }
+cmd_host_run >/dev/null 2>&1 || true
+[ "$(status_field state)" = '"running"' ] || fail "a running update (unit active) was reaped"
+rm -f "$HOST/status.json"
+pass "host-run and ensure-host mark a 'running' update failed when its unit is gone; an active unit keeps it running"
 
 # --- local-server enable / disable ----------------------------------------------------------------------------
 id() { if [ "${1:-}" = -u ]; then echo 0; else command id "$@"; fi; }
 chown() { :; }
-edge_curl() { local o=""; while [ $# -gt 0 ]; do [ "$1" = -o ] && o="$2"; shift; done; printf 'echo enrolled > "%s"\n' "$work/enrolled" > "$o"; }
+edge_curl() { local o=""; printf '%s\n' "$*" > "$work/edge-curl"; while [ $# -gt 0 ]; do [ "$1" = -o ] && o="$2"; shift; done; printf 'echo enrolled > "%s"\n' "$work/enrolled" > "$o"; }
 : > "$work/compose-calls"
 (cmd_local_server enable --install-url https://evil.example.com/install/abc) >/dev/null 2>&1 && fail "enable took a foreign URL"
 cmd_local_server deny >/dev/null 2>&1 || fail "local-server deny"
@@ -249,6 +273,9 @@ cmd_local_server allow >/dev/null 2>&1 || fail "local-server allow"
 [ "$(env_get FALAK_HOST_ALLOW_LOCAL_SERVER)" = 1 ] && grep -q '"local_server_allowed":true' "$HOST/channel.json" || fail "allow: $(cat "$HOST/channel.json")"
 (id() { echo 1000; }; cmd_local_server allow) >/dev/null 2>&1 && fail "allow ran as non-root"
 pass "local-server allow/deny (root only) set FALAK_HOST_ALLOW_LOCAL_SERVER and refresh channel.json"
+out="$( (DOCKER_CGROUP_DRIVER=cgroupfs; cmd_local_server enable --install-url https://panel.example.com/install/tok_1) 2>&1)" && fail "enable went on with the cgroupfs driver"
+grep -q "needs Docker's systemd cgroup driver" <<<"$out" && [ ! -e "$FALAK_LOCAL_EDGE_ENV" ] || fail "cgroupfs refusal: $out"
+pass "local-server enable refuses Docker's cgroupfs driver"
 cmd_local_server enable --install-url https://panel.example.com/install/tok_1 >/dev/null 2>&1 || fail "local-server enable failed"
 want='FALAK_LOCAL_EDGE=1
 FALAK_LOCAL_EDGE_ADDR=10.213.77.1
@@ -256,6 +283,7 @@ FALAK_LOCAL_EDGE_HTTP_PORT=8080
 FALAK_LOCAL_EDGE_HTTPS_PORT=8443
 FALAK_LOCAL_EDGE_TRUST=10.213.77.250/32
 FALAK_LOCAL_EDGE_PANEL=10.213.77.250
+FALAK_LOCAL_EDGE_PANEL_PORTS=80,443
 FALAK_LOCAL_EDGE_PROTECT=10.213.77.0/24,172.30.1.0/24,172.30.2.0/24
 FALAK_PROJECT_NAME=falak
 FALAK_WORKLOAD_SLICE=falak.slice'
@@ -263,18 +291,33 @@ FALAK_WORKLOAD_SLICE=falak.slice'
 [ "$(file_mode "$FALAK_LOCAL_EDGE_ENV")" = 644 ] || fail "local-edge.env mode"
 [ "$(env_get FALAK_LOCAL_EDGE)" = 1 ] && [ "$(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTPS)" = 10.213.77.1:8443 ] && [ "$(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTP)" = 10.213.77.1:8080 ] \
   || fail ".env: $(grep LOCAL "$ENV_FILE")"
-grep -q 'up -d --no-deps edge builder' "$work/compose-calls" || fail "the edge was not recreated"
+grep -q 'up -d --wait --wait-timeout 120 --no-deps edge builder' "$work/compose-calls" || fail "the edge was not recreated (and waited for)"
+grep -q -- '--retry 10 --retry-connrefused --retry-all-errors --retry-delay 2' "$work/edge-curl" || fail "install script fetch retries: $(cat "$work/edge-curl")"
 [ -f "$work/enrolled" ] || fail "the install script did not run"
 cap="$S/falak.slice.d/50-host-cap.conf"
-grep -qx 'MemoryMax=6656M' "$cap" && grep -qx 'MemoryHigh=6323M' "$cap" && grep -qx 'CPUQuota=300%' "$cap" && grep -qx 'CPUWeight=100' "$cap" || fail "cap: $(cat "$cap")"
+grep -qx 'MemoryMax=6656M' "$cap" && grep -qx 'MemoryHigh=6323M' "$cap" && grep -qx 'CPUQuota=300%' "$cap" && grep -qx 'CPUWeight=100' "$cap" \
+  && grep -qx 'IOWeight=50' "$cap" && grep -qx "TasksMax=$(workload_tasks_max)" "$cap" || fail "cap: $(cat "$cap")"
+[[ "$(workload_tasks_max)" =~ ^[0-9]+$ ]] && [ "$(workload_tasks_max)" -ge 800 ] || fail "TasksMax $(workload_tasks_max)"
+dropin="$S/falak-edge.service.d/10-local-edge.conf"
+grep -qx 'After=docker.service' "$dropin" && grep -qx 'Wants=docker.service' "$dropin" && grep -qx 'StartLimitIntervalSec=0' "$dropin" && grep -qx 'RestartSec=5' "$dropin" \
+  || fail "falak-edge drop-in: $(cat "$dropin" 2>/dev/null)"
 [ "$(env_get FALAK_BUILDER_SLICE)" = falak.slice ] || fail "the builder should move to falak.slice"
-pass "local-server enable: local-edge.env, edge upstreams, edge recreated, install script run, falak.slice capped (total - reserve, cores - 1)"
+pass "local-server enable: local-edge.env (PANEL_PORTS), edge upstreams, edge recreated with --wait, fetch retried, install script run, falak.slice capped (memory, CPU, IO, tasks), falak-edge drop-in"
+
+EXTRA_SUBNET=172.30.9.0/24 cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host with a local server"
+grep -qx 'FALAK_LOCAL_EDGE_PROTECT=10.213.77.0/24,172.30.1.0/24,172.30.9.0/24' "$FALAK_LOCAL_EDGE_ENV" || fail "ensure-host did not refresh PROTECT: $(cat "$FALAK_LOCAL_EDGE_ENV")"
+grep -q 'FALAK_LOCAL_EDGE_PROTECT=10.213.77.0/24,172.30.1.0/24,172.30.9.0/24' <<<"$(cmd_local_server status 2>&1)" || fail "status does not show PROTECT"
+cgroup_recursiveprot() { return 1; }
+grep -q 'memory_recursiveprot' <<<"$(cmd_local_server status 2>&1)" || fail "status does not warn about memory_recursiveprot"
+cgroup_recursiveprot() { return 0; }
+pass "ensure-host refreshes local-edge.env (PROTECT) while enabled; status prints it and warns without memory_recursiveprot"
 
 : > "$work/compose-calls"
 cmd_local_server disable >/dev/null 2>&1 || fail "local-server disable failed"
 [ ! -e "$FALAK_LOCAL_EDGE_ENV" ] && [ -z "$(env_get FALAK_LOCAL_EDGE)" ] && [ -z "$(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTPS)" ] || fail "disable left settings"
 [ ! -e "$cap" ] && [ -z "$(env_get FALAK_BUILDER_SLICE)" ] || fail "disable left the falak.slice cap"
-grep -q 'up -d --no-deps edge builder' "$work/compose-calls" || fail "disable did not recreate the edge"
+grep -q 'up -d --wait --wait-timeout 120 --no-deps edge builder' "$work/compose-calls" || fail "disable did not recreate the edge"
+[ ! -e "$dropin" ] || fail "disable left the falak-edge drop-in"
 pass "local-server disable: env file, edge settings and the falak.slice cap go"
 
 # --- update: output also in state/host/update-<UTC>.log; the new falak-ctl writes the host units -----------------

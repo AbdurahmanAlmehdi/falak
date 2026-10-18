@@ -1736,10 +1736,31 @@ cmd_host_run() {
     exec 8>>"$HOST_LOCK"
     flock -w 600 8 || die "another host-run is still busy after 600s"
   fi
+  host_reap_stuck
   # Requests that land while one runs are taken in the same pass (PathChanged may not fire again for them).
   while [ -e "$HOST_DIR/request.json" ] || [ -L "$HOST_DIR/request.json" ]; do
     host_take || true
   done
+}
+
+# host_reap_stuck : an update status.json still says running, but its unit is gone (reboot, killed job) and nothing holds
+# the falak-ctl lock: it ends failed, so the panel stops waiting. (status.json is root's: the panel can't fake one.)
+host_reap_stuck() {
+  local st id started
+  [ -f "$HOST_DIR/status.json" ] && [ ! -L "$HOST_DIR/status.json" ] || return 0
+  st="$(head -c 4096 "$HOST_DIR/status.json")"
+  [ "$(json_field state "$st" || true)" = running ] && [ "$(json_field action "$st" || true)" = update ] || return 0
+  id="$(json_field id "$st" || true)"
+  valid_request_id "$id" || return 0
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "falak-update-$id.service" 2>/dev/null; then return 0; fi
+  if command -v flock >/dev/null 2>&1; then
+    # A running update holds .ctl.lock (also through the ensure-host it runs itself).
+    ( flock -n 7 ) 7>>"$FALAK_DIR/.ctl.lock" || return 0
+  fi
+  started="$(json_field started_at "$st" || true)"
+  [[ "$started" =~ ^[0-9T:Z-]+$ ]] || started=""
+  host_status "$id" update failed "$started" "$(now_iso)" "" "interrupted (the host restarted or the job died)"
+  warn "host request $id: the update was interrupted; marked failed"
 }
 
 # cmd_host_job ID ACTION ARG : runs a request host-run validated (checked again here); output -> ID.log
@@ -1832,6 +1853,14 @@ cp_reserve_mb() {
   printf '%s' "$r"
 }
 env_put() { if [ "$(env_get "$1")" != "$2" ] || ! grep -qE "^$1=" "$ENV_FILE"; then env_set "$1" "$2"; fi; }
+workload_tasks_max() { # 80 % of the kernel's task limit, min(pid_max, threads-max); 16384 when unreadable
+  local m t
+  m="$(cat /proc/sys/kernel/pid_max 2>/dev/null || true)"; t="$(cat /proc/sys/kernel/threads-max 2>/dev/null || true)"
+  if [[ "$t" =~ ^[0-9]+$ ]] && { ! [[ "$m" =~ ^[0-9]+$ ]] || [ "$t" -lt "$m" ]; }; then m="$t"; fi
+  if [[ "$m" =~ ^[0-9]+$ ]] && [ "$m" -ge 1000 ]; then printf '%s' $((m * 80 / 100)); else printf '16384'; fi
+}
+docker_systemd_driver() { [ "$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)" = systemd ]; }
+cgroup_recursiveprot() { grep -E '^cgroup2 ' /proc/mounts 2>/dev/null | grep -q memory_recursiveprot; }
 local_edge_enabled() { [ "$(env_get FALAK_LOCAL_EDGE)" = 1 ]; }
 
 ensure_slices() {
@@ -1840,7 +1869,10 @@ ensure_slices() {
   [[ "$total" =~ ^[0-9]+$ ]] || die "could not read the memory size (MemTotal in /proc/meminfo)"
   [[ "$cores" =~ ^[0-9]+$ ]] || die "could not read the CPU count (nproc)"
   cpus=$((cores - 1)); [ "$cpus" -ge 1 ] || cpus=1
-  [ -n "$(env_get FALAK_BUILDER_CPUS)" ] || env_set FALAK_BUILDER_CPUS "$cpus"
+  # Docker refuses more CPUs than the machine has: recomputed when unset, not a number or above cores - 1 (a resize).
+  local bc
+  bc="$(env_get FALAK_BUILDER_CPUS)"
+  if ! [[ "$bc" =~ ^[0-9]+$ ]] || [ "$bc" -lt 1 ] || [ "$bc" -gt "$cpus" ]; then env_set FALAK_BUILDER_CPUS "$cpus"; fi
   driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
   if [ "$driver" != systemd ]; then
     warn "Docker's cgroup driver is ${driver:-unknown}, not systemd: no falakcp.slice / falak.slice (per-container limits still apply)"
@@ -1855,16 +1887,20 @@ Before=slices.target
 [Slice]
 MemoryMin=${reserve}M
 CPUWeight=1000
+IOWeight=500
 ManagedOOMPreference=avoid" && changed=1
   if local_edge_enabled; then
     work=$((total - reserve))
     mkdir -p "$dir/falak.slice.d"
-    write_unit "$dir/falak.slice.d/50-host-cap.conf" "# falak-ctl local-server: sites and builds on the control-plane machine leave it ${reserve} MB and one core.
+    write_unit "$dir/falak.slice.d/50-host-cap.conf" "# falak-ctl local-server: sites and builds on the control-plane machine leave it ${reserve} MB, one core and a fifth
+# of the process ids (a fork bomb in a site can't starve the panel).
 [Slice]
 MemoryMax=${work}M
 MemoryHigh=$((work * 95 / 100))M
 CPUQuota=$((cpus * 100))%
-CPUWeight=100" && changed=1
+CPUWeight=100
+IOWeight=50
+TasksMax=$(workload_tasks_max)" && changed=1
     env_put FALAK_BUILDER_SLICE falak.slice
   else
     if [ -f "$dir/falak.slice.d/50-host-cap.conf" ]; then rm -f "$dir/falak.slice.d/50-host-cap.conf"; changed=1; fi
@@ -1882,9 +1918,15 @@ CPUWeight=100" && changed=1
 cmd_ensure_host() {
   require_install
   ensure_host_dir
+  host_reap_stuck
   ensure_edge_ip
   ensure_slices
   host_install_units
+  if local_edge_enabled; then
+    # The stack's networks or the edge address may have changed (the agent re-reads the file on every apply).
+    write_local_edge_env || warn "could not refresh $LOCAL_EDGE_ENV (stack down?); it keeps its last values"
+    ensure_agent_edge_dropin
+  fi
 }
 
 # edge_ip_of SUBNET -> the .250 address of an IPv4 subnet of /24 or larger (Docker hands out addresses from the
@@ -1959,41 +2001,71 @@ edge_network() { # -> "GATEWAY SUBNET" of the compose edge network
   printf '%s %s' "$gw" "$subnet"
 }
 
-local_server_enable() {
-  local url="$1" net gw subnet tmp total reserve token edge_ip protect
-  [ "$(id -u)" = 0 ] || die "local-server enable must run as root"
+# write_local_edge_env : (re)writes local-edge.env from the running stack and the edge upstreams in .env; 1 (with a
+# warning, nothing changed) when the stack's networks can't be read.
+write_local_edge_env() {
+  local net gw subnet tmp edge_ip protect
   ensure_edge_ip
   edge_ip="$(env_get FALAK_EDGE_IP)"
-  [ -n "$edge_ip" ] || die "the edge has no fixed address (FALAK_EDGE_SUBNET must be an IPv4 /24 or larger)"
+  [ -n "$edge_ip" ] || { warn "the edge has no fixed address (FALAK_EDGE_SUBNET must be an IPv4 /24 or larger)"; return 1; }
+  net="$(edge_network)" || { warn "could not read the ${FALAK_PROJECT}_edge network (is the stack up? falak-ctl up)"; return 1; }
+  gw="${net% *}"; subnet="${net#* }"
+  [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { warn "unexpected edge network gateway '$gw'"; return 1; }
+  protect="$(project_subnets)"
+  [ -n "$protect" ] || { warn "could not list the subnets of the $FALAK_PROJECT networks (is the stack up? falak-ctl up)"; return 1; }
+  install -d -m 0755 "$(dirname "$LOCAL_EDGE_ENV")"
+  tmp="$(mktemp "$(dirname "$LOCAL_EDGE_ENV")/.local-edge.XXXXXX")"
+  # TRUST/PANEL: PROXY protocol only from the panel's edge. PROTECT: the control plane's networks, which the agent keeps
+  # the sites' traffic out of (except PANEL_PORTS on PANEL).
+  printf '# Written by falak-ctl local-server enable / ensure-host: the agent on the control-plane machine (read by falak-agent).\nFALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=%s\nFALAK_LOCAL_EDGE_HTTP_PORT=8080\nFALAK_LOCAL_EDGE_HTTPS_PORT=8443\nFALAK_LOCAL_EDGE_TRUST=%s/32\nFALAK_LOCAL_EDGE_PANEL=%s\nFALAK_LOCAL_EDGE_PANEL_PORTS=%s,%s\nFALAK_LOCAL_EDGE_PROTECT=%s\nFALAK_PROJECT_NAME=%s\nFALAK_WORKLOAD_SLICE=falak.slice\n' \
+    "$gw" "$edge_ip" "$edge_ip" "$(env_get FALAK_HTTP_PORT 80)" "$(https_port)" "$protect" "$FALAK_PROJECT" > "$tmp"
+  chmod 644 "$tmp"
+  if cmp -s "$tmp" "$LOCAL_EDGE_ENV"; then rm -f "$tmp"; else mv -f "$tmp" "$LOCAL_EDGE_ENV"; ok "wrote $LOCAL_EDGE_ENV"; fi
+  env_put FALAK_LOCAL_EDGE_UPSTREAM_HTTPS "$gw:8443"
+  env_put FALAK_LOCAL_EDGE_UPSTREAM_HTTP "$gw:8080"
+}
+
+# The agent's edge listens on the docker gateway address, which exists only once Docker is up: start after it, and keep
+# retrying instead of giving up after systemd's start limit.
+AGENT_EDGE_DROPIN_NAME="falak-edge.service.d/10-local-edge.conf"
+ensure_agent_edge_dropin() {
+  local f
+  f="$(systemd_dir)/$AGENT_EDGE_DROPIN_NAME"
+  mkdir -p "$(dirname "$f")"
+  if write_unit "$f" "# falak-ctl local-server: the local edge binds the edge network's gateway (created by Docker).
+[Unit]
+After=docker.service
+Wants=docker.service
+StartLimitIntervalSec=0
+
+[Service]
+RestartSec=5"; then
+    if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || warn "systemctl daemon-reload failed"; fi
+  fi
+}
+
+local_server_enable() {
+  local url="$1" tmp total reserve token
+  [ "$(id -u)" = 0 ] || die "local-server enable must run as root"
+  docker_systemd_driver || die "local-server needs Docker's systemd cgroup driver (docker info -f '{{.CgroupDriver}}'): without it nothing keeps them off the panel's share"
   total="$(mem_total_mb)"; reserve="$(cp_reserve_mb)"
   if [ -n "$total" ] && [ $((total - reserve)) -lt 512 ]; then
     die "this machine has ${total} MB; with ${reserve} MB reserved for the control plane less than 512 MB is left for sites"
   fi
-  net="$(edge_network)" || die "could not read the ${FALAK_PROJECT}_edge network (is the stack up? falak-ctl up)"
-  gw="${net% *}"; subnet="${net#* }"
-  [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "unexpected edge network gateway '$gw'"
-  protect="$(project_subnets)"
-  [ -n "$protect" ] || die "could not list the subnets of the $FALAK_PROJECT networks (is the stack up? falak-ctl up)"
-  info "Sites on this machine (edge network $subnet, local edge on $gw:8443 / $gw:8080)"
-  install -d -m 0755 "$(dirname "$LOCAL_EDGE_ENV")"
-  tmp="$(mktemp "$(dirname "$LOCAL_EDGE_ENV")/.local-edge.XXXXXX")"
-  # TRUST/PANEL: PROXY protocol only from the panel's edge. PROTECT: the control plane's networks, which the agent keeps
-  # the sites' traffic out of (except 80/443 to PANEL).
-  printf '# Written by falak-ctl local-server enable: the agent on the control-plane machine (read by falak-agent).\nFALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=%s\nFALAK_LOCAL_EDGE_HTTP_PORT=8080\nFALAK_LOCAL_EDGE_HTTPS_PORT=8443\nFALAK_LOCAL_EDGE_TRUST=%s/32\nFALAK_LOCAL_EDGE_PANEL=%s\nFALAK_LOCAL_EDGE_PROTECT=%s\nFALAK_PROJECT_NAME=%s\nFALAK_WORKLOAD_SLICE=falak.slice\n' \
-    "$gw" "$edge_ip" "$edge_ip" "$protect" "$FALAK_PROJECT" > "$tmp"
-  chmod 644 "$tmp"; mv -f "$tmp" "$LOCAL_EDGE_ENV"
-  ok "wrote $LOCAL_EDGE_ENV"
+  write_local_edge_env || die "could not write $LOCAL_EDGE_ENV (see above)"
+  info "Sites on this machine (local edge on $(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTPS) / $(env_get FALAK_LOCAL_EDGE_UPSTREAM_HTTP))"
   env_set FALAK_LOCAL_EDGE 1
-  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTPS "$gw:8443"
-  env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTP "$gw:8080"
   ensure_slices
-  compose up -d --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
+  ensure_agent_edge_dropin
+  # --wait: the install script is fetched through this edge right below.
+  compose up -d --wait --wait-timeout 120 --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
   ok "edge passes every host it does not serve itself to the local edge"
   info "Enrolling this machine's agent"
   token="${url##*/install/}"
   tmp="$(tmpdir)"
   # Through the local edge (works before DNS, and with FALAK_TLS=internal).
-  edge_curl "$(env_get FALAK_DOMAIN)" "/install/$token" -f --retry 3 -o "$tmp/install.sh" || die "downloading the install script failed"
+  edge_curl "$(env_get FALAK_DOMAIN)" "/install/$token" -f --retry 10 --retry-connrefused --retry-all-errors --retry-delay 2 -o "$tmp/install.sh" \
+    || die "downloading the install script failed"
   sh "$tmp/install.sh" </dev/null || die "the install script failed (see above); retry from the panel or: falak-ctl local-server enable --install-url …"
   ok "this machine is a server now: deploy sites to it from the panel"
 }
@@ -2005,7 +2077,11 @@ local_server_disable() {
   env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTPS ""
   env_set FALAK_LOCAL_EDGE_UPSTREAM_HTTP ""
   ensure_slices
-  compose up -d --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
+  if [ -f "$(systemd_dir)/$AGENT_EDGE_DROPIN_NAME" ]; then
+    rm -f "$(systemd_dir)/$AGENT_EDGE_DROPIN_NAME"
+    if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload || warn "systemctl daemon-reload failed"; fi
+  fi
+  compose up -d --wait --wait-timeout 120 --no-deps edge builder >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
   ok "the edge serves only the control plane again; $LOCAL_EDGE_ENV removed"
   warn "the agent and its sites stay installed, but no request reaches them on 80/443 any more."
   say "  Move the sites to another server, then delete this machine in the panel (Servers → this machine → Delete)."
@@ -2021,9 +2097,12 @@ local_server_status() {
   else
     say "local server: disabled (enable: Servers → Add server → This machine, or falak-ctl local-server enable --install-url …)"
   fi
+  if local_server_allowed; then say "  the panel may ask for it (local-server deny to refuse)"; else say "  the panel may not ask for it (local-server allow)"; fi
   if command -v systemctl >/dev/null 2>&1; then
     say "  falakcp.slice: $(systemctl show falakcp.slice -p MemoryMin -p CPUWeight 2>/dev/null | tr '\n' ' ')"
   fi
+  # Without memory_recursiveprot the panel's containers inside falakcp.slice don't inherit its MemoryMin.
+  cgroup_recursiveprot || warn "cgroup2 is not mounted with memory_recursiveprot (systemd < 248?): falakcp.slice's MemoryMin does not reach the panel's containers"
 }
 
 ask() { # ask VAR PROMPT [default] : read a line from the terminal into VAR (default when empty)

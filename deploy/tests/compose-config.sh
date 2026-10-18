@@ -40,3 +40,12 @@ pass "every service but the builder runs in falakcp.slice with OOM score -900; t
 [ "$(q '.services["host-init"] | [.network_mode, (.read_only|tostring), (.cap_drop|join(",")), (.cap_add|join(",")), (.security_opt|join(","))] | join(" ")')" = "none true ALL CHOWN,FOWNER no-new-privileges:true" ] \
   || fail "host-init hardening: $(q '.services["host-init"]')"
 pass "state/host only in control-plane/horizon/scheduler, after host-init (no network, read-only, CHOWN+FOWNER, no-new-privileges)"
+
+[ "$(q '.services["host-init"].healthcheck | [.interval, (.start_interval // "none")] | join(" ")')" = "2s none" ] || fail "host-init healthcheck: $(q '.services["host-init"].healthcheck')"
+q '.services["host-init"].entrypoint | join(" ")' | grep -q 'chown 0:33 /state/host' || fail "host-init chown (default uid 33)"
+FALAK_APP_UID=1000 render ''
+q '.services["host-init"].entrypoint | join(" ")' | grep -q 'chown 0:1000 /state/host' || fail "host-init ignores FALAK_APP_UID"
+[ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = "" ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = "" ] || fail "builder disk floors should default empty"
+render $'FALAK_BUILD_MIN_FREE_GB=20\nFALAK_BUILD_ABORT_FREE_GB=4'
+[ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = 20 ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = 4 ] || fail "builder disk floors not passed"
+pass "host-init: 2 s healthcheck without start_interval, group = FALAK_APP_UID (33); the builder gets FALAK_BUILD_MIN/ABORT_FREE_GB (empty: its defaults)"

@@ -310,20 +310,31 @@ unavailable (`local_server_allowed` in `state/host/channel.json`). Running `enab
 - writes `/etc/falak/local-edge.env` for the agent: the edge network's gateway and ports 8080/8443 (where the agent's
   edge listens instead of 80/443), the panel edge's fixed address (`FALAK_LOCAL_EDGE_PANEL`; PROXY protocol is accepted
   from it alone, `FALAK_LOCAL_EDGE_TRUST`), the subnets of every network of the Falak stack
-  (`FALAK_LOCAL_EDGE_PROTECT`: the agent keeps the sites' traffic out of them except ports 80/443 of the panel edge),
-  `FALAK_PROJECT_NAME` and `FALAK_WORKLOAD_SLICE=falak.slice`;
+  (`FALAK_LOCAL_EDGE_PROTECT`: the agent keeps the sites' traffic out of them except the panel edge's HTTP/HTTPS ports,
+  `FALAK_LOCAL_EDGE_PANEL_PORTS`), `FALAK_PROJECT_NAME` and `FALAK_WORKLOAD_SLICE=falak.slice`. `falak-ctl ensure-host`
+  (install, `up`, `update`) rewrites it while the local server is on, so new networks or another edge address reach the
+  agent at its next apply; `local-server status` prints it;
+- adds `/etc/systemd/system/falak-edge.service.d/10-local-edge.conf` (start after Docker, keep retrying): the agent's
+  edge binds the Docker gateway address, which exists only once Docker is up;
 - sets `FALAK_LOCAL_EDGE=1` and the two upstreams in `.env` and recreates the edge. The panel's edge keeps every host it
   serves itself (panel, `agents.`, `registry.`, Grafana, former domains, your `/opt/falak/edge/*.caddyfile` sites,
   wildcards included; re-read whenever those files change) and passes the connection of any other host untouched, TLS
   included, to the agent's edge with a PROXY protocol v2 header, so sites see the real client address;
-- downloads and runs the install script like on any server (machine check, agent, enrolment).
+- waits for the new edge, then downloads (retrying) and runs the install script like on any server (machine check,
+  agent, enrolment).
+
+`enable` needs Docker's systemd cgroup driver (below) and refuses without it.
 
 **Reserved share.** With Docker's systemd cgroup driver (the default on Ubuntu/Debian with Docker's packages; check
 `docker info -f '{{.CgroupDriver}}'`) every Falak container but the builder runs in `falakcp.slice`:
-`MemoryMin=FALAK_CP_RESERVE_MB` (default 1536 MB, set in `.env`), `CPUWeight=1000`, OOM score −900. The agent's sites
-and the builder run in `falak.slice`, capped by `/etc/systemd/system/falak.slice.d/50-host-cap.conf` at total memory −
-the reserve (`MemoryHigh` 95 % of that) and (cores − 1) × 100 % CPU. The builder is capped either way:
-`FALAK_BUILDER_CPUS` (default cores − 1, minimum 1), 4096 pids, 1.5 GB, OOM score +500. A build or a site that runs out
+`MemoryMin=FALAK_CP_RESERVE_MB` (default 1536 MB, set in `.env`), `CPUWeight=1000`, `IOWeight=500`, OOM score −900.
+The agent's sites and the builder run in `falak.slice`, capped by `/etc/systemd/system/falak.slice.d/50-host-cap.conf` at
+total memory − the reserve (`MemoryHigh` 95 % of that), (cores − 1) × 100 % CPU, `IOWeight=50` and `TasksMax` = 80 % of
+the kernel's task limit (min of `pid_max` and `threads-max`). The builder is capped either way: `FALAK_BUILDER_CPUS`
+(cores − 1, minimum 1; recomputed when it exceeds that after a resize), 4096 pids, 1.5 GB, OOM score +500; its disk
+guard floors come from `FALAK_BUILD_MIN_FREE_GB` / `FALAK_BUILD_ABORT_FREE_GB` in `.env` (empty: 5 and 2 GiB). The
+panel's containers get the slice's `MemoryMin` only when cgroup2 is mounted with `memory_recursiveprot` (systemd 248+;
+`local-server status` warns otherwise). A build or a site that runs out
 of memory is killed inside its slice; the panel keeps its memory and wins every CPU contention. `enable` refuses a
 machine that would leave sites less than 512 MB. systemd creates a slice on first use, so a missing unit file never
 stops `falak-ctl up`; with another cgroup driver the slices are skipped (with a warning) and only the per-container
@@ -410,7 +421,9 @@ downgrade or reinstall is for root: `falak-ctl update --version …`), at most o
 finished, and `local-server` with an install URL under the panel's own `/install/`, only after `falak-ctl local-server
 allow`; anything else is refused and logged. The update runs in its own
 transient unit (`falak-update-<id>`), so the panel restarting under it can't stop it; the panel shows its progress from
-`state/host/status.json` and `state/host/<id>.log` and reloads once it is back.
+`state/host/status.json` and `state/host/<id>.log` and reloads once it is back. An update still marked running whose
+unit is gone (the host rebooted, the job was killed) is marked failed (`interrupted`) by the next host-run or
+ensure-host.
 
 The directory is `root:www-data`, mode 1770 (sticky), mounted read-write only into `control-plane`, `horizon` and
 `scheduler` at `/falak/host`; the idle `host-init` container (16 MB) creates it with those permissions before they
