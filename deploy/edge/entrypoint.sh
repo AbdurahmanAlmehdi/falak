@@ -144,14 +144,22 @@ render_local_edge() { # 0 when the files changed
   sum="$(local_edge_inputs)"
   [ "$sum" != "$LOCAL_EDGE_SUM" ] || return 1
   LOCAL_EDGE_SUM="$sum"
+  had=0; [ ! -e "$LOCAL_EDGE_GLOBAL" ] || had=1
   rm -f "$LOCAL_EDGE_GLOBAL" "$LOCAL_EDGE_SITE"
   if ! json="$(caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null)"; then
-    echo "falak-edge: local edge: caddy adapt failed, not passing other hosts through" >&2; return 0
+    LOCAL_EDGE_SUM=""   # retried at the next poll
+    echo "falak-edge: local edge: caddy adapt failed, not passing other hosts through" >&2
+    [ "$had" = 1 ]; return
   fi
   hosts=""
   set -f   # *.example.com is a host, not a glob
-  # (valid_hosts loops over $h: another name here.)
-  for kh in $(printf '%s' "$json" | jq -r '[.. | objects | select(has("host")) | .host | arrays | .[] | strings] | unique | .[]'); do
+  # The edge's own hosts always stay, whatever adapt reports; then every host matcher of the config. Matching is
+  # case-insensitive in Caddy, the keep-list is lowercase. (valid_hosts loops over $h: another name here.)
+  for kh in $( {
+    printf '%s\n' "$FALAK_DOMAIN" "${FALAK_DOMAIN_ALIASES:-}" "$AGENT_HOST" "${FALAK_AGENT_API_HOST_ALIASES:-}" \
+      "${FALAK_REGISTRY_HOST:-}" "${FALAK_REGISTRY_HOST_ALIASES:-}" "${FALAK_GRAFANA_HOST:-}" | tr ',' '\n'
+    printf '%s' "$json" | jq -r '.. | objects | select(has("host")) | .host | arrays | .[] | strings'
+  } | tr '[:upper:]' '[:lower:]' | sort -u ); do
     # Wildcards (*.example.com) work in both matchers.
     if valid_hosts "${kh#\*.}"; then hosts="$hosts $kh"; else echo "falak-edge: local edge: not keeping host '$kh' (not a DNS name)" >&2; fi
   done

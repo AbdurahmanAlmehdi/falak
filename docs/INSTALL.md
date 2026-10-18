@@ -126,6 +126,7 @@ What it does:
 | `--build-from-source [--ref REF]` | `FALAK_BUILD_FROM_SOURCE=1` | clones the repo and builds images locally (no registry) |
 | `--source-dir PATH` | `FALAK_DEPLOY_SOURCE` | use deploy files from a local checkout |
 | `--http-port/--https-port` | `FALAK_HTTP_PORT/FALAK_HTTPS_PORT` | 80/443 (other ports only with `--tls internal`) |
+| `--allow-local-server` | `FALAK_ALLOW_LOCAL_SERVER=1` | off: the panel may not make this machine a server ([below](#sites-on-the-control-plane-machine)) |
 | `--skip-dns-check`, `--force` | | |
 
 Running the installer again is safe. Secrets are kept, settings from the flags are updated, the stack is
@@ -292,15 +293,25 @@ organization) creates the server and asks the host to enrol it, or run it yourse
 panel shows:
 
 ```bash
+sudo falak-ctl local-server allow     # once: the panel may ask for it (install.sh --allow-local-server does the same)
 falak-ctl local-server enable --install-url https://<domain>/install/<token>
 falak-ctl local-server status
 falak-ctl local-server disable
+sudo falak-ctl local-server deny      # the panel's request is refused again
 ```
+
+**Consent.** Allowing it lets the panel act as root on this machine, as it does on every server it manages: the agent
+it enrols runs whatever the panel tells it to. It is off by default (`FALAK_HOST_ALLOW_LOCAL_SERVER=0` in `.env`); until
+`allow`, a request from the panel is refused (`not allowed on this host`) and the panel shows **This machine** as
+unavailable (`local_server_allowed` in `state/host/channel.json`). Running `enable` yourself as root needs no `allow`.
 
 `enable`:
 
-- writes `/etc/falak/local-edge.env` (the edge network's gateway, ports 8080/8443, the trusted subnet,
-  `FALAK_WORKLOAD_SLICE=falak.slice`) for the agent, whose edge then listens on the gateway address instead of 80/443;
+- writes `/etc/falak/local-edge.env` for the agent: the edge network's gateway and ports 8080/8443 (where the agent's
+  edge listens instead of 80/443), the panel edge's fixed address (`FALAK_LOCAL_EDGE_PANEL`; PROXY protocol is accepted
+  from it alone, `FALAK_LOCAL_EDGE_TRUST`), the subnets of every network of the Falak stack
+  (`FALAK_LOCAL_EDGE_PROTECT`: the agent keeps the sites' traffic out of them except ports 80/443 of the panel edge),
+  `FALAK_PROJECT_NAME` and `FALAK_WORKLOAD_SLICE=falak.slice`;
 - sets `FALAK_LOCAL_EDGE=1` and the two upstreams in `.env` and recreates the edge. The panel's edge keeps every host it
   serves itself (panel, `agents.`, `registry.`, Grafana, former domains, your `/opt/falak/edge/*.caddyfile` sites,
   wildcards included; re-read whenever those files change) and passes the connection of any other host untouched, TLS
@@ -394,8 +405,10 @@ The panel checks GitHub's latest release every 6 hours (`FALAK_UPDATE_CHECK=0` i
 **Update to vX.Y.Z** to the operator organization's members with the control-plane permission. The panel can't run
 anything on the host itself: it writes `/opt/falak/state/host/request.json`, and `falak-host.path` (installed by
 install.sh and every `falak-ctl update`/`up`) starts `falak-host.service`, i.e. `falak-ctl host-run` as root. host-run
-takes the file away and accepts exactly two requests: `update` to a `vX.Y.Z` version, and `local-server` with an
-install URL under the panel's own `/install/`; anything else is refused and logged. The update runs in its own
+takes the file away and accepts exactly two requests: `update` to a `vX.Y.Z` version newer than the installed one (a
+downgrade or reinstall is for root: `falak-ctl update --version …`), at most one every 10 minutes after the last
+finished, and `local-server` with an install URL under the panel's own `/install/`, only after `falak-ctl local-server
+allow`; anything else is refused and logged. The update runs in its own
 transient unit (`falak-update-<id>`), so the panel restarting under it can't stop it; the panel shows its progress from
 `state/host/status.json` and `state/host/<id>.log` and reloads once it is back.
 
@@ -716,7 +729,7 @@ data. Managed servers keep running. Remove the agent there with `systemctl disab
 | Provisioning step `adopt:<component>` fails: `… is no longer installed; run the machine check again` | A package the machine check found was removed since. Re-provision: the check runs again first. |
 | Agents go offline after a restore | The restored `.env` / `APP_KEY` must belong to the same backup as the database. The `falak-ca` volume is re-synced by the edge within 3 seconds. |
 | Live updates in the UI don't refresh | Check that the `reverb` service is healthy. Browsers connect to `wss://<domain>/app/…` through the edge. |
-| `FALAK_EDGE_SUBNET ... overlaps` | Pick another private /24 in `.env` and re-run the installer. The app trusts proxy headers only from that subnet. |
+| `FALAK_EDGE_SUBNET ... overlaps` | Pick another private /24 in `.env` and re-run the installer. The edge gets the subnet's `.250` address (`FALAK_EDGE_IP`, set by `falak-ctl ensure-host`/`up`) and the app trusts proxy headers only from it. |
 | Builds stay queued | `falak-ctl logs builder`. The builder polls `https://<domain>` with `FALAK_BUILDER_TOKEN`. Docker-mode builds need a `builder` server: the bundled builder does native builds only (`FALAK_LOCAL_BUILDER_MODES=native`, the default). |
 | Docker build fails at push (`lookup registry.falak.local … no such host`, `401`, `x509`) | The install has no built-in registry yet or its DNS is missing: run `falak-ctl up` (adds `FALAK_REGISTRY_*`), create the `registry.<domain>` record, then `falak-ctl registry status`. `x509` with `--tls internal`: see section 2. |
 | Panel slow (seconds per page) | `falak-ctl doctor`, section *PHP threads*. A saturated `agent-api` pool delays agents, not the panel. Raise `FALAK_AGENT_API_THREADS` (or `FALAK_PHP_MAX_THREADS` for the panel) in `.env`, then `falak-ctl up`. See [Performance](#performance-php-threads-and-worker-mode). |

@@ -32,9 +32,10 @@
 #   falak-ctl artisan <args...>             run php artisan in the control-plane container
 #   falak-ctl compose <args...>             raw docker compose with the install's settings
 #   falak-ctl reload-configs                recreate services whose mounted config files changed on disk
-#   falak-ctl local-server enable --install-url URL | disable | status
+#   falak-ctl local-server enable --install-url URL | disable | status | allow | deny
 #                                           sites on this machine: enrol its agent, the edge passes it every host the
-#                                           panel does not serve; the panel keeps FALAK_CP_RESERVE_MB and one core
+#                                           panel does not serve; the panel keeps FALAK_CP_RESERVE_MB and one core.
+#                                           allow/deny: whether the panel may ask for it (This machine)
 #   falak-ctl ensure-host                   (re)write the host units (falak-host.path) and resource slices
 #   falak-ctl host-run                      run the panel's host request (falak-host.service; update, local-server)
 #   falak-ctl version
@@ -583,9 +584,12 @@ fetch_bundle() { # fetch_bundle VERSION DEST_DIR
   # Fail closed: a bundle is never installed unverified (FALAK_DEPLOY_SOURCE copies above are the operator's own).
   curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "https://github.com/$repo/releases/download/$version/SHA256SUMS" \
     || { rm -rf "$tmp"; die "could not download SHA256SUMS for $version from github.com/$repo: refusing to install an unverified bundle"; }
-  grep -q ' falak-deploy.tar.gz$' "$tmp/SHA256SUMS" \
-    || { rm -rf "$tmp"; die "SHA256SUMS of $version lists no falak-deploy.tar.gz: refusing to install an unverified bundle"; }
-  (cd "$tmp" && grep ' falak-deploy.tar.gz$' SHA256SUMS | sha256sum -c --quiet -) || { rm -rf "$tmp"; die "checksum mismatch for falak-deploy.tar.gz"; }
+  local want got
+  want="$(awk '$2 == "falak-deploy.tar.gz" { print $1 }' "$tmp/SHA256SUMS")"
+  [[ "$want" =~ ^[0-9a-f]{64}$ ]] \
+    || { rm -rf "$tmp"; die "SHA256SUMS of $version has no single falak-deploy.tar.gz line: refusing to install an unverified bundle"; }
+  got="$(sha256sum "$tmp/falak-deploy.tar.gz" | cut -d' ' -f1)"
+  [ "$got" = "$want" ] || { rm -rf "$tmp"; die "checksum mismatch for falak-deploy.tar.gz"; }
   tar -xzf "$tmp/falak-deploy.tar.gz" -C "$dest"
   rm -rf "$tmp"
 }
@@ -1300,7 +1304,7 @@ extract_backup() {
 
 # The settings a backup may never bring back: which images run, from where, and compose's own knobs. A backup's
 # .env otherwise wins (APP_KEY, passwords, domains); these stay this host's.
-RESTORE_PINNED="FALAK_VERSION FALAK_IMAGE_PREFIX FALAK_REPO FALAK_DEPLOY_SOURCE FALAK_PULL FALAK_EDGE_SUBNET COMPOSE_PROFILES"
+RESTORE_PINNED="FALAK_VERSION FALAK_IMAGE_PREFIX FALAK_REPO FALAK_DEPLOY_SOURCE FALAK_PULL FALAK_EDGE_SUBNET FALAK_EDGE_IP COMPOSE_PROFILES"
 
 # restore_env FILE : install a backup's env file as .env, keeping this host's pinned settings; COMPOSE_* / DOCKER_*
 # lines from the backup are dropped (compose would read them).
@@ -1619,12 +1623,27 @@ host_new_file() { # host_new_file NAME : prints a fresh 0644 temp file in HOST_D
 }
 
 host_prune_logs() { # host_prune_logs REGEX : keep the newest HOST_KEEP_LOGS logs whose name matches
-  local old
-  # Only names this script writes (no newline or slash can sneak into the list).
+  local old me
+  me="$(id -u)"
+  # Only names this script writes (no newline or slash can sneak into the list), only regular files it owns (root):
+  # whatever the panel puts there is never counted or removed.
   # shellcheck disable=SC2010,SC2012  # ls -t: names are checked against REGEX
-  old="$(ls -1t "$HOST_DIR" 2>/dev/null | grep -E "^$1\$" | tail -n +$((HOST_KEEP_LOGS + 1)) || true)"
+  old="$(ls -1t "$HOST_DIR" 2>/dev/null | grep -E "^$1\$" | while read -r f; do
+    if [ -f "$HOST_DIR/$f" ] && [ ! -L "$HOST_DIR/$f" ] && [ "$(file_uid "$HOST_DIR/$f")" = "$me" ]; then printf '%s\n' "$f"; fi
+  done | tail -n +$((HOST_KEEP_LOGS + 1)) || true)"
   [ -z "$old" ] || printf '%s\n' "$old" | while read -r f; do rm -f "${HOST_DIR:?}/$f"; done
 }
+
+# The last update host-run started finished at this epoch (root-only state/, so a rejected request can't reset it).
+HOST_LAST_UPDATE="$STATE_DIR/.host-last-update"
+HOST_UPDATE_GAP=600
+host_update_too_soon() { # 0 when an update requested from the panel finished less than HOST_UPDATE_GAP seconds ago
+  local last
+  last="$(cat "$HOST_LAST_UPDATE" 2>/dev/null || true)"
+  case "$last" in '' | *[!0-9]*) return 1 ;; esac
+  [ $(($(date +%s) - last)) -lt "$HOST_UPDATE_GAP" ]
+}
+local_server_allowed() { [ "$(env_get FALAK_HOST_ALLOW_LOCAL_SERVER 0)" = 1 ]; }
 
 host_status() { # host_status ID ACTION STATE STARTED FINISHED EXIT [ERROR]
   local tmp log=""
@@ -1675,10 +1694,22 @@ host_take() {
     update)
       version="$(json_field version "$raw" || true)"
       valid_version "$version" || { host_status "$id" update failed "" "$(now_iso)" "" "invalid version (vX.Y.Z)"; warn "host request $id: invalid version"; return 1; }
+      # Forward only: a downgrade (or a reinstall of the same version) is for root on the host.
+      version_newer "$version" "$(env_get FALAK_VERSION)" \
+        || { host_status "$id" update failed "" "$(now_iso)" "" "$version is not newer than $(env_get FALAK_VERSION)"; warn "host request $id: $version is not newer"; return 1; }
+      if host_update_too_soon; then
+        host_status "$id" update failed "" "$(now_iso)" "" "an update finished less than $((HOST_UPDATE_GAP / 60)) minutes ago; try again later"
+        warn "host request $id: refused, the last update finished less than $((HOST_UPDATE_GAP / 60)) min ago"; return 1
+      fi
       arg="$version" ;;
     local-server)
       url="$(json_field install_url "$raw" || true)"
       valid_install_url "$url" || { host_status "$id" local-server failed "" "$(now_iso)" "" "install_url must be $(env_get FALAK_URL)/install/<token>"; warn "host request $id: invalid install_url"; return 1; }
+      # The panel acts as root on every server it manages; on this machine only once root said so.
+      if ! local_server_allowed; then
+        host_status "$id" local-server failed "" "$(now_iso)" "" "not allowed on this host: run 'sudo falak-ctl local-server allow' first"
+        warn "host request $id: local-server is not allowed on this host (falak-ctl local-server allow)"; return 1
+      fi
       arg="$url" ;;
     *) host_status "$id" "" failed "" "$(now_iso)" "" "unknown action"; warn "host request $id: unknown action"; return 1 ;;
   esac
@@ -1734,6 +1765,9 @@ cmd_host_job() {
   rc=$?
   set -e
   exec 3>&-
+  if [ "$action" = update ]; then
+    tmp="$(mktemp "$STATE_DIR/.host-last-update.XXXXXX")"; date +%s > "$tmp"; mv -f "$tmp" "$HOST_LAST_UPDATE"
+  fi
   if [ "$rc" = 0 ]; then host_status "$id" "$action" succeeded "$started" "$(now_iso)" 0
   else host_status "$id" "$action" failed "$started" "$(now_iso)" "$rc"; fi
   host_prune_logs '[0-9A-Za-z]{26}\.log'
@@ -1769,10 +1803,17 @@ TimeoutStartSec=1h" && changed=1
   if ! systemctl enable --now falak-host.path >/dev/null 2>&1; then
     warn "could not enable falak-host.path (systemctl status falak-host.path)"; return 0
   fi
-  # The panel offers its host buttons (update, This machine) only once this exists.
-  local tmp
+  host_write_channel
+}
+
+# channel.json: the panel offers its host buttons (update; This machine when local_server_allowed) only once it exists.
+host_write_channel() {
+  local tmp allowed=false
+  if local_server_allowed; then allowed=true; fi
+  ensure_host_dir
   tmp="$(host_new_file channel.json)"
-  printf '{"version":%s,"units":true,"installed_at":%s}\n' "$(json_str "$(env_get FALAK_VERSION)")" "$(json_str "$(now_iso)")" > "$tmp"
+  printf '{"version":%s,"units":true,"installed_at":%s,"local_server_allowed":%s}\n' \
+    "$(json_str "$(env_get FALAK_VERSION)")" "$(json_str "$(now_iso)")" "$allowed" > "$tmp"
   mv -f "$tmp" "$HOST_DIR/channel.json"
 }
 
@@ -1796,6 +1837,8 @@ local_edge_enabled() { [ "$(env_get FALAK_LOCAL_EDGE)" = 1 ]; }
 ensure_slices() {
   local dir reserve total cores cpus driver changed=0 work
   dir="$(systemd_dir)"; reserve="$(cp_reserve_mb)"; total="$(mem_total_mb)"; cores="$(cpu_cores)"
+  [[ "$total" =~ ^[0-9]+$ ]] || die "could not read the memory size (MemTotal in /proc/meminfo)"
+  [[ "$cores" =~ ^[0-9]+$ ]] || die "could not read the CPU count (nproc)"
   cpus=$((cores - 1)); [ "$cpus" -ge 1 ] || cpus=1
   [ -n "$(env_get FALAK_BUILDER_CPUS)" ] || env_set FALAK_BUILDER_CPUS "$cpus"
   driver="$(docker info --format '{{.CgroupDriver}}' 2>/dev/null || true)"
@@ -1839,8 +1882,39 @@ CPUWeight=100" && changed=1
 cmd_ensure_host() {
   require_install
   ensure_host_dir
+  ensure_edge_ip
   ensure_slices
   host_install_units
+}
+
+# edge_ip_of SUBNET -> the .250 address of an IPv4 subnet of /24 or larger (Docker hands out addresses from the
+# bottom, so the edge's fixed one never collides); nothing for anything else.
+edge_ip_of() {
+  [[ "$1" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+/([0-9]+)$ ]] || return 1
+  [ "${BASH_REMATCH[2]}" -ge 8 ] && [ "${BASH_REMATCH[2]}" -le 24 ] || return 1
+  printf '%s.250' "${BASH_REMATCH[1]}"
+}
+
+# FALAK_EDGE_IP: the edge's fixed address on the edge network. The app trusts forwarded headers and the client-cert
+# fingerprint only from it, and the local server's agent edge accepts PROXY protocol only from it.
+ensure_edge_ip() {
+  local subnet ip
+  subnet="$(env_get FALAK_EDGE_SUBNET 10.213.77.0/24)"
+  if ip="$(edge_ip_of "$subnet")"; then
+    env_put FALAK_EDGE_IP "$ip"
+  else
+    warn "FALAK_EDGE_SUBNET=$subnet is not an IPv4 /8../24: no fixed edge address, the whole subnet stays trusted"
+    env_put FALAK_EDGE_IP ""
+  fi
+}
+
+project_subnets() { # comma-separated IPv4 subnets of every network of the compose project (the agent takes IPv4 only)
+  local ids
+  ids="$(docker network ls -q --filter "label=com.docker.compose.project=$FALAK_PROJECT" 2>/dev/null || true)"
+  [ -n "$ids" ] || return 0
+  # shellcheck disable=SC2086  # network ids
+  docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}}{{"\n"}}{{end}}' $ids 2>/dev/null \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$' | sort -u | paste -sd, -
 }
 
 # --- local server: sites on the control-plane machine ------------------------------------------------------
@@ -1864,7 +1938,16 @@ cmd_local_server() {
       local_server_enable "$url" ;;
     disable) local_server_disable ;;
     status) local_server_status ;;
-    *) die "usage: falak-ctl local-server enable --install-url URL | disable | status" ;;
+    allow|deny)
+      [ "$(id -u)" = 0 ] || die "local-server $sub must run as root"
+      if [ "$sub" = allow ]; then env_set FALAK_HOST_ALLOW_LOCAL_SERVER 1; else env_set FALAK_HOST_ALLOW_LOCAL_SERVER 0; fi
+      if [ -f "$(systemd_dir)/falak-host.path" ]; then host_write_channel; fi
+      if [ "$sub" = allow ]; then
+        ok "the panel may make this machine a server (Servers → Add server → This machine): it then acts as root here, as on every server it manages"
+      else
+        ok "the panel can't make this machine a server (falak-ctl local-server allow to change it)"
+      fi ;;
+    *) die "usage: falak-ctl local-server enable --install-url URL | disable | status | allow | deny" ;;
   esac
 }
 
@@ -1877,8 +1960,11 @@ edge_network() { # -> "GATEWAY SUBNET" of the compose edge network
 }
 
 local_server_enable() {
-  local url="$1" net gw subnet tmp total reserve token
+  local url="$1" net gw subnet tmp total reserve token edge_ip protect
   [ "$(id -u)" = 0 ] || die "local-server enable must run as root"
+  ensure_edge_ip
+  edge_ip="$(env_get FALAK_EDGE_IP)"
+  [ -n "$edge_ip" ] || die "the edge has no fixed address (FALAK_EDGE_SUBNET must be an IPv4 /24 or larger)"
   total="$(mem_total_mb)"; reserve="$(cp_reserve_mb)"
   if [ -n "$total" ] && [ $((total - reserve)) -lt 512 ]; then
     die "this machine has ${total} MB; with ${reserve} MB reserved for the control plane less than 512 MB is left for sites"
@@ -1886,10 +1972,15 @@ local_server_enable() {
   net="$(edge_network)" || die "could not read the ${FALAK_PROJECT}_edge network (is the stack up? falak-ctl up)"
   gw="${net% *}"; subnet="${net#* }"
   [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "unexpected edge network gateway '$gw'"
+  protect="$(project_subnets)"
+  [ -n "$protect" ] || die "could not list the subnets of the $FALAK_PROJECT networks (is the stack up? falak-ctl up)"
   info "Sites on this machine (edge network $subnet, local edge on $gw:8443 / $gw:8080)"
   install -d -m 0755 "$(dirname "$LOCAL_EDGE_ENV")"
   tmp="$(mktemp "$(dirname "$LOCAL_EDGE_ENV")/.local-edge.XXXXXX")"
-  printf '# Written by falak-ctl local-server enable: the agent on the control-plane machine (read by falak-agent).\nFALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=%s\nFALAK_LOCAL_EDGE_HTTP_PORT=8080\nFALAK_LOCAL_EDGE_HTTPS_PORT=8443\nFALAK_LOCAL_EDGE_TRUST=%s\nFALAK_WORKLOAD_SLICE=falak.slice\n' "$gw" "$subnet" > "$tmp"
+  # TRUST/PANEL: PROXY protocol only from the panel's edge. PROTECT: the control plane's networks, which the agent keeps
+  # the sites' traffic out of (except 80/443 to PANEL).
+  printf '# Written by falak-ctl local-server enable: the agent on the control-plane machine (read by falak-agent).\nFALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=%s\nFALAK_LOCAL_EDGE_HTTP_PORT=8080\nFALAK_LOCAL_EDGE_HTTPS_PORT=8443\nFALAK_LOCAL_EDGE_TRUST=%s/32\nFALAK_LOCAL_EDGE_PANEL=%s\nFALAK_LOCAL_EDGE_PROTECT=%s\nFALAK_PROJECT_NAME=%s\nFALAK_WORKLOAD_SLICE=falak.slice\n' \
+    "$gw" "$edge_ip" "$edge_ip" "$protect" "$FALAK_PROJECT" > "$tmp"
   chmod 644 "$tmp"; mv -f "$tmp" "$LOCAL_EDGE_ENV"
   ok "wrote $LOCAL_EDGE_ENV"
   env_set FALAK_LOCAL_EDGE 1
@@ -2204,6 +2295,7 @@ drill_prepare() {
     env_set FALAK_DEPLOY_SOURCE ""
     env_set FALAK_PULL 0
     env_set FALAK_EDGE_SUBNET "$subnet"
+    env_set FALAK_EDGE_IP "$(edge_ip_of "$subnet" || true)"
     env_set FALAK_HTTP_PORT 18080
     env_set FALAK_HTTPS_PORT 18443
     env_set FALAK_TLS internal
@@ -2662,7 +2754,7 @@ cmd_admin() {
   esac
 }
 
-usage() { sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; }
 
 main() {
   local cmd="${1:-help}"; shift || true

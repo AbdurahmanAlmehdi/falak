@@ -358,6 +358,7 @@ pass "dr drill restores into falak-drill (own dir, volumes, no edge or workers),
   grep -q '^FALAK_HTTP_PORT=18080$' "$work/dd/.env" || fail "drill http port"
   grep -q '^FALAK_HTTPS_PORT=18443$' "$work/dd/.env" || fail "drill https port"
   grep -q '^FALAK_EDGE_SUBNET=10.213.78.0/24$' "$work/dd/.env" || fail "drill subnet: $(grep SUBNET "$work/dd/.env")"
+  grep -q '^FALAK_EDGE_IP=10.213.78.250$' "$work/dd/.env" || fail "drill edge address: $(grep EDGE_IP "$work/dd/.env")"
   grep -q '^FALAK_PULL=0$' "$work/dd/.env" || fail "drill pulls"
   grep -q '^FALAK_VERSION=v0.10.0$' "$work/dd/.env" || fail "drill version"
   [ -f "$work/dd/secrets/kek" ] || fail "drill has no KEK"

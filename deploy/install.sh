@@ -11,6 +11,7 @@
 #   --version TAG            release to install (default: latest release)                    [FALAK_VERSION]
 #   --observability          also run Grafana/Loki/Tempo/VictoriaMetrics (grafana.NAME)      [FALAK_OBSERVABILITY=1]
 #   --tls acme|internal      internal = Caddy's local CA, for testing only (default: acme)    [FALAK_TLS]
+#   --allow-local-server     let the panel make this machine a server (it then acts as root here) [FALAK_ALLOW_LOCAL_SERVER=1]
 #   --repo OWNER/NAME        GitHub repository of the release (default: OthmanHaba/falak)         [FALAK_REPO]
 #   --image-prefix PREFIX    image registry prefix (default: ghcr.io/<owner>)                [FALAK_IMAGE_PREFIX]
 #   --build-from-source      build images locally from --ref instead of pulling them         [FALAK_BUILD_FROM_SOURCE=1]
@@ -35,6 +36,7 @@ EMAIL="${FALAK_EMAIL:-}"
 ADMIN_EMAIL="${FALAK_ADMIN_EMAIL:-}"
 VERSION="${FALAK_VERSION:-}"
 OBSERVABILITY="${FALAK_OBSERVABILITY:-}"
+ALLOW_LOCAL_SERVER="${FALAK_ALLOW_LOCAL_SERVER:-}"
 TLS="${FALAK_TLS:-}"
 REPO="${FALAK_REPO:-}"
 IMAGE_PREFIX="${FALAK_IMAGE_PREFIX:-}"
@@ -103,7 +105,7 @@ pull_retry() {
   rm -f "$err"
 }
 
-usage() { sed -n '2,28p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "see docs/INSTALL.md"; }
+usage() { sed -n '2,29p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "see docs/INSTALL.md"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -113,6 +115,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift ;;
     --observability) OBSERVABILITY=1 ;;
     --no-observability) OBSERVABILITY=0 ;;
+    --allow-local-server) ALLOW_LOCAL_SERVER=1 ;;
     --tls) TLS="$2"; shift ;;
     --repo) REPO="$2"; shift ;;
     --image-prefix) IMAGE_PREFIX="$2"; shift ;;
@@ -436,6 +439,8 @@ write_env() {
   env_set FALAK_HTTPS_PORT "$HTTPS_PORT"
   if [ "$TLS" = internal ]; then env_set FALAK_HSTS "max-age=0"; else env_set FALAK_HSTS "max-age=31536000"; fi
   env_default FALAK_EDGE_SUBNET "10.213.77.0/24"
+  # Servers -> Add server -> This machine: off unless asked for (falak-ctl local-server allow|deny changes it later).
+  if [ "$ALLOW_LOCAL_SERVER" = 1 ]; then env_set FALAK_HOST_ALLOW_LOCAL_SERVER 1; else env_default FALAK_HOST_ALLOW_LOCAL_SERVER 0; fi
   env_default FALAK_BACKUP_KEEP "14"
   if [ -n "$SOURCE_DIR" ]; then env_set FALAK_DEPLOY_SOURCE "$SOURCE_DIR"; fi
   if [ "$FROM_SOURCE" = 1 ]; then env_set FALAK_PULL 0; else env_default FALAK_PULL 1; fi

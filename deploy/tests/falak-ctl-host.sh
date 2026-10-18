@@ -42,7 +42,8 @@ systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; }
 docker() {
   case "$1 ${2:-}" in
     "info --format") printf '%s\n' "${DOCKER_CGROUP_DRIVER:-systemd}" ;;
-    "network inspect") printf '10.213.77.1 10.213.77.0/24\n' ;;
+    "network inspect") case "$*" in *Gateway*) printf '10.213.77.1 10.213.77.0/24\n' ;; *) printf '10.213.77.0/24\n172.30.1.0/24\nfd00:1::/64\n\n172.30.2.0/24\n' ;; esac ;;
+    "network ls") printf 'n1\nn2\nn3\n' ;;
     *) printf 'docker %s\n' "$*" >> "$work/docker-calls" ;;
   esac
 }
@@ -79,8 +80,39 @@ grep -q 'stub output for update' "$HOST/$ID.log" || fail "the job's output is no
 [ -k "$HOST" ] && [ "$(file_mode "$HOST" | tail -c 4)" = 770 ] || fail "state/host mode $(file_mode "$HOST") (want 1770)"
 pass "update vX.Y.Z: taken, detached, run as 'falak-ctl update --version', status succeeded, log 0644, dir 1770"
 
+# Rate limit: another update within 10 minutes of the last one is refused (a rejection doesn't reset the clock).
+reset
+request "{\"id\":\"$ID\",\"action\":\"update\",\"version\":\"v0.23.1\"}"
+cmd_host_run >/dev/null 2>&1 || true; wait
+[ ! -e "$work/ctl-calls" ] && [ "$(status_field state)" = '"failed"' ] && grep -q 'less than 10 minutes ago' "$HOST/status.json" || fail "rate limit: $(cat "$HOST/status.json")"
+echo $(($(date +%s) - 601)) > "$FALAK_DIR/state/.host-last-update"
+reset
+request "{\"id\":\"$ID\",\"action\":\"update\",\"version\":\"v0.23.1\"}"
+cmd_host_run >/dev/null 2>&1 || true; wait
+[ "$(cat "$work/ctl-calls" 2>/dev/null)" = "update --version v0.23.1" ] || fail "an update 10 minutes after the last was refused: $(cat "$HOST/status.json")"
+rm -f "$FALAK_DIR/state/.host-last-update"
+pass "an update less than 10 minutes after the last one is refused, later it runs"
+
+# Forward only.
+for v in v0.22.0 v0.21.9 v0.9.99; do
+  reset
+  request "{\"id\":\"$ID\",\"action\":\"update\",\"version\":\"$v\"}"
+  cmd_host_run >/dev/null 2>&1 || true; wait
+  [ ! -e "$work/ctl-calls" ] && grep -q 'is not newer than v0.22.0' "$HOST/status.json" || fail "downgrade to $v: $(cat "$HOST/status.json")"
+done
+pass "an update to the same or an older version is refused (sort -V: v0.9.99 < v0.22.0)"
+
+# local-server needs root's consent on the host.
 reset
 ID2=01JABCDEFGHJKMNPQRSTVWXYZ1
+request "{\"id\":\"$ID2\",\"action\":\"local-server\",\"install_url\":\"https://panel.example.com/install/abc\"}"
+cmd_host_run >/dev/null 2>&1 || true
+[ ! -e "$work/ctl-calls" ] && grep -q "not allowed on this host: run 'sudo falak-ctl local-server allow' first" "$HOST/status.json" || fail "local-server without consent: $(cat "$HOST/status.json")"
+pass "local-server is refused until root allows it"
+env_set FALAK_HOST_ALLOW_LOCAL_SERVER 1
+echo $(($(date +%s) - 5)) > "$FALAK_DIR/state/.host-last-update"   # local-server ignores the update rate limit
+
+reset
 request "{\"id\":\"$ID2\",\"action\":\"local-server\",\"install_url\":\"https:\\/\\/panel.example.com\\/install\\/abc_DEF-123\"}"
 echo 3 > "$work/stub-rc"
 cmd_host_run >/dev/null 2>&1 || true
@@ -88,7 +120,8 @@ rm -f "$work/stub-rc"
 [ "$(cat "$work/ctl-calls")" = "local-server enable --install-url https://panel.example.com/install/abc_DEF-123" ] || fail "local-server ran as: $(cat "$work/ctl-calls")"
 [ ! -e "$work/detach" ] || fail "local-server should run in falak-host.service itself"
 [ "$(status_field state)" = '"failed"' ] && [ "$(status_field exit_code)" = 3 ] || fail "a failing job: $(cat "$HOST/status.json")"
-pass "local-server <FALAK_URL>/install/<token> runs 'local-server enable'; a failing job ends failed with its exit code"
+pass "local-server <FALAK_URL>/install/<token> runs 'local-server enable' (allowed, rate limit exempt); a failing job ends failed with its exit code"
+rm -f "$FALAK_DIR/state/.host-last-update"; env_set FALAK_HOST_ALLOW_LOCAL_SERVER 0
 
 # --- refused requests -----------------------------------------------------------------------------------------
 refuse() { # refuse LABEL JSON
@@ -132,13 +165,20 @@ pass "anything else at request.json is removed"
 # --- log retention ----------------------------------------------------------------------------------------------
 for i in $(seq 10 34); do printf 'x\n' > "$HOST/01JOLDLOGOLDLOGOLDLOGOLD$i.log"; touch -t "2026010100$i" "$HOST/01JOLDLOGOLDLOGOLDLOGOLD$i.log"; done
 printf 'keep\n' > "$HOST/notes.log"
+# Newer logs the panel (uid 33) put there: neither counted nor removed.
+for i in 1 2 3; do printf 'panel\n' > "$HOST/01JPANELPANELPANELPANELPA$i.log"; done
+file_uid() { case "$1" in *PANELPANEL*) echo 33 ;; *) stat -c %u "$1" 2>/dev/null || stat -f %u "$1" ;; esac; }
+rm -f "$FALAK_DIR/state/.host-last-update"
 reset
 request "{\"id\":\"$ID\",\"action\":\"update\",\"version\":\"v0.23.1\"}"
 cmd_host_run >/dev/null 2>&1; wait
-n="$(find "$HOST" -name '*.log' | grep -cE '/[0-9A-Za-z]{26}\.log$')"
+n="$(find "$HOST" -name '*.log' | grep -v PANELPANEL | grep -cE '/[0-9A-Za-z]{26}\.log$')"
 [ "$n" = 20 ] || fail "kept $n request logs, want 20"
 [ -f "$HOST/$ID.log" ] && [ -f "$HOST/notes.log" ] && [ ! -f "$HOST/01JOLDLOGOLDLOGOLDLOGOLD10.log" ] || fail "pruned the wrong logs"
-pass "the newest 20 request logs are kept (other files untouched)"
+[ "$(find "$HOST" -name '01JPANELPANEL*' | wc -l | tr -d ' ')" = 3 ] || fail "logs not owned by root were removed"
+unset -f file_uid
+file_uid() { stat -c %u "$1" 2>/dev/null || stat -f %u "$1"; }
+pass "the newest 20 request logs are kept; other files and files root does not own are untouched"
 
 # --- SHA256SUMS is mandatory ----------------------------------------------------------------------------------
 mkdir -p "$work/rel/deploy" "$work/rel/observability"; printf 'x\n' > "$work/rel/deploy/compose.yml"
@@ -155,9 +195,13 @@ curl() {
 rm -f "$SUMS"
 out="$( (fetch_bundle v0.23.0 "$work/stage") 2>&1)" && fail "a bundle without SHA256SUMS was accepted"
 grep -q 'refusing to install an unverified bundle' <<<"$out" || fail "no SHA256SUMS: $out"
-printf '%s  other.tar.gz\n' "$(sha256sum "$work/falak-deploy.tar.gz" | cut -d' ' -f1)" > "$SUMS"
-out="$( (fetch_bundle v0.23.0 "$work/stage") 2>&1)" && fail "SHA256SUMS without the bundle's line was accepted"
-grep -q 'lists no falak-deploy.tar.gz' <<<"$out" || fail "no entry: $out"
+sum="$(sha256sum "$work/falak-deploy.tar.gz" | cut -d' ' -f1)"
+for bad in "$sum  other.tar.gz" "$sum  xfalak-deploy.tar.gz" "$sum  falak-deploy.tar.gz.sig" "$sum  falak-deploy.tar.gz
+$sum  falak-deploy.tar.gz" "${sum:0:63}  falak-deploy.tar.gz" "$(printf '%s' "$sum" | tr 'a-f' 'A-F')x  falak-deploy.tar.gz"; do
+  printf '%s\n' "$bad" > "$SUMS"
+  out="$( (fetch_bundle v0.23.0 "$work/stage") 2>&1)" && fail "SHA256SUMS accepted: $bad"
+  grep -q 'no single falak-deploy.tar.gz line' <<<"$out" || fail "SHA256SUMS '$bad': $out"
+done
 printf '%064d  falak-deploy.tar.gz\n' 0 > "$SUMS"
 out="$( (fetch_bundle v0.23.0 "$work/stage") 2>&1)" && fail "a wrong checksum was accepted"
 grep -q 'checksum mismatch' <<<"$out" || fail "mismatch: $out"
@@ -168,7 +212,7 @@ env_set FALAK_DEPLOY_SOURCE "$work/rel"; rm -f "$SUMS"
 (fetch_bundle v0.23.0 "$work/stage2") >/dev/null 2>&1 || fail "FALAK_DEPLOY_SOURCE needs no SHA256SUMS"
 env_set FALAK_DEPLOY_SOURCE ""
 unset -f curl
-pass "downloaded bundles need SHA256SUMS with a matching line (fail closed); FALAK_DEPLOY_SOURCE copies are exempt"
+pass "downloaded bundles need SHA256SUMS with exactly one 64-hex falak-deploy.tar.gz line that matches (fail closed); FALAK_DEPLOY_SOURCE is exempt"
 
 # --- ensure-host: units + slices ------------------------------------------------------------------------------
 cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host failed"
@@ -176,7 +220,7 @@ S="$FALAK_SYSTEMD_DIR"
 grep -qx "PathChanged=$HOST/request.json" "$S/falak-host.path" || fail "falak-host.path: $(cat "$S/falak-host.path")"
 grep -qx "ExecStart=$work/ctl-stub host-run" "$S/falak-host.service" && grep -qx 'Type=oneshot' "$S/falak-host.service" || fail "falak-host.service"
 grep -qx 'enable --now falak-host.path' "$systemctl_log" || fail "falak-host.path not enabled"
-grep -qE '^\{"version":"v0.22.0","units":true,"installed_at":"[0-9T:-]+Z"\}$' "$HOST/channel.json" && [ "$(file_mode "$HOST/channel.json")" = 644 ] \
+grep -qE '^\{"version":"v0.22.0","units":true,"installed_at":"[0-9T:-]+Z","local_server_allowed":false\}$' "$HOST/channel.json" && [ "$(file_mode "$HOST/channel.json")" = 644 ] \
   || fail "channel.json: $(cat "$HOST/channel.json" 2>/dev/null)"
 rm -f "$HOST/channel.json"
 systemctl() { printf '%s\n' "$*" >> "$systemctl_log"; [ "$1" != enable ]; }
@@ -188,7 +232,10 @@ grep -qx 'MemoryMin=1536M' "$S/falakcp.slice" && grep -qx 'CPUWeight=1000' "$S/f
 [ "$(env_get FALAK_CP_SLICE)" = falakcp.slice ] && [ "$(env_get FALAK_BUILDER_CPUS)" = 3 ] && [ -z "$(env_get FALAK_BUILDER_SLICE)" ] || fail "slice env: $(grep SLICE "$ENV_FILE")"
 DOCKER_CGROUP_DRIVER=cgroupfs cmd_ensure_host >/dev/null 2>&1 || fail "ensure-host failed with cgroupfs"
 grep -qx 'FALAK_CP_SLICE=' "$ENV_FILE" || fail "cgroupfs: FALAK_CP_SLICE should be set empty"
-pass "ensure-host: falak-host.path/.service, falakcp.slice (MemoryMin, CPUWeight 1000, oomd avoid), no falak.slice cap; cgroupfs skips slices"
+[ "$(env_get FALAK_EDGE_IP)" = 10.213.77.250 ] || fail "FALAK_EDGE_IP: $(env_get FALAK_EDGE_IP)"
+[ "$(edge_ip_of 10.20.0.0/16)" = 10.20.0.250 ] && ! edge_ip_of 10.213.77.0/25 >/dev/null && ! edge_ip_of fd00::/64 >/dev/null || fail "edge_ip_of"
+(mem_total_mb() { :; }; ensure_slices) >/dev/null 2>&1 && fail "ensure_slices went on without the memory size"
+pass "ensure-host: falak-host.path/.service, channel.json, falakcp.slice (MemoryMin, CPUWeight 1000, oomd avoid), no falak.slice cap, FALAK_EDGE_IP=.250; cgroupfs skips slices; no MemTotal stops"
 
 # --- local-server enable / disable ----------------------------------------------------------------------------
 id() { if [ "${1:-}" = -u ]; then echo 0; else command id "$@"; fi; }
@@ -196,12 +243,21 @@ chown() { :; }
 edge_curl() { local o=""; while [ $# -gt 0 ]; do [ "$1" = -o ] && o="$2"; shift; done; printf 'echo enrolled > "%s"\n' "$work/enrolled" > "$o"; }
 : > "$work/compose-calls"
 (cmd_local_server enable --install-url https://evil.example.com/install/abc) >/dev/null 2>&1 && fail "enable took a foreign URL"
+cmd_local_server deny >/dev/null 2>&1 || fail "local-server deny"
+[ "$(env_get FALAK_HOST_ALLOW_LOCAL_SERVER)" = 0 ] && grep -q '"local_server_allowed":false' "$HOST/channel.json" || fail "deny: $(cat "$HOST/channel.json")"
+cmd_local_server allow >/dev/null 2>&1 || fail "local-server allow"
+[ "$(env_get FALAK_HOST_ALLOW_LOCAL_SERVER)" = 1 ] && grep -q '"local_server_allowed":true' "$HOST/channel.json" || fail "allow: $(cat "$HOST/channel.json")"
+(id() { echo 1000; }; cmd_local_server allow) >/dev/null 2>&1 && fail "allow ran as non-root"
+pass "local-server allow/deny (root only) set FALAK_HOST_ALLOW_LOCAL_SERVER and refresh channel.json"
 cmd_local_server enable --install-url https://panel.example.com/install/tok_1 >/dev/null 2>&1 || fail "local-server enable failed"
 want='FALAK_LOCAL_EDGE=1
 FALAK_LOCAL_EDGE_ADDR=10.213.77.1
 FALAK_LOCAL_EDGE_HTTP_PORT=8080
 FALAK_LOCAL_EDGE_HTTPS_PORT=8443
-FALAK_LOCAL_EDGE_TRUST=10.213.77.0/24
+FALAK_LOCAL_EDGE_TRUST=10.213.77.250/32
+FALAK_LOCAL_EDGE_PANEL=10.213.77.250
+FALAK_LOCAL_EDGE_PROTECT=10.213.77.0/24,172.30.1.0/24,172.30.2.0/24
+FALAK_PROJECT_NAME=falak
 FALAK_WORKLOAD_SLICE=falak.slice'
 [ "$(grep -v '^#' "$FALAK_LOCAL_EDGE_ENV")" = "$want" ] || fail "local-edge.env: $(cat "$FALAK_LOCAL_EDGE_ENV")"
 [ "$(file_mode "$FALAK_LOCAL_EDGE_ENV")" = 644 ] || fail "local-edge.env mode"

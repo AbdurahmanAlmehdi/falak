@@ -20,8 +20,9 @@
 # behind them. PHP threads: FALAK_WORKER_MODE / FALAK_PHP_WORKERS / FALAK_PHP_MAX_THREADS (panel) and
 # FALAK_AGENT_API_THREADS (agent-api, >= servers + builders + 8); see docs/INSTALL.md "Performance".
 #
-# Networks: `edge` has a fixed subnet (FALAK_EDGE_SUBNET) because it is the only place the edge talks to the
-# app from, and the app trusts X-Forwarded-* / the client-cert fingerprint header only from that subnet.
+# Networks: `edge` has a fixed subnet (FALAK_EDGE_SUBNET) and the edge a fixed address in it (FALAK_EDGE_IP, the .250
+# host, set by falak-ctl ensure-host), because it is the only place the edge talks to the app from: the app trusts
+# X-Forwarded-* / the client-cert fingerprint header only from that address (the whole subnet on an older .env).
 #
 # Memory limits are caps, not reservations; the measured idle budget per service is in docs/INSTALL.md
 # ("Resource budget"). Core stack ≈ 0.6-0.8 GB idle (limits ≈ 4.3 GB), observability profile ≈ +0.6 GB.
@@ -110,8 +111,9 @@ x-control-plane: &control-plane
     # The organization that operates the install (install.sh records the first admin's): it alone sees the control
     # plane's disaster recovery. Unset with several organizations: nobody does.
     FALAK_DR_ORGANIZATION: ${FALAK_DR_ORGANIZATION:-}
-    FALAK_AGENT_TRUSTED_PROXIES: ${FALAK_EDGE_SUBNET:-10.213.77.0/24}
-    TRUSTED_PROXIES: ${FALAK_EDGE_SUBNET:-10.213.77.0/24}
+    # A bare address is a /32 to Symfony's IpUtils (TrustProxies, AuthenticateAgent).
+    FALAK_AGENT_TRUSTED_PROXIES: ${FALAK_EDGE_IP:-${FALAK_EDGE_SUBNET:-10.213.77.0/24}}
+    TRUSTED_PROXIES: ${FALAK_EDGE_IP:-${FALAK_EDGE_SUBNET:-10.213.77.0/24}}
     FALAK_AGENT_WAKE_DRIVER: redis
     FALAK_ACME_EMAIL: ${FALAK_ACME_EMAIL:-}
     FALAK_TEST_DOMAIN: ${FALAK_TEST_DOMAIN:-}
@@ -248,6 +250,10 @@ services:
     init: true
     user: "0"
     network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: ["no-new-privileges:true"]
     entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:33 /state/host && chmod 1770 /state/host && exec sleep infinity"]
     volumes:
       - ../state:/state
@@ -422,7 +428,9 @@ services:
       - "${FALAK_BIND:-0.0.0.0}:${FALAK_HTTPS_PORT:-443}:${FALAK_HTTPS_PORT:-443}"
       - "${FALAK_BIND:-0.0.0.0}:${FALAK_HTTPS_PORT:-443}:${FALAK_HTTPS_PORT:-443}/udp"
     networks:
-      edge: {}
+      edge:
+        # Empty (an .env from before ensure-host set it): an address from the pool, as before.
+        ipv4_address: ${FALAK_EDGE_IP:-}
       observability: {}
       registry: {}
       public:

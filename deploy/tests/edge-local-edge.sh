@@ -52,8 +52,8 @@ pass "FALAK_LOCAL_EDGE=1 with a malformed upstream refuses to start"
 
 # --- set: front (this image) + back (stock caddy with proxy_protocol) ------------------------------------------
 mkdir -p "$work/custom"
-printf 'custom.test {\n\trespond "front custom"\n}\n*.wild.test {\n\trespond "front wild"\n}\n' > "$work/custom/ops.caddyfile"
-docker run -d --name "$p-front" --network "$net" "${common[@]}" -e FALAK_LOCAL_EDGE=1 \
+printf 'custom.test {\n\trespond "front custom"\n}\n*.wild.test {\n\trespond "front wild"\n}\nUpper.Test {\n\trespond "front upper"\n}\n' > "$work/custom/ops.caddyfile"
+docker run -d --name "$p-front" --network "$net" "${common[@]}" -e FALAK_LOCAL_EDGE=1 -e FALAK_REGISTRY_HOST=registry.panel.test -e FALAK_DOMAIN_ALIASES=Old.Panel.test \
   -e FALAK_LOCAL_EDGE_UPSTREAM_HTTPS="$p-back:8443" -e FALAK_LOCAL_EDGE_UPSTREAM_HTTP="$p-back:8080" \
   -v "$work/custom:/etc/caddy/custom:ro" "$img" >/dev/null
 ready "$p-front" || fail "the edge did not start with FALAK_LOCAL_EDGE=1"
@@ -86,11 +86,11 @@ docker run -d --name "$p-back" --network "$net" -e FRONT_IP="$front" -v "$work/b
 sleep 3
 
 keep="$(docker exec "$p-front" cat /etc/caddy/global/local-edge.caddyfile)"
-for h in panel.test custom.test '*.wild.test'; do
+for h in panel.test custom.test '*.wild.test' agents.panel.test registry.panel.test old.panel.test upper.test; do
   grep -qF " $h " <<<"$(grep 'not tls sni' <<<"$keep") " || fail "keep-list lacks $h: $keep"
 done
 docker exec "$p-front" grep -q '^http:// {' /etc/caddy/sites/local-edge.caddyfile || fail "no explicit http:// site"
-pass "keep-list = the panel, operator hosts and wildcards"
+pass "keep-list = the panel hosts (always, lowercase: agents., registry. without credentials, aliases), operator hosts, wildcards"
 
 client="$(docker run --rm --network "$net" curlimages/curl:8.11.1 -sk --max-time 5 --resolve "site.test:443:$front" https://site.test/ || true)"
 case "$client" in "site "[0-9]*) ;; *) fail "site.test via the front: '$client'" ;; esac
