@@ -30,7 +30,7 @@ pass "the edge has FALAK_EDGE_IP on the edge network and the app trusts only it 
 
 bad="$(q '.services | to_entries[] | select(.key != "builder") | select(.value.cgroup_parent != "falakcp.slice" or .value.oom_score_adj != -900) | .key')"
 [ -z "$bad" ] || fail "not in falakcp.slice / oom -900: $bad"
-[ "$(q '.services.builder.oom_score_adj')" = 500 ] && [ "$(q '.services.builder.deploy.resources.limits.pids')" = 4096 ] || fail "builder caps"
+if ! { [ "$(q '.services.builder.oom_score_adj')" = 500 ] && [ "$(q '.services.builder.deploy.resources.limits.pids')" = 4096 ]; }; then fail "builder caps"; fi
 pass "every service but the builder runs in falakcp.slice with OOM score -900; the builder is capped"
 
 [ "$(q '[.services | to_entries[] | select([.value.volumes[]? | .target] | index("/falak/host")) | .key] | sort | join(",")')" = control-plane,horizon,scheduler ] \
@@ -45,7 +45,7 @@ pass "state/host only in control-plane/horizon/scheduler, after host-init (no ne
 q '.services["host-init"].entrypoint | join(" ")' | grep -q 'chown 0:33 /state/host' || fail "host-init chown (default uid 33)"
 FALAK_APP_UID=1000 render ''
 q '.services["host-init"].entrypoint | join(" ")' | grep -q 'chown 0:1000 /state/host' || fail "host-init ignores FALAK_APP_UID"
-[ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = "" ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = "" ] || fail "builder disk floors should default empty"
+if ! { [ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = "" ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = "" ]; }; then fail "builder disk floors should default empty"; fi
 render $'FALAK_BUILD_MIN_FREE_GB=20\nFALAK_BUILD_ABORT_FREE_GB=4'
-[ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = 20 ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = 4 ] || fail "builder disk floors not passed"
+if ! { [ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = 20 ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = 4 ]; }; then fail "builder disk floors not passed"; fi
 pass "host-init: 2 s healthcheck without start_interval, group = FALAK_APP_UID (33); the builder gets FALAK_BUILD_MIN/ABORT_FREE_GB (empty: its defaults)"
