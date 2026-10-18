@@ -14,6 +14,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
 
@@ -66,6 +67,9 @@ type FirewallPayload struct {
 	// Counters puts an nftables counter on the SSH rule and every rule (feature net.protection): read back by the
 	// protection observer as falak.net.firewall.* and shown next to each rule.
 	Counters bool `json:"counters,omitempty"`
+	// LocalEdge is this host's /etc/falak/local-edge.env (set by the agent, never sent): the control plane's edge
+	// reaches this server's edge on its internal ports.
+	LocalEdge localedge.Config `json:"-"`
 }
 
 // FirewallResult is its result.
@@ -124,6 +128,10 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 	fmt.Fprintf(&b, "\t\ttcp dport %d %saccept comment \"falak:ssh\"\n", ssh, counter)
 	// Sandboxes with an allowlist reach the internet only through the agent's egress proxy on their bridge's gateway.
 	fmt.Fprintf(&b, "\t\tiifname \"br-sbx\" ip daddr 10.88.0.1 tcp dport 3128 %saccept comment \"falak:sandbox-proxy\"\n", counter)
+	if l := p.LocalEdge; l.Enabled {
+		// Only the control plane's edge network may reach the edge's internal ports (it sends the PROXY header).
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s tcp dport { %d, %d } %saccept comment \"falak:local-edge\"\n", l.Trust, l.Addr, l.HTTPPort, l.HTTPSPort, counter)
+	}
 	seen := map[string]bool{}
 	for _, r := range p.Rules {
 		if !idRe.MatchString(r.ID) {
@@ -269,6 +277,11 @@ WantedBy=sysinit.target
 
 // FirewallApply validates, persists and atomically applies the ruleset.
 func (n *Net) FirewallApply(ctx context.Context, p FirewallPayload, st commands.Stream) (any, error) {
+	local, err := localedge.Load(n.d.FS, localedge.Path)
+	if err != nil {
+		return nil, err
+	}
+	p.LocalEdge = local
 	rs, err := RenderRuleset(p)
 	if err != nil {
 		return nil, err

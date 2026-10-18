@@ -19,6 +19,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/backupcrypt"
 	"github.com/OthmanHaba/falak/agent/internal/commands"
+	"github.com/OthmanHaba/falak/agent/internal/docker"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/system"
 )
@@ -476,10 +477,13 @@ func (db *DB) restoreKeyValue(ctx context.Context, name string, in io.Reader, st
 	}
 	fmt.Fprintf(st.Stdout(), "stopped %s\n", name)
 	var errBuf bytes.Buffer
-	res, runErr := db.d.Runner.Run(ctx, runner.Cmd{Name: "docker", Args: []string{
-		"run", "--rm", "-i", "--name", name + "-restore", "--network", "none", "--entrypoint", "falak-db",
-		"--mount", "type=bind,source=" + data + ",target=/data", cur.Image, "restore", "logical", "--in", "-",
-	}, Stdin: in, Stdout: st.Stdout(), Stderr: &errBuf})
+	args := []string{"run", "--rm", "-i", "--name", name + "-restore", "--network", "none", "--entrypoint", "falak-db"}
+	if docker.WorkloadSlice != "" {
+		args = append(args, "--cgroup-parent", docker.WorkloadSlice)
+	}
+	res, runErr := db.d.Runner.Run(ctx, runner.Cmd{Name: "docker", Args: append(args,
+		"--mount", "type=bind,source="+data+",target=/data", cur.Image, "restore", "logical", "--in", "-",
+	), Stdin: in, Stdout: st.Stdout(), Stderr: &errBuf})
 	if runErr == nil && res.ExitCode != 0 {
 		runErr = fmt.Errorf("falak-db restore logical: exit %d: %s", res.ExitCode, lastLines(errBuf.String(), 5))
 	}

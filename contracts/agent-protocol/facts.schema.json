@@ -30,6 +30,7 @@
       },
       "description": "Certificates the edge obtained over ACME (its storage under /var/lib/caddy), the latest expiry per name. Renewals start 30 days before expiry, so one closer than that means renewal is failing. Omitted when there are none"
     },
+    "local_edge": { "type": "boolean", "description": "This is the control-plane machine (falak-ctl wrote /etc/falak/local-edge.env): the server's edge listens behind the control plane's edge on a bridge address (internal ports, PROXY protocol) and docker workloads run under the capped workload slice. Omitted = false" },
     "features": { "type": "array", "items": { "type": "string" }, "uniqueItems": true, "description": "Protocol additions the agent understands (e.g. edge.access_log, telemetry.log_kind, system.upgrade_agent.v2). Agents reject unknown payload fields, so the control plane sends optional fields only to agents that list the feature. Absent = none" },
     "ebpf": { "$ref": "#/$defs/ebpf" }
   },

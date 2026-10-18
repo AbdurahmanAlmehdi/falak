@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 	"github.com/OthmanHaba/falak/agent/internal/version"
 )
@@ -45,6 +46,8 @@ type Facts struct {
 	RebootRequired bool `json:"reboot_required"`
 	// TLSCertificates are the edge's ACME certificates and their expiry.
 	TLSCertificates []TLSCertificate `json:"tls_certificates,omitempty"`
+	// LocalEdge: this is the control-plane machine and its edge sits behind the control plane's (local-edge.env).
+	LocalEdge bool `json:"local_edge,omitempty"`
 	// EBPF is the eBPF probe's status (ebpfobs.Status, docs/plans/network/ebpf.md), set by the agent's heartbeat.
 	EBPF any `json:"ebpf,omitempty"`
 }
@@ -132,6 +135,9 @@ func Collect(ctx context.Context, r runner.Runner, fs hostfs.FS, agentVersion st
 	}
 	f.RebootRequired = RebootRequired(fs)
 	f.TLSCertificates = TLSCertificates(fs)
+	if l, err := localedge.Load(fs, localedge.Path); err == nil {
+		f.LocalEdge = l.Enabled
+	}
 	if v := dirVersions(fs, "/etc/php", func(n string) bool { _, err := strconv.ParseFloat(n, 64); return err == nil }); len(v) > 0 {
 		f.Runtimes["php"] = v
 	}

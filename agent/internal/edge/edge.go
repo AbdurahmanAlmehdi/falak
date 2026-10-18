@@ -26,6 +26,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/logs"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
@@ -240,6 +241,12 @@ type ApplyResult struct {
 func (m *Manager) Apply(ctx context.Context, p Payload, s commands.Stream) (any, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Read on every apply: falak-ctl writes it when the control-plane machine becomes a server (localedge.Path).
+	local, err := localedge.Load(m.o.FS, path.Join(m.o.EtcDir, "local-edge.env"))
+	if err != nil {
+		return nil, err
+	}
+	p.LocalEdge = local
 	// Rate limits the edge cannot run (no module and no usable build, a FrankenPHP edge): the config is applied without
 	// them and the result says why, so the panel can show it. Validated first: a bad payload is refused as before.
 	if _, err := Render(p, m.certDir()); err != nil {

@@ -531,14 +531,21 @@ func TestPrune(t *testing.T) {
 	if got := fin.Result.(PruneResult).SpaceReclaimedBytes; got != 100+1000*4 {
 		t.Fatalf("reclaimed %d", got)
 	}
+	// The control plane's own stack (compose project falak) is never pruned; the build cache has no label filter.
 	want := []string{
-		`containers {"until":["24h"]}`,
-		`images {"dangling":["false"],"until":["24h"]}`,
-		`volumes `,
-		`networks {"until":["24h"]}`,
+		`containers {"label!":["com.docker.compose.project=falak"],"until":["24h"]}`,
+		`images {"dangling":["false"],"label!":["com.docker.compose.project=falak"],"until":["24h"]}`,
+		`volumes {"label!":["com.docker.compose.project=falak"]}`,
+		`networks {"label!":["com.docker.compose.project=falak"],"until":["24h"]}`,
 		`build {"until":["24h"]}`,
 	}
 	if strings.Join(e.prunes, "|") != strings.Join(want, "|") {
+		t.Fatalf("prunes %q", e.prunes)
+	}
+	t.Setenv("FALAK_PROJECT_NAME", "falakcp")
+	e.prunes = nil
+	exec1(t, s, "docker.prune", map[string]any{"images": "none", "networks": false})
+	if strings.Join(e.prunes, "|") != `containers {"label!":["com.docker.compose.project=falakcp"]}` {
 		t.Fatalf("prunes %q", e.prunes)
 	}
 }

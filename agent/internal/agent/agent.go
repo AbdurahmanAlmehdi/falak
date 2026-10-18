@@ -31,6 +31,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/fngateway"
 	"github.com/OthmanHaba/falak/agent/internal/functions"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/metrics"
 	"github.com/OthmanHaba/falak/agent/internal/netcfg"
 	"github.com/OthmanHaba/falak/agent/internal/netobs"
@@ -114,6 +115,12 @@ func Build(d Deps) *Components {
 	}
 	reg := commands.NewRegistry()
 	sink := d.Telemetry.Sink()
+	// On the control-plane machine docker workloads run under the capped workload slice (falak-ctl's local-edge.env).
+	if l, err := localedge.Load(d.FS, localedge.Path); err != nil {
+		log.Warn("local-edge.env ignored", "err", err)
+	} else if l.WorkloadSlice != "" {
+		docker.WorkloadSlice = l.WorkloadSlice
+	}
 
 	// Programs' and cron jobs' secret env variables live on the tmpfs, never in their state files.
 	// Programs with limits run in their slices (falak-<key>.slice), converged by proc.apply.

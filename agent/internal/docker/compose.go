@@ -20,6 +20,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/envlinks"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
+	"gopkg.in/yaml.v3"
 )
 
 // ---- docker.compose.* (docker compose CLI for up/pull/down; the Engine API for ps/restart) ----
@@ -226,12 +227,14 @@ func (s *Service) prepare(project, dir string, files []ComposeFile, envFile stri
 	}
 	args := []string{"compose", "-p", project}
 	envArg := envFile
+	var services []string
 	for _, f := range files {
 		if !strings.HasPrefix(f.Name, ".env") && f.Name != envFile {
 			if err := replaceFile(release, f.Name, []byte(f.Content), 0o640); err != nil {
 				return nil, err
 			}
 			args = append(args, "-f", f.Name)
+			services = append(services, composeServices(f.Content)...)
 			continue
 		}
 		// Env files hold secrets: on the tmpfs only (root, 0400); the release links to them, so `--env-file .env`
@@ -252,10 +255,46 @@ func (s *Service) prepare(project, dir string, files []ComposeFile, envFile stri
 			envArg = target
 		}
 	}
+	if WorkloadSlice != "" && len(services) > 0 {
+		if err := replaceFile(release, HostOverrideFile, hostOverride(services, WorkloadSlice), 0o640); err != nil {
+			return nil, err
+		}
+		args = append(args, "-f", HostOverrideFile)
+	}
 	if envArg != "" {
 		args = append(args[:3], append([]string{"--env-file", envArg}, args[3:]...)...)
 	}
 	return args, nil
+}
+
+// HostOverrideFile is the agent's own compose override, last of the -f files: this host's settings for every service
+// (today only cgroup_parent = WorkloadSlice on the control-plane machine).
+const HostOverrideFile = "compose.falak-host.yaml"
+
+// composeServices are the service names of one compose file; a file compose cannot parse yields none (compose itself
+// reports the error). ponytail: services pulled in through `include:` are not seen (and so not under the slice).
+func composeServices(content string) []string {
+	var doc struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if yaml.Unmarshal([]byte(content), &doc) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(doc.Services))
+	for name := range doc.Services {
+		out = append(out, name)
+	}
+	return out
+}
+
+// hostOverride renders the override (JSON is YAML) for the services, sorted and deduplicated.
+func hostOverride(services []string, slice string) []byte {
+	m := map[string]any{}
+	for _, s := range services {
+		m[s] = map[string]string{"cgroup_parent": slice}
+	}
+	b, _ := json.MarshalIndent(map[string]any{"services": m}, "", "  ")
+	return append(b, '\n')
 }
 
 // writeComposeEnv writes a compose env file to the tmpfs and returns its real path.

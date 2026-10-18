@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/OthmanHaba/falak/agent/internal/runner"
@@ -189,9 +191,35 @@ func (b *Builder) buildDocker(ctx context.Context, j *job) (*ImageResult, error)
 	var cmd runner.Cmd
 	if engine == "buildx" {
 		d.BuildxBuilder = BuildxBuilderName
-		if _, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: "docker", Args: []string{"buildx", "inspect", BuildxBuilderName}, Env: env}); err != nil {
-			if _, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: "docker", Args: []string{"buildx", "create", "--name", BuildxBuilderName, "--driver", "docker-container"}, Env: env, Stdout: j.out, Stderr: j.errw}); err != nil {
+		opts, err := buildxDriverOpts()
+		if err != nil {
+			return nil, err
+		}
+		// The BuildKit container runs outside falak-builder's own cgroup: its limits are driver options, fixed at
+		// creation. The options it was created with are kept beside the cache; a builder with others is recreated
+		// (keeping its state volume, the build cache).
+		stamp, want := filepath.Join(b.CacheDir, "buildx-driver-opts"), strings.Join(opts, "\n")
+		_, missing := runner.Check(ctx, b.Runner, runner.Cmd{Name: "docker", Args: []string{"buildx", "inspect", BuildxBuilderName}, Env: env})
+		if have, _ := os.ReadFile(stamp); missing == nil && string(have) != want {
+			j.logf("Recreating the buildx builder with new limits")
+			if _, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: "docker", Args: []string{"buildx", "rm", "--keep-state", BuildxBuilderName}, Env: env, Stdout: j.out, Stderr: j.errw}); err != nil {
+				return nil, fmt.Errorf("remove buildx builder: %w", err)
+			}
+			missing = errors.New("recreate")
+		}
+		if missing != nil {
+			args := []string{"buildx", "create", "--name", BuildxBuilderName, "--driver", "docker-container"}
+			for _, o := range opts {
+				args = append(args, "--driver-opt", o)
+			}
+			if _, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: "docker", Args: args, Env: env, Stdout: j.out, Stderr: j.errw}); err != nil {
 				return nil, fmt.Errorf("create buildx builder: %w", err)
+			}
+			if err := os.MkdirAll(b.CacheDir, 0o755); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(stamp, []byte(want), 0o644); err != nil {
+				return nil, err
 			}
 		}
 		cmd = runner.Cmd{Name: "docker", Args: d.BuildxArgs()}
@@ -225,6 +253,34 @@ func (b *Builder) buildDocker(ctx context.Context, j *job) (*ImageResult, error)
 		fmt.Fprintf(j.out, "image %s\n", img.Pinned)
 	}
 	return img, nil
+}
+
+// buildxDriverOpts are the BuildKit container's limits (docker-container driver options, buildx 0.12+) from
+// FALAK_BUILD_MEMORY_MB (no swap on top), FALAK_BUILD_CPUS (a CFS quota) and FALAK_BUILD_CGROUP_PARENT. None set =
+// none: the builder is created exactly as before.
+func buildxDriverOpts() ([]string, error) {
+	var opts []string
+	if v := os.Getenv("FALAK_BUILD_MEMORY_MB"); v != "" {
+		mb, err := strconv.Atoi(v)
+		if err != nil || mb < 64 {
+			return nil, fmt.Errorf("FALAK_BUILD_MEMORY_MB %q: a whole number of MB, at least 64", v)
+		}
+		opts = append(opts, fmt.Sprintf("memory=%dm", mb), fmt.Sprintf("memory-swap=%dm", mb))
+	}
+	if v := os.Getenv("FALAK_BUILD_CPUS"); v != "" {
+		cpus, err := strconv.ParseFloat(v, 64)
+		if err != nil || cpus < 0.01 || cpus > 1024 {
+			return nil, fmt.Errorf("FALAK_BUILD_CPUS %q: a number of CPUs", v)
+		}
+		opts = append(opts, "cpu-period=100000", "cpu-quota="+strconv.Itoa(int(math.Round(cpus*100000))))
+	}
+	if v := os.Getenv("FALAK_BUILD_CGROUP_PARENT"); v != "" {
+		if strings.ContainsAny(v, ", \t\n=\"") {
+			return nil, fmt.Errorf("FALAK_BUILD_CGROUP_PARENT %q: not a cgroup or slice name", v)
+		}
+		opts = append(opts, "cgroup-parent="+v)
+	}
+	return opts, nil
 }
 
 func suffix(s string) string {

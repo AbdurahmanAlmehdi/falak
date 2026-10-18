@@ -59,7 +59,8 @@ func TestServePollsAndPostsEvents(t *testing.T) {
 	defer srv.Close()
 	f := &runnertest.Fake{}
 	fakeGit(t, f, filepath.Join(fixtures, "static"))
-	s := &Server{URL: srv.URL, Token: "bt_123", Name: "b1", Once: true, Idle: 10 * time.Millisecond, Builder: newBuilder(t, f), HTTP: srv.Client()}
+	s := &Server{URL: srv.URL, Token: "bt_123", Name: "b1", Once: true, Idle: 10 * time.Millisecond, Builder: newBuilder(t, f), HTTP: srv.Client(),
+		DiskSpace: func(string) (uint64, uint64, error) { return 50 << 30, 100 << 30, nil }}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := s.Run(ctx); err != nil {

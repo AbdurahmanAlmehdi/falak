@@ -68,6 +68,13 @@ func TestCollect(t *testing.T) {
 			t.Fatalf("missing %s", k)
 		}
 	}
+	if _, ok := m["local_edge"]; ok || f.LocalEdge {
+		t.Fatal("local_edge without local-edge.env")
+	}
+	write(t, root, "/etc/falak/local-edge.env", "FALAK_LOCAL_EDGE=1\nFALAK_LOCAL_EDGE_ADDR=172.17.0.1\nFALAK_LOCAL_EDGE_TRUST=172.30.0.0/16\n")
+	if f, _ = Collect(context.Background(), fr, hostfs.FS{Root: root}, "v1.0.0"); !f.LocalEdge {
+		t.Fatal("local_edge not reported")
+	}
 }
 
 // routeTable renders /proc/net/route with default routes via the given interfaces (metric in order).

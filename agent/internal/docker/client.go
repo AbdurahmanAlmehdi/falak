@@ -532,7 +532,15 @@ type HostConfig struct {
 	SecurityOpt    []string          `json:"SecurityOpt,omitempty"`
 	PidsLimit      int64             `json:"PidsLimit,omitempty"`
 	AutoRemove     bool              `json:"AutoRemove,omitempty"`
+	// CgroupParent is WorkloadSlice on the control-plane machine (set by ContainerCreate).
+	CgroupParent string `json:"CgroupParent,omitempty"`
 }
+
+// WorkloadSlice is the systemd slice every container the agent creates (and every compose service) is put under:
+// FALAK_WORKLOAD_SLICE of local-edge.env on the control-plane machine, whose falak.slice caps workloads so they can
+// never starve the panel. Empty elsewhere: Docker's default. Set once at agent start (agent.Build).
+// ponytail: a package variable, not a Client field, because a dozen executors build their own Client.
+var WorkloadSlice string
 
 // Mount is a bind mount.
 type Mount struct {
@@ -558,6 +566,9 @@ type RestartPolicy struct {
 func (c *Client) ContainerCreate(ctx context.Context, name string, body CreateBody) (string, error) {
 	var out struct {
 		ID string `json:"Id"`
+	}
+	if body.HostConfig.CgroupParent == "" {
+		body.HostConfig.CgroupParent = WorkloadSlice
 	}
 	_, err := c.do(ctx, http.MethodPost, "/containers/create", url.Values{"name": {name}}, body, &out)
 	return out.ID, err

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/logs"
 )
 
@@ -34,6 +35,9 @@ type Payload struct {
 	// CaddyBuild is Falak's Caddy build with the rate_limit module, for this server's architecture (feature
 	// edge.rate_limit): only sent with rate limits, installed only when the edge's Caddy lacks the module.
 	CaddyBuild *CaddyBuild `json:"caddy_build,omitempty"`
+	// LocalEdge is this host's /etc/falak/local-edge.env (set by the agent, never sent): on the control-plane machine
+	// the edge listens behind the control plane's edge instead of on 80/443.
+	LocalEdge localedge.Config `json:"-"`
 }
 
 // CaddyBuild is a Caddy binary to download, checked against its SHA-256.
@@ -302,8 +306,13 @@ func Render(p Payload, certDir string) (obj, error) {
 		}
 	}
 	servers := obj{}
+	local := p.LocalEdge
 	if len(tlsRoutes) > 0 {
 		srv := obj{"listen": []any{":443"}, "routes": tlsRoutes}
+		if local.Enabled {
+			srv["listen"] = []any{local.HTTPSListen()}
+			behindLocalEdge(srv, local, true)
+		}
 		trustProxies(srv, p.TrustedProxies)
 		if len(skipCerts) > 0 {
 			srv["automatic_https"] = obj{"skip_certificates": toAny(skipCerts)}
@@ -313,18 +322,33 @@ func Render(p Payload, certDir string) (obj, error) {
 		}
 		servers["falak"] = srv
 	}
-	if len(plainRoutes) > 0 {
-		// Caddy adds its HTTP→HTTPS redirects for TLS sites to this existing :80 server.
+	// Caddy adds its HTTP→HTTPS redirects for TLS sites to this existing :80 server. Behind the local edge it always
+	// exists: the server Caddy would create for the redirects otherwise has no PROXY protocol wrapper and listens on
+	// every address. The redirects carry no port (the TLS server listens on https_port, see Caddy's makeRedirRoute)
+	// and every server answers ACME HTTP-01 challenges before its routes.
+	if len(plainRoutes) > 0 || local.Enabled {
 		srv := obj{"listen": []any{":80"}, "routes": plainRoutes}
+		if local.Enabled {
+			srv["listen"] = []any{local.HTTPListen()}
+			if plainRoutes == nil {
+				srv["routes"] = []any{}
+			}
+			behindLocalEdge(srv, local, false)
+		}
 		trustProxies(srv, p.TrustedProxies)
 		if len(plainLoggers) > 0 {
 			srv["logs"] = serverLogs(plainLoggers)
 		}
 		servers["falak_http"] = srv
 	}
+	httpApp := obj{"servers": servers}
+	if local.Enabled {
+		// ACME's HTTP-01 / TLS-ALPN-01 solvers and the automatic redirects use these instead of 80/443.
+		httpApp["http_port"], httpApp["https_port"] = local.HTTPPort, local.HTTPSPort
+	}
 	cfg := obj{
 		"admin": obj{"listen": AdminListen},
-		"apps":  obj{"http": obj{"servers": servers}},
+		"apps":  obj{"http": httpApp},
 	}
 	if len(accessLogs) > 0 {
 		cfg["logging"] = accessLogging(accessLogs)
@@ -365,6 +389,18 @@ func Render(p Payload, certDir string) (obj, error) {
 		cfg["apps"].(obj)["tls"] = tlsApp
 	}
 	return cfg, nil
+}
+
+// behindLocalEdge reads the PROXY protocol header of the control plane's edge before TLS (honoured only from its
+// network; anyone else sending one is refused), so client IPs are the visitors'. HTTP/3 is off: it would advertise a
+// UDP port the control plane's edge does not forward.
+func behindLocalEdge(srv obj, c localedge.Config, tls bool) {
+	wrappers := []any{obj{"wrapper": "proxy_protocol", "allow": []any{c.Trust}, "fallback_policy": "reject"}}
+	if tls {
+		wrappers = append(wrappers, obj{"wrapper": "tls"})
+	}
+	srv["listener_wrappers"] = wrappers
+	srv["protocols"] = []any{"h1", "h2"}
 }
 
 func siteRoutes(s Site, requestID bool) ([]any, error) {
