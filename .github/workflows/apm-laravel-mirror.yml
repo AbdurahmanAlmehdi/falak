@@ -1,0 +1,46 @@
+# Packagist can't read a package from a subfolder, so falak/apm-laravel is served from a mirror repo:
+# github.com/OthmanHaba/falak-apm-laravel. Push a tag apm-laravel-vX.Y.Z here and this copies
+# packages/apm-laravel at that commit to the mirror's main and tags it vX.Y.Z; Packagist picks the tag up.
+# Secret APM_LARAVEL_MIRROR_KEY: private half of a deploy key with write access on the mirror.
+name: apm-laravel-mirror
+
+on:
+  push:
+    tags: ['apm-laravel-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apm-laravel-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Push to the mirror
+        env:
+          DEPLOY_KEY: ${{ secrets.APM_LARAVEL_MIRROR_KEY }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#apm-laravel-}"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "bad tag $GITHUB_REF_NAME"; exit 1; }
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/mirror && chmod 600 ~/.ssh/mirror
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/mirror -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+          git clone git@github.com:OthmanHaba/falak-apm-laravel.git mirror
+          find mirror -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          git archive HEAD:packages/apm-laravel | tar -x -C mirror
+
+          cd mirror
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --quiet || git commit -m "falak/apm-laravel $version (from OthmanHaba/falak@${GITHUB_SHA::7})"
+          git tag -a "$version" -m "falak/apm-laravel $version"
+          git push origin main "refs/tags/$version"
