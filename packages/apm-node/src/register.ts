@@ -1,9 +1,9 @@
 /**
  * Side-effect entry point:
  *
- *   node --import @falak/apm-node/register server.js
+ *   node --import @othmanhaba/apm-node/register server.js
  *   // or first line of your entry file:
- *   import '@falak/apm-node/register';
+ *   import '@othmanhaba/apm-node/register';
  *
  * Configured entirely from FALAK_* / OTEL_* environment variables.
  */

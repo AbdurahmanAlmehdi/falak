@@ -8,7 +8,7 @@ Self-hosted server management, deployment and observability — a replacement fo
 | `control-plane/` | Laravel 12 **modular monolith** (17 modules under `modules/`) + Inertia React TypeScript UI |
 | `agent/` | Go: `falak-agent` (servers, ~10 MB, ~17 MB RAM), `falak` (CLI), `falak-builder` (build worker) |
 | `packages/apm-laravel` | `falak/apm-laravel` — Nightwatch-equivalent instrumentation (Laravel 12/13) |
-| `packages/apm-node` | `@falak/apm-node` — OpenTelemetry preset for Node/Bun/Deno/TypeScript apps |
+| `packages/apm-node` | `@othmanhaba/apm-node` — OpenTelemetry preset for Node/Bun/Deno/TypeScript apps |
 | `observability/` | Loki + Tempo + Grafana + VictoriaMetrics **or** Mimir, dashboards, alert rules |
 | `contracts/` | Agent protocol + telemetry contract (JSON Schemas shared by PHP and Go) |
 | `sim/` | Local end-to-end simulation: control plane + 3 Ubuntu 24.04 "servers" + builder + git + LGTM |
@@ -237,7 +237,7 @@ records follow your domains, new services get names under your zone, and service
 ### Instrument your apps (APM)
 - Laravel: require `falak/apm-laravel` — auto-discovered; sends requests, queries, jobs, mail,
   notifications, cache, commands, scheduled tasks, outgoing HTTP, exceptions and logs to the local agent.
-- Node/Bun/Deno: `import '@falak/apm-node/register'` (see `packages/apm-node/README.md`).
+- Node/Bun/Deno: `import '@othmanhaba/apm-node/register'` (see `packages/apm-node/README.md`).
 
 Issues, thresholds and missed scheduled runs appear under **Insights**; traces, logs and metrics in
 Grafana (dashboards are provisioned per organization).

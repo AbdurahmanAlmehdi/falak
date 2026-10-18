@@ -1,7 +1,7 @@
 {
   "uid": "falak-node",
   "title": "Falak / Node app",
-  "description": "@falak/apm-node: HTTP span metrics + Node runtime metrics (OTel nodejs.* / v8js.* conventions).",
+  "description": "@othmanhaba/apm-node: HTTP span metrics + Node runtime metrics (OTel nodejs.* / v8js.* conventions).",
   "tags": [
     "falak",
     "node",

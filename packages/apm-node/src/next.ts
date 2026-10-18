@@ -2,7 +2,7 @@
  * Next.js helper. In `instrumentation.ts` at the project root:
  *
  *   export async function register() {
- *     const { registerFalak } = await import('@falak/apm-node/next');
+ *     const { registerFalak } = await import('@othmanhaba/apm-node/next');
  *     await registerFalak();
  *   }
  *

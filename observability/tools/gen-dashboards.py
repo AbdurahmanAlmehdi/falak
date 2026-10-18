@@ -7,7 +7,7 @@ Series/label names follow observability/README.md ("Metric & label contract"):
   * span metrics from Tempo's metrics-generator: traces_spanmetrics_{calls_total,latency_bucket}
     with labels service, span_name, span_kind, status_code + the falak.* / http.* dimensions
     (dots -> underscores, e.g. falak_event_type, http_route, falak_site_id).
-  * host / container / runtime metrics from falak-agent and @falak/apm-node, OTel semantic
+  * host / container / runtime metrics from falak-agent and @othmanhaba/apm-node, OTel semantic
     conventions translated with Prometheus naming (unit suffixes, _total).
 """
 import json
@@ -310,7 +310,7 @@ def node():
     ]
     V = [var_query("site", "Site", f'label_values({CALLS}{{falak_event_type="request"}}, falak_site_id)')]
     return dashboard("falak-node", "Falak / Node app", ["node", "site"], P, V, DEPLOY_ANNOTATIONS,
-                     desc="@falak/apm-node: HTTP span metrics + Node runtime metrics (OTel nodejs.* / v8js.* conventions).")
+                     desc="@othmanhaba/apm-node: HTTP span metrics + Node runtime metrics (OTel nodejs.* / v8js.* conventions).")
 
 
 # --------------------------------------------------------------------------- Deployments

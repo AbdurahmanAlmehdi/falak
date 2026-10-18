@@ -2,7 +2,7 @@
  * Nuxt / Nitro plugin.
  *
  *   // server/plugins/falak.ts
- *   import falak from '@falak/apm-node/nitro';
+ *   import falak from '@othmanhaba/apm-node/nitro';
  *   export default defineNitroPlugin(falak);
  *
  * Starts the SDK (if not started via --import), opens a SERVER span per request when no

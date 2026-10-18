@@ -166,7 +166,7 @@ still stored as traces), so the agent should not hold spans longer than that bef
 `container.memory.usage` (By), `container.memory.limit` (By), `container.network.io` (By, sum)
 with `container.name` and `network.io.direction`.
 
-**Node runtime** (`@falak/apm-node`, OTel runtime-node conventions):
+**Node runtime** (`@othmanhaba/apm-node`, OTel runtime-node conventions):
 `nodejs.eventloop.delay.p50|p99` (s), `nodejs.eventloop.utilization` (1),
 `v8js.memory.heap.used` (By, `v8js.heap.space.name`).
 

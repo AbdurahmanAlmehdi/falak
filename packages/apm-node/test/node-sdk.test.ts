@@ -13,7 +13,7 @@ beforeAll(() => {
   }
 });
 
-describe('Node.js: import "@falak/apm-node/register" (NodeSDK + auto-instrumentation)', () => {
+describe('Node.js: import "@othmanhaba/apm-node/register" (NodeSDK + auto-instrumentation)', () => {
   test('http server + undici fetch spans are mapped, linked and exported to the agent', async () => {
     const agent = await fakeOtlpServer();
 

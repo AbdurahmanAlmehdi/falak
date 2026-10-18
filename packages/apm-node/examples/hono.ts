@@ -1,7 +1,7 @@
 // Hono on Bun / Deno / Node: wrap app.fetch.
 // @ts-nocheck — hono is not a dependency of this package
 import { Hono } from 'hono';
-import { start, withFalakRequest } from '@falak/apm-node';
+import { start, withFalakRequest } from '@othmanhaba/apm-node';
 
 start();
 

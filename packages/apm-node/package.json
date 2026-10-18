@@ -1,8 +1,17 @@
 {
-  "name": "@falak/apm-node",
+  "name": "@othmanhaba/apm-node",
   "version": "0.1.0",
   "description": "Falak APM for Node.js, Bun and Deno: an OpenTelemetry preset that exports Nightwatch-style request, outgoing request, query, cache and exception telemetry to the local falak-agent.",
   "license": "Apache-2.0",
+  "homepage": "https://falak.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OthmanHaba/falak.git",
+    "directory": "packages/apm-node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"

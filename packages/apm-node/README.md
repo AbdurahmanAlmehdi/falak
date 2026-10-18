@@ -1,11 +1,11 @@
-# @falak/apm-node
+# @othmanhaba/apm-node
 
 Falak APM for **Node.js 20+, Bun and Deno**. It is a thin preset over the official OpenTelemetry JS SDK. It exports traces, logs and metrics as OTLP/HTTP JSON to the local `falak-agent` (`http://127.0.0.1:4318`). Spans are normalised to the [Falak telemetry contract](../../contracts/telemetry/README.md) (`falak.event.type` = `request` / `outgoing_request` / `query` / `cache`).
 
 ## Install
 
 ```bash
-npm i @falak/apm-node      # or: bun add @falak/apm-node / pnpm add @falak/apm-node
+npm i @othmanhaba/apm-node      # or: bun add @othmanhaba/apm-node / pnpm add @othmanhaba/apm-node
 ```
 
 ## Node.js
@@ -13,18 +13,18 @@ npm i @falak/apm-node      # or: bun add @falak/apm-node / pnpm add @falak/apm-n
 Load it before your app so that auto-instrumentation can patch modules as they are imported:
 
 ```bash
-node --import @falak/apm-node/register server.js
-# or: NODE_OPTIONS="--import @falak/apm-node/register"
+node --import @othmanhaba/apm-node/register server.js
+# or: NODE_OPTIONS="--import @othmanhaba/apm-node/register"
 ```
 
-You can also put `import '@falak/apm-node/register';` on the first line of the entry file. That covers CommonJS modules and Node built-ins. Use `--import` when the app loads `pg`/`express`/… through ESM `import`.
+You can also put `import '@othmanhaba/apm-node/register';` on the first line of the entry file. That covers CommonJS modules and Node built-ins. Use `--import` when the app loads `pg`/`express`/… through ESM `import`.
 
 Auto-instrumented: `http`/`https` (incoming and outgoing), `undici`/global `fetch`, `pg`, `mysql2`, `ioredis`, `express` and `fastify`. Each instrumentation turns on only when its module is loaded.
 
 Programmatic setup:
 
 ```ts
-import { start, shutdown } from '@falak/apm-node';
+import { start, shutdown } from '@othmanhaba/apm-node';
 
 start({ serviceName: 'shop', sampleRate: 0.5, redactKeys: ['password', 'token', 'ssn'] });
 process.on('SIGTERM', () => shutdown().finally(() => process.exit(0)));
@@ -36,7 +36,7 @@ process.on('SIGTERM', () => shutdown().finally(() => process.exit(0)));
 
 ```ts
 export async function register() {
-  const { registerFalak } = await import('@falak/apm-node/next');
+  const { registerFalak } = await import('@othmanhaba/apm-node/next');
   await registerFalak();
 }
 ```
@@ -47,7 +47,7 @@ Only the Node.js runtime is instrumented. Next's own spans are exported and mapp
 
 ```ts
 // server/plugins/falak.ts
-import falak from '@falak/apm-node/nitro';
+import falak from '@othmanhaba/apm-node/nitro';
 export default defineNitroPlugin(falak);
 ```
 
@@ -58,7 +58,7 @@ The plugin starts the SDK and records errors from Nitro's `error` hook as unhand
 Node's auto-instrumentation does not hook `Bun.serve` or `Deno.serve`. On those runtimes `start()` uses a lightweight tracer provider with the same exporters, and you wrap your handler:
 
 ```ts
-import { start, withFalakRequest, setUser, recordException } from '@falak/apm-node';
+import { start, withFalakRequest, setUser, recordException } from '@othmanhaba/apm-node';
 
 start();
 
@@ -76,7 +76,7 @@ The wrapper continues an incoming `traceparent`. It records thrown errors as `fa
 ## Exceptions
 
 ```ts
-import { recordException } from '@falak/apm-node';
+import { recordException } from '@othmanhaba/apm-node';
 
 try { await charge(); } catch (e) { recordException(e); /* handled=true, span status untouched */ }
 recordException(err, { handled: false }); // span → ERROR

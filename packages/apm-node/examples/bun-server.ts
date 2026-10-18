@@ -1,5 +1,5 @@
 // bun run examples/bun-server.ts
-import { recordException, start, withFalakRequest } from '@falak/apm-node';
+import { recordException, start, withFalakRequest } from '@othmanhaba/apm-node';
 
 start(); // Bun: lightweight provider (no Node auto-instrumentation)
 

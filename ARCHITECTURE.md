@@ -21,7 +21,7 @@ infra-deployment/
 ├── agent/                       ← Go: `falak-agent` (servers) + `falak` (CLI) + `falak-builder`
 ├── packages/
 │   ├── apm-laravel/             ← `falak/apm-laravel` Composer package (Nightwatch-equivalent)
-│   └── apm-node/                ← `@falak/apm-node` TS package (OTel preset for Node/Bun/Deno)
+│   └── apm-node/                ← `@othmanhaba/apm-node` TS package (OTel preset for Node/Bun/Deno)
 ├── observability/               ← Loki, Tempo, Grafana, VictoriaMetrics|Mimir configs, dashboards, alert rules
 └── sim/                         ← docker compose E2E simulation (control plane + fake Ubuntu servers + LGTM)
 ```
@@ -191,7 +191,7 @@ Deploy script macros: `$FALAK_FETCH`, `$FALAK_ACTIVATE`, `$FALAK_RESTART_PROCS`;
 ## 6. Observability
 
 ```
-app ─(falak/apm-laravel | @falak/apm-node)─► unix:/run/falak/otlp.sock ─┐
+app ─(falak/apm-laravel | @othmanhaba/apm-node)─► unix:/run/falak/otlp.sock ─┐
 host metrics / logs / container logs ──────────────────────────────────┤ falak-agent (batch, retry, disk buffer)
                                                                         └─► OTLP/HTTP ─► Loki · Tempo · VictoriaMetrics|Mimir ─► Grafana
                                                      exceptions/breaches ─► control plane Insights

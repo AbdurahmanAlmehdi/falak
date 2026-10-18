@@ -130,7 +130,7 @@ func TestMetricsAlwaysExportedAsProtobuf(t *testing.T) {
 		return false
 	}
 
-	// 1. JSON in (e.g. @falak/apm-node) → protobuf out.
+	// 1. JSON in (e.g. @othmanhaba/apm-node) → protobuf out.
 	post("application/json", jsonMetrics)
 	waitFor(t, "JSON-ingested metric exported", func() bool { return has("queue.depth") })
 

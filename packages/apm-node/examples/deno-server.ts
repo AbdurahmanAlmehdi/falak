@@ -1,6 +1,6 @@
 // deno run --allow-net --allow-env examples/deno-server.ts
 // @ts-nocheck — Deno globals / npm: specifiers
-import { start, withFalakRequest } from 'npm:@falak/apm-node';
+import { start, withFalakRequest } from 'npm:@othmanhaba/apm-node';
 
 start();
 
