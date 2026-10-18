@@ -1897,6 +1897,7 @@ ManagedOOMPreference=avoid" && changed=1
 [Slice]
 MemoryMax=${work}M
 MemoryHigh=$((work * 95 / 100))M
+MemorySwapMax=0
 CPUQuota=$((cpus * 100))%
 CPUWeight=100
 IOWeight=50

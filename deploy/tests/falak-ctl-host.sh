@@ -295,7 +295,7 @@ grep -q 'up -d --wait --wait-timeout 120 --no-deps edge builder' "$work/compose-
 grep -q -- '--retry 10 --retry-connrefused --retry-all-errors --retry-delay 2' "$work/edge-curl" || fail "install script fetch retries: $(cat "$work/edge-curl")"
 [ -f "$work/enrolled" ] || fail "the install script did not run"
 cap="$S/falak.slice.d/50-host-cap.conf"
-grep -qx 'MemoryMax=6656M' "$cap" && grep -qx 'MemoryHigh=6323M' "$cap" && grep -qx 'CPUQuota=300%' "$cap" && grep -qx 'CPUWeight=100' "$cap" \
+grep -qx 'MemoryMax=6656M' "$cap" && grep -qx 'MemoryHigh=6323M' "$cap" && grep -qx 'MemorySwapMax=0' "$cap" && grep -qx 'CPUQuota=300%' "$cap" && grep -qx 'CPUWeight=100' "$cap" \
   && grep -qx 'IOWeight=50' "$cap" && grep -qx "TasksMax=$(workload_tasks_max)" "$cap" || fail "cap: $(cat "$cap")"
 [[ "$(workload_tasks_max)" =~ ^[0-9]+$ ]] && [ "$(workload_tasks_max)" -ge 800 ] || fail "TasksMax $(workload_tasks_max)"
 dropin="$S/falak-edge.service.d/10-local-edge.conf"
