@@ -79,27 +79,104 @@ func TestComposeHostOverride(t *testing.T) {
 func TestComposeRefusedOnTheControlPlaneHost(t *testing.T) {
 	asControlPlaneHost(t, "falak.slice")
 	files := []ComposeFile{{Name: "compose.yaml", Content: "services: {}\n"}}
-	for name, cfg := range map[string]string{
-		"network_mode host": `{"services":{"web":{"image":"nginx","network_mode":"host"}}}`,
-		"pid host":          `{"services":{"web":{"image":"nginx","pid":"host"}}}`,
-		"privileged":        `{"services":{"web":{"image":"nginx","privileged":true}}}`,
-		"exit":              ``,
+	svc := func(s string) string { return `{"services":{"web":{"image":"nginx",` + s + `}}}` }
+	for _, tc := range []struct{ name, cfg string }{
+		{"network_mode host", svc(`"network_mode":"host"`)},
+		{"pid host", svc(`"pid":"host"`)},
+		{"ipc host", svc(`"ipc":"host"`)},
+		{"userns_mode host", svc(`"userns_mode":"host"`)},
+		{"cgroup host", svc(`"cgroup":"host"`)},
+		{"privileged", svc(`"privileged":true`)},
+		{"devices", svc(`"devices":[{"source":"/dev/kvm","target":"/dev/kvm","permissions":"rwm"}]`)},
+		{"cap_add SYS_ADMIN", svc(`"cap_add":["NET_BIND_SERVICE","SYS_ADMIN"]`)},
+		{"security_opt seccomp=unconfined", svc(`"security_opt":["seccomp=unconfined"]`)},
+		{"security_opt apparmor:unconfined", svc(`"security_opt":["apparmor:unconfined"]`)},
+		// The control plane's networks: by compose name, by an explicit name labelled with its project, external.
+		{"network falak_backend (the control plane's)", `{"services":{"web":{"networks":{"b":null}}},"networks":{"b":{"name":"falak_backend","external":true}}}`},
+		{"network cp-explicit (the control plane's)", `{"services":{"web":{"networks":{"b":null}}},"networks":{"b":{"name":"cp-explicit"}}}`},
+		{"volume falak_pg-data (the control plane's)", `{"services":{"web":{"volumes":[{"type":"volume","source":"pg","target":"/d"}]}},"volumes":{"pg":{"name":"falak_pg-data","external":true}}}`},
+		{"network_mode of container falak-db-1 (the control plane's)", svc(`"network_mode":"container:falak-db-1"`)},
+		{"volumes_from of container falak-db-1 (the control plane's)", svc(`"volumes_from":["container:falak-db-1:ro"]`)},
+		{"bind mount of /var/run/docker.sock", svc(`"volumes":[{"type":"bind","source":"/var/run/docker.sock","target":"/s"}]`)},
+		{"bind mount of /", svc(`"volumes":[{"type":"bind","source":"/","target":"/h"}]`)},
+		{"bind mount of /run", svc(`"volumes":[{"type":"bind","source":"/run","target":"/h"}]`)},
+		{"bind mount of /opt/falak/state", svc(`"volumes":[{"type":"bind","source":"/opt/falak/state","target":"/h"}]`)},
+		{"bind mount of /proc/1/root", svc(`"volumes":[{"type":"bind","source":"/proc/1/root","target":"/h"}]`)},
+		{"bind mount of /srv/r/link", svc(`"volumes":[{"type":"bind","source":"/srv/r/link","target":"/h"}]`)},
+		{"bind mount of /srv/r/dangling (through an unresolvable symlink)", svc(`"volumes":[{"type":"bind","source":"/srv/r/dangling","target":"/h"}]`)},
+		{"name falak_x (the control plane's project)", ``},
+		{"exit", ``},
 	} {
+		name, cfg := tc.name, tc.cfg
 		t.Run(name, func(t *testing.T) {
-			s, _, fr, _, _ := newSvc(t)
+			s, e, fr, _, root := newSvc(t)
+			e.networks["falak_backend"], e.networks["cp-explicit"] = nil, nil
+			e.networkLabels = map[string]map[string]string{"cp-explicit": {LabelComposeProject: "falak"}}
+			addComposeContainer(e, "falak", "db", "postgres:17", "sha256:pg")
+			// A link a container planted in the release directory, and one to a path that does not exist yet.
+			os.MkdirAll(filepath.Join(root, "srv/r"), 0o755)
+			os.MkdirAll(filepath.Join(root, "etc"), 0o755)
+			os.Symlink("/etc", filepath.Join(root, "srv/r/link"))
+			os.Symlink("/etc/new", filepath.Join(root, "srv/r/dangling"))
+			project := "shop"
+			if strings.HasPrefix(name, "name falak_x") {
+				project, cfg = "falak_x", `{"services":{}}`
+			}
 			res := runner.Result{Stdout: []byte(cfg)}
 			if cfg == "" {
 				res = runner.Result{ExitCode: 1, Stderr: []byte("invalid compose file")}
 			}
-			fr.On("docker compose -p shop -f compose.yaml config", res)
-			fin, _ := exec1(t, s, "docker.compose.up", ComposeUpPayload{Project: "shop", Directory: "/srv/r", Files: files})
-			if fin.Error == "" || fr.Ran("docker compose -p shop -f compose.yaml up") {
+			fr.On("docker compose -p "+project+" -f compose.yaml config", res)
+			fin, _ := exec1(t, s, "docker.compose.up", ComposeUpPayload{Project: project, Directory: "/srv/r", Files: files})
+			if fin.Error == "" || fr.Ran("docker compose -p "+project+" -f compose.yaml up") {
 				t.Fatalf("deployed: %+v %v", fin, fr.Lines())
 			}
 			if cfg != "" && !strings.Contains(fin.Error, name+" is not allowed on the control-plane machine") {
 				t.Fatalf("error %q", fin.Error)
 			}
 		})
+	}
+}
+
+// What stays allowed: safe capabilities, the project's own networks and volumes, binds under its directory, a
+// sibling service's namespace.
+func TestComposeAllowedOnTheControlPlaneHost(t *testing.T) {
+	asControlPlaneHost(t, "falak.slice")
+	s, e, fr, _, _ := newSvc(t)
+	e.networks["falak_backend"] = nil
+	cfg := `{"services":{"web":{"cap_add":["NET_BIND_SERVICE","CAP_CHOWN"],"security_opt":["no-new-privileges:true"],` +
+		`"networks":{"default":null},"volumes":[{"type":"bind","source":"/srv/r/data","target":"/d"},{"type":"volume","source":"db","target":"/v"},` +
+		`{"type":"volume","target":"/anon"}]},"side":{"network_mode":"service:web","volumes_from":["web"]}},` +
+		`"networks":{"default":{"name":"shop_default"}},"volumes":{"db":{"name":"shop_db"}}}`
+	fr.On("docker compose -p shop -f compose.yaml config", runner.Result{Stdout: []byte(cfg)})
+	fin, _ := exec1(t, s, "docker.compose.up", ComposeUpPayload{Project: "shop", Directory: "/srv/r", Files: []ComposeFile{{Name: "compose.yaml", Content: "services: {}\n"}}})
+	if fin.Error != "" || !fr.Ran("docker compose -p shop -f compose.yaml -f ") {
+		t.Fatalf("%+v %v", fin, fr.Lines())
+	}
+}
+
+func TestDockerSiteRefusedOnTheControlPlaneHost(t *testing.T) {
+	asControlPlaneHost(t, "falak.slice")
+	s, e, _, _, _ := newSvc(t)
+	e.networks["falak_backend"] = nil
+	addComposeContainer(e, "falak", "db", "postgres:17", "sha256:pg")
+	for want, p := range map[string]RunPayload{
+		"network mode host": {Network: "host"},
+		"network mode of container falak-db-1 (the control plane's)": {Network: "container:falak-db-1"},
+		"network falak_backend (the control plane's)":                {Networks: []NetworkJoin{{Name: "falak_backend"}}},
+		"network falak_edge (the control plane's)":                   {Network: "falak_edge"},
+		"bind mount of /var/lib/docker/volumes":                      {Volumes: []VolumeSpec{{Source: "/var/lib/docker/volumes", Target: "/v"}}},
+		"volume falak_pg-data (the control plane's)":                 {Volumes: []VolumeSpec{{Source: "falak_pg-data", Target: "/v"}}},
+	} {
+		p.Name, p.Image = "site-x", "nginx:1"
+		fin, _ := exec1(t, s, "docker.run", p)
+		if !strings.Contains(fin.Error, want+" is not allowed on the control-plane machine") {
+			t.Errorf("%s: %q", want, fin.Error)
+		}
+	}
+	fin, _ := exec1(t, s, "docker.run", RunPayload{Name: "site-ok", Image: "nginx:1", Volumes: []VolumeSpec{{Source: "/srv/falak/sites/x/data", Target: "/d"}}})
+	if fin.Error != "" {
+		t.Fatalf("allowed site refused: %s", fin.Error)
 	}
 }
 

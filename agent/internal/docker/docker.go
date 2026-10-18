@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -305,8 +304,8 @@ func (s *Service) run(ctx context.Context, p RunPayload, st commands.Stream) (an
 	if err := p.Limits.validate(); err != nil {
 		return nil, &commands.PayloadError{Err: err}
 	}
-	if err := hostNamespaceAllowed(p.Name, p.Network); err != nil {
-		return nil, &commands.PayloadError{Err: err} // before the current container is replaced
+	if err := s.checkSite(ctx, p.Name, p.Network, p.Networks, p.Volumes); err != nil {
+		return nil, err // before the current container is replaced
 	}
 	id, changed, err := s.ensureContainer(ctx, p, st)
 	return RunResult{Changed: changed, ContainerID: id}, err
@@ -480,14 +479,7 @@ func (s *Service) prune(ctx context.Context, p PrunePayload, st commands.Stream)
 	// Never the control plane's own stack (the control-plane machine as a server): its containers, images, volumes and
 	// networks carry its compose project label. A stopped panel mid-update must not lose its volumes. The build cache
 	// has no label filter (it is only cache).
-	cp := Local.ProjectName // local-edge.env first, then the agent's environment
-	if cp == "" {
-		cp = os.Getenv("FALAK_PROJECT_NAME")
-	}
-	if cp == "" {
-		cp = "falak"
-	}
-	notCP := []string{LabelComposeProject + "=" + cp}
+	notCP := []string{LabelComposeProject + "=" + cpProject()}
 	until := func() map[string][]string {
 		f := map[string][]string{"label!": notCP}
 		if p.Until != "" {

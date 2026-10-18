@@ -265,8 +265,8 @@ func (s *Service) HostOverrideFile(project string) string {
 }
 
 // localCompose runs on the control-plane machine before `up`. It resolves the project exactly as `up` will (compose
-// config: include, extends, profiles, interpolation), refuses services sharing the host's network or PID namespace or
-// running privileged, and puts every service under the workload slice with an override file. Any failure fails the
+// config: include, extends, profiles, interpolation), refuses what would reach the host or the control plane's own
+// stack (checkResolved), and puts every service under the workload slice with an override file. Any failure fails the
 // deploy: a service must never run outside the slice there.
 func (s *Service) localCompose(ctx context.Context, project, dir string, env map[string]string, args []string, st commands.Stream) ([]string, error) {
 	// Stdout is not streamed: the resolved config holds the interpolated secrets.
@@ -279,15 +279,12 @@ func (s *Service) localCompose(ctx context.Context, project, dir string, env map
 	if err != nil {
 		return nil, fmt.Errorf("docker compose config (resolving the services of %s on the control-plane machine): %w", project, err)
 	}
-	var cfg struct {
-		Services map[string]struct {
-			NetworkMode string `json:"network_mode"`
-			Pid         string `json:"pid"`
-			Privileged  bool   `json:"privileged"`
-		} `json:"services"`
-	}
+	var cfg resolvedCompose
 	if err := json.Unmarshal(res.Stdout, &cfg); err != nil {
 		return nil, fmt.Errorf("docker compose config of %s: %w", project, err)
+	}
+	if err := s.checkResolved(ctx, project, cfg); err != nil {
+		return nil, err
 	}
 	names := make([]string, 0, len(cfg.Services))
 	for name := range cfg.Services {
@@ -296,15 +293,6 @@ func (s *Service) localCompose(ctx context.Context, project, dir string, env map
 	sort.Strings(names)
 	override := map[string]any{}
 	for _, name := range names {
-		sv := cfg.Services[name]
-		switch {
-		case sv.NetworkMode == "host":
-			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: network_mode host is not allowed on the control-plane machine", name)}
-		case sv.Pid == "host":
-			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: pid host is not allowed on the control-plane machine", name)}
-		case sv.Privileged:
-			return nil, &commands.PayloadError{Err: fmt.Errorf("service %s: privileged is not allowed on the control-plane machine", name)}
-		}
 		override[name] = map[string]string{"cgroup_parent": Local.WorkloadSlice}
 	}
 	if Local.WorkloadSlice == "" || len(names) == 0 {
