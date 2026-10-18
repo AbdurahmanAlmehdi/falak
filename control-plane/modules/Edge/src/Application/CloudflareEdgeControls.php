@@ -10,6 +10,7 @@ use Falak\Edge\Infrastructure\Cloudflare\CloudflareApi;
 use Falak\Edge\Infrastructure\Cloudflare\CloudflareError;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Network\Contracts\Firewalls;
+use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\SiteDirectory;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -26,6 +27,7 @@ final class CloudflareEdgeControls
 
     public function __construct(
         private readonly SiteDirectory $sites,
+        private readonly ServerDirectory $servers,
         private readonly Firewalls $firewalls,
         private readonly AuditLog $audit,
     ) {}
@@ -163,6 +165,12 @@ final class CloudflareEdgeControls
     public function lock(string $organizationId, string $serverId, ?string $mode): void
     {
         $serverId = strtolower($serverId);
+
+        // The control plane's machine: web traffic arrives through the control plane's Docker-published edge (DNAT),
+        // which the host firewall's input rules never see; a lock would protect nothing.
+        if ($mode !== null && $this->servers->find($serverId)?->controlPlaneHost) {
+            throw ValidationException::withMessages(['mode' => 'Origin lock-down does not apply on the control-plane machine: its web ports belong to the control plane\'s edge, which the host firewall does not filter.']);
+        }
 
         if ($mode === OriginLock::CLOSED && ! CloudflareTunnel::query()->where('server_id', $serverId)->where('organization_id', $organizationId)->where('status', CloudflareTunnel::ACTIVE)->exists()) {
             throw ValidationException::withMessages(['mode' => 'Close the web ports only on a server that runs through a healthy Cloudflare Tunnel.']);

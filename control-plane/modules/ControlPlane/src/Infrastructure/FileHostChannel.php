@@ -23,6 +23,10 @@ final class FileHostChannel implements HostChannel
 
     private const ID = '/^[0-9A-Za-z]{26}$/';
 
+    private const RUNNING_STALE_HOURS = 2;
+
+    public const LOCAL_SERVER_NOT_ALLOWED = 'Run sudo falak-ctl local-server allow on the control-plane machine (it lets the panel act as root there, as on every server it manages).';
+
     private const NOT_SET_UP = 'Run sudo falak-ctl up once on the control-plane machine to enable updates from the panel.';
 
     /**
@@ -33,6 +37,11 @@ final class FileHostChannel implements HostChannel
     public function available(): bool
     {
         return $this->mounted() && is_file($this->path('channel.json'));
+    }
+
+    public function localServerAllowed(): bool
+    {
+        return $this->available() && ($this->json('channel.json')['local_server_allowed'] ?? false) === true;
     }
 
     private function mounted(): bool
@@ -55,6 +64,10 @@ final class FileHostChannel implements HostChannel
 
         if ($this->panelUrl === '' || ! str_starts_with($installUrl, $prefix) || preg_match(self::TOKEN, substr($installUrl, strlen($prefix))) !== 1) {
             throw new HostRequestRefused('Not an install URL.');
+        }
+
+        if ($this->available() && ! $this->localServerAllowed()) {
+            throw new HostRequestRefused(self::LOCAL_SERVER_NOT_ALLOWED);
         }
 
         return $this->write(self::LOCAL_SERVER, ['install_url' => $installUrl], $requestedBy);
@@ -93,12 +106,16 @@ final class FileHostChannel implements HostChannel
                     // Why the host refused a request (id null when the id itself was invalid).
                     'error' => is_string($raw['error'] ?? null) ? mb_substr($raw['error'], 0, 500) : null,
                 ];
+                // Running for longer than any update takes: the host most likely died mid-run.
+                $startedAt = $this->time($status['started_at']);
+                $status['stale'] = $status['state'] === 'running' && $startedAt !== null && $startedAt->lt(now()->subHours(self::RUNNING_STALE_HOURS));
             }
         }
 
-        // ponytail: a host that died mid-run leaves "running" for good (deleting status.json on the host clears it).
-        // Add a running timeout here if that turns out to happen.
-        $busy = ($status['state'] ?? null) === 'running' || ($pending !== null && ! $pending['stale']);
+        // ponytail: a host that died mid-run would leave "running" for good; falak-ctl marks interrupted jobs failed, and
+        // a run older than RUNNING_STALE_HOURS counts as stale (warned in the UI, no longer blocking). Lower it if
+        // updates ever get that slow legitimately.
+        $busy = (($status['state'] ?? null) === 'running' && ! $status['stale']) || ($pending !== null && ! $pending['stale']);
 
         return ['mounted' => $mounted, 'available' => $mounted && $this->available(), 'busy' => $busy, 'pending' => $pending, 'status' => $status];
     }

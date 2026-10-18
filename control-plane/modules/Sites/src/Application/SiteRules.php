@@ -19,6 +19,8 @@ use Illuminate\Validation\ValidationException;
  */
 final class SiteRules
 {
+    public const DOCKER_ON_CONTROL_PLANE = 'Docker builds on the control-plane machine need a builder server; native builds run on the control plane\'s builder.';
+
     public function __construct(
         private readonly ServerDirectory $servers,
         private readonly AgentDirectory $agents,
@@ -29,11 +31,12 @@ final class SiteRules
      * Servers must belong to the organization, host sites and support the runtime.
      *
      * @param  list<string>  $serverIds
+     * @param  ?string  $leaderId  the site's leader (on-server builds run there); null: any of the servers may lead
      * @return list<ServerData>
      *
      * @throws ValidationException
      */
-    public function targets(string $organizationId, array $serverIds, SiteRuntime $runtime, ?string $phpVersion, BuildMode $buildMode, string $field = 'server_ids'): array
+    public function targets(string $organizationId, array $serverIds, SiteRuntime $runtime, ?string $phpVersion, BuildMode $buildMode, string $field = 'server_ids', ?string $leaderId = null): array
     {
         if ($serverIds === []) {
             throw ValidationException::withMessages([$field => 'Pick at least one server.']);
@@ -60,6 +63,11 @@ final class SiteRules
 
             if ($buildMode === BuildMode::OnServer) {
                 $memory = $this->agents->forServer($server->id)?->facts['memory_bytes'] ?? null;
+
+                // The control plane's builder is native only (no Docker daemon in it): an image can't be built there.
+                if ($runtime === SiteRuntime::Docker && $server->controlPlaneHost && ($leaderId === null || $leaderId === $server->id)) {
+                    throw ValidationException::withMessages(['build_mode' => self::DOCKER_ON_CONTROL_PLANE]);
+                }
 
                 if (! is_numeric($memory) || (int) $memory < BuildMode::ON_SERVER_MIN_MEMORY_BYTES) {
                     throw ValidationException::withMessages(['build_mode' => "On-server builds need at least 2 GB of RAM; {$server->name} ".(is_numeric($memory) ? 'has '.round(((int) $memory) / 1024 ** 3, 1).' GB.' : 'has not reported its memory yet.')]);

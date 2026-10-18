@@ -4,6 +4,7 @@ use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
 use Falak\Projects\Contracts\ProjectDirectory;
 use Falak\Servers\Contracts\ServerType;
+use Falak\Sites\Application\SiteRules;
 use Falak\Sites\Contracts\BuildMode;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Sites\Contracts\SiteRuntime;
@@ -72,7 +73,7 @@ it('creates a Laravel site on several servers with a leader, preset defaults and
 it('never gives an isolated site a unix user in Falak\'s falak- namespace (Redis / Valkey instance users)', function () {
     $server = sites_server($this->organization->id, php: ['8.4'], phpRuntime: 'fpm');
 
-    foreach (['falak-redis-cache' => 's-falak-redis-cache', 'Falak' => 's-falak-2' /* slug falak is reserved */, 'falakworks' => 's-falakworks'] as $name => $user) {
+    foreach (['falak-redis-cache' => 'site-falak-redis-cache' /* falak-* slugs are reserved */, 'Falak' => 'site-falak', 'falakworks' => 's-falakworks'] as $name => $user) {
         $this->post('/sites', sites_input([$server->id], ['runtime' => 'php-fpm', 'php_version' => '8.4', 'isolated' => true, 'name' => $name]))->assertSessionHasNoErrors();
         expect(Site::query()->where('name', $name)->value('unix_user'))->toBe($user);
     }
@@ -210,18 +211,33 @@ it('only allows on-server builds with at least 2 GB of RAM', function () {
     expect(Site::query()->firstOrFail()->build_mode)->toBe(BuildMode::OnServer);
 });
 
+it('refuses Docker on-server builds led by the control-plane machine (its builder is native only)', function () {
+    $cp = sites_server($this->organization->id, ['name' => 'this-machine', 'control_plane_host' => true]);
+    $web = sites_server($this->organization->id, ['name' => 'web']);
+    sites_fake_agent_memory([$cp->id => 8 * 1024 ** 3, $web->id => 8 * 1024 ** 3]);
+    $docker = ['framework' => 'docker', 'runtime' => 'docker', 'php_version' => null, 'build_mode' => 'on-server'];
+
+    $this->post('/sites', sites_input([$cp->id], $docker))->assertSessionHasErrors(['build_mode' => SiteRules::DOCKER_ON_CONTROL_PLANE]);
+    $this->post('/sites', sites_input([$cp->id, $web->id], [...$docker, 'leader_server_id' => $cp->id]))->assertSessionHasErrors('build_mode');
+
+    // Native on-server builds run on the control plane's builder; another leader builds the image itself.
+    $this->post('/sites', sites_input([$cp->id], ['build_mode' => 'on-server']))->assertSessionHasNoErrors();
+    $this->post('/sites', sites_input([$web->id, $cp->id], [...$docker, 'name' => 'api', 'leader_server_id' => $web->id]))->assertSessionHasNoErrors();
+});
+
 it('never gives a site the control plane\'s compose project name', function () {
     $server = sites_server($this->organization->id);
 
-    $this->post('/sites', sites_input([$server->id], ['slug' => 'falak']))->assertSessionHasErrors(['slug' => 'This name is reserved for Falak\'s own control plane.']);
-    $this->post('/sites', sites_input([$server->id], ['slug' => 'falak-control']))->assertSessionHasErrors('slug');
+    foreach (['falak', 'falak-control', 'falak-docs'] as $slug) {
+        $this->post('/sites', sites_input([$server->id], ['slug' => $slug]))->assertSessionHasErrors(['slug' => 'Names starting with "falak" are reserved for Falak\'s own control plane.']);
+    }
 
-    // A generated slug steps around it.
-    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak']))->assertSessionHasNoErrors();
-    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak Agent']))->assertSessionHasNoErrors();
-    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak docs']))->assertSessionHasNoErrors();
+    // Generated slugs step around them; "falakworks" is not Falak's.
+    foreach (['Falak', 'Falak Agent', 'Falak docs', 'falakworks'] as $name) {
+        $this->post('/sites', sites_input([$server->id], ['name' => $name]))->assertSessionHasNoErrors();
+    }
 
-    expect(Site::query()->orderBy('created_at')->pluck('slug')->all())->toBe(['falak-2', 'falak-agent-2', 'falak-docs']);
+    expect(Site::query()->orderBy('created_at')->pluck('slug')->all())->toBe(['site-falak', 'site-falak-agent', 'site-falak-docs', 'falakworks']);
 });
 
 it('makes slugs unique and keeps a manual deploy key for custom git', function () {

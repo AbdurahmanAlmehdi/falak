@@ -37,3 +37,17 @@ it('refuses falak.* labels set by the file, except the leader command and the en
         ->and(compose_errors("services:\n  app:\n    image: nginx\n    labels:\n      falak.deploy.leader_command: php artisan migrate --force\n      com.example.team: web\n"))->toBe([])
         ->and(compose_errors("services:\n  sandbox:\n    image: nginx\n    labels:\n      falak.environment_network: none\n"))->toBe([]);
 });
+
+it('refuses the control plane\'s volumes and volumes_from Falak containers', function (string $yaml, string $error) {
+    expect(implode(' ', compose_errors($yaml)))->toContain($error);
+})->with([
+    'external by key' => ["services:\n  app:\n    image: nginx\n    volumes: [falak_pg-data:/data]\nvolumes:\n  falak_pg-data:\n    external: true\n", "Falak's own volumes are not available"],
+    'external by name' => ["services:\n  app:\n    image: nginx\n    volumes: [db:/data]\nvolumes:\n  db:\n    external: true\n    name: falak_pg-data\n", 'Volume db is falak_pg-data'],
+    'legacy external name' => ["services:\n  app:\n    image: nginx\n    volumes: [ca:/ca]\nvolumes:\n  ca:\n    external:\n      name: falak_falak-ca\n", 'Volume ca is falak_falak-ca'],
+    'named like one' => ["services:\n  app:\n    image: nginx\n    volumes: [v:/v]\nvolumes:\n  v:\n    name: falak-vol-1\n", 'Volume v is falak-vol-1'],
+    'volumes_from' => ["services:\n  app:\n    image: nginx\n    volumes_from: ['container:falak-postgres-1:ro']\n", "mounts a Falak container's volumes"],
+]);
+
+it('keeps volumes that only look alike', function () {
+    expect(compose_errors("services:\n  app:\n    image: nginx\n    volumes: [falak:/data, falakdata:/x]\n    volumes_from: [db]\n  db:\n    image: postgres\nvolumes:\n  falak: {}\n  falakdata:\n    name: falakdata\n"))->toBe([]);
+});

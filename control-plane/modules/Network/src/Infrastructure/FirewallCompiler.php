@@ -38,9 +38,14 @@ final class FirewallCompiler
             ->orderBy('id')
             ->get();
 
+        // The control plane's machine keeps its own SSH (the machine check adopts it): accept the port it really uses,
+        // never lock its operator out.
+        $server = $this->servers->find($serverId);
+        $sshPort = $server?->controlPlaneHost && $server->sshPort !== null ? $server->sshPort : (int) config('network.ssh_port', 22);
+
         return [
             'input_policy' => 'drop',
-            'ssh_port' => (int) config('network.ssh_port', 22),
+            'ssh_port' => $sshPort,
             'allow_icmp' => true,
             // Rule counters (feature net.protection; stripped for older agents by PayloadCompatibility).
             'counters' => true,

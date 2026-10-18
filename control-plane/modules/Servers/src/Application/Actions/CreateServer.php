@@ -28,6 +28,10 @@ use Illuminate\Validation\ValidationException;
  */
 final class CreateServer
 {
+    public const RUN_UP = 'Run sudo falak-ctl up once on the control-plane machine to enable the host channel.';
+
+    public const RUN_ALLOW = 'Run sudo falak-ctl local-server allow on the control-plane machine (it lets the panel act as root there, as on every server it manages).';
+
     public function __construct(
         private readonly ProviderGateway $providers,
         private readonly Enrollment $enrollment,
@@ -152,7 +156,11 @@ final class CreateServer
         }
 
         if (! $this->host->available()) {
-            $refuse('The host channel is not installed on this control plane: run sudo falak-ctl update on the host (v0.23 installs it).');
+            $refuse(self::RUN_UP);
+        }
+
+        if (! $this->host->localServerAllowed()) {
+            $refuse(self::RUN_ALLOW);
         }
 
         if (Server::query()->where('control_plane_host', true)->exists()) {

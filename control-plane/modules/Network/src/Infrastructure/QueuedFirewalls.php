@@ -79,6 +79,10 @@ final class QueuedFirewalls implements Firewalls
             throw new InvalidArgumentException("Invalid port {$port}.");
         }
 
+        if ($server->controlPlaneHost && SaveFirewallRule::coversWebPorts((string) $port)) {
+            throw new InvalidArgumentException(SaveFirewallRule::CONTROL_PLANE_DENY);
+        }
+
         if ($reason = $this->protectedPort($server->id, $proto, $port)) {
             throw new InvalidArgumentException("Port {$proto->value}/{$port} is not closed: {$reason}");
         }

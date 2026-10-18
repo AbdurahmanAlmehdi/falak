@@ -41,7 +41,7 @@ final class StoreSiteRequest extends FormRequest
     {
         return [
             'name' => ['required', 'string', 'max:64', 'regex:/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/', Rule::unique('sites_sites')->where('organization_id', $organizationId)],
-            'slug' => ['nullable', 'string', 'max:50', 'regex:'.CreateSite::SLUG_PATTERN, Rule::notIn(CreateSite::RESERVED_SLUGS), Rule::unique('sites_sites', 'slug')],
+            'slug' => ['nullable', 'string', 'max:50', 'regex:'.CreateSite::SLUG_PATTERN, 'not_regex:'.CreateSite::RESERVED_SLUG_PATTERN, Rule::unique('sites_sites', 'slug')],
             'framework' => ['required_unless:runtime,compose', 'nullable', Rule::enum(Framework::class)],
             'runtime' => ['nullable', Rule::enum(SiteRuntime::class)],
             'build_mode' => ['nullable', Rule::enum(BuildMode::class)],
@@ -196,7 +196,7 @@ final class StoreSiteRequest extends FormRequest
         return [
             'name.regex' => 'Use letters, numbers, spaces, dots, dashes and underscores.',
             'slug.regex' => 'Use lowercase letters, numbers and dashes.',
-            'slug.not_in' => 'This name is reserved for Falak\'s own control plane.',
+            'slug.not_regex' => 'Names starting with "falak" are reserved for Falak\'s own control plane.',
             'branch.regex' => 'Not a valid branch name.',
             'branch.not_regex' => 'Not a valid branch name.',
         ];

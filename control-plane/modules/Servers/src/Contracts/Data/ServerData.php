@@ -37,6 +37,11 @@ final readonly class ServerData
         public bool $controlPlaneHost = false,
         /** Memory kept for the control plane on this machine (FALAK_CP_RESERVE_MB): not allocatable to workloads. */
         public int $reservedMemoryMb = 0,
+        /**
+         * The SSH port in use: on the control plane's machine (whose SSH Falak keeps) the port sshd listens on per the
+         * last machine check, else the server's ssh_port. The firewall must never close it.
+         */
+        public ?int $sshPort = null,
     ) {}
 
     public function isActive(): bool

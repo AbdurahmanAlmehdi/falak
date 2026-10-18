@@ -81,6 +81,11 @@ export function HostLog({ data, down, label }: { data: HostStatusResponse | null
                     {data.channel.status.error}
                 </Callout>
             )}
+            {data?.channel.status?.stale && (
+                <Callout tone="warning" title="The last host request looks stuck">
+                    It has been running for more than 2 hours. Check it on the host (journalctl -u falak-host.service); a new request can be started.
+                </Callout>
+            )}
             {data?.channel.pending?.stale && (
                 <Callout tone="warning" title="The host has not picked up the last request">
                     It has waited more than 15 minutes. Check falak-host.path on the host (systemctl status falak-host.path); a new request replaces

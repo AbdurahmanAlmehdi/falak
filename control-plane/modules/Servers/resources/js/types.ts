@@ -57,6 +57,8 @@ export interface ServerDetails extends ServerSummary {
     provisioned_at: string | null;
     install_command: string | null;
     can_regenerate_install_command: boolean;
+    /** The control plane's machine before its agent enrolled (operators only): retry through the host channel, or by hand. */
+    local_server: { can_retry: boolean; hint: string | null; manual_command: string | null } | null;
 }
 
 export interface AgentDetails {

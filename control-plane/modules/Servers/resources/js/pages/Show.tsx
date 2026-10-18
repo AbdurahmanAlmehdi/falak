@@ -135,6 +135,7 @@ export default function Show({ server, agent, metrics, services, machineCheck, c
     const showCheck = machineCheck.status !== null || (machineCheck.supported && server.status !== 'creating');
     const [showLog, setShowLog] = useState(server.status !== 'active');
     const [regenerating, setRegenerating] = useState(false);
+    const [retrying, setRetrying] = useState(false);
     const [reprovisioning, setReprovisioning] = useState(false);
 
     // Live: the layout listens for `server.updated`; poll while the server is settling in case Reverb is down.
@@ -163,6 +164,18 @@ export default function Show({ server, agent, metrics, services, machineCheck, c
                     toast.success('Provisioning started', 'Follow the log below.');
                 },
                 onError: (errors) => toast.error('Could not re-provision', Object.values(errors)[0]),
+            },
+        );
+
+    const retryLocalServer = () =>
+        router.post(
+            `/servers/${server.id}/local-server/retry`,
+            {},
+            {
+                preserveScroll: true,
+                onStart: () => setRetrying(true),
+                onFinish: () => setRetrying(false),
+                onError: (errors) => toast.error('Could not retry', Object.values(errors)[0]),
             },
         );
 
@@ -323,6 +336,26 @@ export default function Show({ server, agent, metrics, services, machineCheck, c
                                         )}
                                     </div>
                                 </>
+                            )}
+                            {server.local_server && (
+                                <div className="grid gap-2" data-testid="local-server">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <Button
+                                            variant="secondary"
+                                            size="sm"
+                                            icon={<RotateCw />}
+                                            loading={retrying}
+                                            disabled={!server.local_server.can_retry}
+                                            onClick={retryLocalServer}
+                                        >
+                                            Retry on this host
+                                        </Button>
+                                        {server.local_server.hint && <span className="text-fg-muted text-xs">{server.local_server.hint}</span>}
+                                    </div>
+                                    {server.local_server.manual_command && (
+                                        <CodeBlock code={server.local_server.manual_command} title="Or by hand on the control-plane machine" wrap />
+                                    )}
+                                </div>
                             )}
                             {server.status === 'error' && server.status_message && (
                                 <p role="alert" className="border-danger/40 bg-danger-soft text-danger rounded-lg border px-3 py-2 text-sm">

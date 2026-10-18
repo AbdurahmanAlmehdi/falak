@@ -19,6 +19,12 @@ interface HostChannel
     public function available(): bool;
 
     /**
+     * Whether the operator let the panel enroll this machine as a server (channel.json `local_server_allowed`, set by
+     * `sudo falak-ctl local-server allow`; off by default: the panel then acts as root there).
+     */
+    public function localServerAllowed(): bool;
+
+    /**
      * `falak-ctl update <version>` (takes a backup first, rolls back on failure; the panel restarts).
      *
      * @return string the request id
@@ -39,9 +45,10 @@ interface HostChannel
     /**
      * The channel as the panel sees it: `pending` is request.json not yet picked up (`stale` past the stale window),
      * `status` the host's status.json; `busy` refuses new requests. `mounted` without `available`: the directory is
-     * there but falak-ctl has not installed its units yet (sudo falak-ctl up once).
+     * there but falak-ctl has not installed its units yet (sudo falak-ctl up once). A status `running` for over 2 h is
+     * `stale` (the host most likely died mid-run) and no longer blocks.
      *
-     * @return array{mounted: bool, available: bool, busy: bool, pending: array{id: string, action: string, requested_at: ?string, stale: bool}|null, status: array{id: string, action: string, state: string, started_at: ?string, finished_at: ?string, exit_code: ?int, error: ?string}|null}
+     * @return array{mounted: bool, available: bool, busy: bool, pending: array{id: string, action: string, requested_at: ?string, stale: bool}|null, status: array{id: string, action: string, state: string, started_at: ?string, finished_at: ?string, exit_code: ?int, error: ?string, stale: bool}|null}
      */
     public function state(): array;
 

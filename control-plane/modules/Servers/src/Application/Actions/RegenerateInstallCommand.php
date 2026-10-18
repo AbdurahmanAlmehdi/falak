@@ -2,6 +2,7 @@
 
 namespace Falak\Servers\Application\Actions;
 
+use Falak\Fleet\Contracts\Data\InstallToken;
 use Falak\Fleet\Contracts\Enrollment;
 use Falak\Servers\Domain\Models\Server;
 
@@ -12,11 +13,11 @@ final class RegenerateInstallCommand
 {
     public function __construct(private readonly Enrollment $enrollment) {}
 
-    public function __invoke(Server $server): string
+    public function __invoke(Server $server): InstallToken
     {
         $install = $this->enrollment->issueInstallToken($server->organization_id, $server->id, 60 * 24 * 7);
         $server->forceFill(['install_command' => $install->command])->save();
 
-        return $install->command;
+        return $install;
     }
 }

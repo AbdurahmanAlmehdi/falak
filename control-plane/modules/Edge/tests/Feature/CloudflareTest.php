@@ -435,3 +435,15 @@ it('marks a tunnel Cloudflare reports down, and brings it back when healthy', fu
     expect($tunnel->refresh()->status)->toBe(CloudflareTunnel::ACTIVE)
         ->and(app(WebOriginPolicy::class)->for($this->web1->id)['mode'])->toBe('closed');
 });
+
+it('refuses an origin lock-down on the control-plane machine (its web traffic bypasses the host firewall)', function () {
+    $cp = edge_server($this->servers, $this->org, ['id' => strtolower((string) Str::ulid()), 'name' => 'this-machine', 'controlPlaneHost' => true]);
+    $controls = app(CloudflareEdgeControls::class);
+
+    expect(fn () => $controls->lock($this->org, $cp->id, 'cloudflare'))
+        ->toThrow(fn (ValidationException $e) => expect($e->errors()['mode'][0])->toContain('does not apply on the control-plane machine'));
+
+    // Removing one is always fine.
+    $controls->lock($this->org, $cp->id, null);
+    expect(app(WebOriginPolicy::class)->for($cp->id))->toBeNull();
+});

@@ -116,3 +116,25 @@ it('reads why the host refused a request', function () {
     expect($this->host->state()['status'])->toMatchArray(['id' => '', 'state' => 'failed', 'error' => 'invalid id'])
         ->and($this->host->state()['busy'])->toBeFalse();
 });
+
+it('only enrolls this machine once the operator allowed it (channel.json local_server_allowed)', function () {
+    $url = 'https://panel.falak.test/install/'.str_repeat('a', 48);
+    expect($this->host->localServerAllowed())->toBeTrue();
+
+    file_put_contents("{$this->dir}/channel.json", json_encode(['version' => 'v0.23.0', 'units' => true]));
+
+    expect($this->host->localServerAllowed())->toBeFalse()
+        ->and(fn () => $this->host->requestLocalServer($url, null))->toThrow(HostRequestRefused::class, 'sudo falak-ctl local-server allow')
+        // Updates don't need it.
+        ->and($this->host->requestUpdate('v0.24.0', null))->toBeString();
+});
+
+it('treats a run still "running" after 2 hours as stale', function () {
+    Carbon::setTestNow('2026-10-18 12:00:00');
+    host_status($this->dir, ['state' => 'running', 'started_at' => '2026-10-18T10:30:00+00:00']);
+    expect($this->host->state())->toMatchArray(['busy' => true])->and($this->host->state()['status']['stale'])->toBeFalse();
+
+    host_status($this->dir, ['state' => 'running', 'started_at' => '2026-10-18T09:59:00+00:00']);
+    expect($this->host->state())->toMatchArray(['busy' => false])->and($this->host->state()['status']['stale'])->toBeTrue();
+    expect($this->host->requestUpdate('v0.24.0', null))->toBeString();
+});

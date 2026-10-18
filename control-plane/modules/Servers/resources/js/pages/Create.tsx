@@ -41,7 +41,7 @@ interface Props {
     sshKeys: SshKeyOption[];
     canManageProviders: boolean;
     /** "This machine" (the control plane's own host): operators only, once the host channel exists, at most once. */
-    thisMachine: { reserve_mb: number } | null;
+    thisMachine: { reserve_mb: number; allowed: boolean; hint: string | null } | null;
 }
 
 type CreateForm = {
@@ -72,9 +72,11 @@ function ChoiceCard({
     description,
     icon,
     aside,
+    disabled = false,
 }: {
     selected: boolean;
     onSelect: () => void;
+    disabled?: boolean;
     title: ReactNode;
     description?: ReactNode;
     icon?: ReactNode;
@@ -86,7 +88,9 @@ function ChoiceCard({
             role="radio"
             aria-checked={selected}
             onClick={onSelect}
+            disabled={disabled}
             className={cn(
+                'disabled:cursor-not-allowed disabled:opacity-60',
                 'group relative flex min-h-16 items-start gap-3 rounded-lg border p-3 text-left transition-[border-color,background-color] duration-150',
                 'focus-visible:outline-primary focus-visible:outline-2 focus-visible:outline-offset-2',
                 selected ? 'border-primary bg-primary-soft' : 'border-border bg-surface-1 hover:border-border-strong hover:bg-surface-2',
@@ -252,12 +256,16 @@ export default function Create({ types, providers, credentials, options, sshKeys
                             <ChoiceCard
                                 selected={data.control_plane_host}
                                 onSelect={() => chooseProvider('custom', true)}
+                                disabled={!thisMachine.allowed}
                                 icon={<ServerIcon className="size-4" aria-hidden />}
                                 title="This machine"
                                 description="The control plane's own server"
                             />
                         )}
                     </div>
+                    {thisMachine && !thisMachine.allowed && thisMachine.hint && (
+                        <p className="text-fg-muted text-xs">This machine: {thisMachine.hint}</p>
+                    )}
                     {errors.provider && <p className="text-danger text-xs">{errors.provider}</p>}
                     {errors.control_plane_host && <p className="text-danger text-xs">{errors.control_plane_host}</p>}
                 </Section>

@@ -4,10 +4,12 @@ use Falak\Edge\Contracts\EdgeRoutes;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
 use Falak\Network\Contracts\Firewalls;
+use Falak\Servers\Application\Actions\CreateServer;
 use Falak\Servers\Application\ServerFacts;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Servers\Contracts\ServerStatus;
 use Falak\Servers\Domain\Models\Server;
+use Illuminate\Validation\ValidationException;
 use Inertia\Testing\AssertableInertia as Assert;
 
 require_once __DIR__.'/../../../ControlPlane/tests/Support/helpers.php';
@@ -38,7 +40,7 @@ function this_machine_input(array $overrides = []): array
 
 it('adds the control plane\'s machine as a server through the host channel', function () {
     config(['servers.control_plane_reserve_mb' => 2048]);
-    expect(this_machine_offer($this))->toBe(['reserve_mb' => 2048]);
+    expect(this_machine_offer($this))->toBe(['reserve_mb' => 2048, 'allowed' => true, 'hint' => null]);
 
     $this->post('/servers', this_machine_input())->assertSessionHasNoErrors()->assertRedirect();
 
@@ -60,6 +62,61 @@ it('adds the control plane\'s machine as a server through the host channel', fun
     $this->get("/servers/{$server->id}")->assertOk()->assertInertia(fn (Assert $page) => $page
         ->where('server.control_plane_host', true)
         ->where('server.reserved_memory_mb', 2048));
+});
+
+it('stays disabled until the operator allowed it on the host', function () {
+    $channel = json_decode((string) file_get_contents("{$this->dir}/channel.json"), true);
+    file_put_contents("{$this->dir}/channel.json", json_encode([...$channel, 'local_server_allowed' => false]));
+
+    expect(this_machine_offer($this))->toBe(['reserve_mb' => 1536, 'allowed' => false, 'hint' => CreateServer::RUN_ALLOW])
+        ->and(CreateServer::RUN_ALLOW)->toContain('sudo falak-ctl local-server allow');
+
+    $this->post('/servers', this_machine_input())->assertSessionHasErrors(['control_plane_host' => CreateServer::RUN_ALLOW]);
+    expect(Server::query()->count())->toBe(0)->and(file_exists("{$this->dir}/request.json"))->toBeFalse();
+});
+
+it('tells the operator to run falak-ctl up when the units are not installed', function () {
+    unlink("{$this->dir}/channel.json");
+
+    expect(fn () => app(CreateServer::class)($this->organization->id, $this->owner->id, this_machine_input()))
+        ->toThrow(fn (ValidationException $e) => expect($e->errors()['control_plane_host'][0])->toBe(CreateServer::RUN_UP));
+    expect(CreateServer::RUN_UP)->toContain('sudo falak-ctl up');
+});
+
+it('retries the install on this host while the agent has not enrolled', function () {
+    $this->post('/servers', this_machine_input())->assertSessionHasNoErrors();
+    $server = Server::query()->sole();
+    $first = json_decode((string) file_get_contents("{$this->dir}/request.json"), true);
+
+    // The host ran it and it failed.
+    unlink("{$this->dir}/request.json");
+    host_status($this->dir, ['id' => $first['id'], 'action' => 'local-server', 'state' => 'failed', 'exit_code' => 1]);
+
+    $this->get("/servers/{$server->id}")->assertOk()->assertInertia(fn (Assert $page) => $page
+        ->where('server.local_server.can_retry', true)
+        ->where('server.local_server.manual_command', 'sudo falak-ctl local-server enable --install-url '.$first['install_url']));
+
+    $this->post("/servers/{$server->id}/local-server/retry")->assertSessionHasNoErrors()->assertRedirect();
+
+    $second = json_decode((string) file_get_contents("{$this->dir}/request.json"), true);
+    expect($second)->toMatchArray(['action' => 'local-server'])
+        ->and($second['install_url'])->not->toBe($first['install_url'])
+        ->and($server->refresh()->install_command)->toContain($second['install_url'])
+        ->and(AuditEntry::query()->where('action', 'server.local_server_retried')->sole()->context)->toBe(['request_id' => $second['id']]);
+
+    // Pending now: the button waits.
+    $this->post("/servers/{$server->id}/local-server/retry")->assertSessionHasErrors('local_server');
+    $this->get("/servers/{$server->id}")->assertInertia(fn (Assert $page) => $page->where('server.local_server.can_retry', false));
+
+    // Not for developers, not for other servers.
+    [$developer] = memberOf($this->organization, Role::Developer);
+    $this->actingAs($developer);
+    $this->post("/servers/{$server->id}/local-server/retry")->assertForbidden();
+    $this->get("/servers/{$server->id}")->assertInertia(fn (Assert $page) => $page->where('server.local_server', null));
+
+    $this->actingAs($this->owner);
+    $other = Server::factory()->create(['organization_id' => $this->organization->id]);
+    $this->post("/servers/{$other->id}/local-server/retry")->assertForbidden();
 });
 
 it('is only for the operator organization\'s owners and admins, with the host channel', function () {

@@ -40,6 +40,8 @@ export interface HostChannelState {
         exit_code: number | null;
         /** Why the host refused the request. */
         error: string | null;
+        /** Still "running" after 2 h: the host most likely died mid-run; it no longer blocks new requests. */
+        stale: boolean;
     } | null;
 }
 

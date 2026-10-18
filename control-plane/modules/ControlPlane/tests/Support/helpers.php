@@ -10,7 +10,7 @@ function host_channel(): string
     mkdir($dir, 0700, true);
     config(['controlplane.host_channel_dir' => $dir]);
 
-    file_put_contents("{$dir}/channel.json", json_encode(['version' => 'v0.23.0', 'units' => true, 'installed_at' => now()->toIso8601String()]));
+    file_put_contents("{$dir}/channel.json", json_encode(['version' => 'v0.23.0', 'units' => true, 'local_server_allowed' => true, 'installed_at' => now()->toIso8601String()]));
 
     return $dir;
 }

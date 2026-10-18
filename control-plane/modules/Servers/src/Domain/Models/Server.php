@@ -173,6 +173,17 @@ class Server extends Model
             ->all();
     }
 
+    /**
+     * The port sshd listens on per the last machine check (its first, when several), else ssh_port.
+     */
+    public function sshPortInUse(): ?int
+    {
+        $ports = (string) ($this->machineInspection()->value('report')['ssh']['effective']['port'] ?? '');
+        $first = (int) strtok($ports, ' ');
+
+        return $first > 0 && $first <= 65535 ? $first : $this->ssh_port;
+    }
+
     public function toData(): ServerData
     {
         $installed = $this->phpVersions->where('status', PhpVersionStatus::Installed);
@@ -200,6 +211,7 @@ class Server extends Model
             sandboxesEnabled: (bool) ($this->sandboxes_enabled ?? true),
             controlPlaneHost: (bool) $this->control_plane_host,
             reservedMemoryMb: $this->control_plane_host ? (int) config('servers.control_plane_reserve_mb', 1536) : 0,
+            sshPort: $this->control_plane_host ? $this->sshPortInUse() : $this->ssh_port,
         );
     }
 }
