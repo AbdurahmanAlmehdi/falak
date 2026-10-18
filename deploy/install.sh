@@ -357,7 +357,8 @@ fetch_files() {
   info "Falak $VERSION files"
   local stage
   stage="$(mktemp -d)"
-  if [ "$FROM_SOURCE" = 1 ] && [ -z "$SOURCE_DIR" ]; then
+  # Our own clone (saved as FALAK_DEPLOY_SOURCE by an earlier run) is fetched again, or a re-run builds stale code.
+  if [ "$FROM_SOURCE" = 1 ] && { [ -z "$SOURCE_DIR" ] || [ "$SOURCE_DIR" = "$FALAK_DIR/src" ]; }; then
     command -v git >/dev/null 2>&1 || apt-get install -y -qq git >/dev/null
     rm -rf "$FALAK_DIR/src"
     git clone -q --depth 1 --branch "${REF:-$VERSION}" "https://github.com/$REPO.git" "$FALAK_DIR/src" \
