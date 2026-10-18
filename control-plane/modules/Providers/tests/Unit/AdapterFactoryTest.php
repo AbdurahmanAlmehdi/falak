@@ -4,6 +4,7 @@ use Falak\Providers\Contracts\Data\MachineSpec;
 use Falak\Providers\Contracts\Exceptions\ProviderException;
 use Falak\Providers\Contracts\ProviderType;
 use Falak\Providers\Infrastructure\AdapterFactory;
+use Falak\Providers\Infrastructure\Adapters\ContaboAdapter;
 use Falak\Providers\Infrastructure\Adapters\CustomAdapter;
 use Falak\Providers\Infrastructure\Adapters\DigitalOceanAdapter;
 use Falak\Providers\Infrastructure\Adapters\HetznerAdapter;
@@ -23,6 +24,7 @@ it('builds the adapter for each provider type', function (ProviderType $type, ar
     [ProviderType::Vultr, ['api_key' => 'k'], VultrAdapter::class],
     [ProviderType::Linode, ['token' => 't'], LinodeAdapter::class],
     [ProviderType::Aws, ['access_key_id' => 'a', 'secret_access_key' => 's', 'region' => 'us-east-1'], LightsailAdapter::class],
+    [ProviderType::Contabo, ['api_details' => 'ClientId: INT-1 Client Secret: s API User: me@example.com API Password: p'], ContaboAdapter::class],
     [ProviderType::Custom, [], CustomAdapter::class],
 ]);
 

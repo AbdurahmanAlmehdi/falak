@@ -321,7 +321,7 @@ function Sidebar() {
             })}
             <span className="bg-border mx-2.5 my-2 h-px" aria-hidden />
             <a
-                href="https://github.com/"
+                href="https://falak.sh/docs/"
                 target="_blank"
                 rel="noreferrer"
                 className="text-fg-muted hover:bg-surface-2/60 hover:text-fg flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors duration-150"

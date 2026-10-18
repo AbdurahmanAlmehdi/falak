@@ -2,7 +2,7 @@ import { Tag } from '@/components/falak/tag';
 import { Tooltip } from '@/components/falak/tooltip';
 import { cn } from '@/lib/utils';
 import { Server } from 'lucide-react';
-import { siAkamai, siDigitalocean, siHetzner, siVultr, type SimpleIcon } from 'simple-icons';
+import { siAkamai, siContabo, siDigitalocean, siHetzner, siVultr, type SimpleIcon } from 'simple-icons';
 import { type ServerSummary } from '../types';
 
 const PROVIDER_ICONS: Record<string, SimpleIcon> = {
@@ -10,6 +10,7 @@ const PROVIDER_ICONS: Record<string, SimpleIcon> = {
     digitalocean: siDigitalocean,
     vultr: siVultr,
     linode: siAkamai,
+    contabo: siContabo,
 };
 
 /** Provider mark (monochrome, current text color); a generic server glyph for custom / unknown providers. */

@@ -43,7 +43,7 @@ function HelpMenu() {
                         </span>
                     </MenuItem>
                 ))}
-                <MenuLink href="https://github.com/" external icon={<BookOpen />}>
+                <MenuLink href="https://falak.sh/docs/" external icon={<BookOpen />}>
                     Documentation
                 </MenuLink>
             </MenuContent>

@@ -5,6 +5,7 @@ namespace Falak\Providers\Infrastructure;
 use Falak\Providers\Contracts\Exceptions\ProviderException;
 use Falak\Providers\Contracts\ProviderAdapter;
 use Falak\Providers\Contracts\ProviderType;
+use Falak\Providers\Infrastructure\Adapters\ContaboAdapter;
 use Falak\Providers\Infrastructure\Adapters\CustomAdapter;
 use Falak\Providers\Infrastructure\Adapters\DigitalOceanAdapter;
 use Falak\Providers\Infrastructure\Adapters\HetznerAdapter;
@@ -50,6 +51,12 @@ final class AdapterFactory
                 $field('secret_access_key'),
                 $field('region'),
                 $endpoint('https://lightsail.{region}.amazonaws.com'),
+                $http,
+            ),
+            ProviderType::Contabo => new ContaboAdapter(
+                ContaboAdapter::parseCredentials($field('api_details')),
+                $endpoint('https://api.contabo.com/v1'),
+                $pinned !== null ? rtrim($pinned, '/').'/token' : (string) $this->config->get('providers.contabo_auth_url', 'https://auth.contabo.com/auth/realms/contabo/protocol/openid-connect/token'),
                 $http,
             ),
             ProviderType::Custom => new CustomAdapter,

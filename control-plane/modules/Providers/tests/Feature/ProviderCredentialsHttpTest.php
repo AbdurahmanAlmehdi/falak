@@ -34,7 +34,7 @@ it('shows credentials without secrets to viewers', function () {
         ->where('credentials.0.provider', 'hetzner')
         ->missing('credentials.0.credentials')
         ->where('can.manage', false)
-        ->has('providers', 5)
+        ->has('providers', 6)
         ->where('providers.4.value', 'aws')
         ->has('providers.4.fields', 3));
 
@@ -70,6 +70,24 @@ it('lets admins add a verified credential and records an audit entry without sec
     expect($audit)->not->toBeNull()
         ->and($audit['organization_id'])->toBe($org->id)
         ->and(json_encode(auditRows()))->not->toContain('hcloud-top-secret');
+});
+
+it('adds a Contabo account from one pasted cntb command, and explains what is missing', function () {
+    Http::fake([
+        'auth.contabo.com/*' => Http::response(['access_token' => 'tok']),
+        'api.contabo.com/v1/compute/instances*' => Http::response(['data' => [], '_pagination' => ['totalPages' => 1]]),
+    ]);
+    actingAsMember(Role::Admin);
+    $pasted = "cntb config set-credentials --oauth2-clientid=INT-1 --oauth2-client-secret=sec --oauth2-user=me@example.com --oauth2-password='Pa ss!1'";
+
+    $this->post('/providers', ['provider' => 'contabo', 'name' => 'Contabo', 'credentials' => ['api_details' => $pasted]])
+        ->assertRedirect()->assertSessionHasNoErrors();
+
+    expect(ProviderCredential::query()->firstOrFail()->credentials)->toBe(['api_details' => $pasted]);
+    Http::assertSent(fn (Request $r) => str_contains($r->url(), 'auth.contabo.com') && $r['password'] === 'Pa ss!1');
+
+    $this->post('/providers', ['provider' => 'contabo', 'name' => 'Half', 'credentials' => ['api_details' => 'ClientId: INT-1']])
+        ->assertSessionHasErrors(['credentials' => 'Could not verify the credential: Missing Client Secret, API User, API Password. On my.contabo.com → Account → API, set an API password, then paste the whole `cntb config set-credentials …` line (with your password filled in), or the four values.']);
 });
 
 it('rejects credentials the provider does not accept', function () {

@@ -9,6 +9,7 @@ enum ProviderType: string
     case Vultr = 'vultr';
     case Linode = 'linode';
     case Aws = 'aws';
+    case Contabo = 'contabo';
     case Custom = 'custom';
 
     public function label(): string
@@ -19,6 +20,7 @@ enum ProviderType: string
             self::Vultr => 'Vultr',
             self::Linode => 'Akamai / Linode',
             self::Aws => 'AWS Lightsail',
+            self::Contabo => 'Contabo',
             self::Custom => 'Custom (bring your own server)',
         };
     }

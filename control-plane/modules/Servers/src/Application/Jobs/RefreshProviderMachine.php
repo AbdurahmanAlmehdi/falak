@@ -19,7 +19,8 @@ final class RefreshProviderMachine implements ShouldQueue
     use InteractsWithQueue;
     use Queueable;
 
-    public const MAX_POLLS = 15;
+    // 20 minutes at 20 s: Contabo can take 10+ minutes to install a machine and assign its IP.
+    public const MAX_POLLS = 60;
 
     public function __construct(public readonly string $serverId, public readonly int $poll = 1) {}
 

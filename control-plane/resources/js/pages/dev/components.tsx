@@ -210,6 +210,7 @@ export default function ComponentsGallery() {
                             'digitalocean',
                             'vultr',
                             'linode',
+                            'contabo',
                             'aws',
                             'r2',
                             'b2',

@@ -5,7 +5,7 @@ import { DataTable } from '@/components/falak/data-table';
 import { Dialog } from '@/components/falak/dialog';
 import { EmptyState } from '@/components/falak/empty-state';
 import { Field } from '@/components/falak/field';
-import { Input } from '@/components/falak/input';
+import { Input, Textarea } from '@/components/falak/input';
 import { IntegrationTile } from '@/components/falak/integration-icon';
 import { RelativeTime } from '@/components/falak/relative-time';
 import { SecretInput } from '@/components/falak/secret-input';
@@ -22,6 +22,8 @@ interface CredentialField {
     label: string;
     secret: boolean;
     help: string;
+    /** Paste box (e.g. Contabo's API details): newlines survive, unlike a password input. */
+    multiline?: boolean;
 }
 
 interface ProviderOption {
@@ -60,6 +62,7 @@ const BLURBS: Record<string, string> = {
     vultr: 'Cloud compute in 30+ locations.',
     linode: 'Akamai cloud compute (Linode).',
     aws: 'Amazon Lightsail instances.',
+    contabo: 'Low-cost VPS and VDS in 9 regions, billed monthly.',
 };
 
 function credentialStatus(credential: Credential): { status: string; label: string } {
@@ -98,7 +101,20 @@ function CredentialFields({
                     error={errors[`credentials.${field.name}`]}
                     required={!replace}
                 >
-                    {field.secret ? (
+                    {field.multiline ? (
+                        <Textarea
+                            mono
+                            autoComplete="off"
+                            spellCheck={false}
+                            value={values[field.name] ?? ''}
+                            placeholder={
+                                replace
+                                    ? 'Paste new API details to replace the stored ones'
+                                    : "cntb config set-credentials --oauth2-clientid=… --oauth2-client-secret=… --oauth2-user=… --oauth2-password='…'"
+                            }
+                            onChange={(event) => onChange(field.name, event.target.value)}
+                        />
+                    ) : field.secret ? (
                         <SecretInput stored={replace} value={values[field.name] ?? ''} onChange={(value) => onChange(field.name, value)} />
                     ) : (
                         <Input

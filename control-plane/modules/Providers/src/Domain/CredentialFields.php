@@ -10,7 +10,7 @@ use Falak\Providers\Contracts\ProviderType;
 final class CredentialFields
 {
     /**
-     * @return list<array{name: string, label: string, secret: bool, help: string, options?: list<string>}>
+     * @return list<array{name: string, label: string, secret: bool, help: string, multiline?: bool, options?: list<string>}>
      */
     public static function for(ProviderType $type): array
     {
@@ -32,6 +32,9 @@ final class CredentialFields
                 ['name' => 'secret_access_key', 'label' => 'Secret access key', 'secret' => true, 'help' => ''],
                 ['name' => 'region', 'label' => 'Default region', 'secret' => false, 'help' => 'Used for account-level calls and SSH key pairs, e.g. us-east-1.'],
             ],
+            ProviderType::Contabo => [
+                ['name' => 'api_details', 'label' => 'API details', 'secret' => true, 'multiline' => true, 'help' => 'On my.contabo.com → Account → API: set an API password, then copy the "cntb config set-credentials …" line (or the Client ID, Client Secret, API User and API Password) and paste it here. Falak picks out the four values. Contabo bills monthly: deleting a server cancels it, and it keeps running until the paid month ends.'],
+            ],
             ProviderType::Custom => [],
         };
     }
@@ -46,7 +49,7 @@ final class CredentialFields
         $rules = [];
 
         foreach (self::for($type) as $field) {
-            $rule = [$required ? 'required' : 'sometimes', 'string', 'max:512'];
+            $rule = [$required ? 'required' : 'sometimes', 'string', ($field['multiline'] ?? false) ? 'max:4096' : 'max:512'];
 
             if ($field['name'] === 'region') {
                 $rule[] = 'regex:/^[a-z]{2}(-[a-z]+)+-\d$/';

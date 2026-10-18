@@ -11,7 +11,7 @@ registerSettingsNav({
     icon: Cloud,
     permission: 'providers.view',
     requiresOrganization: true,
-    keywords: ['cloud', 'hetzner', 'digitalocean', 'vultr', 'linode', 'aws', 'lightsail', 'credentials'],
+    keywords: ['cloud', 'hetzner', 'digitalocean', 'vultr', 'linode', 'aws', 'lightsail', 'contabo', 'credentials'],
 });
 
 registerCommands({

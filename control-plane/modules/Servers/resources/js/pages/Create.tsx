@@ -381,8 +381,9 @@ export default function Create({ types, providers, credentials, options, sshKeys
                                                 value: size.id,
                                                 label: size.name,
                                                 description: [
-                                                    `${size.cpus} vCPU`,
-                                                    `${(size.memory_mb / 1024).toFixed(size.memory_mb < 1024 ? 1 : 0)} GB`,
+                                                    // Unknown (0) for providers without a catalog API, e.g. Contabo.
+                                                    size.cpus ? `${size.cpus} vCPU` : null,
+                                                    size.memory_mb ? `${(size.memory_mb / 1024).toFixed(size.memory_mb < 1024 ? 1 : 0)} GB` : null,
                                                     `${size.disk_gb} GB disk`,
                                                     size.arch !== 'amd64' ? size.arch : null,
                                                     size.price_monthly !== null ? `$${size.price_monthly.toFixed(2)}/mo` : null,

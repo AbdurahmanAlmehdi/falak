@@ -21,5 +21,8 @@ return [
         'linode' => env('FALAK_LINODE_API_URL', 'https://api.linode.com/v4'),
         // {region} is substituted per call; Lightsail is a regional JSON 1.1 API.
         'aws' => env('FALAK_LIGHTSAIL_API_URL', 'https://lightsail.{region}.amazonaws.com'),
+        'contabo' => env('FALAK_CONTABO_API_URL', 'https://api.contabo.com/v1'),
     ],
+
+    'contabo_auth_url' => env('FALAK_CONTABO_AUTH_URL', 'https://auth.contabo.com/auth/realms/contabo/protocol/openid-connect/token'),
 ];
