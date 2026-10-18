@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
  * @property string $mode native|docker
  * @property BuildStatus $status
  * @property ?string $builder_id
+ * @property ?string $builder_server_id on-server builds: only the builder running on this server may claim it
  * @property ?string $repository
  * @property ?string $branch
  * @property ?string $commit

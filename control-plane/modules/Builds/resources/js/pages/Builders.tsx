@@ -13,6 +13,7 @@ import { Section } from '@/components/falak/section';
 import { StatusBadge, StatusDot } from '@/components/falak/status';
 import { Tag } from '@/components/falak/tag';
 import SettingsLayout from '@/layouts/settings/layout';
+import { formatBytes } from '@/lib/utils';
 import { Link, router, useForm } from '@inertiajs/react';
 import { Hammer, Plus, Power, RefreshCw, Server, Trash2 } from 'lucide-react';
 import { useState, type FormEventHandler } from 'react';
@@ -22,6 +23,8 @@ interface BuilderRow {
     name: string;
     kind: 'local' | 'server' | 'external';
     server_id: string | null;
+    pool: boolean;
+    caps: { memory_max_bytes: number | null; cpus: number | null; tasks_max: number } | null;
     shared: boolean;
     modes: string[];
     enabled: boolean;
@@ -56,7 +59,8 @@ export default function Builders({ builders, localConfigured, panelUrl, plainTok
     const [busy, setBusy] = useState<string | null>(null);
 
     const local = builders.filter((builder) => builder.shared || builder.kind === 'local');
-    const servers = builders.filter((builder) => !builder.shared && builder.kind === 'server');
+    const servers = builders.filter((builder) => !builder.shared && builder.kind === 'server' && builder.pool);
+    const siteServers = builders.filter((builder) => !builder.shared && builder.kind === 'server' && !builder.pool);
     const external = builders.filter((builder) => !builder.shared && builder.kind === 'external');
 
     const submit: FormEventHandler = (event) => {
@@ -119,6 +123,25 @@ export default function Builders({ builders, localConfigured, panelUrl, plainTok
                 </span>
             ),
         },
+        {
+            id: 'caps',
+            header: 'Limits',
+            hideOnMobile: true,
+            cell: (builder) =>
+                builder.caps ? (
+                    <span className="text-fg-muted font-mono text-xs">
+                        {[
+                            builder.caps.memory_max_bytes !== null ? `${formatBytes(builder.caps.memory_max_bytes)} RAM` : null,
+                            builder.caps.cpus !== null ? `${builder.caps.cpus} CPU` : null,
+                            `${builder.caps.tasks_max} tasks`,
+                        ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                    </span>
+                ) : (
+                    <span className="text-fg-faint text-xs">{builder.kind === 'server' ? 'Not reported yet' : '—'}</span>
+                ),
+        },
         { id: 'status', header: 'Status', cell: builderStatus },
         {
             id: 'seen',
@@ -147,7 +170,7 @@ export default function Builders({ builders, localConfigured, panelUrl, plainTok
     return (
         <SettingsLayout
             title="Builders"
-            description="Where sites are built. Builds run on the control plane, on builder servers or on machines you run yourself — app servers only receive finished artifacts."
+            description="Where sites are built. Builds run on the control plane, on builder servers or on machines you run yourself — app servers only receive finished artifacts, unless a site is set to build on its own server."
             wide
         >
             <Section
@@ -202,6 +225,22 @@ export default function Builders({ builders, localConfigured, panelUrl, plainTok
                     }}
                 />
             </Section>
+
+            {siteServers.length > 0 && (
+                <Section
+                    title="Site servers"
+                    description="Installed for sites that build on their own server. They only take those sites' builds, one at a time, capped (by default 60% of the server's RAM and all cores but one) so a build cannot take the sites down."
+                    bare
+                >
+                    <DataTable
+                        label="Site server builders"
+                        rows={siteServers}
+                        rowKey={(builder) => builder.id}
+                        columns={columns}
+                        rowActions={can.manage ? actions : undefined}
+                    />
+                </Section>
+            )}
 
             <Section
                 title="External builders"

@@ -41,7 +41,6 @@ use Falak\Processes\Contracts\ProcessControl;
 use Falak\Secrets\Contracts\Data\SecretAccessor;
 use Falak\Secrets\Contracts\Secrets;
 use Falak\Servers\Contracts\ServerDirectory;
-use Falak\Sites\Contracts\BuildMode;
 use Falak\Sites\Contracts\ComposeSites;
 use Falak\Sites\Contracts\ComposeSource;
 use Falak\Sites\Contracts\Data\SiteData;
@@ -341,10 +340,6 @@ final class Orchestrator
     private function plan(Deployment $deployment): void
     {
         $site = $this->sites->find($deployment->site_id) ?? throw new InvalidArgumentException('The site no longer exists.');
-
-        if ($site->buildMode === BuildMode::OnServer && $deployment->trigger !== Trigger::Rollback) {
-            throw new InvalidArgumentException('On-server builds are not supported yet; switch the site to native builds.');
-        }
 
         $readiness = TargetReadiness::of($site, $this->servers);
         $blocker = $readiness->blocker();

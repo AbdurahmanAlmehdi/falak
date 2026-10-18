@@ -22,12 +22,13 @@ final class BuildConfiguration
         private readonly Secrets $secrets,
     ) {}
 
-    public static function mode(SiteData $site): ?string
+    /** The builder mode; on-server builds run the same native / docker build on a builder on the site's server. */
+    public static function mode(SiteData $site): string
     {
         return match ($site->buildMode) {
             BuildMode::Native => 'native',
             BuildMode::Docker => 'docker',
-            BuildMode::OnServer => null,
+            BuildMode::OnServer => $site->runtime->usesDocker() ? 'docker' : 'native',
         };
     }
 

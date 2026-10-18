@@ -35,6 +35,11 @@ final class AssignBuild
             ->where('status', BuildStatus::Queued)
             ->whereIn('mode', $builder->modes)
             ->when($builder->organization_id !== null, fn ($q) => $q->where('organization_id', $builder->organization_id))
+            // Pinned (on-server) builds go only to the builder on their server; unpinned ones only to pool builders.
+            ->where(fn ($q) => $q
+                ->when($builder->server_id !== null, fn ($q) => $q->orWhere('builder_server_id', $builder->server_id))
+                ->when($builder->pool, fn ($q) => $q->orWhereNull('builder_server_id'))
+                ->when($builder->server_id === null && ! $builder->pool, fn ($q) => $q->whereRaw('1 = 0')))
             ->orderBy('created_at')
             ->orderBy('id')
             ->limit(10)

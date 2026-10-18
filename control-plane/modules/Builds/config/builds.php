@@ -38,6 +38,19 @@ return [
         'binaries_path' => env('FALAK_BUILDER_BINARIES_PATH', storage_path('falak/builder')),
     ],
 
+    // Limits of falak-builder on Falak servers (falak-build.slice + the BuildKit caps falak-builder applies).
+    'caps' => [
+        // Share of the server's RAM builds may use: site servers (on-server builds) / dedicated builder servers.
+        'memory_percent' => (int) env('FALAK_BUILD_MEMORY_PERCENT', 60),
+        'dedicated_memory_percent' => (int) env('FALAK_BUILD_DEDICATED_MEMORY_PERCENT', 85),
+        'tasks_max' => 4096,
+        'io_weight' => 50,
+        'cpu_weight' => 50,
+        // Disk guard thresholds handed to falak-builder; null keeps its defaults.
+        'min_free_gb' => env('FALAK_BUILD_MIN_FREE_GB'),
+        'abort_free_gb' => env('FALAK_BUILD_ABORT_FREE_GB'),
+    ],
+
     'artifacts' => [
         // local | s3
         'driver' => env('FALAK_ARTIFACTS_DRIVER', 'local'),

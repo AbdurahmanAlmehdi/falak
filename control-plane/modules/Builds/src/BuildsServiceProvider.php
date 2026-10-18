@@ -19,6 +19,7 @@ use Falak\Builds\Infrastructure\Artifacts\LocalArtifactStorage;
 use Falak\Builds\Infrastructure\Artifacts\S3ArtifactStorage;
 use Falak\Builds\Infrastructure\Artifacts\SigV4Presigner;
 use Falak\Builds\Infrastructure\EloquentBuildService;
+use Falak\Fleet\Events\AgentFactsReported;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Events\OrganizationDeleted;
@@ -78,6 +79,7 @@ class BuildsServiceProvider extends ModuleServiceProvider
         $this->app->make(AlertTypes::class)->register('builds.failed', 'Build failed', 'Builds', Severity::Warning);
 
         Event::listen(ServerProvisioned::class, [ManageServerBuilders::class, 'provisioned']);
+        Event::listen(AgentFactsReported::class, [ManageServerBuilders::class, 'facts']);
         Event::listen(ServerDeleted::class, [ManageServerBuilders::class, 'serverDeleted']);
         Event::listen(OrganizationDeleted::class, [ManageServerBuilders::class, 'organizationDeleted']);
         Event::listen(SiteDeleted::class, [ManageServerBuilders::class, 'siteDeleted']);
