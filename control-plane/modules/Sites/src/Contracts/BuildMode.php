@@ -19,7 +19,7 @@ enum BuildMode: string
         return match ($this) {
             self::Native => 'Native (Railpack)',
             self::Docker => 'Docker image',
-            self::OnServer => 'On server',
+            self::OnServer => 'Build on the site\'s server',
         };
     }
 }

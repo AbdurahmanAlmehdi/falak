@@ -4,6 +4,7 @@ namespace Falak\Recovery\Application;
 
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Identity\Contracts\OrganizationDirectory;
+use Falak\Recovery\Contracts\OperatorOrganization;
 use Falak\Recovery\Domain\Models\Dismissal;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Carbon;
@@ -15,7 +16,7 @@ use Illuminate\Support\Carbon;
  * of other organizations on a shared install never see it. The banner stays until DR is configured; a dismissal hides
  * it for recovery.dismiss_days, then it returns.
  */
-final class ControlPlaneNotice
+final class ControlPlaneNotice implements OperatorOrganization
 {
     public const PERMISSION = 'recovery.control_plane';
 
@@ -25,6 +26,11 @@ final class ControlPlaneNotice
         private readonly OrganizationDirectory $organizations,
         private readonly OrganizationAccess $access,
     ) {}
+
+    public function id(): ?string
+    {
+        return $this->operatorOrganizationId();
+    }
 
     public function operatorOrganizationId(): ?string
     {

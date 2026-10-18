@@ -2,6 +2,9 @@
 
 namespace Falak\Servers\Application;
 
+use Falak\Edge\Contracts\EdgeRoutes;
+use Falak\Network\Contracts\Firewalls;
+use Falak\Servers\Contracts\ServerStatus;
 use Falak\Servers\Domain\Models\Server;
 use Falak\Servers\Events\ServerUpdated;
 
@@ -10,6 +13,11 @@ use Falak\Servers\Events\ServerUpdated;
  */
 final class ServerFacts
 {
+    public function __construct(
+        private readonly EdgeRoutes $edge,
+        private readonly Firewalls $firewalls,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $facts
      */
@@ -37,6 +45,15 @@ final class ServerFacts
         ])->save();
 
         ServerUpdated::dispatch($server->id, $server->status->value, $server->status_message, $server->provision_command_id);
+
+        // The control plane's machine: the agent switches its edge (8080/8443 behind the control plane's edge) and
+        // firewall to local mode only on the next edge.caddy.apply / net.firewall.apply. Provisioning sends both at its
+        // end; an active server that just turned local_edge on gets them now.
+        if ($server->control_plane_host && $server->status === ServerStatus::Active
+            && ($facts['local_edge'] ?? false) === true && ($previous['local_edge'] ?? false) !== true) {
+            $this->edge->apply($server->id, force: true);
+            $this->firewalls->reapply($server->id);
+        }
     }
 
     /**

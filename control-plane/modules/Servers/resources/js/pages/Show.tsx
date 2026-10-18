@@ -265,6 +265,20 @@ export default function Show({ server, agent, metrics, services, machineCheck, c
                         : 'The agent is offline; update it once it reconnects.'}
                 </Callout>
             )}
+            {server.control_plane_host && (
+                <Callout tone="info" title="Control-plane machine">
+                    Falak's own control plane runs here and keeps {Math.round((server.reserved_memory_mb / 1024) * 10) / 10} GB of memory and a CPU
+                    share for itself; sites get the rest. Its edge owns ports 80 and 443 and forwards your sites to this server's edge (no HTTP/3).{' '}
+                    {agent &&
+                        (agent.local_edge ? (
+                            'Local edge: on.'
+                        ) : (
+                            <>
+                                Local edge: not set up yet; run <code>sudo falak-ctl local-server enable</code> on the host.
+                            </>
+                        ))}
+                </Callout>
+            )}
             {server.status_message && !['active', 'error', 'needs_attention'].includes(server.status) && (
                 <div
                     role={server.status === 'error' ? 'alert' : 'status'}

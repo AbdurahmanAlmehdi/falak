@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/falak/skeleton';
 import { Tag } from '@/components/falak/tag';
 import { cn } from '@/lib/utils';
 import { Head, Link, useForm } from '@inertiajs/react';
-import { Check, KeyRound, Terminal } from 'lucide-react';
+import { Check, KeyRound, Server as ServerIcon, Terminal } from 'lucide-react';
 import { useMemo, type FormEventHandler, type ReactNode } from 'react';
 import { useCatalog, type Image, type Region, type Size } from '../components/catalog';
 import { ProviderIcon } from '../components/server-ui';
@@ -40,6 +40,8 @@ interface Props {
     };
     sshKeys: SshKeyOption[];
     canManageProviders: boolean;
+    /** "This machine" (the control plane's own host): operators only, once the host channel exists, at most once. */
+    thisMachine: { reserve_mb: number } | null;
 }
 
 type CreateForm = {
@@ -53,6 +55,7 @@ type CreateForm = {
     timezone: string;
     stack: StackConfig;
     ssh_key_ids: string[];
+    control_plane_host: boolean;
 };
 
 const NONE = 'none';
@@ -116,7 +119,7 @@ function CatalogHint({ loading, error, empty }: { loading: boolean; error: strin
     return empty ? <span>{empty}</span> : null;
 }
 
-export default function Create({ types, providers, credentials, options, sshKeys, canManageProviders }: Props) {
+export default function Create({ types, providers, credentials, options, sshKeys, canManageProviders, thisMachine }: Props) {
     const initialType = types.find((type) => type.value === 'app') ?? types[0];
     const requested = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('provider');
     const initialProvider = providers.find((provider) => provider.value === requested)?.value ?? providers.find((p) => p.has_api)?.value ?? 'custom';
@@ -132,6 +135,7 @@ export default function Create({ types, providers, credentials, options, sshKeys
         timezone: 'UTC',
         stack: initialType.defaults,
         ssh_key_ids: [],
+        control_plane_host: false,
     });
 
     const errorBag = errors as Partial<Record<string, string>>;
@@ -166,11 +170,12 @@ export default function Create({ types, providers, credentials, options, sshKeys
         if (type) setData((current) => ({ ...current, type: value, stack: type.defaults }));
     };
 
-    const chooseProvider = (value: string) => {
-        clearErrors('provider', 'credential_id', 'region', 'size', 'image');
+    const chooseProvider = (value: string, controlPlaneHost = false) => {
+        clearErrors('provider', 'credential_id', 'region', 'size', 'image', 'control_plane_host');
         setData((current) => ({
             ...current,
             provider: value,
+            control_plane_host: controlPlaneHost,
             credential_id: credentials.find((credential) => credential.provider === value)?.id ?? '',
             region: '',
             size: '',
@@ -229,7 +234,7 @@ export default function Create({ types, providers, credentials, options, sshKeys
                             return (
                                 <ChoiceCard
                                     key={option.value}
-                                    selected={data.provider === option.value}
+                                    selected={data.provider === option.value && !data.control_plane_host}
                                     onSelect={() => chooseProvider(option.value)}
                                     icon={<ProviderIcon provider={option.value} />}
                                     title={option.value === 'custom' ? 'Custom server' : option.label}
@@ -243,8 +248,18 @@ export default function Create({ types, providers, credentials, options, sshKeys
                                 />
                             );
                         })}
+                        {thisMachine && (
+                            <ChoiceCard
+                                selected={data.control_plane_host}
+                                onSelect={() => chooseProvider('custom', true)}
+                                icon={<ServerIcon className="size-4" aria-hidden />}
+                                title="This machine"
+                                description="The control plane's own server"
+                            />
+                        )}
                     </div>
                     {errors.provider && <p className="text-danger text-xs">{errors.provider}</p>}
+                    {errors.control_plane_host && <p className="text-danger text-xs">{errors.control_plane_host}</p>}
                 </Section>
 
                 <Section title="2. Server" description="A name you'll recognise, and what the machine is for.">
@@ -398,6 +413,33 @@ export default function Create({ types, providers, credentials, options, sshKeys
                             </>
                         )}
                     </Section>
+                ) : data.control_plane_host && thisMachine ? (
+                    <Section
+                        title="3. Run sites next to the control plane"
+                        description="Falak installs the agent on this machine for you, through falak-ctl on the host."
+                    >
+                        <ul className="text-fg-muted grid list-disc gap-1.5 pl-5 text-sm">
+                            <li>
+                                {thisMachine.reserve_mb >= 1024
+                                    ? `${(thisMachine.reserve_mb / 1024).toFixed(1).replace(/\.0$/, '')} GB`
+                                    : `${thisMachine.reserve_mb} MB`}{' '}
+                                of memory and a CPU share stay reserved for Falak itself; sites get the rest, capped so a build or a busy site can't
+                                take the panel down.
+                            </li>
+                            <li>
+                                The control plane's edge keeps ports 80 and 443 and hands your sites' domains to the agent's edge. HTTP/3 is not
+                                available for sites on this machine.
+                            </li>
+                            <li>Falak keeps this machine's Docker, SSH, swap and hostname as they are.</li>
+                            <li>
+                                If this machine is lost, the panel and these sites go down together: keep disaster recovery set up and move important
+                                sites to their own servers.
+                            </li>
+                        </ul>
+                        <Field label="Timezone" error={errors.timezone} className="sm:max-w-xs">
+                            <Input value={data.timezone} onChange={(event) => setData('timezone', event.target.value)} placeholder="UTC" mono />
+                        </Field>
+                    </Section>
                 ) : (
                     <Section title="3. Connect your machine" description="Any Ubuntu 22.04 / 24.04 LTS server with outbound HTTPS.">
                         <div className="flex items-start gap-3">
@@ -545,7 +587,7 @@ export default function Create({ types, providers, credentials, options, sshKeys
                                 <Link href="/servers">Cancel</Link>
                             </Button>
                             <Button type="submit" variant="primary" loading={processing} disabled={!ready}>
-                                {hasApi ? 'Create server' : 'Create & get install command'}
+                                {hasApi ? 'Create server' : data.control_plane_host ? 'Add this machine' : 'Create & get install command'}
                             </Button>
                         </div>
                     </div>

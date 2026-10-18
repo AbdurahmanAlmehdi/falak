@@ -33,6 +33,10 @@ export interface ServerSummary {
     memory_percent: number | null;
     disk_percent: number | null;
     created_at: string;
+    /** The control plane's own machine ("This machine"). */
+    control_plane_host: boolean;
+    /** Memory kept for the control plane there (0 elsewhere). */
+    reserved_memory_mb: number;
 }
 
 export interface ServerDetails extends ServerSummary {
@@ -74,6 +78,8 @@ export interface AgentDetails {
     runtimes: Record<string, string[]>;
     docker: string | null;
     kernel: string | null;
+    /** The control plane's machine: the agent's edge runs behind the control plane's edge (falak-ctl local-server enable). */
+    local_edge: boolean;
 }
 
 export interface MetricSample {

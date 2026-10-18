@@ -39,6 +39,7 @@ final class Modules
         'Sandboxes',
         'Terminal',
         'Recovery',
+        'ControlPlane',
         'Config',
     ];
 

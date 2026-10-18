@@ -22,6 +22,10 @@ return [
     ],
     'default_node' => '22',
 
+    // The control plane's own machine as a server: memory falak-ctl keeps for the control plane (falakcp.slice
+    // MemoryMin), never allocatable to sites there. Must match the host's FALAK_CP_RESERVE_MB.
+    'control_plane_reserve_mb' => (int) env('FALAK_CP_RESERVE_MB', 1536),
+
     'frankenphp' => [
         'version' => env('FALAK_FRANKENPHP_VERSION', '1.9.1'),
         'sha256' => env('FALAK_FRANKENPHP_SHA256'),

@@ -35,6 +35,7 @@ final class StoreServerRequest extends FormRequest
             'stack.node' => ['nullable', 'string'],
             'ssh_key_ids' => ['nullable', 'array'],
             'ssh_key_ids.*' => ['string'],
+            'control_plane_host' => ['sometimes', 'boolean'],
         ];
     }
 

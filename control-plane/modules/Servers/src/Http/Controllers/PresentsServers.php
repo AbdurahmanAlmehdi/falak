@@ -46,6 +46,8 @@ trait PresentsServers
             'memory_percent' => $this->percent($metrics['memory_used_bytes'] ?? null, $server->memory_bytes),
             'disk_percent' => $this->percent($metrics['disk_used_bytes'] ?? null, $server->disk_bytes),
             'created_at' => $server->created_at->toIso8601String(),
+            'control_plane_host' => (bool) $server->control_plane_host,
+            'reserved_memory_mb' => $server->control_plane_host ? (int) config('servers.control_plane_reserve_mb', 1536) : 0,
         ];
     }
 

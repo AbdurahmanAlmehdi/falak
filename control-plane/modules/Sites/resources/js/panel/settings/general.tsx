@@ -307,7 +307,16 @@ export function BuildSettings({ ctx }: ServiceTabProps) {
                         options={runtimes.map((item) => ({ value: item.value, label: item.label }))}
                     />
                 </Field>
-                <Field label="Build mode" aside={badge('/build/mode')} error={errors.build_mode}>
+                <Field
+                    label="Build mode"
+                    aside={badge('/build/mode')}
+                    error={errors.build_mode}
+                    hint={
+                        draft.build_mode === 'on-server'
+                            ? "Builds run on this site's leader server inside a capped slice (60% of RAM, all CPUs but one by default); needs ≥ 2 GB RAM."
+                            : undefined
+                    }
+                >
                     <Select
                         value={draft.build_mode}
                         disabled={lock('/build/mode')}

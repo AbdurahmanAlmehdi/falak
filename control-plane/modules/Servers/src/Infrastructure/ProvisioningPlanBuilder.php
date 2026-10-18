@@ -21,7 +21,7 @@ use Illuminate\Support\Str;
  *
  * With a machine check (agents with provision.v2) the plan follows its decisions: adopted and blocked components
  * install nothing (an adopted engine keeps its service entry), completed ones install only their missing packages, an
- * adopted swap / hostname is left out, and `components` tells the agent what was adopted.
+ * adopted swap / hostname / SSH is left out, and `components` tells the agent what was adopted.
  */
 final class ProvisioningPlanBuilder
 {
@@ -66,6 +66,11 @@ final class ProvisioningPlanBuilder
 
             if ($this->decided($check, 'hostname', Decision::Adopt)) {
                 unset($plan['hostname']);
+            }
+
+            // Only the control plane's machine adopts SSH: its sshd stays as the operator set it up.
+            if ($this->decided($check, 'ssh', Decision::Adopt)) {
+                unset($plan['ssh']);
             }
 
             $plan['components'] = $this->components($check);

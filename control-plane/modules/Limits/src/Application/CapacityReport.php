@@ -13,7 +13,7 @@ use Falak\Servers\Contracts\Data\ServerData;
  * the server has (the agent's facts). Limits summing past the RAM is overcommitment — fine while services stay under
  * their limits, an OOM risk when they don't; reservations past the RAM can't all be honoured at once.
  *
- * @phpstan-type Capacity array{server: array{id: string, name: string, memory_mb: ?int, cpus: ?int}, totals: array{memory_limit_mb: int, memory_reservation_mb: int, cpus: float}, unlimited: array{memory: int, cpus: int}, overcommitted: array{memory: bool, reservations: bool, cpus: bool}, items: list<array<string, mixed>>, warnings: list<string>}
+ * @phpstan-type Capacity array{server: array{id: string, name: string, memory_mb: ?int, cpus: ?int, total_memory_mb: ?int, reserved_memory_mb: int}, totals: array{memory_limit_mb: int, memory_reservation_mb: int, cpus: float}, unlimited: array{memory: int, cpus: int}, overcommitted: array{memory: bool, reservations: bool, cpus: bool}, items: list<array<string, mixed>>, warnings: list<string>}
  */
 final class CapacityReport
 {
@@ -37,7 +37,9 @@ final class CapacityReport
         usort($items, fn (CapacityItem $a, CapacityItem $b) => [$b->memoryLimitMb ?? -1, $a->name] <=> [$a->memoryLimitMb ?? -1, $b->name]);
 
         $facts = $this->agents->forServer($server->id)?->facts ?? [];
-        $memoryMb = is_numeric($facts['memory_bytes'] ?? null) ? intdiv((int) $facts['memory_bytes'], 1024 ** 2) : null;
+        $totalMb = is_numeric($facts['memory_bytes'] ?? null) ? intdiv((int) $facts['memory_bytes'], 1024 ** 2) : null;
+        // The control plane's machine keeps a share for the control plane: only the rest is allocatable.
+        $memoryMb = $totalMb !== null ? max(0, $totalMb - $server->reservedMemoryMb) : null;
         $cores = is_numeric($facts['cpus'] ?? null) ? (int) $facts['cpus'] : null;
 
         $limit = array_sum(array_map(fn (CapacityItem $item) => $item->memoryLimitMb ?? 0, $items));
@@ -60,7 +62,7 @@ final class CapacityReport
         ]));
 
         return [
-            'server' => ['id' => $server->id, 'name' => $server->name, 'memory_mb' => $memoryMb, 'cpus' => $cores],
+            'server' => ['id' => $server->id, 'name' => $server->name, 'memory_mb' => $memoryMb, 'cpus' => $cores, 'total_memory_mb' => $totalMb, 'reserved_memory_mb' => $server->reservedMemoryMb],
             'totals' => ['memory_limit_mb' => $limit, 'memory_reservation_mb' => $reserved, 'cpus' => $cpus],
             'unlimited' => ['memory' => $unlimitedMemory, 'cpus' => $unlimitedCpus],
             'overcommitted' => $over,

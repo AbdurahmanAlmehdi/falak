@@ -5,7 +5,8 @@ import { Link } from '@inertiajs/react';
 
 /** GET /servers/{server}/capacity. */
 interface CapacityData {
-    server: { id: string; name: string; memory_mb: number | null; cpus: number | null };
+    /** memory_mb: allocatable (the total minus reserved_memory_mb, kept for the control plane on its own machine). */
+    server: { id: string; name: string; memory_mb: number | null; cpus: number | null; total_memory_mb: number | null; reserved_memory_mb: number };
     totals: { memory_limit_mb: number; memory_reservation_mb: number; cpus: number };
     unlimited: { memory: number; cpus: number };
     overcommitted: { memory: boolean; reservations: boolean; cpus: boolean };
@@ -84,7 +85,11 @@ export function CapacityCard({ serverId }: { serverId: string }) {
     return (
         <Section
             title="Capacity"
-            description="What the services on this server may use, against what it has."
+            description={
+                data.server.reserved_memory_mb > 0
+                    ? `What the services on this server may use, against what it has: ${memoryLabel(data.server.reserved_memory_mb)} of its memory is kept for the control plane.`
+                    : 'What the services on this server may use, against what it has.'
+            }
             aside={
                 (data.overcommitted.memory || data.overcommitted.cpus || data.overcommitted.reservations) && <Tag tone="warning">Overcommitted</Tag>
             }

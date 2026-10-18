@@ -33,6 +33,10 @@ final readonly class ServerData
         public ?string $region = null,
         /** Sandboxes may run here (a server can opt out). */
         public bool $sandboxesEnabled = true,
+        /** The control plane's own machine ("This machine"). */
+        public bool $controlPlaneHost = false,
+        /** Memory kept for the control plane on this machine (FALAK_CP_RESERVE_MB): not allocatable to workloads. */
+        public int $reservedMemoryMb = 0,
     ) {}
 
     public function isActive(): bool

@@ -31,6 +31,13 @@ final class CreateSite
 {
     public const SLUG_PATTERN = '/^[a-z0-9][a-z0-9-]{0,62}$/';
 
+    /**
+     * Slugs a site never gets: a compose site's project is its slug, and the control plane's own compose project is
+     * `falak` (deploy/compose.yml). Its containers are falak-<service>-1, so a slug + "-" + service could also be
+     * falak-control + plane (falak-control-plane-1) or falak-agent + api (falak-agent-api-1).
+     */
+    public const RESERVED_SLUGS = ['falak', 'falak-control', 'falak-agent'];
+
     /** @var list<string> warnings from the source control provider */
     public array $warnings = [];
 
@@ -301,7 +308,7 @@ final class CreateSite
         $base = preg_match(self::SLUG_PATTERN, $base) === 1 ? $base : 'site-'.$base;
         $slug = $base;
 
-        for ($i = 2; Site::query()->where('slug', $slug)->exists(); $i++) {
+        for ($i = 2; in_array($slug, self::RESERVED_SLUGS, true) || Site::query()->where('slug', $slug)->exists(); $i++) {
             $slug = "{$base}-{$i}";
         }
 

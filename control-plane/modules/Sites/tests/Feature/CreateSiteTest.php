@@ -72,7 +72,7 @@ it('creates a Laravel site on several servers with a leader, preset defaults and
 it('never gives an isolated site a unix user in Falak\'s falak- namespace (Redis / Valkey instance users)', function () {
     $server = sites_server($this->organization->id, php: ['8.4'], phpRuntime: 'fpm');
 
-    foreach (['falak-redis-cache' => 's-falak-redis-cache', 'Falak' => 's-falak', 'falakworks' => 's-falakworks'] as $name => $user) {
+    foreach (['falak-redis-cache' => 's-falak-redis-cache', 'Falak' => 's-falak-2' /* slug falak is reserved */, 'falakworks' => 's-falakworks'] as $name => $user) {
         $this->post('/sites', sites_input([$server->id], ['runtime' => 'php-fpm', 'php_version' => '8.4', 'isolated' => true, 'name' => $name]))->assertSessionHasNoErrors();
         expect(Site::query()->where('name', $name)->value('unix_user'))->toBe($user);
     }
@@ -208,6 +208,20 @@ it('only allows on-server builds with at least 2 GB of RAM', function () {
     $this->post('/sites', sites_input([$big->id], ['build_mode' => 'on-server']))->assertSessionHasNoErrors();
 
     expect(Site::query()->firstOrFail()->build_mode)->toBe(BuildMode::OnServer);
+});
+
+it('never gives a site the control plane\'s compose project name', function () {
+    $server = sites_server($this->organization->id);
+
+    $this->post('/sites', sites_input([$server->id], ['slug' => 'falak']))->assertSessionHasErrors(['slug' => 'This name is reserved for Falak\'s own control plane.']);
+    $this->post('/sites', sites_input([$server->id], ['slug' => 'falak-control']))->assertSessionHasErrors('slug');
+
+    // A generated slug steps around it.
+    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak']))->assertSessionHasNoErrors();
+    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak Agent']))->assertSessionHasNoErrors();
+    $this->post('/sites', sites_input([$server->id], ['name' => 'Falak docs']))->assertSessionHasNoErrors();
+
+    expect(Site::query()->orderBy('created_at')->pluck('slug')->all())->toBe(['falak-2', 'falak-agent-2', 'falak-docs']);
 });
 
 it('makes slugs unique and keeps a manual deploy key for custom git', function () {
