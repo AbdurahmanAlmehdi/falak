@@ -104,6 +104,10 @@ func (b *Builder) Build(ctx context.Context, jb Job, sink commands.EventSink) (r
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 				code, msg = ExitTimeout, secrets.String(fmt.Sprintf("build timed out after %s: %v", jb.Timeout(), err))
 			}
+			var low DiskLowError
+			if errors.As(context.Cause(ctx), &low) {
+				msg = low.Error() // the disk guard (Server) stopped it: say so, not "signal: killed"
+			}
 			fmt.Fprintf(j.errw, "build failed: %s\n", msg)
 		}
 		_ = out.Flush()

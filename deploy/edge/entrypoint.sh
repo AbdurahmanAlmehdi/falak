@@ -8,6 +8,8 @@
 #    discarded) is trusted, so every non-enroll agent call fails closed;
 #  - serves $FALAK_AGENT_API_HOST with the Fleet-issued server certificate (agent-api.{pem,key}) once present;
 #  - publishes Caddy's internal root to $FALAK_EDGE_PKI_OUT (FALAK_TLS=internal: the builder trusts it);
+#  - FALAK_LOCAL_EDGE=1 (falak-ctl local-server enable): layer4 listener wrappers on the HTTP/HTTPS servers hand every
+#    host this edge does not serve itself to the control-plane machine's own agent edge (PROXY protocol v2);
 #  - hot-reloads Caddy whenever any of that changes.
 set -eu
 
@@ -104,6 +106,105 @@ SITE
   unset REGISTRY_HASH
 fi
 
+# --- local edge: sites on the control-plane machine ------------------------------------------------------
+# The agent on this machine runs its own edge on FALAK_LOCAL_EDGE_UPSTREAM_HTTPS / _HTTP (the edge network's gateway).
+# Keep-list = every host the config without these files serves (from `caddy adapt`, operator files included);
+# TLS (by SNI) and plain HTTP (by Host) of any other host is passed through untouched, with the client address in a
+# PROXY v2 header. HTTP/3 (udp) stays with this edge and its own hosts. Unset: the files are absent and the config
+# is exactly the one without the feature.
+LOCAL_EDGE_GLOBAL=/etc/caddy/global/local-edge.caddyfile
+LOCAL_EDGE_SITE=/etc/caddy/sites/local-edge.caddyfile
+LOCAL_EDGE_SUM=""
+
+# valid_upstream HOST:PORT : an IPv4 address or DNS name and a port, nothing Caddy could parse as more.
+valid_upstream() {
+  case "$1" in *[!A-Za-z0-9.:-]*|:*|*:|*:*:*|'') return 1 ;; esac
+  case "$1" in *:*) ;; *) return 1 ;; esac
+  case "${1##*:}" in *[!0-9]*) return 1 ;; esac
+  return 0
+}
+
+if [ "${FALAK_LOCAL_EDGE:-}" = 1 ]; then
+  for v in "${FALAK_LOCAL_EDGE_UPSTREAM_HTTPS:-}" "${FALAK_LOCAL_EDGE_UPSTREAM_HTTP:-}"; do
+    valid_upstream "$v" || { echo "falak-edge: FALAK_LOCAL_EDGE=1 needs FALAK_LOCAL_EDGE_UPSTREAM_HTTPS and _HTTP as host:port" >&2; exit 2; }
+  done
+fi
+
+local_edge_inputs() { # checksum of everything the keep-list comes from
+  for f in /etc/caddy/custom/*.caddyfile /etc/caddy/sites/*.caddyfile; do
+    [ "$f" = "$LOCAL_EDGE_SITE" ] || cat "$f" 2>/dev/null || true
+  done | md5sum
+}
+
+render_local_edge() { # 0 when the files changed
+  if [ "${FALAK_LOCAL_EDGE:-}" != 1 ]; then
+    [ -e "$LOCAL_EDGE_GLOBAL" ] || [ -e "$LOCAL_EDGE_SITE" ] || return 1
+    rm -f "$LOCAL_EDGE_GLOBAL" "$LOCAL_EDGE_SITE"; return 0
+  fi
+  sum="$(local_edge_inputs)"
+  [ "$sum" != "$LOCAL_EDGE_SUM" ] || return 1
+  LOCAL_EDGE_SUM="$sum"
+  had=0; [ ! -e "$LOCAL_EDGE_GLOBAL" ] || had=1
+  rm -f "$LOCAL_EDGE_GLOBAL" "$LOCAL_EDGE_SITE"
+  if ! json="$(caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null)"; then
+    LOCAL_EDGE_SUM=""   # retried at the next poll
+    echo "falak-edge: local edge: caddy adapt failed, not passing other hosts through" >&2
+    [ "$had" = 1 ]; return
+  fi
+  hosts=""
+  set -f   # *.example.com is a host, not a glob
+  # The edge's own hosts always stay, whatever adapt reports; then every host matcher of the config. Matching is
+  # case-insensitive in Caddy, the keep-list is lowercase. (valid_hosts loops over $h: another name here.)
+  for kh in $( {
+    printf '%s\n' "$FALAK_DOMAIN" "${FALAK_DOMAIN_ALIASES:-}" "$AGENT_HOST" "${FALAK_AGENT_API_HOST_ALIASES:-}" \
+      "${FALAK_REGISTRY_HOST:-}" "${FALAK_REGISTRY_HOST_ALIASES:-}" "${FALAK_GRAFANA_HOST:-}" | tr ',' '\n'
+    printf '%s' "$json" | jq -r '.. | objects | select(has("host")) | .host | arrays | .[] | strings'
+  } | tr '[:upper:]' '[:lower:]' | sort -u ); do
+    # Wildcards (*.example.com) work in both matchers.
+    if valid_hosts "${kh#\*.}"; then hosts="$hosts $kh"; else echo "falak-edge: local edge: not keeping host '$kh' (not a DNS name)" >&2; fi
+  done
+  set +f
+  [ -n "$hosts" ] || hosts=" $FALAK_DOMAIN"
+  https_port="${FALAK_HTTPS_PORT:-443}"; redir_port=""; [ "$https_port" = 443 ] || redir_port=":$https_port"
+  cat > "$LOCAL_EDGE_GLOBAL" <<CONF
+servers :$https_port {
+	listener_wrappers {
+		layer4 {
+			@falak_local not tls sni$hosts
+			route @falak_local {
+				proxy {
+					proxy_protocol v2
+					upstream $FALAK_LOCAL_EDGE_UPSTREAM_HTTPS
+				}
+			}
+		}
+		tls
+	}
+}
+servers :${FALAK_HTTP_PORT:-80} {
+	listener_wrappers {
+		layer4 {
+			@falak_local not http host$hosts
+			route @falak_local {
+				proxy {
+					proxy_protocol v2
+					upstream $FALAK_LOCAL_EDGE_UPSTREAM_HTTP
+				}
+			}
+		}
+	}
+}
+CONF
+  # An explicit HTTP server: Caddy's implicit redirect server takes no `servers` options (no listener wrapper).
+  cat > "$LOCAL_EDGE_SITE" <<CONF
+http:// {
+	redir https://{host}$redir_port{uri} 308
+}
+CONF
+  echo "falak-edge: local edge: keeping$hosts; every other host goes to $FALAK_LOCAL_EDGE_UPSTREAM_HTTPS / $FALAK_LOCAL_EDGE_UPSTREAM_HTTP"
+  return 0
+}
+
 # --- dynamic: Fleet CA + agent API certificate ---------------------------------------------------------
 placeholder() {
   tmp=$(mktemp -d)
@@ -165,6 +266,7 @@ publish_root() {
 
 sync_ca || true
 sync_agent_site || true
+render_local_edge || true
 
 (
   while sleep "${FALAK_EDGE_CA_POLL:-3}"; do
@@ -172,9 +274,10 @@ sync_agent_site || true
     changed=0
     sync_ca && changed=1
     sync_agent_site && changed=1
+    render_local_edge && changed=1
     if [ "$changed" = 1 ]; then
       if caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force >/dev/null 2>&1; then
-        echo "falak-edge: reloaded (Fleet CA / agent API certificate changed)"
+        echo "falak-edge: reloaded (Fleet CA / agent API certificate / local edge hosts changed)"
       else
         echo "falak-edge: reload failed" >&2
       fi

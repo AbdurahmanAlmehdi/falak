@@ -31,13 +31,13 @@ beforeEach(function () {
 });
 
 it('records a compose `name:` (and legacy external name) as external, so its stack can never delete the volume it points at', function () {
-    $victim = volumes_volume($this->organization->id, $this->server, 'db', VolumeKind::Docker, ['protected' => true]);
+    $victim = volumes_volume($this->organization->id, $this->server, 'db', VolumeKind::Docker, ['protected' => true, 'docker_name' => 'shared-db']);
     $site = volumes_docker_site($this->organization->id, [$this->server], 'Evil');
-    $yaml = "services:\n  app:\n    image: alpine\n    volumes: [steal:/steal, old:/old]\nvolumes:\n  steal:\n    name: falak-db\n  old:\n    external:\n      name: legacy-vol\n";
+    $yaml = "services:\n  app:\n    image: alpine\n    volumes: [steal:/steal, old:/old]\nvolumes:\n  steal:\n    name: shared-db\n  old:\n    external:\n      name: legacy-vol\n";
 
     app(ServiceVolumes::class)->composeDeployed($this->organization->id, $site->id, $this->server->id, 'evil', $yaml);
 
-    $alias = Volume::query()->where('docker_name', 'falak-db')->whereKeyNot($victim->id)->sole();
+    $alias = Volume::query()->where('docker_name', 'shared-db')->whereKeyNot($victim->id)->sole();
     expect($alias->external())->toBeTrue()
         ->and(Volume::query()->where('docker_name', 'legacy-vol')->sole()->external())->toBeTrue();
 

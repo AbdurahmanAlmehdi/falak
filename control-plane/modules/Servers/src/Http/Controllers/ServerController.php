@@ -2,15 +2,19 @@
 
 namespace Falak\Servers\Http\Controllers;
 
+use Falak\ControlPlane\Contracts\Exceptions\HostRequestRefused;
+use Falak\ControlPlane\Contracts\HostChannel;
 use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentUpgrades;
 use Falak\Fleet\Contracts\Data\MetricSample;
+use Falak\Identity\Contracts\AuditLog;
 use Falak\Identity\Contracts\CurrentOrganization;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
 use Falak\Providers\Contracts\Data\CredentialSummary;
 use Falak\Providers\Contracts\ProviderGateway;
 use Falak\Providers\Contracts\ProviderType;
+use Falak\Recovery\Contracts\OperatorOrganization;
 use Falak\Servers\Application\Actions\ChangeServerTimezone;
 use Falak\Servers\Application\Actions\CreateServer;
 use Falak\Servers\Application\Actions\DeleteServer;
@@ -29,6 +33,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -38,6 +43,9 @@ final class ServerController extends Controller
 
     public const METRIC_RANGES = ['1h' => 1, '6h' => 6, '24h' => 24];
 
+    /** The ControlPlane module's operator permission: "This machine" is an instance-operator action. */
+    private const CONTROL_PLANE_PERMISSION = 'controlplane.update';
+
     public function __construct(
         private readonly CurrentOrganization $organization,
         private readonly OrganizationAccess $access,
@@ -45,6 +53,7 @@ final class ServerController extends Controller
         private readonly ServerServices $services,
         private readonly AgentUpgrades $upgrades,
         private readonly MachineChecks $checks,
+        private readonly OperatorOrganization $operator,
     ) {}
 
     public function index(Request $request): Response
@@ -91,7 +100,7 @@ final class ServerController extends Controller
         ]);
     }
 
-    public function create(Request $request, ProviderGateway $providers): Response
+    public function create(Request $request, ProviderGateway $providers, HostChannel $host): Response
     {
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, 'servers.create');
@@ -117,20 +126,25 @@ final class ServerController extends Controller
             ],
             'sshKeys' => SshKey::query()->where('organization_id', $organizationId)->orderBy('name')->get(['id', 'name', 'fingerprint']),
             'canManageProviders' => $this->access->can($request->user(), $organizationId, 'providers.manage'),
+            // Shown disabled (with the falak-ctl command) until the operator allowed it on the host.
+            'thisMachine' => $this->thisMachineOffered($request, $organizationId, $host)
+                ? ['reserve_mb' => (int) config('servers.control_plane_reserve_mb', 1536), 'allowed' => $host->localServerAllowed(), 'hint' => $host->localServerAllowed() ? null : CreateServer::RUN_ALLOW]
+                : null,
         ]);
     }
 
-    public function store(StoreServerRequest $request, CreateServer $create): RedirectResponse
+    public function store(StoreServerRequest $request, CreateServer $create, HostChannel $host): RedirectResponse
     {
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, 'servers.create');
+        abort_if($request->boolean('control_plane_host') && ! $this->thisMachineOffered($request, $organizationId, $host), 403);
 
         $server = $create($organizationId, $request->user()?->getAuthIdentifier(), $request->validated());
 
         return to_route('servers.show', $server);
     }
 
-    public function show(Request $request, Server $server): Response
+    public function show(Request $request, Server $server, HostChannel $host): Response
     {
         $this->authorize('view', $server);
         $server->load('phpVersions');
@@ -161,6 +175,9 @@ final class ServerController extends Controller
                 // Without a live agent nobody can be displaced; otherwise only agent managers see (re)install commands.
                 'install_command' => ($canUpdate && $awaitingAgent) || $canManageAgents ? $server->install_command : null,
                 'can_regenerate_install_command' => $canManageAgents,
+                'local_server' => $server->control_plane_host && $awaitingAgent && $this->operatorCan($request, $server->organization_id)
+                    ? $this->localServer($server, $host)
+                    : null,
             ],
             'agent' => $agent ? [
                 'id' => $agent->id,
@@ -174,6 +191,7 @@ final class ServerController extends Controller
                 'runtimes' => $agent->facts['runtimes'] ?? (object) [],
                 'docker' => $agent->facts['docker'] ?? null,
                 'kernel' => $agent->facts['kernel'] ?? null,
+                'local_edge' => ($agent->facts['local_edge'] ?? false) === true,
             ] : null,
             'metrics' => $this->samples($server, '1h'),
             'machineCheck' => $this->machineCheck($server, $this->checks),
@@ -283,6 +301,78 @@ final class ServerController extends Controller
                 ->get(['id', 'name', 'ipv4', 'type', 'status'])
                 ->map(fn (Server $server) => ['id' => $server->id, 'name' => $server->name, 'ipv4' => $server->ipv4, 'type' => $server->type->value, 'status' => $server->status->value]),
         ]);
+    }
+
+    /**
+     * "Retry on this host": the control plane's machine was added but its agent never enrolled (the local-server request
+     * failed or the host never ran it). A fresh install token goes to the host channel again.
+     */
+    public function retryLocalServer(Request $request, Server $server, HostChannel $host, RegenerateInstallCommand $regenerate, AuditLog $audit): RedirectResponse
+    {
+        $this->authorize('update', $server);
+        abort_unless($server->control_plane_host && $this->operatorCan($request, $server->organization_id), 403);
+        abort_if($this->agents->forServer($server->id) !== null, 422, 'The agent on this machine has enrolled already.');
+
+        $refuse = fn (string $message) => throw ValidationException::withMessages(['local_server' => $message]);
+
+        match (true) {
+            ! $host->available() => $refuse(CreateServer::RUN_UP),
+            ! $host->localServerAllowed() => $refuse(CreateServer::RUN_ALLOW),
+            $host->state()['busy'] => $refuse('The control plane\'s host is busy with another request; try again once it finishes.'),
+            default => null,
+        };
+
+        $install = $regenerate($server);
+
+        try {
+            $id = $host->requestLocalServer($install->url, (string) $request->user()?->getAuthIdentifier());
+        } catch (HostRequestRefused $e) {
+            $refuse($e->getMessage());
+        }
+
+        $audit->record('server.local_server_retried', 'server', $server->id, ['request_id' => $id], $server->organization_id);
+
+        return back()->with('success', 'Asked the host to install the agent again.');
+    }
+
+    /**
+     * "This machine" in Add server: the operator organization's owners and admins, once the host channel exists
+     * (falak-ctl ≥ v0.23) and while the control plane's machine is not a server yet.
+     */
+    private function thisMachineOffered(Request $request, string $organizationId, HostChannel $host): bool
+    {
+        return $this->operatorCan($request, $organizationId)
+            && $host->available()
+            && ! Server::query()->where('control_plane_host', true)->exists();
+    }
+
+    private function operatorCan(Request $request, string $organizationId): bool
+    {
+        return $organizationId === $this->operator->id()
+            && $this->access->can($request->user(), $organizationId, self::CONTROL_PLANE_PERMISSION);
+    }
+
+    /**
+     * The control plane's machine before its agent enrolled: whether a retry can go to the host now, and the command
+     * that does the same by hand on the host.
+     *
+     * @return array{can_retry: bool, hint: ?string, manual_command: ?string}
+     */
+    private function localServer(Server $server, HostChannel $host): array
+    {
+        preg_match('#https?://\S+/install/[A-Za-z0-9_-]+#', (string) $server->install_command, $url);
+        $hint = match (true) {
+            ! $host->available() => CreateServer::RUN_UP,
+            ! $host->localServerAllowed() => CreateServer::RUN_ALLOW,
+            $host->state()['busy'] => 'The host is busy with another request.',
+            default => null,
+        };
+
+        return [
+            'can_retry' => $hint === null,
+            'hint' => $hint,
+            'manual_command' => isset($url[0]) ? 'sudo falak-ctl local-server enable --install-url '.$url[0] : null,
+        ];
     }
 
     /**

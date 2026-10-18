@@ -20,6 +20,10 @@ use Illuminate\Validation\ValidationException;
  * services switch to it and redeploy → the source is deleted. Each step starts when the previous one succeeded
  * (HandleCommandOutcome); a failure stops the move with the source untouched and redeploys the services where they
  * were. The services are down from the archive to the redeploy. They must already run on the target server.
+ *
+ * A compose stack's volume (moving its site, Recovery's SiteMove only: $compose) is restored into a volume of the same
+ * Docker name and compose key on the target, which the stack's `up` there uses; nothing is handed over or deleted
+ * here (the stack switches when it deploys there, the source goes with VolumeRecovery::finishMove()).
  */
 final class MoveVolume
 {
@@ -33,13 +37,13 @@ final class MoveVolume
     /**
      * @throws ValidationException
      */
-    public function __invoke(Volume $source, string $serverId, string $storageProviderId, ?string $actorId = null): Operation
+    public function __invoke(Volume $source, string $serverId, string $storageProviderId, ?string $actorId = null, bool $compose = false): Operation
     {
         if (! $source->kind->portable() || $source->status !== VolumeStatus::Active) {
             throw ValidationException::withMessages(['volume' => 'Only active Docker and sized volumes can be moved.']);
         }
 
-        if ($source->composeKey() !== null) {
+        if ($source->composeKey() !== null && ! $compose) {
             throw ValidationException::withMessages(['volume' => 'A compose stack’s volume moves with its stack: clone it instead.']);
         }
 
@@ -61,8 +65,14 @@ final class MoveVolume
         }
 
         $target = $this->create->prepare($source->organization_id, $serverId, $source->name, $source->kind, $source->size_limit_bytes, labels: (array) $source->labels, protected: $source->protected, actorId: $actorId);
+        $compose = $source->composeKey() !== null;
 
-        $operation = DB::transaction(function () use ($target, $source, $actorId) {
+        if ($compose) {
+            // The stack's `up` on the target finds the restored volume by its Docker name; SyncComposeVolumes by its key.
+            $target->forceFill(['docker_name' => $source->docker_name, 'options' => $source->options]);
+        }
+
+        $operation = DB::transaction(function () use ($target, $source, $actorId, $compose) {
             CreateVolume::save($target);
 
             return Operation::query()->create([
@@ -70,7 +80,7 @@ final class MoveVolume
                 'volume_id' => $target->id,
                 'kind' => OperationKind::Move,
                 'status' => OperationStatus::Running,
-                'meta' => ['source_id' => $source->id, 'source_name' => $source->name, 'from_server_id' => $source->server_id],
+                'meta' => ['source_id' => $source->id, 'source_name' => $source->name, 'from_server_id' => $source->server_id, ...($compose ? ['compose' => true] : [])],
                 'requested_by' => $actorId,
             ]);
         });

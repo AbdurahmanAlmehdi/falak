@@ -3,6 +3,7 @@
 use Falak\Recovery\Http\Controllers\DisasterRecoveryController;
 use Falak\Recovery\Http\Controllers\ReadinessController;
 use Falak\Recovery\Http\Controllers\ServerRecoveryController;
+use Falak\Recovery\Http\Controllers\SiteMoveController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['auth', 'org'])->group(function () {
@@ -17,4 +18,15 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::post('servers/{server}/recovery', [ServerRecoveryController::class, 'store'])->where('server', '[0-9A-Za-z]{26}')->name('recovery.server.store');
     Route::get('recoveries/{recovery}', [ServerRecoveryController::class, 'progress'])->where('recovery', '[0-9A-Za-z]{26}')->name('recovery.progress');
     Route::post('recoveries/{recovery}/steps/{step}/retry', [ServerRecoveryController::class, 'retry'])->where('recovery', '[0-9A-Za-z]{26}')->name('recovery.retry');
+
+    // "Move to another server" (sites.manage): a site's move, and a server's "Move all sites".
+    Route::get('sites/{site}/move', [SiteMoveController::class, 'show'])->where('site', '[0-9A-Za-z]{26}')->name('recovery.site_move');
+    Route::post('sites/{site}/move/plan', [SiteMoveController::class, 'plan'])->where('site', '[0-9A-Za-z]{26}')->name('recovery.site_move.plan');
+    Route::post('sites/{site}/move', [SiteMoveController::class, 'store'])->where('site', '[0-9A-Za-z]{26}')->name('recovery.site_move.store');
+    Route::get('site-moves/{move}', [SiteMoveController::class, 'progress'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.progress');
+    Route::post('site-moves/{move}/steps/{step}/retry', [SiteMoveController::class, 'retry'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.retry');
+    Route::post('site-moves/{move}/cancel', [SiteMoveController::class, 'cancel'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.cancel');
+    Route::post('site-moves/{move}/abandon', [SiteMoveController::class, 'abandon'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.abandon');
+    Route::get('servers/{server}/site-moves', [SiteMoveController::class, 'forServer'])->where('server', '[0-9A-Za-z]{26}')->name('recovery.server_site_moves');
+    Route::post('servers/{server}/move-sites', [SiteMoveController::class, 'moveAll'])->where('server', '[0-9A-Za-z]{26}')->name('recovery.server_site_moves.store');
 });

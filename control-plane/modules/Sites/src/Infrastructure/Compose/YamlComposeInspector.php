@@ -97,6 +97,13 @@ final class YamlComposeInspector implements ComposeInspector
             if (is_array($volume) && self::falakLabels($volume['labels'] ?? []) !== []) {
                 $errors[] = "Volume {$key} sets Falak's labels (falak.*).";
             }
+
+            // The control plane's own volumes (compose project falak: falak_pg-data …) and Falak's falak-* volumes.
+            $real = $volumeDefinitions[(string) $key]['name'] ?? (($volumeDefinitions[(string) $key]['external'] ?? false) ? (string) $key : null);
+
+            if ($real !== null && preg_match('/^falak[_-]/i', $real) === 1) {
+                $errors[] = "Volume {$key} is {$real}: Falak's own volumes are not available to compose files.";
+            }
         }
 
         $safe = array_map('strtoupper', (array) config('sites.compose.safe_capabilities', []));
@@ -134,6 +141,12 @@ final class YamlComposeInspector implements ComposeInspector
                     $errors[] = "Service {$name}: {$key}: {$mode} shares another container's namespace; only services of this file can (service:<name>).";
                 } elseif (str_starts_with($mode, 'service:') && ! array_key_exists(substr($mode, 8), (array) $definitions)) {
                     $errors[] = "Service {$name}: {$key}: {$mode} names no service of this file.";
+                }
+            }
+
+            foreach ((array) ($service['volumes_from'] ?? []) as $from) {
+                if (is_string($from) && preg_match('/^container:falak/i', $from) === 1) {
+                    $errors[] = "Service {$name}: volumes_from {$from} mounts a Falak container's volumes.";
                 }
             }
 

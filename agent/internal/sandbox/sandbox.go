@@ -24,7 +24,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
@@ -124,7 +123,7 @@ func New(d Deps) *Service {
 		}
 	}
 	if d.DiskSpace == nil {
-		d.DiskSpace = diskSpace
+		d.DiskSpace = hostfs.DiskSpace
 	}
 	return &Service{d: d, alloc: newAllocator(filepath.Join(d.Root, "addresses.json")), proxy: newProxy()}
 }
@@ -925,15 +924,6 @@ func (s *Service) pull(ctx context.Context, ref string, w io.Writer) error {
 }
 
 func gib(b uint64) string { return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30)) }
-
-func diskSpace(path string) (free, total uint64, err error) {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(path, &st); err != nil {
-		return 0, 0, err
-	}
-	bs := uint64(st.Bsize)
-	return uint64(st.Bavail) * bs, uint64(st.Blocks) * bs, nil
-}
 
 // haveRootfs reports whether image id has a base rootfs (it was pulled anonymously and exported).
 func (s *Service) haveRootfs(id string) bool {

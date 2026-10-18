@@ -52,6 +52,8 @@ trait PresentsBuilds
             'name' => $builder->name,
             'kind' => $builder->kind,
             'server_id' => $builder->server_id,
+            'pool' => $builder->pool,
+            'caps' => $builder->caps,
             'shared' => $builder->organization_id === null,
             'modes' => $builder->modes,
             'enabled' => $builder->enabled,

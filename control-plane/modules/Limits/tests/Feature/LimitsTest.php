@@ -231,6 +231,17 @@ it('sums every service’s limits on a server against its memory and cores, data
     $this->getJson("/api/v1/servers/{$this->server->id}/capacity")->assertOk()->assertJsonPath('data.totals.cpus', 3.5);
 });
 
+it('subtracts the control plane\'s reserve from the memory of its own machine', function () {
+    config(['servers.control_plane_reserve_mb' => 1536]);
+    $this->server->forceFill(['control_plane_host' => true])->save();
+    limits_docker_site($this, ['limits' => ['memory_limit' => 768]]);
+
+    $capacity = $this->getJson("/servers/{$this->server->id}/capacity")->assertOk()->json('data');
+
+    expect($capacity['server'])->toMatchArray(['memory_mb' => 512, 'total_memory_mb' => 2048, 'reserved_memory_mb' => 1536])
+        ->and($capacity['overcommitted']['memory'])->toBeTrue();
+});
+
 it('keeps capacity views and limits to their organization', function () {
     [$other, $otherOrg] = memberOf();
     $theirs = limits_server($otherOrg);

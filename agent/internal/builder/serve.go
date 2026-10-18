@@ -11,9 +11,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/OthmanHaba/falak/agent/internal/hostfs"
 )
 
 // Server polls the control plane for build jobs and runs them one at a time.
@@ -34,6 +38,78 @@ type Server struct {
 	// HeartbeatInterval between heartbeats while a build runs (default 20s; the control plane fails a build after
 	// 90s of silence).
 	HeartbeatInterval time.Duration
+	// DiskSpace reports the free and total bytes of the filesystem holding a path (default statfs; tests fake it).
+	DiskSpace func(path string) (free, total uint64, err error)
+
+	// The disk guard's floors in GiB (FALAK_BUILD_MIN_FREE_GB, FALAK_BUILD_ABORT_FREE_GB), set by Run.
+	minFreeGB, abortFreeGB int
+}
+
+// diskPause is how long a builder short of disk space waits before it checks again (instead of claiming a job);
+// diskJobPoll is how often free space is checked during a build. Vars: tests shorten them.
+var diskPause, diskJobPoll = 30 * time.Second, 2 * time.Second
+
+// DiskLowError stops a running build when the work or cache directory's disk is nearly full (a full disk takes
+// everything else on the machine down with the build).
+type DiskLowError struct{ GB int }
+
+func (e DiskLowError) Error() string {
+	return fmt.Sprintf("Build stopped: the disk has less than %d GB free", e.GB)
+}
+
+// envGB reads a whole number of GiB from the environment, def when unset or invalid.
+func envGB(log *slog.Logger, key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		log.Warn("ignoring invalid "+key, "value", v, "default", def)
+		return def
+	}
+	return n
+}
+
+// diskShort says why the work or cache directory's filesystem has less than gb GiB free (or less than a tenth of it,
+// with tenth), "" when both have enough. A directory not created yet is checked through its nearest existing parent;
+// a statfs error is not a shortage.
+func (s *Server) diskShort(gb int, tenth bool) string {
+	for _, dir := range []string{s.Builder.WorkDir, s.Builder.CacheDir} {
+		for _, err := os.Stat(dir); err != nil && filepath.Dir(dir) != dir; _, err = os.Stat(dir) {
+			dir = filepath.Dir(dir)
+		}
+		free, total, err := s.DiskSpace(dir)
+		if err != nil {
+			continue
+		}
+		floor := uint64(gb) << 30
+		if tenth {
+			floor = max(floor, total/10)
+		}
+		if free < floor {
+			return fmt.Sprintf("%.1f GiB free under %s, %.1f GiB required", float64(free)/(1<<30), dir, float64(floor)/(1<<30))
+		}
+	}
+	return ""
+}
+
+// watchDisk stops the build (with DiskLowError) once free space drops below the abort floor, until ctx ends.
+func (s *Server) watchDisk(ctx context.Context, every time.Duration, stop context.CancelCauseFunc) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if why := s.diskShort(s.abortFreeGB, false); why != "" {
+				s.Log.Error("stopping the build: disk nearly full", "detail", why)
+				stop(DiskLowError{GB: s.abortFreeGB})
+				return
+			}
+		}
+	}
 }
 
 // NewRunID returns a random run id.
@@ -106,9 +182,30 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.RunID == "" {
 		s.RunID = NewRunID()
 	}
+	if s.DiskSpace == nil {
+		s.DiskSpace = hostfs.DiskSpace
+	}
+	s.Builder.defaults() // WorkDir and CacheDir, for the disk guard
+	s.minFreeGB = envGB(s.Log, "FALAK_BUILD_MIN_FREE_GB", 5)
+	s.abortFreeGB = envGB(s.Log, "FALAK_BUILD_ABORT_FREE_GB", 2)
+	pause := diskPause
 	s.Log.Info("builder polling", "name", s.Name, "run_id", s.RunID)
 	backoff := time.Second
+	short := false
 	for ctx.Err() == nil {
+		// No job is claimed without room for it: max(FALAK_BUILD_MIN_FREE_GB, 10 %) free. Logged once per change.
+		if why := s.diskShort(s.minFreeGB, true); why != "" {
+			if !short {
+				s.Log.Warn("not taking builds: low disk space", "detail", why)
+				short = true
+			}
+			sleep(ctx, pause)
+			continue
+		}
+		if short {
+			s.Log.Info("disk space recovered: taking builds again")
+			short = false
+		}
 		j, err := s.Next(ctx)
 		switch {
 		case errors.Is(err, ErrNoJob):
@@ -140,12 +237,14 @@ func (s *Server) runJob(ctx context.Context, j Job) {
 	if id == "" {
 		id = "invalid"
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, stop := context.WithCancelCause(ctx)
+	cancel := func() { stop(nil) }
 	defer cancel()
 	sink := (&HTTPSink{URL: strings.TrimRight(s.URL, "/") + EventsPath(id), Token: s.Token, Client: s.HTTP, Log: s.Log, OnGone: cancel}).Start()
 	s.Log.Info("build started", "build_id", id, "mode", j.Mode)
 	hbCtx, stopHeartbeat := context.WithCancel(ctx)
 	go s.heartbeat(hbCtx, id, cancel)
+	go s.watchDisk(hbCtx, diskJobPoll, stop)
 	res, err := s.Builder.Build(ctx, j, sink)
 	stopHeartbeat()
 	cctx, cancelFlush := context.WithTimeout(context.Background(), 2*time.Minute)

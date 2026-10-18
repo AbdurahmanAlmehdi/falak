@@ -51,6 +51,7 @@ use Illuminate\Support\Carbon;
  * @property ?Carbon $provisioned_at
  * @property ?string $created_by
  * @property bool $sandboxes_enabled
+ * @property bool $control_plane_host
  * @property Carbon $created_at
  */
 #[UseFactory(ServerFactory::class)]
@@ -79,6 +80,7 @@ class Server extends Model
             'status' => ServerStatus::class,
             'facts' => 'array',
             'sandboxes_enabled' => 'boolean',
+            'control_plane_host' => 'boolean',
             'install_command' => Sealed::class,
             'provisioned_at' => 'datetime',
             'ssh_port' => 'integer',
@@ -171,6 +173,17 @@ class Server extends Model
             ->all();
     }
 
+    /**
+     * The port sshd listens on per the last machine check (its first, when several), else ssh_port.
+     */
+    public function sshPortInUse(): ?int
+    {
+        $ports = (string) ($this->machineInspection()->value('report')['ssh']['effective']['port'] ?? '');
+        $first = (int) strtok($ports, ' ');
+
+        return $first > 0 && $first <= 65535 ? $first : $this->ssh_port;
+    }
+
     public function toData(): ServerData
     {
         $installed = $this->phpVersions->where('status', PhpVersionStatus::Installed);
@@ -196,6 +209,9 @@ class Server extends Model
             providerCredentialId: $this->provider_credential_id,
             region: $this->region,
             sandboxesEnabled: (bool) ($this->sandboxes_enabled ?? true),
+            controlPlaneHost: (bool) $this->control_plane_host,
+            reservedMemoryMb: $this->control_plane_host ? (int) config('servers.control_plane_reserve_mb', 1536) : 0,
+            sshPort: $this->control_plane_host ? $this->sshPortInUse() : $this->ssh_port,
         );
     }
 }

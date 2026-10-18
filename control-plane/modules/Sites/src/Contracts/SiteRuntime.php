@@ -71,6 +71,11 @@ enum SiteRuntime: string
      */
     public function buildModes(): array
     {
-        return $this->usesDocker() ? [BuildMode::Docker] : [BuildMode::Native, BuildMode::OnServer];
+        return match (true) {
+            // Docker sites can also build their image on the leader server (Builds' server-pinned builder).
+            $this === self::Docker => [BuildMode::Docker, BuildMode::OnServer],
+            $this->usesDocker() => [BuildMode::Docker],
+            default => [BuildMode::Native, BuildMode::OnServer],
+        };
     }
 }

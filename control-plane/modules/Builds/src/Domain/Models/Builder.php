@@ -22,6 +22,8 @@ use Illuminate\Support\Str;
  * @property ?string $last_ip
  * @property ?Carbon $last_seen_at
  * @property ?string $install_command_id
+ * @property bool $pool claims unpinned builds; false: a site server's builder that only takes builds pinned to its server
+ * @property ?array{memory_max_bytes: ?int, cpus: ?int, tasks_max: int, io_weight: int, cpu_weight: int} $caps
  * @property Carbon $created_at
  */
 class Builder extends Model
@@ -42,6 +44,9 @@ class Builder extends Model
     /** @var list<string> */
     protected $hidden = ['token_hash'];
 
+    /** @var array<string, mixed> */
+    protected $attributes = ['pool' => true];
+
     /**
      * @return array<string, string>
      */
@@ -50,6 +55,8 @@ class Builder extends Model
         return [
             'modes' => 'array',
             'enabled' => 'boolean',
+            'pool' => 'boolean',
+            'caps' => 'array',
             'last_seen_at' => 'datetime',
         ];
     }

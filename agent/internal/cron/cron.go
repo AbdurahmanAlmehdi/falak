@@ -14,10 +14,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/OthmanHaba/falak/agent/internal/cgroup"
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/envlinks"
 	"github.com/OthmanHaba/falak/agent/internal/obs"
@@ -54,6 +58,11 @@ type Options struct {
 	Logger      *slog.Logger
 	// SiteID resolves a site slug to its ULID for heartbeats (optional; defaults to the slug).
 	SiteID func(slug string) string
+	// Slice is the slice unit runs go into, each as a transient scope (falak.slice on the control-plane machine, so
+	// a job is capped with every workload); "" = the agent's own cgroup. LookupUser resolves a job's user then
+	// (default runner.Credential): the scope starts as root and setpriv drops to the user.
+	Slice      string
+	LookupUser func(name string) (*syscall.Credential, string, error)
 }
 
 // Job mirrors one cron.apply job.
@@ -146,6 +155,26 @@ type Scheduler struct {
 	waiting map[string]waitingJob
 	wake    chan struct{}
 	wg      sync.WaitGroup
+	runs    atomic.Uint64 // names the runs' scopes (runs of one job may overlap)
+}
+
+// inSlice wraps a run in a transient scope of Options.Slice (cgroup.ScopeCommand): systemd-run starts it as root, so
+// the user is dropped by setpriv instead of the runner, with the environment the runner would have set for that user.
+func (s *Scheduler) inSlice(cmd runner.Cmd, job string) (runner.Cmd, error) {
+	sp := cgroup.ScopeSpec{SliceUnit: s.opts.Slice, Unit: "falak-cron-" + job + "-" + strconv.FormatUint(s.runs.Add(1), 10),
+		Command: append([]string{cmd.Name}, cmd.Args...)}
+	if cmd.User != "" {
+		cred, home, err := s.opts.LookupUser(cmd.User)
+		if err != nil {
+			return cmd, err
+		}
+		sp.AsUser, sp.UID, sp.GID = true, cred.Uid, cred.Gid
+		cmd.Env = append([]string{"HOME=" + home, "USER=" + cmd.User, "LOGNAME=" + cmd.User}, cmd.Env...)
+		cmd.User = ""
+	}
+	argv := cgroup.ScopeCommand(sp)
+	cmd.Name, cmd.Args = argv[0], argv[1:]
+	return cmd, nil
 }
 
 // New creates a scheduler; call Start to restore state and run the loop.
@@ -161,6 +190,9 @@ func New(o Options) *Scheduler {
 	}
 	if o.Runner == nil {
 		o.Runner = runner.Exec{}
+	}
+	if o.LookupUser == nil {
+		o.LookupUser = runner.Credential
 	}
 	return &Scheduler{opts: o, log: o.Logger.With("component", "cron"), entries: map[string]*entry{},
 		running: map[string]int{}, wake: make(chan struct{}, 1)}
@@ -401,7 +433,15 @@ func (s *Scheduler) run(ctx context.Context, j Job, scheduled time.Time) {
 	}
 	env = append(env, "FALAK_SCHEDULE_NAME="+j.Name)
 	started := s.opts.Clock.Now()
-	res, err := s.opts.Runner.Run(rctx, runner.Cmd{Name: "/bin/sh", Args: []string{"-c", j.Command}, User: j.User, Dir: j.Cwd, Env: env, ClearEnv: true})
+	cmd := runner.Cmd{Name: "/bin/sh", Args: []string{"-c", j.Command}, User: j.User, Dir: j.Cwd, Env: env, ClearEnv: true}
+	var res runner.Result
+	var err error
+	if s.opts.Slice != "" {
+		cmd, err = s.inSlice(cmd, j.Name)
+	}
+	if err == nil {
+		res, err = s.opts.Runner.Run(rctx, cmd)
+	}
 	end := s.opts.Clock.Now()
 	hb := Heartbeat{ScheduledAt: scheduled, StartedAt: &started, At: end}
 	dur := end.Sub(started).Milliseconds()

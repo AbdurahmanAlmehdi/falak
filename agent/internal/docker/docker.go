@@ -304,6 +304,9 @@ func (s *Service) run(ctx context.Context, p RunPayload, st commands.Stream) (an
 	if err := p.Limits.validate(); err != nil {
 		return nil, &commands.PayloadError{Err: err}
 	}
+	if err := s.checkSite(ctx, p.Name, p.Network, p.Networks, p.Volumes); err != nil {
+		return nil, err // before the current container is replaced
+	}
 	id, changed, err := s.ensureContainer(ctx, p, st)
 	return RunResult{Changed: changed, ContainerID: id}, err
 }
@@ -473,11 +476,16 @@ func (s *Service) prune(ctx context.Context, p PrunePayload, st commands.Stream)
 	if p.Until != "" && !untilRe.MatchString(p.Until) {
 		return nil, &commands.PayloadError{Err: fmt.Errorf("invalid until %q", p.Until)}
 	}
+	// Never the control plane's own stack (the control-plane machine as a server): its containers, images, volumes and
+	// networks carry its compose project label. A stopped panel mid-update must not lose its volumes. The build cache
+	// has no label filter (it is only cache).
+	notCP := []string{LabelComposeProject + "=" + cpProject()}
 	until := func() map[string][]string {
-		if p.Until == "" {
-			return map[string][]string{}
+		f := map[string][]string{"label!": notCP}
+		if p.Until != "" {
+			f["until"] = []string{p.Until}
 		}
-		return map[string][]string{"until": {p.Until}}
+		return f
 	}
 	type step struct {
 		kind    string
@@ -501,13 +509,15 @@ func (s *Service) prune(ctx context.Context, p PrunePayload, st commands.Stream)
 		return nil, &commands.PayloadError{Err: fmt.Errorf("invalid images mode %q", p.Images)}
 	}
 	if p.Volumes {
-		steps = append(steps, step{"volumes", nil}) // volumes prune does not support `until`
+		steps = append(steps, step{"volumes", map[string][]string{"label!": notCP}}) // volumes prune does not support `until`
 	}
 	if p.Networks == nil || *p.Networks {
 		steps = append(steps, step{"networks", until()})
 	}
 	if p.BuildCache {
-		steps = append(steps, step{"build", until()})
+		f := until()
+		delete(f, "label!")
+		steps = append(steps, step{"build", f})
 	}
 	var total uint64
 	for _, stp := range steps {

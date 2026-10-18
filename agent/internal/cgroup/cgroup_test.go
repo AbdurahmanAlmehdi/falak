@@ -92,6 +92,34 @@ func TestApplyWritesUnitsAndSetsPropertiesLive(t *testing.T) {
 	}
 }
 
+// falak.slice itself and its drop-ins belong to falak-ctl on the control-plane machine (50-host-cap.conf caps every
+// workload): neither Apply nor Prune ever writes or removes them, even when they carry Falak's header.
+func TestFalakSliceAndDropInsAreNeverTouched(t *testing.T) {
+	root := t.TempDir()
+	fs := hostfs.FS{Root: root}
+	parent, dropIn := filepath.Join(UnitDir, "falak.slice"), filepath.Join(UnitDir, "falak.slice.d", "50-host-cap.conf")
+	for _, p := range []string{parent, dropIn} {
+		if _, err := fs.WriteFile(p, []byte(header+"[Slice]\nMemoryMax=1G\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := &Manager{Runner: &runnertest.Fake{}, FS: fs}
+	if _, _, err := m.Apply(context.Background(), []Slice{{Name: "site_shop", MemoryMaxBytes: 64 << 20}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Prune(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{parent, dropIn} {
+		if b, err := fs.ReadFile(p); err != nil || string(b) != header+"[Slice]\nMemoryMax=1G\n" {
+			t.Fatalf("%s touched: %q %v", p, b, err)
+		}
+	}
+	if fs.Exists(filepath.Join(UnitDir, Unit("site_shop"))) {
+		t.Fatal("prune kept an unwanted slice")
+	}
+}
+
 func TestPartitionSkipsOnlyInvalidSlices(t *testing.T) {
 	valid, errs := Partition([]Slice{
 		{Name: "site_shop", MemoryMaxBytes: 64 << 20},

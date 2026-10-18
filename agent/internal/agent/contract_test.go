@@ -596,7 +596,7 @@ func TestFactsValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := facts.Facts{Hostname: "web-1", OS: facts.OS{ID: "ubuntu", Version: "24.04"}, Arch: "amd64", CPUs: 2, MemoryBytes: 1 << 30, DiskBytes: 1 << 34,
-		AgentVersion: "v0.10.0", Runtimes: map[string][]string{}, Features: []string{}, RebootRequired: true,
+		AgentVersion: "v0.10.0", Runtimes: map[string][]string{}, Features: []string{}, RebootRequired: true, LocalEdge: true,
 		TLSCertificates: []facts.TLSCertificate{{Name: "example.com", NotAfter: "2026-12-30T00:00:00Z"}}}
 	b, _ := json.Marshal(f)
 	v, _ := jsonschema.UnmarshalJSON(bytes.NewReader(b))

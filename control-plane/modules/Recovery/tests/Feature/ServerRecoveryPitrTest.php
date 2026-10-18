@@ -37,6 +37,26 @@ final class RecoveryFakePitrDatabases implements DatabaseRecovery
         return ['db1' => $this->point()];
     }
 
+    public function backUp(string $instanceId, string $storageProviderId, ?string $actorId = null): array
+    {
+        return [];
+    }
+
+    public function backupProgress(array $backupIds): array
+    {
+        return ['state' => 'succeeded', 'message' => null];
+    }
+
+    public function restoreBackups(string $instanceId, array $backupIds, ?string $actorId = null): array
+    {
+        return ['restores' => [], 'skipped' => []];
+    }
+
+    public function removeLeftover(string $instanceId, string $serverId): bool
+    {
+        return true;
+    }
+
     public function relocate(string $instanceId, string $targetServerId, ?string $actorId = null, bool $suspendPitr = false): void
     {
         $this->calls[] = 'relocate'.($suspendPitr ? ':suspend' : '');

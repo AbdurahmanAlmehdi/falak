@@ -2,10 +2,14 @@
 
 namespace Falak\Edge\Infrastructure;
 
+use Falak\Edge\Application\Actions\AddDomain;
+use Falak\Edge\Application\Actions\MakePrimaryDomain;
+use Falak\Edge\Application\Actions\RemoveDomain;
 use Falak\Edge\Contracts\DomainRecords;
 use Falak\Edge\Domain\Models\CloudflareZone;
 use Falak\Edge\Domain\Models\DnsRecord;
 use Falak\Edge\Domain\Models\Domain;
+use Falak\Sites\Contracts\SiteDirectory;
 
 final class EloquentDomainRecords implements DomainRecords
 {
@@ -29,5 +33,32 @@ final class EloquentDomainRecords implements DomainRecords
 
             return ['site_id' => $domain->site_id, 'name' => $domain->name, 'managed' => $own->isNotEmpty() || $inZone, 'status' => $status];
         })->values()->all();
+    }
+
+    public function followServer(string $siteId, string $fromIpv4, string $toIpv4): array
+    {
+        $site = app(SiteDirectory::class)->find($siteId);
+        $old = '.'.str_replace('.', '-', $fromIpv4).'.';
+
+        if ($site === null || $fromIpv4 === $toIpv4) {
+            return [];
+        }
+
+        $renamed = [];
+
+        foreach (Domain::query()->where('site_id', $siteId)->where('name', 'like', "%{$old}%")->get() as $domain) {
+            /** @var Domain $domain */
+            $name = str_replace($old, '.'.str_replace('.', '-', $toIpv4).'.', $domain->name);
+            $new = app(AddDomain::class)($site, $name, $domain->tls_mode, $domain->www_redirect, $domain->certificate_id, $domain->dns_credential_id, $domain->compose_service);
+
+            if ($domain->is_primary) {
+                app(MakePrimaryDomain::class)($new);
+            }
+
+            app(RemoveDomain::class)($domain->refresh());
+            $renamed[$domain->name] = $name;
+        }
+
+        return $renamed;
     }
 }

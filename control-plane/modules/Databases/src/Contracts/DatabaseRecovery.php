@@ -74,4 +74,37 @@ interface DatabaseRecovery
      * @return array{state: string, message: ?string}
      */
     public function progress(string $instanceId, array $restoreIds = []): array;
+
+    /**
+     * Moving a site (Recovery's "Move to another server"): a fresh backup of each database of a running instance into
+     * $storageProviderId (Falak-held key), so restoreLatest() after relocate() carries everything up to now.
+     *
+     * @return list<string> backup ids
+     *
+     * @throws ValidationException
+     */
+    public function backUp(string $instanceId, string $storageProviderId, ?string $actorId = null): array;
+
+    /**
+     * @param  list<string>  $backupIds
+     * @return array{state: string, message: ?string} running | succeeded | failed
+     */
+    public function backupProgress(array $backupIds): array;
+
+    /**
+     * Restore exactly these backups (from backUp()) into the instance's databases of the same names, after
+     * relocate(). A backup that can't be restored (gone, not restorable, no such database there) is skipped, with why.
+     *
+     * @param  list<string>  $backupIds
+     * @return array{restores: list<string>, skipped: list<string>}
+     *
+     * @throws ValidationException
+     */
+    public function restoreBackups(string $instanceId, array $backupIds, ?string $actorId = null): array;
+
+    /**
+     * After a move: the instance's old container on $serverId (the server it left, still running) is removed. Its
+     * data volume there stays (delete it on the Volumes page once you checked). No-op when the agent is offline.
+     */
+    public function removeLeftover(string $instanceId, string $serverId): bool;
 }

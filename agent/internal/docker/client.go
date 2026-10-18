@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 )
 
 // DefaultAPIVersion is the highest API version this client speaks (Docker Engine 24+).
@@ -532,6 +534,26 @@ type HostConfig struct {
 	SecurityOpt    []string          `json:"SecurityOpt,omitempty"`
 	PidsLimit      int64             `json:"PidsLimit,omitempty"`
 	AutoRemove     bool              `json:"AutoRemove,omitempty"`
+	// CgroupParent is Local.Slice() on the control-plane machine (set by ContainerCreate).
+	CgroupParent string `json:"CgroupParent,omitempty"`
+}
+
+// Local is the control-plane machine's local-edge.env (zero elsewhere), set once at agent start (agent.Build):
+//   - every container the agent creates, and every compose service, is put under Local.Slice() (falak.slice,
+//     capped so workloads can never starve the panel);
+//   - workloads may not share the host's network or PID namespace, nor run privileged (they would reach the control
+//     plane's own services);
+//   - docker.prune leaves Local.ProjectName (the control plane's stack) alone.
+//
+// ponytail: a package variable, not a Client field, because a dozen executors build their own Client.
+var Local localedge.Config
+
+// hostNamespaceAllowed refuses a workload sharing the host's namespaces on the control-plane machine.
+func hostNamespaceAllowed(what, network string) error {
+	if Local.Enabled && network == "host" {
+		return fmt.Errorf("%s: network mode host is not allowed on the control-plane machine", what)
+	}
+	return nil
 }
 
 // Mount is a bind mount.
@@ -558,6 +580,12 @@ type RestartPolicy struct {
 func (c *Client) ContainerCreate(ctx context.Context, name string, body CreateBody) (string, error) {
 	var out struct {
 		ID string `json:"Id"`
+	}
+	if err := hostNamespaceAllowed(name, body.HostConfig.NetworkMode); err != nil {
+		return "", err
+	}
+	if body.HostConfig.CgroupParent == "" {
+		body.HostConfig.CgroupParent = Local.Slice()
 	}
 	_, err := c.do(ctx, http.MethodPost, "/containers/create", url.Values{"name": {name}}, body, &out)
 	return out.ID, err

@@ -27,7 +27,8 @@ Releases are published from [github.com/OthmanHaba/falak](https://github.com/Oth
 | Network | public IPv4 (or IPv6); ports **80** and **443** free and reachable | |
 | DNS | records for the panel, `agents.` and `registry.` hosts (below) | |
 
-This host runs only Falak. The servers Falak manages are separate machines: Ubuntu 22.04, 24.04 or 26.04 (the agent
+The servers Falak manages are usually separate machines; the control-plane machine can host sites too, with a reserved
+share for the panel (see [Sites on the control-plane machine](#sites-on-the-control-plane-machine)). Servers: Ubuntu 22.04, 24.04 or 26.04 (the agent
 installer warns on other apt-based systems). On 26.04 PHP comes from Ubuntu's archive (PHP 8.5 only) until `ppa:ondrej/php`
 publishes packages for it. Every server runs Docker Engine 28 or newer from Docker's apt repository (`docker-ce`, key fingerprint
 `9DC8 5822 9FC7 DD38 854A  E2D8 8D81 803C 0EBF CD88` checked): provisioning replaces an older Docker (containers, images and
@@ -125,6 +126,7 @@ What it does:
 | `--build-from-source [--ref REF]` | `FALAK_BUILD_FROM_SOURCE=1` | clones the repo and builds images locally (no registry) |
 | `--source-dir PATH` | `FALAK_DEPLOY_SOURCE` | use deploy files from a local checkout |
 | `--http-port/--https-port` | `FALAK_HTTP_PORT/FALAK_HTTPS_PORT` | 80/443 (other ports only with `--tls internal`) |
+| `--allow-local-server` | `FALAK_ALLOW_LOCAL_SERVER=1` | off: the panel may not make this machine a server ([below](#sites-on-the-control-plane-machine)) |
 | `--skip-dns-check`, `--force` | | |
 
 Running the installer again is safe. Secrets are kept, settings from the flags are updated, the stack is
@@ -284,6 +286,67 @@ Point the domain's DNS at this server, then reload: `falak-ctl compose exec edge
 makes the reload fail and the running config stays; at a container restart it would stop the edge, so validate first
 with `caddy validate` in place of `caddy reload`.
 
+### Sites on the control-plane machine
+
+The machine that runs Falak can also be one of its servers: **Servers → Add server → This machine** (operator
+organization) creates the server and asks the host to enrol it, or run it yourself as root with the install URL the
+panel shows:
+
+```bash
+sudo falak-ctl local-server allow     # once: the panel may ask for it (install.sh --allow-local-server does the same)
+falak-ctl local-server enable --install-url https://<domain>/install/<token>
+falak-ctl local-server status
+falak-ctl local-server disable
+sudo falak-ctl local-server deny      # the panel's request is refused again
+```
+
+**Consent.** Allowing it lets the panel act as root on this machine, as it does on every server it manages: the agent
+it enrols runs whatever the panel tells it to. It is off by default (`FALAK_HOST_ALLOW_LOCAL_SERVER=0` in `.env`); until
+`allow`, a request from the panel is refused (`not allowed on this host`) and the panel shows **This machine** as
+unavailable (`local_server_allowed` in `state/host/channel.json`). Running `enable` yourself as root needs no `allow`.
+
+`enable`:
+
+- writes `/etc/falak/local-edge.env` for the agent: the edge network's gateway and ports 8080/8443 (where the agent's
+  edge listens instead of 80/443), the panel edge's fixed address (`FALAK_LOCAL_EDGE_PANEL`; PROXY protocol is accepted
+  from it alone, `FALAK_LOCAL_EDGE_TRUST`), the subnets of every network of the Falak stack
+  (`FALAK_LOCAL_EDGE_PROTECT`: the agent keeps the sites' traffic out of them except the panel edge's HTTP/HTTPS ports,
+  `FALAK_LOCAL_EDGE_PANEL_PORTS`), `FALAK_PROJECT_NAME` and `FALAK_WORKLOAD_SLICE=falak.slice`. `falak-ctl ensure-host`
+  (install, `up`, `update`) rewrites it while the local server is on, so new networks or another edge address reach the
+  agent at its next apply; `local-server status` prints it;
+- adds `/etc/systemd/system/falak-edge.service.d/10-local-edge.conf` (start after Docker, keep retrying): the agent's
+  edge binds the Docker gateway address, which exists only once Docker is up;
+- sets `FALAK_LOCAL_EDGE=1` and the two upstreams in `.env` and recreates the edge. The panel's edge keeps every host it
+  serves itself (panel, `agents.`, `registry.`, Grafana, former domains, your `/opt/falak/edge/*.caddyfile` sites,
+  wildcards included; re-read whenever those files change) and passes the connection of any other host untouched, TLS
+  included, to the agent's edge with a PROXY protocol v2 header, so sites see the real client address;
+- waits for the new edge, then downloads (retrying) and runs the install script like on any server (machine check,
+  agent, enrolment).
+
+`enable` needs Docker's systemd cgroup driver (below) and refuses without it.
+
+**Reserved share.** With Docker's systemd cgroup driver (the default on Ubuntu/Debian with Docker's packages; check
+`docker info -f '{{.CgroupDriver}}'`) every Falak container but the builder runs in `falakcp.slice`:
+`MemoryMin=FALAK_CP_RESERVE_MB` (default 1536 MB, set in `.env`), `CPUWeight=1000`, `IOWeight=500`, OOM score −900.
+The agent's sites and the builder run in `falak.slice`, capped by `/etc/systemd/system/falak.slice.d/50-host-cap.conf` at
+total memory − the reserve (`MemoryHigh` 95 % of that), (cores − 1) × 100 % CPU, `IOWeight=50` and `TasksMax` = 80 % of
+the kernel's task limit (min of `pid_max` and `threads-max`). The builder is capped either way: `FALAK_BUILDER_CPUS`
+(cores − 1, minimum 1; recomputed when it exceeds that after a resize), 4096 pids, 1.5 GB, OOM score +500; its disk
+guard floors come from `FALAK_BUILD_MIN_FREE_GB` / `FALAK_BUILD_ABORT_FREE_GB` in `.env` (empty: 5 and 2 GiB). The
+panel's containers get the slice's `MemoryMin` only when cgroup2 is mounted with `memory_recursiveprot` (systemd 248+;
+`local-server status` warns otherwise). A build or a site that runs out
+of memory is killed inside its slice; the panel keeps its memory and wins every CPU contention. `enable` refuses a
+machine that would leave sites less than 512 MB. systemd creates a slice on first use, so a missing unit file never
+stops `falak-ctl up`; with another cgroup driver the slices are skipped (with a warning) and only the per-container
+limits apply. `falak-ctl ensure-host` (run by install, `up` and `update`) rewrites the slices.
+
+**HTTP/3.** UDP 443 stays with the panel's edge: sites on this machine are served over HTTP/1.1 and HTTP/2 only
+(browsers fall back on their own).
+
+`disable` removes `local-edge.env`, the upstreams and the `falak.slice` cap and recreates the edge: the agent and its
+sites stay installed but get no traffic any more. Move the sites to another server, then delete this machine in the
+panel (**Servers → this machine → Delete**).
+
 ### Domains for new services
 
 When a service is created (template, Git repository, Docker image) each public endpoint gets a domain:
@@ -342,6 +405,31 @@ An update:
 4. recreates every service whose **mounted config files** changed (see below) and prints their names;
 5. health-checks every container and `https://<domain>/up`;
 6. after a successful update, removes older Falak images (see below).
+
+The release's `SHA256SUMS` is required: an update stops before changing anything when it is missing, lacks
+`falak-deploy.tar.gz` or does not match (`FALAK_DEPLOY_SOURCE` checkouts are your own and not checked). Everything the
+update prints also goes to `/opt/falak/state/host/update-<UTC>.log` (the newest 20 are kept).
+
+### Updating from the panel
+
+The panel checks GitHub's latest release every 6 hours (`FALAK_UPDATE_CHECK=0` in `custom.env` turns it off) and shows
+**Update to vX.Y.Z** to the operator organization's members with the control-plane permission. The panel can't run
+anything on the host itself: it writes `/opt/falak/state/host/request.json`, and `falak-host.path` (installed by
+install.sh and every `falak-ctl update`/`up`) starts `falak-host.service`, i.e. `falak-ctl host-run` as root. host-run
+takes the file away and accepts exactly two requests: `update` to a `vX.Y.Z` version newer than the installed one (a
+downgrade or reinstall is for root: `falak-ctl update --version …`), at most one every 10 minutes after the last
+finished, and `local-server` with an install URL under the panel's own `/install/`, only after `falak-ctl local-server
+allow`; anything else is refused and logged. The update runs in its own
+transient unit (`falak-update-<id>`), so the panel restarting under it can't stop it; the panel shows its progress from
+`state/host/status.json` and `state/host/<id>.log` and reloads once it is back. An update still marked running whose
+unit is gone (the host rebooted, the job was killed) is marked failed (`interrupted`) by the next host-run or
+ensure-host.
+
+The directory is `root:www-data`, mode 1770 (sticky), mounted read-write only into `control-plane`, `horizon` and
+`scheduler` at `/falak/host`; the idle `host-init` container (16 MB) creates it with those permissions before they
+start. Once the units are in place falak-ctl writes `state/host/channel.json`, and the panel offers its host buttons
+only then: after an update from v0.22 or older (run by the old falak-ctl) run `falak-ctl up` once so the new falak-ctl
+installs `falak-host.path` and the slices.
 
 **Old images.** Each release pulls new `falak-control-plane`, `falak-edge` and `falak-builder` images (about 1 GB
 together), so a host that updates often fills its disk. After a successful update falak-ctl records the version it
@@ -654,7 +742,7 @@ data. Managed servers keep running. Remove the agent there with `systemctl disab
 | Provisioning step `adopt:<component>` fails: `… is no longer installed; run the machine check again` | A package the machine check found was removed since. Re-provision: the check runs again first. |
 | Agents go offline after a restore | The restored `.env` / `APP_KEY` must belong to the same backup as the database. The `falak-ca` volume is re-synced by the edge within 3 seconds. |
 | Live updates in the UI don't refresh | Check that the `reverb` service is healthy. Browsers connect to `wss://<domain>/app/…` through the edge. |
-| `FALAK_EDGE_SUBNET ... overlaps` | Pick another private /24 in `.env` and re-run the installer. The app trusts proxy headers only from that subnet. |
+| `FALAK_EDGE_SUBNET ... overlaps` | Pick another private /24 in `.env` and re-run the installer. The edge gets the subnet's `.250` address (`FALAK_EDGE_IP`, set by `falak-ctl ensure-host`/`up`) and the app trusts proxy headers only from it. |
 | Builds stay queued | `falak-ctl logs builder`. The builder polls `https://<domain>` with `FALAK_BUILDER_TOKEN`. Docker-mode builds need a `builder` server: the bundled builder does native builds only (`FALAK_LOCAL_BUILDER_MODES=native`, the default). |
 | Docker build fails at push (`lookup registry.falak.local … no such host`, `401`, `x509`) | The install has no built-in registry yet or its DNS is missing: run `falak-ctl up` (adds `FALAK_REGISTRY_*`), create the `registry.<domain>` record, then `falak-ctl registry status`. `x509` with `--tls internal`: see section 2. |
 | Panel slow (seconds per page) | `falak-ctl doctor`, section *PHP threads*. A saturated `agent-api` pool delays agents, not the panel. Raise `FALAK_AGENT_API_THREADS` (or `FALAK_PHP_MAX_THREADS` for the panel) in `.env`, then `falak-ctl up`. See [Performance](#performance-php-threads-and-worker-mode). |

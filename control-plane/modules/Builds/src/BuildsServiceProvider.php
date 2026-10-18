@@ -4,6 +4,7 @@ namespace Falak\Builds;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Builds\Application\Actions\InstallServerBuilder;
 use Falak\Builds\Application\Artifacts\ArtifactStorage;
 use Falak\Builds\Application\Console\RegistryIdleCommand;
 use Falak\Builds\Application\Console\RegistryPruneCommand;
@@ -19,6 +20,7 @@ use Falak\Builds\Infrastructure\Artifacts\LocalArtifactStorage;
 use Falak\Builds\Infrastructure\Artifacts\S3ArtifactStorage;
 use Falak\Builds\Infrastructure\Artifacts\SigV4Presigner;
 use Falak\Builds\Infrastructure\EloquentBuildService;
+use Falak\Fleet\Events\AgentFactsReported;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Events\OrganizationDeleted;
@@ -78,6 +80,7 @@ class BuildsServiceProvider extends ModuleServiceProvider
         $this->app->make(AlertTypes::class)->register('builds.failed', 'Build failed', 'Builds', Severity::Warning);
 
         Event::listen(ServerProvisioned::class, [ManageServerBuilders::class, 'provisioned']);
+        Event::listen(AgentFactsReported::class, [ManageServerBuilders::class, 'facts']);
         Event::listen(ServerDeleted::class, [ManageServerBuilders::class, 'serverDeleted']);
         Event::listen(OrganizationDeleted::class, [ManageServerBuilders::class, 'organizationDeleted']);
         Event::listen(SiteDeleted::class, [ManageServerBuilders::class, 'siteDeleted']);
@@ -85,6 +88,8 @@ class BuildsServiceProvider extends ModuleServiceProvider
         Broadcast::channel(BuildChannel::NAME, BuildChannel::class);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            // Server builders installed before the build caps get them (once; a no-op afterwards).
+            $schedule->call(fn () => $this->app->make(InstallServerBuilder::class)->refreshPending())->everyTenMinutes()->name('builds:refresh-builder-caps')->withoutOverlapping();
             $schedule->job(new ExpireBuilds)->everyMinute()->name('builds:expire')->withoutOverlapping();
             $schedule->job(new PruneArtifacts)->dailyAt('03:30')->name('builds:prune-artifacts')->withoutOverlapping();
             // After the artifacts prune: images of builds it pruned go too, unless a release may still run them.

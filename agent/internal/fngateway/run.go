@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/OthmanHaba/falak/agent/internal/docker"
+	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 )
 
 // RunOptions of `falak-agent fn-gateway`.
@@ -30,6 +32,15 @@ func Run(ctx context.Context, o RunOptions) error {
 	}
 	if o.StateDir == "" {
 		o.StateDir = DefaultStateDir
+	}
+	// On the control-plane machine function containers are capped and guarded like the agent's (docker.Local): this
+	// process creates them, not the agent.
+	local, err := localedge.Load(hostfs.FS{}, localedge.Path)
+	if err != nil {
+		return err
+	}
+	if local.Enabled {
+		docker.Local = local
 	}
 	g := New(Options{
 		Engine:          DockerEngine{C: docker.NewClient(o.DockerSocket)},

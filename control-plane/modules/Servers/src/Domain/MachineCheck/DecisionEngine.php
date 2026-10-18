@@ -17,6 +17,9 @@ final class DecisionEngine
     /** Falak's edge (FrankenPHP or Caddy) runs as this unit. */
     private const EDGE_UNIT = 'falak-edge.service';
 
+    /** On the control plane's machine Falak's edge listens here; the control plane's edge forwards sites to it. */
+    private const LOCAL_EDGE_PORTS = [8080, 8443];
+
     /** Falak's sshd drop-in; sshd keeps the first value of a keyword, so files sorting before it win. */
     private const SSH_DROP_IN = '/etc/ssh/sshd_config.d/50-falak.conf';
 
@@ -36,19 +39,49 @@ final class DecisionEngine
 
     public function decide(MachineReport $report, Wanted $wanted): MachineCheck
     {
+        $cp = $wanted->controlPlaneHost;
+
         return new MachineCheck(array_values(array_filter([
             $this->base($report, $wanted),
-            $this->docker($report),
+            $cp ? $this->controlPlaneDocker($this->docker($report)) : $this->docker($report),
             $this->edge($report, $wanted),
             $this->php($report, $wanted),
             $this->node($report, $wanted),
-            $this->ssh($report, $wanted),
+            $cp ? $this->kept($this->ssh($report, $wanted)) : $this->ssh($report, $wanted),
             $this->firewall($report),
-            $this->swap($report, $wanted),
-            $this->hostname($report, $wanted),
+            $cp ? $this->kept($this->swap($report, $wanted)) : $this->swap($report, $wanted),
+            $cp ? $this->kept($this->hostname($report, $wanted)) : $this->hostname($report, $wanted),
             $this->unattended($report),
             $this->fail2ban($report),
         ])));
+    }
+
+    /**
+     * The control plane's machine: its Docker runs the control plane, so Falak never installs or replaces it (that would
+     * restart the panel mid-provisioning); a Docker it would replace blocks instead.
+     */
+    private function controlPlaneDocker(ComponentDecision $decision): ComponentDecision
+    {
+        if ($decision->decision !== Decision::Install) {
+            return $decision;
+        }
+
+        $message = $decision->found === []
+            ? 'No Docker found on the control plane\'s machine; Falak does not install Docker where its own control plane runs.'
+            : 'Falak would replace Docker on the control plane\'s machine, which restarts the control plane.';
+
+        return new ComponentDecision('docker', 'Docker', Decision::Block, $message, $decision->found, notes: [
+            Note::block($message, 'Upgrade Docker Engine on the host yourself (from Docker\'s apt repository, at a quiet moment: the control plane restarts with it), then re-check.'),
+            ...$decision->notes,
+        ]);
+    }
+
+    /**
+     * The control plane's machine keeps its SSH (port, password login), swap and hostname: they are the operator's.
+     */
+    private function kept(ComponentDecision $decision): ComponentDecision
+    {
+        return new ComponentDecision($decision->component, $decision->label, Decision::Adopt, 'Kept (control-plane machine).', $decision->found);
     }
 
     private function base(MachineReport $report, Wanted $wanted): ?ComponentDecision
@@ -258,7 +291,17 @@ final class DecisionEngine
 
         $notes = [];
 
-        foreach ((array) ($this->rules['edge_ports'] ?? [80, 443]) as $port) {
+        // The control plane's machine: the control plane's edge owns 80/443 and hands sites to Falak's edge on
+        // 8080/8443 (falak-ctl local-server enable writes the agent's local-edge config; the agent reports local_edge).
+        if ($wanted->controlPlaneHost && ! $wanted->localEdge) {
+            $message = 'The control plane\'s edge owns ports 80 and 443 here, and the agent has not set up its local edge (8080/8443) yet.';
+
+            return new ComponentDecision('edge', 'Web server', Decision::Block, $message, $found, notes: [Note::block($message, 'Run sudo falak-ctl local-server enable on the host, then re-check.')]);
+        }
+
+        $ports = $wanted->controlPlaneHost ? self::LOCAL_EDGE_PORTS : (array) ($this->rules['edge_ports'] ?? [80, 443]);
+
+        foreach ($ports as $port) {
             $notes = [...$notes, ...$this->portNotes($report, (int) $port, "Falak's edge", [], self::EDGE_UNIT)];
         }
 
@@ -287,9 +330,11 @@ final class DecisionEngine
             return new ComponentDecision('edge', 'Web server', Decision::Adopt, 'Uses the installed Caddy '.MachineReport::upstream($caddy['version'] ?? null).' as falak-edge (its caddy.service is not running).', $found, notes: $notes);
         }
 
+        $where = $wanted->controlPlaneHost ? "ports 8080 and 8443, behind the control plane's edge" : 'ports 80 and 443';
+
         return new ComponentDecision('edge', 'Web server', Decision::Install, $frankenphp
-            ? 'FrankenPHP serves ports 80 and 443 as falak-edge.'
-            : "Installs Caddy from Caddy's repository and runs it as falak-edge on ports 80 and 443.", $found, notes: $notes);
+            ? "FrankenPHP serves {$where} as falak-edge."
+            : "Installs Caddy from Caddy's repository and runs it as falak-edge on {$where}.", $found, notes: $notes);
     }
 
     private function php(MachineReport $report, Wanted $wanted): ?ComponentDecision

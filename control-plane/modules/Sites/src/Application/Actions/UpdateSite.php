@@ -61,7 +61,7 @@ final class UpdateSite
         }
 
         $this->rules->runtimeAndFramework($site->framework, $runtime, $buildMode);
-        $this->rules->targets($site->organization_id, $site->serverIds(), $runtime, $phpVersion, $buildMode);
+        $this->rules->targets($site->organization_id, $site->serverIds(), $runtime, $phpVersion, $buildMode, leaderId: $site->leaderTarget()?->server_id);
 
         if (array_key_exists('source_connection_id', $data)) {
             $this->rules->connection($site->organization_id, $data['source_connection_id']);

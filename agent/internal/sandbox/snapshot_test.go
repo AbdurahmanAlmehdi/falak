@@ -362,7 +362,7 @@ func TestInitSpawnsBackgroundJobs(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatal(err, string(out))
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 500; i++ { // up to 10 s: the job runs in the background, slow under a loaded -race run
 		if _, err := os.Stat(filepath.Join(work, "done")); err == nil {
 			break
 		}

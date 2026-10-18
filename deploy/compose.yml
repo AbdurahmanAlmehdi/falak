@@ -20,8 +20,9 @@
 # behind them. PHP threads: FALAK_WORKER_MODE / FALAK_PHP_WORKERS / FALAK_PHP_MAX_THREADS (panel) and
 # FALAK_AGENT_API_THREADS (agent-api, >= servers + builders + 8); see docs/INSTALL.md "Performance".
 #
-# Networks: `edge` has a fixed subnet (FALAK_EDGE_SUBNET) because it is the only place the edge talks to the
-# app from, and the app trusts X-Forwarded-* / the client-cert fingerprint header only from that subnet.
+# Networks: `edge` has a fixed subnet (FALAK_EDGE_SUBNET) and the edge a fixed address in it (FALAK_EDGE_IP, the .250
+# host, set by falak-ctl ensure-host), because it is the only place the edge talks to the app from: the app trusts
+# X-Forwarded-* / the client-cert fingerprint header only from that address (the whole subnet on an older .env).
 #
 # Memory limits are caps, not reservations; the measured idle budget per service is in docs/INSTALL.md
 # ("Resource budget"). Core stack ≈ 0.6-0.8 GB idle (limits ≈ 4.3 GB), observability profile ≈ +0.6 GB.
@@ -36,7 +37,16 @@ x-logging: &logging
   driver: json-file
   options: { max-size: "10m", max-file: "5" }
 
+# Resource isolation (docs/INSTALL.md, "Sites on the control-plane machine"): with Docker's systemd cgroup driver every
+# service but the builder runs in falakcp.slice (MemoryMin = FALAK_CP_RESERVE_MB, CPUWeight 1000; falak-ctl writes it)
+# and is the last the kernel OOM killer picks. systemd creates a slice on demand, so a missing unit file never stops
+# `up`. falak-ctl sets FALAK_CP_SLICE= (empty: Docker's default parent) with another cgroup driver.
+x-caps: &caps
+  cgroup_parent: ${FALAK_CP_SLICE-falakcp.slice}
+  oom_score_adj: -900
+
 x-control-plane: &control-plane
+  <<: *caps
   image: ${FALAK_IMAGE_PREFIX:?set FALAK_IMAGE_PREFIX}/falak-control-plane:${FALAK_VERSION:?set FALAK_VERSION}
   logging: *logging
   restart: unless-stopped
@@ -53,6 +63,8 @@ x-control-plane: &control-plane
     APP_URL: ${FALAK_URL:?set FALAK_URL}
     LOG_CHANNEL: stderr
     LOG_LEVEL: ${FALAK_LOG_LEVEL:-warning}
+    # The control-plane machine's reserved share (falakcp.slice): the panel subtracts it from that server's capacity.
+    FALAK_CP_RESERVE_MB: ${FALAK_CP_RESERVE_MB:-1536}
     DB_CONNECTION: pgsql
     DB_HOST: postgres
     DB_PORT: "5432"
@@ -99,8 +111,9 @@ x-control-plane: &control-plane
     # The organization that operates the install (install.sh records the first admin's): it alone sees the control
     # plane's disaster recovery. Unset with several organizations: nobody does.
     FALAK_DR_ORGANIZATION: ${FALAK_DR_ORGANIZATION:-}
-    FALAK_AGENT_TRUSTED_PROXIES: ${FALAK_EDGE_SUBNET:-10.213.77.0/24}
-    TRUSTED_PROXIES: ${FALAK_EDGE_SUBNET:-10.213.77.0/24}
+    # A bare address is a /32 to Symfony's IpUtils (TrustProxies, AuthenticateAgent).
+    FALAK_AGENT_TRUSTED_PROXIES: ${FALAK_EDGE_IP:-${FALAK_EDGE_SUBNET:-10.213.77.0/24}}
+    TRUSTED_PROXIES: ${FALAK_EDGE_IP:-${FALAK_EDGE_SUBNET:-10.213.77.0/24}}
     FALAK_AGENT_WAKE_DRIVER: redis
     FALAK_ACME_EMAIL: ${FALAK_ACME_EMAIL:-}
     FALAK_TEST_DOMAIN: ${FALAK_TEST_DOMAIN:-}
@@ -144,8 +157,18 @@ x-control-plane: &control-plane
     # passphrase stay in /opt/falak/dr, which no container mounts).
     - ../state:/opt/falak/state:ro
 
+# The panel asks the host for updates and the local server through state/host (request.json in, status.json + logs
+# out; falak-host.path runs `falak-ctl host-run`, which accepts only its allowlist). Writable only here.
+x-host-volumes: &host-volumes
+  - falak-ca:/falak/ca
+  - app-storage:/app/storage
+  - ../secrets:/opt/falak/secrets:ro
+  - ../state:/opt/falak/state:ro
+  - ../state/host:/falak/host
+
 services:
   postgres:
+    <<: *caps
     image: postgres:17.11
     logging: *logging
     restart: unless-stopped
@@ -193,6 +216,7 @@ services:
         limits: { memory: 512m }
 
   valkey:
+    <<: *caps
     image: valkey/valkey:9.1.2-alpine
     logging: *logging
     restart: unless-stopped
@@ -215,14 +239,46 @@ services:
       resources:
         limits: { memory: 192m }
 
+  # state/host for the panel's host requests (root:www-data 1770), also when an older falak-ctl ran the update and
+  # never created it. Stays up idle instead of exiting: falak-ctl's health check (old versions included) fails on any
+  # container that is not running, which would roll the update back.
+  host-init:
+    <<: *caps
+    image: postgres:17.11   # already on the host (the database)
+    logging: *logging
+    restart: unless-stopped
+    init: true
+    user: "0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    # The group is the panel containers' www-data (FALAK_APP_UID, as falak-ctl uses it; 33 in the image).
+    entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:${FALAK_APP_UID:-33} /state/host && chmod 1770 /state/host && exec sleep infinity"]
+    volumes:
+      - ../state:/state
+    healthcheck:
+      # 2 s: the panel services wait for it (start_interval would need Docker Engine 25+).
+      test: ["CMD-SHELL", "test -k /state/host"]
+      interval: 2s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { memory: 16m }
+
   control-plane:
     <<: *control-plane
     command: ["web"]
     environment:
       <<: *cp-env
       FALAK_MIGRATE: "1"
+    volumes: *host-volumes
     networks: [edge, backend, observability]
     depends_on:
+      host-init: { condition: service_healthy }
       postgres: { condition: service_healthy }
       valkey: { condition: service_healthy }
     healthcheck:
@@ -256,9 +312,11 @@ services:
   horizon:
     <<: *control-plane
     command: ["horizon"]
+    volumes: *host-volumes
     stop_grace_period: 90s
     networks: [backend, observability]
     depends_on:
+      host-init: { condition: service_healthy }
       control-plane: { condition: service_healthy }   # migrations have run
     healthcheck:
       test: ["CMD", "falak-healthcheck"]
@@ -313,8 +371,10 @@ services:
   scheduler:
     <<: *control-plane
     command: ["scheduler"]
+    volumes: *host-volumes
     networks: [backend, observability]
     depends_on:
+      host-init: { condition: service_healthy }
       control-plane: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "falak-healthcheck"]
@@ -326,6 +386,7 @@ services:
         limits: { memory: 256m }
 
   edge:
+    <<: *caps
     image: ${FALAK_IMAGE_PREFIX}/falak-edge:${FALAK_VERSION}
     logging: *logging
     restart: unless-stopped
@@ -349,6 +410,11 @@ services:
       FALAK_HTTP_PORT: ${FALAK_HTTP_PORT:-80}
       FALAK_HTTPS_PORT: ${FALAK_HTTPS_PORT:-443}
       FALAK_EDGE_CA_FILE: /falak/ca/ca.pem
+      # Sites on the control-plane machine (falak-ctl local-server enable): hosts the edge does not serve go to the
+      # local agent's edge on the edge network's gateway.
+      FALAK_LOCAL_EDGE: ${FALAK_LOCAL_EDGE:-}
+      FALAK_LOCAL_EDGE_UPSTREAM_HTTPS: ${FALAK_LOCAL_EDGE_UPSTREAM_HTTPS:-}
+      FALAK_LOCAL_EDGE_UPSTREAM_HTTP: ${FALAK_LOCAL_EDGE_UPSTREAM_HTTP:-}
       FALAK_EDGE_PKI_OUT: /falak/edge-pki
     volumes:
       - falak-ca:/falak/ca:ro
@@ -363,7 +429,9 @@ services:
       - "${FALAK_BIND:-0.0.0.0}:${FALAK_HTTPS_PORT:-443}:${FALAK_HTTPS_PORT:-443}"
       - "${FALAK_BIND:-0.0.0.0}:${FALAK_HTTPS_PORT:-443}:${FALAK_HTTPS_PORT:-443}/udp"
     networks:
-      edge: {}
+      edge:
+        # Empty (an .env from before ensure-host set it): an address from the pool, as before.
+        ipv4_address: ${FALAK_EDGE_IP:-}
       observability: {}
       registry: {}
       public:
@@ -381,10 +449,14 @@ services:
       resources:
         limits: { memory: 128m }
 
-  # Shared builder of the control-plane host (native builds: PHP/Composer, Node, Bun).
+  # Shared builder of the control-plane host (native builds: PHP/Composer, Node, Bun). Capped so a build can't take the
+  # panel down: memory, FALAK_BUILDER_CPUS (falak-ctl: cores - 1, min 1), pids, and killed before any panel service.
+  # With a local server it runs in falak.slice next to the sites (FALAK_BUILDER_SLICE); otherwise Docker's default.
   builder:
     image: ${FALAK_IMAGE_PREFIX}/falak-builder:${FALAK_VERSION}
     logging: *logging
+    cgroup_parent: ${FALAK_BUILDER_SLICE:-}
+    oom_score_adj: 500
     restart: unless-stopped
     init: true
     command: ["serve"]
@@ -392,6 +464,9 @@ services:
       FALAK_URL: ${FALAK_URL}
       FALAK_BUILDER_TOKEN: ${FALAK_BUILDER_TOKEN}
       FALAK_BUILDER_NAME: control-plane
+      # Disk guard floors in GiB (empty: the builder's defaults, 5 and 2).
+      FALAK_BUILD_MIN_FREE_GB: ${FALAK_BUILD_MIN_FREE_GB:-}
+      FALAK_BUILD_ABORT_FREE_GB: ${FALAK_BUILD_ABORT_FREE_GB:-}
       FALAK_TLS: ${FALAK_TLS:-acme}
     volumes:
       - builder-data:/var/lib/falak-builder
@@ -403,12 +478,13 @@ services:
       agent-api: { condition: service_healthy }
     deploy:
       resources:
-        limits: { memory: 1536m }
+        limits: { memory: 1536m, cpus: "${FALAK_BUILDER_CPUS:-1}", pids: 4096 }
 
   # Built-in image registry (distribution): images of docker builds, pushed by builders and pulled by servers
   # through the edge (https://FALAK_REGISTRY_HOST, basic auth there). Only the edge can reach it. Deletes are
   # enabled for `falak-ctl registry gc`.
   registry:
+    <<: *caps
     image: registry:2.8.3
     logging: *logging
     restart: unless-stopped
@@ -432,6 +508,7 @@ services:
 
   # --- observability profile (configs from ../observability; VictoriaMetrics backend) ------------------
   gateway:
+    <<: *caps
     image: caddy:2.11.4-alpine
     profiles: [observability]
     restart: unless-stopped
@@ -452,6 +529,7 @@ services:
         limits: { memory: 64m }
 
   loki:
+    <<: *caps
     image: grafana/loki:3.7.8
     profiles: [observability]
     restart: unless-stopped
@@ -468,6 +546,7 @@ services:
         limits: { memory: 384m }
 
   tempo:
+    <<: *caps
     image: grafana/tempo:2.10.8
     profiles: [observability]
     restart: unless-stopped
@@ -485,6 +564,7 @@ services:
         limits: { memory: 384m }
 
   victoriametrics:
+    <<: *caps
     image: victoriametrics/victoria-metrics:v1.152.0
     profiles: [observability]
     restart: unless-stopped
@@ -510,6 +590,7 @@ services:
         limits: { memory: 384m }
 
   grafana:
+    <<: *caps
     image: grafana/grafana:13.2.2
     profiles: [observability]
     restart: unless-stopped

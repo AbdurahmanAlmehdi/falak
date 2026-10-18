@@ -2,7 +2,9 @@
 
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\AuditEntry;
+use Falak\Network\Application\Actions\SaveFirewallRule;
 use Falak\Network\Application\ApplyFirewall;
+use Falak\Network\Contracts\Firewalls;
 use Falak\Network\Domain\Enums\ApplyStatus;
 use Falak\Network\Domain\Models\FirewallRule;
 use Falak\Network\Domain\Models\FirewallState;
@@ -229,4 +231,31 @@ it('hides other organizations servers and rules', function () {
 
     $own = network_server($outsider->current_organization_id, ['name' => 'mine']);
     $this->delete("/network/servers/{$own->id}/firewall/rules/{$rule->id}")->assertNotFound();
+});
+
+it('keeps the SSH port the control plane machine really uses open, and refuses web-port deny rules there', function () {
+    $cp = network_server($this->organization, ['name' => 'this-machine', 'control_plane_host' => true, 'ssh_port' => 22]);
+    $cp->machineInspection()->create(['purpose' => 'check', 'status' => 'finished', 'report' => ['ssh' => ['effective' => ['port' => '2222 22']]]]);
+
+    $this->get("/servers/{$cp->id}/firewall")->assertOk();
+    expect($this->agents->last('net.firewall.apply', $cp->id)['payload']['ssh_port'])->toBe(2222);
+
+    // Without a machine check: the server's own port, not the configured default.
+    $cp->machineInspection()->delete();
+    $cp->forceFill(['ssh_port' => 2200])->save();
+    app(ApplyFirewall::class)($cp->id, force: true);
+    expect($this->agents->last('net.firewall.apply', $cp->id)['payload']['ssh_port'])->toBe(2200);
+
+    // Other servers keep network.ssh_port.
+    $this->get("/servers/{$this->server->id}/firewall");
+    expect($this->agents->last('net.firewall.apply', $this->server->id)['payload']['ssh_port'])->toBe((int) config('network.ssh_port', 22));
+
+    foreach (['', '443', '1-1000'] as $port) {
+        $this->post("/network/servers/{$cp->id}/firewall/rules", ['name' => 'Block', 'action' => 'deny', 'protocol' => 'tcp', 'port' => $port, 'source' => '203.0.113.0/24'])
+            ->assertSessionHasErrors(['action' => SaveFirewallRule::CONTROL_PLANE_DENY]);
+    }
+    // Ports the host itself serves still work.
+    $this->post("/network/servers/{$cp->id}/firewall/rules", ['name' => 'No pg', 'action' => 'deny', 'protocol' => 'tcp', 'port' => '5432'])->assertSessionHasNoErrors();
+
+    expect(fn () => app(Firewalls::class)->denyPort($cp->id, 'tcp', 80, 'web'))->toThrow(InvalidArgumentException::class, 'do not apply on the control-plane machine');
 });

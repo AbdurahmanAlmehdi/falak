@@ -31,6 +31,13 @@ final class CreateSite
 {
     public const SLUG_PATTERN = '/^[a-z0-9][a-z0-9-]{0,62}$/';
 
+    /**
+     * Slugs a new site never gets: `falak` and anything starting with `falak-`. A compose site's project is its slug and
+     * the control plane's own compose project is `falak` (deploy/compose.yml); its containers, networks and volumes are
+     * falak-* / falak_*, and slug + "-" + service could otherwise name one of them. Existing sites keep their slugs.
+     */
+    public const RESERVED_SLUG_PATTERN = '/^falak(-|$)/';
+
     /** @var list<string> warnings from the source control provider */
     public array $warnings = [];
 
@@ -141,7 +148,7 @@ final class CreateSite
 
         $this->rules->runtimeAndFramework($framework, $runtime, $buildMode);
         if ($requireServers || $serverIds !== []) {
-            $this->rules->targets($organizationId, $serverIds, $runtime, $phpVersion, $buildMode);
+            $this->rules->targets($organizationId, $serverIds, $runtime, $phpVersion, $buildMode, leaderId: $leaderId);
         }
 
         $this->rules->connection($organizationId, $data['source_connection_id'] ?? null);
@@ -298,7 +305,7 @@ final class CreateSite
     private function slug(string $source): string
     {
         $base = Str::limit(trim(Str::slug($source), '-'), 50, '') ?: 'site';
-        $base = preg_match(self::SLUG_PATTERN, $base) === 1 ? $base : 'site-'.$base;
+        $base = preg_match(self::SLUG_PATTERN, $base) === 1 && preg_match(self::RESERVED_SLUG_PATTERN, $base) !== 1 ? $base : Str::limit('site-'.$base, 50, '');
         $slug = $base;
 
         for ($i = 2; Site::query()->where('slug', $slug)->exists(); $i++) {

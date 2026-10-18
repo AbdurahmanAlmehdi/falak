@@ -14,6 +14,7 @@ import (
 
 	"github.com/OthmanHaba/falak/agent/internal/commands"
 	"github.com/OthmanHaba/falak/agent/internal/hostfs"
+	"github.com/OthmanHaba/falak/agent/internal/localedge"
 	"github.com/OthmanHaba/falak/agent/internal/runner"
 )
 
@@ -66,6 +67,9 @@ type FirewallPayload struct {
 	// Counters puts an nftables counter on the SSH rule and every rule (feature net.protection): read back by the
 	// protection observer as falak.net.firewall.* and shown next to each rule.
 	Counters bool `json:"counters,omitempty"`
+	// LocalEdge is this host's /etc/falak/local-edge.env (set by the agent, never sent): the control plane's edge
+	// reaches this server's edge on its internal ports.
+	LocalEdge localedge.Config `json:"-"`
 }
 
 // FirewallResult is its result.
@@ -124,6 +128,10 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 	fmt.Fprintf(&b, "\t\ttcp dport %d %saccept comment \"falak:ssh\"\n", ssh, counter)
 	// Sandboxes with an allowlist reach the internet only through the agent's egress proxy on their bridge's gateway.
 	fmt.Fprintf(&b, "\t\tiifname \"br-sbx\" ip daddr 10.88.0.1 tcp dport 3128 %saccept comment \"falak:sandbox-proxy\"\n", counter)
+	if l := p.LocalEdge; l.Enabled {
+		// Only the control plane's edge network may reach the edge's internal ports (it sends the PROXY header).
+		fmt.Fprintf(&b, "\t\tip saddr %s ip daddr %s tcp dport { %d, %d } %saccept comment \"falak:local-edge\"\n", l.Trust, l.Addr, l.HTTPPort, l.HTTPSPort, counter)
+	}
 	seen := map[string]bool{}
 	for _, r := range p.Rules {
 		if !idRe.MatchString(r.ID) {
@@ -141,7 +149,26 @@ func RenderRuleset(p FirewallPayload) (string, error) {
 			b.WriteString("\t\t" + l + "\n")
 		}
 	}
-	b.WriteString("\t}\n}\n")
+	b.WriteString("\t}\n")
+	if l := p.LocalEdge; l.Enabled && (l.Panel != "" || len(l.Protect) > 0) {
+		// The control-plane machine: host processes other than root (tenant sites run as their site users) reach the
+		// panel through its edge only, never the control plane's own containers (database, Redis, the app). The agent
+		// (root) is unaffected; containers are kept off those networks by Docker's bridge isolation (forward path).
+		// Replies go through: the agent edge (user caddy) answers the panel's edge on connections the edge opened.
+		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter; policy accept;\n\t\tct state established,related accept\n")
+		if l.Panel != "" {
+			ports := make([]string, 0, len(l.PanelPorts))
+			for _, p := range l.PanelPorts {
+				ports = append(ports, strconv.Itoa(p))
+			}
+			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s tcp dport %s counter accept comment \"falak:protect-cp\"\n", l.Panel, set(ports))
+		}
+		if len(l.Protect) > 0 {
+			fmt.Fprintf(&b, "\t\tmeta skuid != 0 ip daddr %s counter drop comment \"falak:protect-cp\"\n", set(l.Protect))
+		}
+		b.WriteString("\t}\n")
+	}
+	b.WriteString("}\n")
 	return b.String(), nil
 }
 
@@ -269,6 +296,11 @@ WantedBy=sysinit.target
 
 // FirewallApply validates, persists and atomically applies the ruleset.
 func (n *Net) FirewallApply(ctx context.Context, p FirewallPayload, st commands.Stream) (any, error) {
+	local, err := localedge.Load(n.d.FS, localedge.Path)
+	if err != nil {
+		return nil, err
+	}
+	p.LocalEdge = local
 	rs, err := RenderRuleset(p)
 	if err != nil {
 		return nil, err

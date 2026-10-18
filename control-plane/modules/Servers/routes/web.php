@@ -22,6 +22,7 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::post('servers/{server}/provision', [MachineCheckController::class, 'provision'])->name('servers.provision');
     Route::post('servers/{server}/agent/upgrade', [ServerAgentController::class, 'upgrade'])->name('servers.agent.upgrade');
     Route::post('servers/{server}/install-command', [ServerController::class, 'installCommand'])->name('servers.install-command');
+    Route::post('servers/{server}/local-server/retry', [ServerController::class, 'retryLocalServer'])->middleware('throttle:6,1')->name('servers.local-server.retry');
     Route::get('servers/{server}/metrics', [ServerController::class, 'metrics'])->name('servers.metrics');
 
     // Server page tabs owned by Servers (/servers/{id}/{tab}); Network, Terminal and Recipes register theirs.

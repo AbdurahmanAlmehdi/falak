@@ -47,6 +47,8 @@ final class MachineChecks
             phpVersions: $stack->phpRuntime !== null ? ($server->desiredPhpVersions() ?: $stack->phpVersions) : [],
             nodeVersion: $node !== null ? (string) $node : null,
             basePackages: array_values(array_map('strval', (array) config('servers.base_packages', []))),
+            controlPlaneHost: (bool) $server->control_plane_host,
+            localEdge: ($this->agents->forServer($server->id)?->facts['local_edge'] ?? false) === true,
         );
     }
 

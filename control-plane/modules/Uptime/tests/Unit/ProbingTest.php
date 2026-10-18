@@ -202,8 +202,10 @@ it('probes tcp ports and tls handshakes through the guard', function () {
 it('judges certificate chains', function () {
     $pki = new Pki;
     $inspector = new CertificateInspector;
-    $now = new DateTimeImmutable;
     $leaf = $pki->leaf(['shop.example.com', '*.example.org']);
+    // Certificates are issued before $now: one made after it can read as not yet valid when a second ticks over.
+    $selfSigned = $pki->leaf(['x.example.com'], 90, true);
+    $now = new DateTimeImmutable;
     $chain = [$leaf, $pki->intermediatePem()];
 
     $ok = $inspector->inspect($chain, 'shop.example.com', $pki->caFile, $now);
@@ -214,7 +216,7 @@ it('judges certificate chains', function () {
         ->and($inspector->inspect($chain, 'a.b.example.org', $pki->caFile, $now)->problem)->toBe(TlsReport::HOSTNAME_MISMATCH)
         ->and($inspector->inspect($chain, 'other.example.com', $pki->caFile, $now)->problem)->toBe(TlsReport::HOSTNAME_MISMATCH)
         ->and($inspector->inspect([$leaf], 'shop.example.com', $pki->caFile, $now)->problem)->toBe(TlsReport::INTERMEDIATE_MISSING)
-        ->and($inspector->inspect([$pki->leaf(['x.example.com'], 90, true)], 'x.example.com', $pki->caFile, $now)->problem)->toBe(TlsReport::SELF_SIGNED)
+        ->and($inspector->inspect([$selfSigned], 'x.example.com', $pki->caFile, $now)->problem)->toBe(TlsReport::SELF_SIGNED)
         ->and($inspector->inspect($chain, 'shop.example.com', $pki->caFile, $now->modify('+400 days'))->problem)->toBe(TlsReport::EXPIRED)
         ->and($inspector->inspect([], 'shop.example.com', $pki->caFile, $now)->problem)->toBe(TlsReport::NO_CERTIFICATE);
 

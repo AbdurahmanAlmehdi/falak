@@ -3,6 +3,8 @@
 namespace Falak\Volumes\Infrastructure;
 
 use DateTimeImmutable;
+use Falak\Volumes\Application\Actions\DeleteVolume;
+use Falak\Volumes\Application\Actions\MoveVolume;
 use Falak\Volumes\Application\Actions\RestoreVolumeBackup;
 use Falak\Volumes\Contracts\AttachableType;
 use Falak\Volumes\Contracts\Data\VolumeRecoveryPoint;
@@ -22,7 +24,11 @@ use Illuminate\Validation\ValidationException;
 
 final class EloquentVolumeRecovery implements VolumeRecovery
 {
-    public function __construct(private readonly RestoreVolumeBackup $restore) {}
+    public function __construct(
+        private readonly RestoreVolumeBackup $restore,
+        private readonly MoveVolume $move,
+        private readonly DeleteVolume $delete,
+    ) {}
 
     public function volumesOn(string $serverId): array
     {
@@ -66,6 +72,30 @@ final class EloquentVolumeRecovery implements VolumeRecovery
             OperationStatus::Failed => ['state' => 'failed', 'message' => $operation->error],
             default => ['state' => 'running', 'message' => $operation->step !== null ? "Step: {$operation->step}" : null],
         };
+    }
+
+    public function move(string $volumeId, string $targetServerId, string $storageProviderId, ?string $actorId = null): string
+    {
+        $volume = Volume::query()->with('attachments')->find($volumeId) ?? throw ValidationException::withMessages(['volume' => 'Unknown volume.']);
+
+        return ($this->move)($volume, $targetServerId, $storageProviderId, $actorId, compose: true)->id;
+    }
+
+    public function finishMove(string $operationId, ?string $actorId = null): ?string
+    {
+        $operation = Operation::query()->find($operationId);
+        $source = $operation?->meta('compose') === true ? Volume::query()->find($operation->meta('source_id')) : null;
+
+        if ($source === null) {
+            return null;
+        }
+
+        // Its stack no longer runs there: the attachments are stale. An external volume only leaves Falak (DeleteVolume).
+        $source->attachments()->delete();
+        $source->forceFill(['protected' => false])->save();
+        ($this->delete)($source, $actorId, (int) config('volumes.delete_wait_s', 120), background: true);
+
+        return $source->external() ? "{$source->name} is external: Docker keeps it on the old server." : "{$source->name} deleted on the old server.";
     }
 
     /** Docker and sized volumes that are not a database container's data. @return Builder<Volume> */

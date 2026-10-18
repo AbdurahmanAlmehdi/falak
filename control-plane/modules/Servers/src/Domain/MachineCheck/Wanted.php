@@ -23,5 +23,9 @@ final readonly class Wanted
         public array $phpVersions = [],
         public ?string $nodeVersion = null,
         public array $basePackages = [],
+        /** The control plane's own machine: its edge owns 80/443, and Docker, SSH, swap and the hostname are its. */
+        public bool $controlPlaneHost = false,
+        /** The agent's `local_edge` fact: falak-ctl local-server set the agent edge up on 8080/8443. */
+        public bool $localEdge = false,
     ) {}
 }

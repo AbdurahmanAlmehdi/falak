@@ -860,7 +860,7 @@ func (l *live) serve(id string) (served, string) {
 }
 
 func freeBytes(path string) uint64 {
-	f, _, _ := diskSpace(path)
+	f, _, _ := hostfs.DiskSpace(path)
 	return f
 }
 

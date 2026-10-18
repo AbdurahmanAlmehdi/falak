@@ -91,6 +91,58 @@ export interface ServerRecovery {
     finished_at: string | null;
 }
 
+/** "Move to another server": a site's move and its steps (GET /site-moves/{id}). */
+export interface SiteMove {
+    id: string;
+    site: { id: string; name: string };
+    from_server: { id: string; name: string };
+    target_server: { id: string; name: string };
+    batch_id: string | null;
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'abandoned';
+    current_step: string | null;
+    cancellable: boolean;
+    /** Failed and past cancelling: an operator can give it up (nothing changes on servers). */
+    abandonable: boolean;
+    steps?: RecoveryStep[];
+    created_at: string;
+    finished_at: string | null;
+}
+
+export interface MoveCandidate {
+    id: string;
+    name: string;
+    status: string;
+    status_label: string;
+    ipv4: string | null;
+    docker: boolean;
+}
+
+/** POST /sites/{site}/move/plan: the dry run. */
+export interface SiteMovePlan {
+    site: { id: string; name: string; runtime: string };
+    from: { id: string; name: string; ipv4: string | null; ipv6: string | null; status: string };
+    target: { id: string; name: string; ipv4: string | null; ipv6: string | null; status: string } | null;
+    blocking: string[];
+    problems: string[];
+    databases: {
+        id: string;
+        name: string;
+        engine: string;
+        version: string;
+        move: boolean;
+        reason: string | null;
+        pitr: boolean;
+        databases: string[];
+    }[];
+    volumes: { id: string; name: string; kind: string; used_bytes: number | null }[];
+    domains: { site_id: string; name: string; managed: boolean; status: string | null; kind: 'managed' | 'generated' | 'manual' }[];
+    downtime: string;
+    stateful: boolean;
+    storage_provider_id: string | null;
+    storage_providers: { id: string; name: string }[];
+    capacity: { needed_mb: number; free_mb: number | null; unlimited: boolean; volume_bytes: number; disk_bytes: number | null } | null;
+}
+
 export interface ProjectReadiness {
     project_id: string;
     name: string;
