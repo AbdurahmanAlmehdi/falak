@@ -118,7 +118,8 @@ final class SiteMovePlanner
         $domains = array_map(fn (array $domain) => [
             ...$domain,
             'kind' => match (true) {
-                $domain['managed'] => 'managed',
+                // In a managed zone but without a record Falak keeps: nothing follows on its own, the user moves it.
+                $domain['managed'] && $domain['status'] !== null => 'managed',
                 $from->ipv4 !== null && str_contains($domain['name'], '.'.str_replace('.', '-', $from->ipv4).'.') => 'generated',
                 default => 'manual',
             },

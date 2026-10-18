@@ -189,7 +189,8 @@ function PlanView({ plan, storage, onStorage }: { plan: SiteMovePlan; storage: s
                             <Tag>{volume.kind} volume</Tag>
                             <span className="text-fg">{volume.name}</span>
                             <span className="text-fg-muted">
-                                copied through object storage{volume.used_bytes ? ` (${bytesLabel(volume.used_bytes)})` : ''}
+                                copied through object storage{volume.used_bytes ? ` (${bytesLabel(volume.used_bytes)})` : ''}; the old volume is
+                                deleted after it is copied, its backups are kept
                             </span>
                         </li>
                     ))}

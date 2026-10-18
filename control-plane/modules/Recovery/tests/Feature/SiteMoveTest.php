@@ -362,6 +362,33 @@ it('moves a compose stack’s volume as a copy the stack switches to at the cuto
         ->and($volume->refresh()->attachments()->count())->toBe(0);
 });
 
+it('treats a domain in a managed zone without a record as one to move by hand', function () {
+    $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
+    projects_deployment($site, 'succeeded', ['created_at' => now()->subDay()]);
+    app()->instance(DomainRecords::class, new SiteMoveFakeDomains([
+        ['site_id' => $site->id, 'name' => 'new.example.org', 'managed' => true, 'status' => null],
+    ]));
+
+    expect($this->postJson("/sites/{$site->id}/move/plan", ['server_id' => $this->target->id])->json('data.domains.0.kind'))->toBe('manual');
+
+    $this->postJson("/sites/{$site->id}/move", ['server_id' => $this->target->id])->assertCreated();
+    $move = SiteMove::query()->sole();
+    SiteTarget::query()->where('site_id', $site->id)->where('server_id', $this->target->id)->update(['status' => TargetStatus::Ready]);
+    site_move_advance();
+    site_move_deployed($site);
+    site_move_advance();
+
+    // The old server stays a member until the name points at the new one.
+    expect(site_move_targets($site, TargetRole::Leader))->toBe([$this->target->id])
+        ->and(site_move_targets($site))->toContain($this->old->id)
+        ->and(collect(site_move_step($move, 'cutover')['items'])->firstWhere('id', 'new.example.org'))->toMatchArray(['state' => 'manual', 'kind' => 'manual'])
+        ->and($move->refresh()->status)->toBe('running');
+
+    $this->dns->pointing = [$this->target->id];
+    site_move_advance();
+    expect($move->refresh()->status)->toBe('succeeded')->and(site_move_targets($site))->toBe([$this->target->id]);
+});
+
 it('keeps the old server serving a stateless site until its DNS moves; managed records move on their own', function () {
     $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
     projects_deployment($site, 'succeeded', ['created_at' => now()->subDay()]);
