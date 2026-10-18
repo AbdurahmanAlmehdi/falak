@@ -17,7 +17,8 @@ use Illuminate\Support\Carbon;
  * copies removed once the site runs on the new server; backups kept). Every step before the cutover is additive: a
  * failure there leaves the site serving from the old server.
  *
- * Status: queued (a "Move all sites" waiting its turn) → running → succeeded | failed | cancelled.
+ * Status: queued (a "Move all sites" waiting its turn) → running → succeeded | failed | cancelled; a failed move
+ * that can't be cancelled any more can be abandoned (only marked, so the site can be moved again).
  *
  * @property string $id
  * @property string $organization_id

@@ -26,6 +26,7 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::get('site-moves/{move}', [SiteMoveController::class, 'progress'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.progress');
     Route::post('site-moves/{move}/steps/{step}/retry', [SiteMoveController::class, 'retry'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.retry');
     Route::post('site-moves/{move}/cancel', [SiteMoveController::class, 'cancel'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.cancel');
+    Route::post('site-moves/{move}/abandon', [SiteMoveController::class, 'abandon'])->where('move', '[0-9A-Za-z]{26}')->name('recovery.site_move.abandon');
     Route::get('servers/{server}/site-moves', [SiteMoveController::class, 'forServer'])->where('server', '[0-9A-Za-z]{26}')->name('recovery.server_site_moves');
     Route::post('servers/{server}/move-sites', [SiteMoveController::class, 'moveAll'])->where('server', '[0-9A-Za-z]{26}')->name('recovery.server_site_moves.store');
 });

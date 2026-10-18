@@ -86,6 +86,15 @@ final class SiteMoveController extends Controller
         return response()->json(['data' => self::resource($model->refresh())]);
     }
 
+    /** POST /site-moves/{move}/abandon: a failed move that can't be cancelled is given up (nothing changes on servers). */
+    public function abandon(Request $request, string $move, SiteMoveRunner $runner): JsonResponse
+    {
+        $model = $this->move($request, $move);
+        $runner->abandon($model, $this->actor($request));
+
+        return response()->json(['data' => self::resource($model->refresh())]);
+    }
+
     /** GET /servers/{server}/site-moves: the moves off this server (latest first) and where its sites could go. */
     public function forServer(Request $request, string $server): JsonResponse
     {
@@ -188,7 +197,8 @@ final class SiteMoveController extends Controller
             'batch_id' => $move->batch_id,
             'status' => $move->status,
             'current_step' => $move->current_step,
-            'cancellable' => in_array($move->status, ['queued', 'failed'], true) && ! $move->switched() && ! $move->movedData(),
+            'cancellable' => $cancellable = in_array($move->status, ['queued', 'failed'], true) && ! $move->switched() && ! $move->movedData(),
+            'abandonable' => $move->status === 'failed' && ! $cancellable,
             ...($steps ? ['steps' => array_map(fn (array $step) => [
                 ...$step,
                 'items' => array_map(fn (array $item) => array_intersect_key($item, array_flip(['id', 'label', 'state', 'message', 'phase', 'kind'])), $step['items']),

@@ -47,6 +47,11 @@ final class RecoveryFakePitrDatabases implements DatabaseRecovery
         return ['state' => 'succeeded', 'message' => null];
     }
 
+    public function restoreBackups(string $instanceId, array $backupIds, ?string $actorId = null): array
+    {
+        return ['restores' => [], 'skipped' => []];
+    }
+
     public function removeLeftover(string $instanceId, string $serverId): bool
     {
         return true;

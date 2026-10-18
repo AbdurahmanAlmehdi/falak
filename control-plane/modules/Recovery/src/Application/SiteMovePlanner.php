@@ -224,7 +224,8 @@ final class SiteMovePlanner
         $facts = $this->agents->forServer($target->id)?->facts ?? [];
         $memoryMb = is_numeric($facts['memory_bytes'] ?? null) ? intdiv((int) $facts['memory_bytes'], 1024 ** 2) : null;
         $disk = is_numeric($facts['disk_bytes'] ?? null) ? (int) $facts['disk_bytes'] : null;
-        $free = $memoryMb !== null ? $memoryMb - $used : null;
+        // Memory kept for the control plane on its own machine is never the workloads'.
+        $free = $memoryMb !== null ? $memoryMb - $used - $target->reservedMemoryMb : null;
         $volumeBytes = array_sum(array_map(fn (VolumeRecoveryPoint $point) => (int) ($this->serviceVolumes->find($point->volumeId)?->usedBytes ?? 0), $volumes));
 
         $warnings = array_values(array_filter([

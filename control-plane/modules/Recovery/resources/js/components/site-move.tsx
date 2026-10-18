@@ -39,7 +39,7 @@ export function SiteMoveSettings({ ctx }: ServiceTabProps) {
                 </Button>
             }
         >
-            {move && move.status !== 'cancelled' ? (
+            {move && !['cancelled', 'abandoned'].includes(move.status) ? (
                 <MoveProgress moveId={move.id} initial={move} onChange={() => (state.reload(), ctx.refresh())} />
             ) : (
                 <p className="text-fg-muted text-sm">No move yet.</p>
@@ -230,6 +230,7 @@ function PlanView({ plan, storage, onStorage }: { plan: SiteMovePlan; storage: s
 function MoveProgress({ moveId, initial, onChange }: { moveId: string; initial: SiteMove; onChange: () => void }) {
     const live = useJson<SiteMove>(`/site-moves/${moveId}`, { interval: ['queued', 'running'].includes(initial.status) ? 5000 : false });
     const move = live.data ?? initial;
+    const [abandoning, setAbandoning] = useState(false);
 
     useEffect(() => {
         if (live.data && live.data.status !== initial.status) onChange();
@@ -264,7 +265,33 @@ function MoveProgress({ moveId, initial, onChange }: { moveId: string; initial: 
                         Cancel the move
                     </Button>
                 )}
+                {move.abandonable && (
+                    <Button size="sm" variant="ghost" className="ml-auto" icon={<X />} onClick={() => setAbandoning(true)}>
+                        Abandon the move…
+                    </Button>
+                )}
             </div>
+            <Dialog
+                open={abandoning}
+                onOpenChange={setAbandoning}
+                title="Abandon this move?"
+                footer={
+                    <>
+                        <Button variant="ghost" onClick={() => setAbandoning(false)}>
+                            Keep it
+                        </Button>
+                        <Button variant="danger" onClick={() => (setAbandoning(false), act(`/site-moves/${move.id}/abandon`, 'Could not abandon'))}>
+                            Abandon the move
+                        </Button>
+                    </>
+                }
+            >
+                <Callout tone="danger">
+                    It can't be cancelled any more: some data already moved or the new server already serves the site. Abandoning only stops tracking
+                    it, so the site can be moved again — nothing is changed or undone on either server. Check the site's servers, databases and
+                    volumes yourself and clean up what is left.
+                </Callout>
+            </Dialog>
             <ol className="grid gap-3">
                 {(move.steps ?? []).map((step) => (
                     <li key={step.key} className="grid gap-1.5">

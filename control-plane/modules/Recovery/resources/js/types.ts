@@ -98,9 +98,11 @@ export interface SiteMove {
     from_server: { id: string; name: string };
     target_server: { id: string; name: string };
     batch_id: string | null;
-    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'abandoned';
     current_step: string | null;
     cancellable: boolean;
+    /** Failed and past cancelling: an operator can give it up (nothing changes on servers). */
+    abandonable: boolean;
     steps?: RecoveryStep[];
     created_at: string;
     finished_at: string | null;

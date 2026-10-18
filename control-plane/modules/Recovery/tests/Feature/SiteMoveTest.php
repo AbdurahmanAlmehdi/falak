@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Databases\Domain\Models\Backup;
+use Falak\Databases\Domain\Models\Restore;
 use Falak\Deployments\Contracts\DeploymentTrigger;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Edge\Contracts\Data\DnsCheckResult;
@@ -8,8 +9,10 @@ use Falak\Edge\Contracts\DnsCheck;
 use Falak\Edge\Contracts\DnsStatus;
 use Falak\Edge\Contracts\DomainRecords;
 use Falak\Edge\Domain\Models\Domain;
+use Falak\Fleet\Domain\Models\Agent;
 use Falak\Identity\Contracts\Role;
 use Falak\Recovery\Application\Jobs\AdvanceSiteMoves;
+use Falak\Recovery\Application\SiteMoveRunner;
 use Falak\Recovery\Domain\Models\SiteMove;
 use Falak\Servers\Domain\Models\Server;
 use Falak\Sites\Contracts\TargetRole;
@@ -20,7 +23,9 @@ use Falak\Volumes\Contracts\AttachableType;
 use Falak\Volumes\Contracts\VolumeKind;
 use Falak\Volumes\Domain\Models\Volume;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Tests\Support\FakeAgentGateway;
 
 require_once __DIR__.'/../Support/helpers.php';
@@ -58,7 +63,7 @@ final class SiteMoveFakeDns implements DnsCheck
 final class SiteMoveFakeDomains implements DomainRecords
 {
     /** @param list<array{site_id: string, name: string, managed: bool, status: ?string}> $records */
-    public function __construct(public array $records = []) {}
+    public function __construct(public array $records = [], public bool $failRename = false) {}
 
     public function forSites(array $siteIds): array
     {
@@ -67,6 +72,10 @@ final class SiteMoveFakeDomains implements DomainRecords
 
     public function followServer(string $siteId, string $fromIpv4, string $toIpv4): array
     {
+        if ($this->failRename) {
+            throw new RuntimeException('edge is down');
+        }
+
         return [];
     }
 }
@@ -414,4 +423,159 @@ it('moves all sites of a server one after another', function () {
         ->and(Server::query()->find($this->old->id))->not->toBeNull()
         ->and(site_move_targets($second))->toBe([$this->target->id]);
     $this->getJson("/servers/{$this->old->id}/site-moves")->assertOk()->assertJsonCount(2, 'data.moves');
+});
+
+/** A stateful move driven up to its database restore: backed up, relocated, the container and database created. */
+function site_move_until_restore(object $test, Site $site): SiteMove
+{
+    $test->postJson("/sites/{$site->id}/move", ['server_id' => $test->target->id])->assertCreated();
+    $move = SiteMove::query()->sole();
+    SiteTarget::query()->where('site_id', $site->id)->where('server_id', $test->target->id)->update(['status' => TargetStatus::Ready]);
+    site_move_advance();
+    site_move_deployed($site);
+    site_move_advance();
+    $backup = $test->agents->last('db.backup', $test->old->id);
+    $test->agents->succeed($backup['handle'], site_move_backup_result($backup));
+    site_move_advance();
+
+    foreach (['db.instance.create', 'db.create'] as $type) {
+        foreach ($test->agents->dispatched($type, $test->target->id) as $command) {
+            $test->agents->succeed($command['handle']);
+        }
+    }
+
+    return $move;
+}
+
+it('waits for a managed domain’s record without removing the old server a manual domain still needs', function () {
+    $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
+    projects_deployment($site, 'succeeded', ['created_at' => now()->subDay()]);
+    $domains = new SiteMoveFakeDomains([
+        ['site_id' => $site->id, 'name' => 'web.example.com', 'managed' => false, 'status' => null],
+        ['site_id' => $site->id, 'name' => 'cf.example.org', 'managed' => true, 'status' => 'pending'],
+    ]);
+    app()->instance(DomainRecords::class, $domains);
+
+    $this->postJson("/sites/{$site->id}/move", ['server_id' => $this->target->id])->assertCreated();
+    $move = SiteMove::query()->sole();
+    SiteTarget::query()->where('site_id', $site->id)->where('server_id', $this->target->id)->update(['status' => TargetStatus::Ready]);
+    site_move_advance();
+    site_move_deployed($site);
+    site_move_advance();
+    site_move_advance();
+
+    // The pending record keeps the cutover running; the old server stays a member (the manual domain points there).
+    $cutover = site_move_step($move, 'cutover');
+    expect($cutover['status'])->toBe('running')
+        ->and(collect($cutover['items'])->firstWhere('id', 'cf.example.org')['state'])->toBe('running')
+        ->and(site_move_targets($site, TargetRole::Leader))->toBe([$this->target->id])
+        ->and(site_move_targets($site))->toContain($this->old->id);
+
+    $domains->records[1]['status'] = 'synced';
+    site_move_advance();
+    expect(site_move_step($move, 'cutover')['status'])->toBe('succeeded')
+        ->and(site_move_targets($site))->toContain($this->old->id)
+        ->and($move->refresh()->status)->toBe('running');
+});
+
+it('restores the move’s own backup, not a newer one', function () {
+    $site = site_move_stateful($this);
+    site_move_until_restore($this, $site);
+    $ours = Backup::query()->sole();
+    $newer = $ours->replicate();
+    $newer->id = strtolower((string) Str::ulid());
+    $newer->forceFill(['finished_at' => now()->addHour(), 'sha256' => hash('sha256', 'empty')])->save();
+
+    site_move_advance();
+
+    expect(Restore::query()->sole()->backup_id)->toBe($ours->id);
+});
+
+it('fails the move when the move’s backup can’t be restored, before any cutover', function () {
+    $site = site_move_stateful($this);
+    $move = site_move_until_restore($this, $site);
+    Backup::query()->update(['sha256' => null]);
+
+    site_move_advance();
+
+    expect($move->refresh()->status)->toBe('failed')
+        ->and(site_move_step($move, 'databases')['items'][0]['state'])->toBe('failed')
+        ->and(site_move_step($move, 'databases')['items'][0]['message'])->toContain('Not restored')
+        ->and(site_move_step($move, 'cutover')['status'])->toBe('pending')
+        ->and(site_move_targets($site, TargetRole::Leader))->toBe([$this->old->id]);
+    $this->agents->assertNothingDispatched('db.restore');
+});
+
+it('starts the next move of a batch while one only waits for DNS in its cleanup', function () {
+    $first = volumes_docker_site($this->organization->id, [$this->old], 'One');
+    $second = volumes_docker_site($this->organization->id, [$this->old], 'Two');
+    projects_deployment($first, 'succeeded', ['created_at' => now()->subDay()]);
+    projects_deployment($second, 'succeeded', ['created_at' => now()->subDay()]);
+    Domain::query()->create(['organization_id' => $this->organization->id, 'site_id' => $first->id, 'name' => 'one.example.com', 'is_primary' => true, 'www_redirect' => 'none', 'tls_mode' => 'auto']);
+
+    $this->postJson("/servers/{$this->old->id}/move-sites", ['server_id' => $this->target->id])->assertCreated();
+    site_move_deployed($first);
+    site_move_advance();
+
+    $one = SiteMove::query()->where('site_id', $first->id)->sole();
+    expect($one->status)->toBe('running')
+        ->and($one->current_step)->toBe('cleanup')
+        ->and(SiteMove::query()->where('site_id', $second->id)->value('status'))->toBe('running');
+});
+
+it('refuses a second start while one is being created for the site', function () {
+    $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
+    $lock = Cache::lock(SiteMoveRunner::siteLock($site->id), 30);
+    expect($lock->get())->toBeTrue();
+
+    $this->postJson("/sites/{$site->id}/move", ['server_id' => $this->target->id])->assertJsonValidationErrors(['server_id' => 'right now']);
+    expect(SiteMove::query()->count())->toBe(0);
+
+    $lock->release();
+    $this->postJson("/sites/{$site->id}/move", ['server_id' => $this->target->id])->assertCreated();
+});
+
+it('lets an operator abandon a failed move that can no longer be cancelled', function () {
+    $site = site_move_stateful($this);
+    $move = site_move_until_restore($this, $site);
+    site_move_advance();
+    $this->agents->fail($this->agents->last('db.restore', $this->target->id)['handle'], 'corrupt dump');
+    site_move_advance();
+
+    expect($move->refresh()->status)->toBe('failed');
+    $this->getJson("/site-moves/{$move->id}")->assertJsonPath('data.cancellable', false)->assertJsonPath('data.abandonable', true);
+    $this->postJson("/site-moves/{$move->id}/cancel")->assertJsonValidationErrors('move');
+
+    $this->postJson("/site-moves/{$move->id}/abandon")->assertOk()->assertJsonPath('data.status', 'abandoned');
+    $this->assertDatabaseHas('identity_audit_log', ['action' => 'recovery.site_move_abandoned', 'subject_id' => $site->id]);
+    // Nothing changed on the servers; the site can be moved again.
+    expect($this->instance->refresh()->server_id)->toBe($this->target->id)
+        ->and(SiteMove::query()->whereIn('status', SiteMove::ACTIVE)->exists())->toBeFalse();
+    $this->postJson("/site-moves/{$move->id}/abandon")->assertJsonValidationErrors('move');
+});
+
+it('leaves the control plane’s reserved memory out of the target’s free memory', function () {
+    $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
+    Agent::factory()->create(['server_id' => $this->target->id, 'organization_id' => $this->organization->id, 'facts' => ['memory_bytes' => 4096 * 1024 ** 2, 'cpus' => 2]]);
+    config(['servers.control_plane_reserve_mb' => 1536]);
+
+    expect($this->postJson("/sites/{$site->id}/move/plan", ['server_id' => $this->target->id])->json('data.capacity.free_mb'))->toBe(4096);
+
+    Server::query()->whereKey($this->target->id)->update(['control_plane_host' => true]);
+    expect($this->postJson("/sites/{$site->id}/move/plan", ['server_id' => $this->target->id])->json('data.capacity.free_mb'))->toBe(4096 - 1536);
+});
+
+it('keeps a switched move switched when renaming its generated domains fails', function () {
+    $site = volumes_docker_site($this->organization->id, [$this->old], 'Web');
+    app()->instance(DomainRecords::class, new SiteMoveFakeDomains(failRename: true));
+
+    $this->postJson("/sites/{$site->id}/move", ['server_id' => $this->target->id])->assertCreated();
+    $move = SiteMove::query()->sole();
+    SiteTarget::query()->where('site_id', $site->id)->where('server_id', $this->target->id)->update(['status' => TargetStatus::Ready]);
+    site_move_advance();
+
+    expect($move->refresh()->status)->toBe('failed')
+        ->and($move->switched())->toBeTrue()
+        ->and(site_move_step($move, 'cutover')['items'][0]['message'])->toContain('edge is down');
+    $this->postJson("/site-moves/{$move->id}/cancel")->assertJsonValidationErrors('move');
 });

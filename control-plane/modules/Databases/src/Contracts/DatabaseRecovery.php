@@ -92,6 +92,17 @@ interface DatabaseRecovery
     public function backupProgress(array $backupIds): array;
 
     /**
+     * Restore exactly these backups (from backUp()) into the instance's databases of the same names, after
+     * relocate(). A backup that can't be restored (gone, not restorable, no such database there) is skipped, with why.
+     *
+     * @param  list<string>  $backupIds
+     * @return array{restores: list<string>, skipped: list<string>}
+     *
+     * @throws ValidationException
+     */
+    public function restoreBackups(string $instanceId, array $backupIds, ?string $actorId = null): array;
+
+    /**
      * After a move: the instance's old container on $serverId (the server it left, still running) is removed. Its
      * data volume there stays (delete it on the Volumes page once you checked). No-op when the agent is offline.
      */

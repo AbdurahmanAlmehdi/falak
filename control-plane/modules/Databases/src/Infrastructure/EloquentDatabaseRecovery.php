@@ -253,6 +253,29 @@ final class EloquentDatabaseRecovery implements DatabaseRecovery
         };
     }
 
+    public function restoreBackups(string $instanceId, array $backupIds, ?string $actorId = null): array
+    {
+        $instance = $this->instance($instanceId);
+        $backups = Backup::query()->with('storageProvider')->where('organization_id', $instance->organization_id)->whereIn('id', $backupIds)->get()->keyBy('id');
+        $restores = [];
+        $skipped = [];
+
+        foreach ($backupIds as $backupId) {
+            /** @var ?Backup $backup */
+            $backup = $backups->get($backupId);
+
+            if ($backup === null || ! $backup->isRestorable() || $backup->isCustomerHeld()) {
+                $skipped[] = ($backup?->database_name ?? $backupId).': its backup from this move is gone or can\'t be restored here';
+
+                continue;
+            }
+
+            $restores[] = ($this->restore)($backup, $instance, $backup->database_name, $actorId)->id;
+        }
+
+        return ['restores' => $restores, 'skipped' => $skipped];
+    }
+
     public function removeLeftover(string $instanceId, string $serverId): bool
     {
         // HandleCommandOutcome finds the (moved, active) instance by the key and leaves it alone.

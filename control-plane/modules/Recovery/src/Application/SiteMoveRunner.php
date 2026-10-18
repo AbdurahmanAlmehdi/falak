@@ -57,6 +57,29 @@ final class SiteMoveRunner
      */
     public function start(SiteData $site, ServerData $target, ?string $fromServerId = null, ?string $storageProviderId = null, ?string $actorId = null, ?string $batchId = null): SiteMove
     {
+        // One move per site: the check and the insert under a per-site lock (two clicks, or a click and a "Move all").
+        $move = Cache::lock(self::siteLock($site->id), 30)->get(fn () => $this->create($site, $target, $fromServerId, $storageProviderId, $actorId, $batchId));
+
+        if (! $move instanceof SiteMove) {
+            throw ValidationException::withMessages(['server_id' => "{$site->name} is being moved right now: try again in a moment."]);
+        }
+
+        $this->audit->record('recovery.site_move_'.($batchId !== null ? 'queued' : 'started'), 'site', $site->id, ['move_id' => $move->id, 'from' => $move->from_server_id, 'to' => $target->id], $site->organizationId);
+
+        if ($batchId === null) {
+            $this->advance($move);
+        }
+
+        return $move->refresh();
+    }
+
+    public static function siteLock(string $siteId): string
+    {
+        return "recovery:site-move-start:{$siteId}";
+    }
+
+    private function create(SiteData $site, ServerData $target, ?string $fromServerId, ?string $storageProviderId, ?string $actorId, ?string $batchId): SiteMove
+    {
         if (SiteMove::query()->where('site_id', $site->id)->whereIn('status', SiteMove::ACTIVE)->exists()) {
             throw ValidationException::withMessages(['server_id' => "{$site->name} is already being moved: finish or cancel that move first."]);
         }
@@ -67,7 +90,7 @@ final class SiteMoveRunner
             throw ValidationException::withMessages(['server_id' => implode(' ', $plan['blocking'])]);
         }
 
-        $move = SiteMove::query()->create([
+        return SiteMove::query()->create([
             'organization_id' => $site->organizationId,
             'site_id' => $site->id,
             'site_name' => $site->name,
@@ -82,14 +105,6 @@ final class SiteMoveRunner
             'steps' => self::steps($site, $target, $plan),
             'requested_by' => $actorId,
         ]);
-
-        $this->audit->record('recovery.site_move_'.($batchId !== null ? 'queued' : 'started'), 'site', $site->id, ['move_id' => $move->id, 'from' => $move->from_server_id, 'to' => $target->id], $site->organizationId);
-
-        if ($batchId === null) {
-            $this->advance($move);
-        }
-
-        return $move->refresh();
     }
 
     /**
@@ -119,13 +134,20 @@ final class SiteMoveRunner
         return $moves;
     }
 
-    /** Each "Move all sites" batch starts its next queued move once none of it runs (a failed one holds the batch). */
+    /**
+     * Each "Move all sites" batch starts its next queued move once none of it runs (a failed one holds the batch). A
+     * move only waiting in its cleanup (the old server serving until DNS moves, up to 48 h) doesn't hold it.
+     */
     public function kick(): void
     {
         $batches = SiteMove::query()->where('status', 'queued')->whereNotNull('batch_id')->distinct()->pluck('batch_id');
 
         foreach ($batches as $batch) {
-            if (SiteMove::query()->where('batch_id', $batch)->whereIn('status', ['running', 'failed'])->exists()) {
+            $busy = SiteMove::query()->where('batch_id', $batch)
+                ->where(fn ($q) => $q->where('status', 'failed')->orWhere(fn ($q) => $q->where('status', 'running')->where(fn ($q) => $q->whereNull('current_step')->orWhere('current_step', '!=', 'cleanup'))))
+                ->exists();
+
+            if ($busy) {
                 continue;
             }
 
@@ -179,6 +201,28 @@ final class SiteMoveRunner
         });
 
         $this->audit->record('recovery.site_move_cancelled', 'site', $move->site_id, ['move_id' => $move->id], $move->organization_id);
+        $this->kick();
+    }
+
+    /**
+     * An operator gives up on a failed move that can't be cancelled (data moved, or it cut over): it is only marked
+     * abandoned, so the site can be moved again. Nothing on any server changes; what moved stays where it is.
+     *
+     * @throws ValidationException when the move hasn't failed
+     */
+    public function abandon(SiteMove $move, ?string $actorId = null): void
+    {
+        Cache::lock("recovery:site-move:{$move->id}", 120)->block(30, function () use ($move) {
+            $move->refresh();
+
+            if ($move->status !== 'failed') {
+                throw ValidationException::withMessages(['move' => 'Only a failed move can be abandoned.']);
+            }
+
+            $move->forceFill(['status' => 'abandoned', 'finished_at' => now()])->save();
+        });
+
+        $this->audit->record('recovery.site_move_abandoned', 'site', $move->site_id, ['move_id' => $move->id, 'step' => $move->current_step, 'by' => $actorId], $move->organization_id);
         $this->kick();
     }
 
@@ -271,7 +315,8 @@ final class SiteMoveRunner
                     'add_target' => $this->addTarget($move, $item),
                     'databases' => $this->database($move, $item),
                     'volumes' => $this->volume($move, $item),
-                    'cutover' => $this->cutover($move, $item),
+                    // The switch first; the domain items it adds are only re-checked (Cloudflare records syncing).
+                    'cutover' => ($item['id'] ?? null) === 'switch' ? $this->cutover($move, $item) : $this->domainState($move, $item),
                     'cleanup' => $this->cleanup($move, $item),
                 } + $item;
             } catch (ValidationException $e) {
@@ -395,11 +440,17 @@ final class SiteMoveRunner
         }
 
         if ($item['state'] === 'pending') {
-            $result = $this->databases->restoreLatest($id, $move->requested_by);
+            // The move's own backups (taken above), never whatever is newest by then.
+            $result = $this->databases->restoreBackups($id, (array) ($item['backups'] ?? []), $move->requested_by);
             $item = [...$item, 'state' => 'running', 'restores' => $result['restores'], 'skipped' => $result['skipped']];
         }
 
-        $notes = [...(array) ($item['skipped'] ?? []), ...(($item['pitr'] ?? false) ? ['Point-in-time recovery is off after the move: turn it on again on its page.'] : [])];
+        // A moved database that isn't restored would come up empty on the new server: the move must not go on.
+        if (($item['skipped'] ?? []) !== []) {
+            return [...$item, 'state' => 'failed', 'message' => 'Not restored: '.implode(' ', (array) $item['skipped'])];
+        }
+
+        $notes = ($item['pitr'] ?? false) ? ['Point-in-time recovery is off after the move: turn it on again on its page.'] : [];
         $progress = ($item['restores'] ?? []) === [] ? ['state' => 'succeeded', 'message' => null] : $this->databases->progress($id, (array) $item['restores']);
 
         return match ($progress['state']) {
@@ -443,24 +494,53 @@ final class SiteMoveRunner
                 $this->relocation->replaceServer($move->site_id, $move->from_server_id, $move->target_server_id);
             }
 
-            $renamed = $item['renamed'] ?? null;
-
-            if ($renamed === null) {
-                $from = $this->servers->find($move->from_server_id);
-                $target = $this->servers->find($move->target_server_id);
-                $renamed = $from?->ipv4 !== null && $target?->ipv4 !== null ? $this->domains->followServer($move->site_id, $from->ipv4, $target->ipv4) : [];
-            }
-
-            $item = [...$item, 'switched' => true, 'switched_at' => $item['switched_at'] ?? now()->getTimestamp(), 'renamed' => $renamed];
-
-            if (! ($item['deploy'] ?? false)) {
-                return [...$item, 'state' => 'succeeded', 'message' => "{$move->target_server_name} leads the site."];
-            }
-
-            $item = [...$item, 'phase' => 'deploy', 'state' => 'pending'];
+            // Switched from here on: whatever fails next keeps that recorded (the move can't be cancelled any more).
+            $item = [...$item, 'switched' => true, 'switched_at' => $item['switched_at'] ?? now()->getTimestamp()];
         }
 
-        return $this->deploy($move, $item, "Moved to {$move->target_server_name}");
+        try {
+            if (($item['phase'] ?? 'switch') === 'switch') {
+                if (($item['renamed'] ?? null) === null) {
+                    $from = $this->servers->find($move->from_server_id);
+                    $target = $this->servers->find($move->target_server_id);
+                    $item['renamed'] = $from?->ipv4 !== null && $target?->ipv4 !== null ? $this->domains->followServer($move->site_id, $from->ipv4, $target->ipv4) : [];
+                }
+
+                if (! ($item['deploy'] ?? false)) {
+                    return [...$item, 'state' => 'succeeded', 'message' => "{$move->target_server_name} leads the site."];
+                }
+
+                $item = [...$item, 'phase' => 'deploy', 'state' => 'pending'];
+            }
+
+            return $this->deploy($move, $item, "Moved to {$move->target_server_name}");
+        } catch (ValidationException $e) {
+            return [...$item, 'state' => 'failed', 'message' => (string) collect($e->errors())->flatten()->first()];
+        } catch (Throwable $e) {
+            report($e);
+
+            return [...$item, 'state' => 'failed', 'message' => 'Unexpected error: '.mb_substr($e->getMessage(), 0, 300)];
+        }
+    }
+
+    /**
+     * A managed domain's record after the switch, read again: synced → done, conflict / error → failed, else running.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function domainState(SiteMove $move, array $item): array
+    {
+        $record = collect($this->domains->forSites([$move->site_id]))->firstWhere('name', $item['id']);
+
+        return match (true) {
+            $record === null => [...$item, 'state' => 'skipped', 'message' => 'The domain was removed.'],
+            $record['status'] === 'synced' => [...$item, 'state' => 'succeeded', 'message' => 'Falak moved its DNS record to the new server.'],
+            in_array($record['status'], ['conflict', 'error'], true) => [...$item, 'state' => 'failed', 'message' => "Its Cloudflare record is in {$record['status']}: see the domain's settings."],
+            $record['status'] === 'pending' => [...$item, 'state' => 'running', 'message' => 'Updating its DNS record at Cloudflare.'],
+            // In a managed zone but no record (yet): the user's turn, like any other domain.
+            default => [...$item, 'state' => 'manual', 'message' => 'Falak keeps no DNS record for it: point it at the new server.'],
+        };
     }
 
     /**
@@ -601,7 +681,7 @@ final class SiteMoveRunner
             $items[] = match (true) {
                 $record['managed'] && $record['status'] === 'synced' => ['id' => $record['name'], 'label' => $record['name'], 'kind' => 'managed', 'state' => 'succeeded', 'message' => 'Falak moved its DNS record to the new server.'],
                 $record['managed'] && in_array($record['status'], ['conflict', 'error'], true) => ['id' => $record['name'], 'label' => $record['name'], 'kind' => 'managed', 'state' => 'failed', 'message' => "Its Cloudflare record is in {$record['status']}: see the domain's settings."],
-                $record['managed'] => ['id' => $record['name'], 'label' => $record['name'], 'kind' => 'managed', 'state' => 'running', 'message' => 'Updating its DNS record at Cloudflare.'],
+                $record['managed'] && $record['status'] === 'pending' => ['id' => $record['name'], 'label' => $record['name'], 'kind' => 'managed', 'state' => 'running', 'message' => 'Updating its DNS record at Cloudflare.'],
                 default => ['id' => $record['name'], 'label' => $record['name'], 'kind' => 'manual', 'state' => 'manual', 'message' => $keepOld
                     ? "Point its DNS record at {$address}: {$move->from_server_name} keeps serving it until then (at most 48 h)."
                     : "Point its DNS record at {$address} now: {$move->from_server_name} no longer serves it."],
