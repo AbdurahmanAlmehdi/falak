@@ -4,6 +4,7 @@ namespace Falak\Builds;
 
 use Falak\Alerting\Contracts\AlertTypes;
 use Falak\Alerting\Contracts\Severity;
+use Falak\Builds\Application\Actions\InstallServerBuilder;
 use Falak\Builds\Application\Artifacts\ArtifactStorage;
 use Falak\Builds\Application\Console\RegistryIdleCommand;
 use Falak\Builds\Application\Console\RegistryPruneCommand;
@@ -87,6 +88,8 @@ class BuildsServiceProvider extends ModuleServiceProvider
         Broadcast::channel(BuildChannel::NAME, BuildChannel::class);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            // Server builders installed before the build caps get them (once; a no-op afterwards).
+            $schedule->call(fn () => $this->app->make(InstallServerBuilder::class)->refreshPending())->everyTenMinutes()->name('builds:refresh-builder-caps')->withoutOverlapping();
             $schedule->job(new ExpireBuilds)->everyMinute()->name('builds:expire')->withoutOverlapping();
             $schedule->job(new PruneArtifacts)->dailyAt('03:30')->name('builds:prune-artifacts')->withoutOverlapping();
             // After the artifacts prune: images of builds it pruned go too, unless a release may still run them.

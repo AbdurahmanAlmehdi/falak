@@ -15,11 +15,17 @@ use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentStatus;
 use Falak\Fleet\Contracts\Data\AgentInfo;
 use Falak\Fleet\Events\AgentFactsReported;
-use Falak\Servers\Contracts\Data\ServerData;
+use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Servers\Contracts\ServerType;
+use Falak\Servers\Events\ServerDeleted;
 use Falak\Servers\Events\ServerProvisioned;
 use Falak\Sites\Contracts\SiteDirectory;
+use Illuminate\Cache\CacheManager;
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Events\CallQueuedListener;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 
 require_once __DIR__.'/../../../Deployments/tests/Support/helpers.php';
@@ -186,7 +192,11 @@ it('re-renders the caps when the server reports new memory or cores, without rot
     $slice = collect($world->agents->dispatched('system.write_file'))->last(fn ($c) => $c['payload']['path'] === InstallServerBuilder::SLICE_PATH);
 
     expect($slice['payload']['content'])->toContain('MemoryMax=9830M', 'CPUQuota=700%')
-        ->and($world->agents->last('system.exec')['payload']['script'])->toBe('systemctl daemon-reload')
+        ->and($world->agents->last('system.exec')['payload']['script'])
+        ->toContain('systemctl daemon-reload', 'systemctl set-property --runtime falak-build.slice MemoryMax=9830M CPUQuota=700% TasksMax=4096 IOWeight=50 CPUWeight=50')
+        ->not->toContain('restart')
+        // The unit is current already: only the caps are rewritten.
+        ->and(collect($world->agents->dispatched('system.write_file'))->where('payload.path', InstallServerBuilder::UNIT_PATH))->toHaveCount(1)
         ->and(Builder::query()->where('server_id', $leader)->value('token_hash'))->toBe($token)
         ->and(Builder::query()->where('server_id', $leader)->sole()->caps['cpus'])->toBe(7);
 });
@@ -222,4 +232,108 @@ it('pins on-server builds on the control-plane machine to the control plane buil
         ->and($world->agents->dispatched('system.exec'))->toBe([]);
 
     expect(on_server_poll('local-builder-token-123')->assertOk()->json('id'))->toBe($build->id);
-})->skip(! property_exists(ServerData::class, 'controlPlaneHost'), 'Needs the Servers contract field ServerData::$controlPlaneHost (Lane C).');
+});
+
+it('refuses the control plane builder when it is disabled', function () {
+    $world = on_server_world();
+    $world->servers[0]->forceFill(['control_plane_host' => true])->save();
+    on_server_request($world);
+    Builder::query()->where('kind', 'local')->update(['enabled' => false]);
+
+    expect(fn () => on_server_request($world))->toThrow(InvalidArgumentException::class, "The control plane's builder is disabled.");
+});
+
+it('never turns the control plane builder into a server builder, and keeps it when its server is deleted', function () {
+    $world = on_server_world();
+    $server = $world->servers[0];
+    $server->forceFill(['control_plane_host' => true])->save();
+    on_server_request($world);
+    $local = Builder::query()->where('kind', 'local')->sole();
+
+    expect(app(InstallServerBuilder::class)(app(ServerDirectory::class)->find($server->id))->id)->toBe($local->id)
+        ->and($local->refresh()->kind)->toBe('local')
+        ->and($world->agents->dispatched())->toBe([]);
+
+    ServerDeleted::dispatch($server->id, $world->organization->id, 'web', $server->name);
+
+    // Still a working (pool) builder; the deleted server's queued pinned build fails at once.
+    expect($local->refresh()->server_id)->toBeNull()
+        ->and(Build::query()->sole()->status)->toBe(BuildStatus::Failed);
+    on_server_poll('local-builder-token-123')->assertNoContent();
+});
+
+it('installs a site server builder under a per-server lock', function () {
+    $world = on_server_world();
+    $leader = $world->servers[0]->id;
+    $cache = new class(app()) extends CacheManager
+    {
+        public array $locks = [];
+
+        public function lock(string $name, int $seconds = 0): Lock
+        {
+            $this->locks[] = $name;
+
+            return $this->store()->lock($name, $seconds);
+        }
+    };
+    Cache::swap($cache);
+
+    on_server_request($world);
+    on_server_request($world);
+
+    // Every lookup-or-install holds the server's lock, and releases it.
+    expect($cache->locks)->toBe(["builds:server-builder:{$leader}", "builds:server-builder:{$leader}"])
+        ->and(Cache::lock("builds:server-builder:{$leader}", 30)->get())->toBeTrue()
+        ->and($world->agents->dispatched('system.exec'))->toHaveCount(1);
+});
+
+it('brings builders installed before the caps up to date without a token rotation or a restart', function () {
+    $world = on_server_world();
+    $leader = $world->servers[0]->id;
+    on_server_request($world);
+    $builder = Builder::query()->where('server_id', $leader)->sole();
+    $builder->forceFill(['caps' => null])->save(); // a pre-v0.23 install: old unit, no slice
+    $token = $builder->token_hash;
+    $before = count($world->agents->dispatched());
+
+    app(InstallServerBuilder::class)->refreshPending();
+
+    $sent = array_slice($world->agents->dispatched(), $before);
+    $paths = array_map(fn ($c) => $c['payload']['path'] ?? $c['handle']->type, $sent);
+
+    expect($paths)->toBe([InstallServerBuilder::UNIT_PATH, InstallServerBuilder::SLICE_PATH, InstallServerBuilder::CAPS_ENV_PATH, 'system.exec'])
+        ->and($sent[0]['payload']['content'])->toContain('Slice=falak-build.slice')
+        ->and($sent[3]['payload']['script'])->toContain('systemctl daemon-reload', 'set-property --runtime falak-build.slice MemoryMax=4915M')
+        ->not->toContain('restart')
+        ->and($builder->refresh()->token_hash)->toBe($token)
+        ->and($builder->caps['cpus'])->toBe(3);
+
+    // Once: nothing pending afterwards.
+    app(InstallServerBuilder::class)->refreshPending();
+    expect($world->agents->dispatched())->toHaveCount(count($sent) + $before);
+});
+
+it('keeps the caps stale when the agent is away, so a later report retries', function () {
+    $world = on_server_world();
+    $leader = $world->servers[0]->id;
+    on_server_request($world);
+    $world->agents->unavailable($leader);
+
+    AgentFactsReported::dispatch('agent', $world->organization->id, $leader, ['memory_bytes' => 16 * 1024 ** 3, 'cpus' => 8]);
+
+    expect(Builder::query()->where('server_id', $leader)->sole()->caps['cpus'])->toBe(3);
+});
+
+it('only queues facts reports that change a server builder caps', function () {
+    $world = on_server_world();
+    $leader = $world->servers[0]->id;
+    on_server_request($world);
+    Queue::fake();
+
+    AgentFactsReported::dispatch('agent', $world->organization->id, $leader, ['memory_bytes' => 8 * 1024 ** 3, 'cpus' => 4, 'hostname' => 'renamed']);
+    AgentFactsReported::dispatch('agent', $world->organization->id, $world->servers[0]->id.'x', ['memory_bytes' => 1, 'cpus' => 1]);
+    Queue::assertNotPushed(CallQueuedListener::class, fn ($job) => $job->method === 'facts');
+
+    AgentFactsReported::dispatch('agent', $world->organization->id, $leader, ['memory_bytes' => 16 * 1024 ** 3, 'cpus' => 8]);
+    Queue::assertPushed(CallQueuedListener::class, fn ($job) => $job->method === 'facts');
+});

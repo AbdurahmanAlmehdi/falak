@@ -39,8 +39,15 @@ final class InstallServerBuilder
 
     public function __invoke(ServerData $server, ?string $actorId = null, ?bool $pool = null): Builder
     {
+        $existing = Builder::query()->where('server_id', $server->id)->first();
+
+        // The control plane's own builder serves this machine; it is configured through the environment, never here.
+        if ($existing?->kind === Builder::KIND_LOCAL) {
+            return $existing;
+        }
+
         $token = Builder::newToken();
-        $pool ??= Builder::query()->where('server_id', $server->id)->value('pool') ?? $server->type === ServerType::Builder;
+        $pool ??= $existing->pool ?? $server->type === ServerType::Builder;
 
         /** @var Builder $builder */
         $builder = Builder::query()->updateOrCreate(['server_id' => $server->id], [
@@ -83,28 +90,77 @@ final class InstallServerBuilder
     }
 
     /**
-     * Re-render the caps of an installed server builder from new facts (memory / cores changed). The slice's limits
-     * apply on daemon-reload; the BuildKit caps in the env file apply when falak-builder next restarts (a restart
-     * here would kill a running build). Returns false when the caps did not change.
+     * Whether refreshCaps() has anything to do for these facts (a cheap check, no agent call).
+     *
+     * @param  array<string, mixed>  $facts
+     */
+    public static function capsStale(Builder $builder, array $facts): bool
+    {
+        return $builder->kind === Builder::KIND_SERVER && $builder->server_id !== null && self::caps($facts, $builder->pool) !== $builder->caps;
+    }
+
+    /**
+     * Re-render the caps of an installed server builder from new facts (memory / cores changed), without rotating
+     * its token or restarting it (a restart would kill a running build). A builder installed before the caps existed
+     * (caps null) also gets the current unit, which joins falak-build.slice at falak-builder's next restart. The
+     * slice's limits apply at once (set-property --runtime, on top of the file); the BuildKit caps in the env file
+     * apply at the next restart. Returns false when nothing changed or the agent is away.
      *
      * @param  array<string, mixed>  $facts
      */
     public function refreshCaps(Builder $builder, array $facts): bool
     {
-        if ($builder->server_id === null || self::caps($facts, $builder->pool) === $builder->caps) {
+        if (! self::capsStale($builder, $facts)) {
             return false;
         }
 
-        $key = "builds:builder:{$builder->id}:caps:".md5((string) json_encode(self::caps($facts, $builder->pool)));
+        $serverId = (string) $builder->server_id;
+        $caps = self::caps($facts, $builder->pool);
+        $key = "builds:builder:{$builder->id}:caps:".md5((string) json_encode($caps));
+        $previous = $builder->caps;
+        $oldUnit = $previous === null;
 
         try {
+            if ($oldUnit) {
+                $this->agents->dispatch($serverId, 'system.write_file', ['path' => self::UNIT_PATH, 'content' => self::unit(), 'mode' => '0644'], 60, "{$key}:unit");
+            }
+
             $this->writeCaps($builder, $facts, $key);
-            $this->agents->dispatch($builder->server_id, 'system.exec', ['script' => 'systemctl daemon-reload', 'user' => 'root'], 60, "{$key}:reload");
+            $this->agents->dispatch($serverId, 'system.exec', ['script' => self::reloadScript($caps), 'user' => 'root'], 60, "{$key}:reload");
         } catch (AgentUnavailable) {
+            // Stays stale, so the next facts report or sweep retries.
+            $builder->forceFill(['caps' => $previous])->save();
+
             return false;
         }
 
         return true;
+    }
+
+    /**
+     * Server builders installed before the caps (caps null) get them once, from the facts their agents last reported.
+     */
+    public function refreshPending(): void
+    {
+        Builder::query()->where('kind', Builder::KIND_SERVER)->whereNotNull('server_id')->whereNull('caps')->get()
+            ->each(fn (Builder $builder) => $this->refreshCaps($builder, (array) ($this->directory->forServer((string) $builder->server_id)?->facts ?? [])));
+    }
+
+    /**
+     * @param  array{memory_max_bytes: ?int, cpus: ?int, tasks_max: int, io_weight: int, cpu_weight: int}  $caps
+     */
+    public static function reloadScript(array $caps): string
+    {
+        $properties = array_filter([
+            'MemoryMax' => $caps['memory_max_bytes'] !== null ? intdiv($caps['memory_max_bytes'], 1024 ** 2).'M' : null,
+            'CPUQuota' => $caps['cpus'] !== null ? ($caps['cpus'] * 100).'%' : null,
+            'TasksMax' => $caps['tasks_max'],
+            'IOWeight' => $caps['io_weight'],
+            'CPUWeight' => $caps['cpu_weight'],
+        ], fn ($value) => $value !== null);
+
+        return "systemctl daemon-reload\nsystemctl set-property --runtime ".self::SLICE.' '
+            .implode(' ', array_map(fn ($name, $value) => "{$name}={$value}", array_keys($properties), $properties))."\n";
     }
 
     /**

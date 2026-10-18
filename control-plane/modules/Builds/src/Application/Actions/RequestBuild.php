@@ -14,6 +14,7 @@ use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\BuildMode;
 use Falak\Sites\Contracts\Data\SiteData;
 use Falak\Sites\Contracts\SiteDirectory;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
@@ -111,8 +112,7 @@ final class RequestBuild
         $serverId = $site->leader()?->serverId ?? throw new InvalidArgumentException('The site has no leader server to build on.');
         $server = $this->servers->find($serverId) ?? throw new InvalidArgumentException('The site\'s leader server no longer exists.');
 
-        // ponytail: read defensively until Servers' ServerData carries controlPlaneHost everywhere.
-        if ((bool) (get_object_vars($server)['controlPlaneHost'] ?? false)) {
+        if ($server->controlPlaneHost) {
             // The control-plane machine already runs a capped builder: pin to it rather than installing a second one.
             $token = (string) config('builds.local_builder.token');
 
@@ -121,6 +121,10 @@ final class RequestBuild
             }
 
             $local = $this->local->resolve($token);
+
+            if (! $local->enabled) {
+                throw new InvalidArgumentException("The control plane's builder is disabled.");
+            }
 
             if (! $local->supports($mode)) {
                 throw new InvalidArgumentException("The control plane's builder does not build {$mode} (FALAK_LOCAL_BUILDER_MODES).");
@@ -135,7 +139,9 @@ final class RequestBuild
             return $serverId;
         }
 
-        $builder = Builder::query()->where('server_id', $serverId)->first() ?? ($this->install)($server, pool: false);
+        // Locked: two first builds at once must not install twice (each install rotates the token).
+        $builder = Cache::lock("builds:server-builder:{$serverId}", 30)->block(10, fn () => Builder::query()->where('server_id', $serverId)->first()
+            ?? ($this->install)($server, pool: false));
 
         if (! $builder->enabled) {
             throw new InvalidArgumentException("The builder on {$server->name} is disabled; enable it on the Builders page.");
