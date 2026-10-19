@@ -44,7 +44,7 @@ pass "tailnet refuses off the tailnet and changes nothing; status says public"
 tailscale_ip=100.101.102.103
 if run tailnet; then fail "tailnet with an unapproved route succeeded"; fi
 grep -q 'Approve it in the Tailscale admin console' "$work/out" || fail "no approval hint: $(cat "$work/out")"
-[ -z "$(env_get FALAK_PANEL_ALLOW)" ] && [ ! -s "$calls" ] || fail "changed although the route is not approved"
+if [ -n "$(env_get FALAK_PANEL_ALLOW)" ] || [ -s "$calls" ]; then fail "changed although the route is not approved"; fi
 pass "tailnet refuses while the route awaits approval and changes nothing"
 
 tailscale_routes='
