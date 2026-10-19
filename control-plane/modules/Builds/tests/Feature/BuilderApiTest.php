@@ -219,6 +219,21 @@ it('runs the build lifecycle from builder events and verifies the uploaded artif
     $this->get(preg_replace('/signature=[^&]+/', 'signature=forged', $artifact->url))->assertForbidden();
 });
 
+it('accepts artifacts larger than post_max_size (the upload streams, capped by max_upload_bytes)', function () {
+    request_build(builds_world());
+    $job = next_job()->json();
+    $tarball = random_bytes(1024);
+
+    // A 78 MB static site failed with 413: ValidatePostSize compared Content-Length to post_max_size (64M).
+    $this->call('PUT', $job['native']['upload']['url'], [], [], [], ['CONTENT_TYPE' => 'application/octet-stream', 'CONTENT_LENGTH' => (string) (200 * 1024 ** 2)], $tarball)
+        ->assertCreated()->assertJsonPath('size_bytes', 1024);
+});
+
+it('still refuses other bodies over post_max_size', function () {
+    $this->call('POST', '/login', [], [], [], ['CONTENT_LENGTH' => (string) (200 * 1024 ** 2)], 'x')->assertStatus(413);
+    $this->call('POST', '/api/internal/artifacts/x', [], [], [], ['CONTENT_LENGTH' => (string) (200 * 1024 ** 2)], 'x')->assertStatus(413);
+});
+
 it('fails a build whose uploaded artifact does not match the reported checksum', function () {
     Event::fake([BuildFailed::class]);
     $world = builds_world();
