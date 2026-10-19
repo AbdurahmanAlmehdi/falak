@@ -1,9 +1,29 @@
-import { registerCommands, registerIpActions, registerNavigation, registerServiceTabs, type ServiceTabProps } from '@/lib/registry';
-import { Ban, Gauge, Network, Shield } from 'lucide-react';
+import {
+    registerCommands,
+    registerIpActions,
+    registerNavigation,
+    registerServiceTabs,
+    registerSettingsNav,
+    type ServiceTabProps,
+} from '@/lib/registry';
+import { Ban, Gauge, Network, Shield, Waypoints } from 'lucide-react';
 import { createElement, lazy } from 'react';
 import { BlockIpAction } from './components/block-ip-action';
 
 registerNavigation({ id: 'network', title: 'Network', url: '/network', icon: Network, order: 400, permission: 'network.view' });
+
+// Organization settings → Integrations → Tailscale (docs/plans/TAILSCALE.md), next to Cloudflare.
+registerSettingsNav({
+    id: 'tailscale',
+    title: 'Tailscale',
+    url: '/settings/tailscale',
+    group: 'integrations',
+    order: 216,
+    icon: Waypoints,
+    permission: 'network.view',
+    requiresOrganization: true,
+    keywords: ['tailscale', 'vpn', 'tailnet', 'wireguard', 'private', 'auth key'],
+});
 
 const ConnectionsView = lazy(() => import('./components/connections-view').then((module) => ({ default: module.ConnectionsView })));
 

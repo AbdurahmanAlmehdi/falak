@@ -383,8 +383,28 @@ falak-ctl artisan <command>               # php artisan in the control-plane con
 falak-ctl prune-images [--dry-run]        # remove Falak images except the current and previous version
 falak-ctl registry status                 # built-in image registry: address, size, answers with its credentials
 falak-ctl registry gc [--dry-run] [--force] # delete registry layers no image references (stops the registry briefly)
+falak-ctl panel-access tailnet | public | status  # panel only over Tailscale (see below)
 falak-ctl up | down | restart [service]
 ```
+
+### Panel over Tailscale only
+
+Once the control-plane machine is on the organization's tailnet (**Settings → Network → Tailscale**, then join that
+server from its **Network** tab), the panel can be closed to everyone else:
+
+```bash
+falak-ctl panel-access tailnet   # refuses unless `tailscale ip -4` works on this machine
+falak-ctl panel-access status
+falak-ctl panel-access public    # back to reachable from anywhere (over SSH if you are locked out)
+```
+
+`tailnet` sets `FALAK_PANEL_ALLOW="100.64.0.0/10 fd7a:115c:a1e0::/48"` in `.env` and recreates the edge. Browser paths
+on the panel domain (and the agent API host) then answer 403 to any other address; DNS and certificates do not change,
+devices reach the public address through the tailnet (they must accept routes; Linux: `tailscale set --accept-routes`).
+Machine paths stay public: `/agent/*`, `/install/*`, `/api/*` (token API, Git webhooks, deploy hooks, builders),
+`/terminal/v1/*` (CLI consoles), `/otlp/*`, `/up` and public status pages (`/status/<slug>`). `FALAK_PANEL_ALLOW` takes
+any space-separated CIDR list; the edge sees the TCP peer address (no proxy headers are trusted), so a panel behind a
+Cloudflare proxy or tunnel would be refused: keep its record "DNS only".
 
 ## 5. Upgrade
 

@@ -19,6 +19,7 @@ use Falak\Edge\Domain\Models\SiteSetting;
 use Falak\Edge\Http\Rules\Cidr;
 use Falak\Identity\Contracts\OrganizationAccess;
 use Falak\Kernel\Http\Controller;
+use Falak\Network\Contracts\Tailnet;
 use Falak\Sites\Contracts\Data\SiteData;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -77,7 +78,9 @@ final class RoutingController extends Controller
                 'deny_ips' => $settings->deny_ips,
                 'max_body_bytes' => $settings->max_body_bytes,
                 'encode' => $settings->encode,
+                'tailnet_only' => $settings->tailnet_only,
             ],
+            'tailnet' => ['configured' => app(Tailnet::class)->configured($siteData->organizationId)],
             'serviceSettings' => (object) ServiceSetting::query()->where('site_id', $siteData->id)->get()
                 ->mapWithKeys(fn (ServiceSetting $s) => [$s->service => ['allow_ips' => $s->allow_ips, 'deny_ips' => $s->deny_ips]])->all(),
             'behindLoadBalancer' => LoadBalancer::query()->where('site_id', $siteData->id)->exists(),
@@ -209,6 +212,7 @@ final class RoutingController extends Controller
             'deny_ips.*' => ['string', new Cidr],
             'max_body_bytes' => ['nullable', 'integer', 'min:0', 'max:'.(10 * 1024 ** 3)],
             'encode' => ['required', 'boolean'],
+            'tailnet_only' => ['sometimes', 'boolean'],
         ]);
 
         $update(
@@ -217,6 +221,7 @@ final class RoutingController extends Controller
             array_values($data['deny_ips']),
             isset($data['max_body_bytes']) ? (int) $data['max_body_bytes'] : null,
             (bool) $data['encode'],
+            isset($data['tailnet_only']) ? (bool) $data['tailnet_only'] : null,
         );
 
         return back();

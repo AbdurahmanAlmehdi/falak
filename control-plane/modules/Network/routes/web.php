@@ -6,6 +6,7 @@ use Falak\Network\Http\Controllers\FirewallController;
 use Falak\Network\Http\Controllers\NetworkController;
 use Falak\Network\Http\Controllers\PrivateNetworkController;
 use Falak\Network\Http\Controllers\ProtectionController;
+use Falak\Network\Http\Controllers\TailscaleController;
 use Illuminate\Support\Facades\Route;
 
 // Server page tabs (/servers/{id}/{tab}) owned by Network.
@@ -13,6 +14,11 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::get('servers/{server}/firewall', [FirewallController::class, 'show'])->name('network.firewall.show');
     Route::get('servers/{server}/network', [ConnectionsController::class, 'page'])->name('network.server');
     Route::get('servers/{server}/private-network', [PrivateNetworkController::class, 'forServer'])->name('network.server.private');
+
+    // Tailscale (docs/plans/TAILSCALE.md).
+    Route::get('settings/tailscale', [TailscaleController::class, 'show'])->name('network.tailscale');
+    Route::put('settings/tailscale', [TailscaleController::class, 'saveKey'])->middleware('throttle:20,1')->name('network.tailscale.key');
+    Route::delete('settings/tailscale', [TailscaleController::class, 'removeKey'])->name('network.tailscale.key.remove');
 });
 
 Route::middleware(['auth', 'org'])->prefix('network')->name('network.')->group(function () {
@@ -41,6 +47,8 @@ Route::middleware(['auth', 'org'])->prefix('network')->name('network.')->group(f
     Route::post('blocks', [ProtectionController::class, 'store'])->name('blocks.store');
     Route::delete('blocks/{block}', [ProtectionController::class, 'destroy'])->name('blocks.destroy');
     Route::put('servers/{server}/protection', [ProtectionController::class, 'settings'])->name('protection.settings');
+    Route::post('servers/{server}/tailscale', [TailscaleController::class, 'join'])->middleware('throttle:20,1')->name('tailscale.join');
+    Route::delete('servers/{server}/tailscale', [TailscaleController::class, 'leave'])->name('tailscale.leave');
 
     Route::post('private-networks', [PrivateNetworkController::class, 'store'])->name('private-networks.store');
     Route::get('private-networks/{network}', [PrivateNetworkController::class, 'show'])->name('private-networks.show');

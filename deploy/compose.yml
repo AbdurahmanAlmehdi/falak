@@ -416,6 +416,9 @@ services:
       FALAK_LOCAL_EDGE_UPSTREAM_HTTPS: ${FALAK_LOCAL_EDGE_UPSTREAM_HTTPS:-}
       FALAK_LOCAL_EDGE_UPSTREAM_HTTP: ${FALAK_LOCAL_EDGE_UPSTREAM_HTTP:-}
       FALAK_EDGE_PKI_OUT: /falak/edge-pki
+      # Panel over Tailscale only (falak-ctl panel-access): browser paths only from these CIDRs. Unset or empty:
+      # everyone (never pass it empty: Caddy would then match no client and refuse the panel to all).
+      FALAK_PANEL_ALLOW: ${FALAK_PANEL_ALLOW:-0.0.0.0/0 ::/0}
     volumes:
       - falak-ca:/falak/ca:ro
       - edge-pki:/falak/edge-pki

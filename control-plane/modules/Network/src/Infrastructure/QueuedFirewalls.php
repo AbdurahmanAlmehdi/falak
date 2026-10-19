@@ -104,7 +104,7 @@ final class QueuedFirewalls implements Firewalls
 
     /**
      * Why a port must never get a deny rule from here (a deny wins over every accept): SSH, the web ports the edge
-     * serves, private networks' WireGuard ports, and ports an allow rule opens on purpose. null when it may be closed.
+     * serves, private networks' WireGuard ports, Tailscale's port, and ports an allow rule opens on purpose. null when it may be closed.
      */
     private function protectedPort(string $serverId, RuleProtocol $protocol, int $port): ?string
     {
@@ -122,6 +122,10 @@ final class QueuedFirewalls implements Firewalls
         foreach ($payload['rules'] as $rule) {
             if (str_starts_with((string) $rule['id'], 'wg-') && $protocol !== RuleProtocol::Tcp && in_array((string) $port, $rule['ports'] ?? [], true)) {
                 return 'a private network (WireGuard) uses it.';
+            }
+
+            if ($rule['id'] === 'tailscale-direct' && $protocol !== RuleProtocol::Tcp && in_array((string) $port, $rule['ports'], true)) {
+                return 'Tailscale uses it.';
             }
         }
 

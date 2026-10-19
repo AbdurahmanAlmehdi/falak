@@ -36,6 +36,8 @@
 #                                           sites on this machine: enrol its agent, the edge passes it every host the
 #                                           panel does not serve; the panel keeps FALAK_CP_RESERVE_MB and one core.
 #                                           allow/deny: whether the panel may ask for it (This machine)
+#   falak-ctl panel-access tailnet | public | status
+#                                           panel (browser paths) only over the Tailscale tailnet / from anywhere
 #   falak-ctl ensure-host                   (re)write the host units (falak-host.path) and resource slices
 #   falak-ctl host-run                      run the panel's host request (falak-host.service; update, local-server)
 #   falak-ctl version
@@ -2820,6 +2822,47 @@ cmd_domain() {
   say "  New servers enroll against https://$new$suffix; update CLI logins (falak login --url ...)."
 }
 
+# Panel over Tailscale only: FALAK_PANEL_ALLOW limits the edge's browser paths (deploy/edge/Caddyfile); machine paths
+# (agents, installers, API, webhooks, relay, OTLP, /up, status pages) stay public.
+PANEL_TAILNET_RANGES="100.64.0.0/10 fd7a:115c:a1e0::/48"
+cmd_panel_access() {
+  require_install
+  local sub="${1:-status}" allow ip
+  case "$sub" in
+    tailnet)
+      if ! ip="$(tailscale ip -4 2>/dev/null | head -1)" || [ -z "$ip" ]; then
+        bad "this machine is not on a tailnet (tailscale ip -4 failed): the panel would be unreachable"
+        say "  Join it first: Settings → Network → Tailscale (save the auth key), then Servers → the control-plane"
+        say "  server → Network → Join the tailnet. Wait until it is active, then run this again."
+        exit 1
+      fi
+      # Devices reach the panel through this machine's advertised route: refuse until it is approved.
+      if ! tailscale status --json --peers=false 2>/dev/null | tr -d ' \t\n' | grep -q '"PrimaryRoutes":\["'; then
+        bad "this machine's route is not approved yet: tailnet devices would not reach the panel"
+        say "  Approve it in the Tailscale admin console (Machines → this machine → Edit route settings), then run this again."
+        exit 1
+      fi
+      env_set FALAK_PANEL_ALLOW "$PANEL_TAILNET_RANGES"
+      compose up -d --wait --wait-timeout 120 --no-deps edge >/dev/null || die "recreating the edge failed (falak-ctl logs edge); back to public: falak-ctl panel-access public"
+      ok "the panel answers browsers only over the tailnet ($PANEL_TAILNET_RANGES; this machine: $ip)"
+      say "  Devices must accept routes (Linux: tailscale set --accept-routes). Agents, webhooks and the API stay public."
+      say "  Locked out? Over SSH: falak-ctl panel-access public" ;;
+    public)
+      env_set FALAK_PANEL_ALLOW ""
+      compose up -d --wait --wait-timeout 120 --no-deps edge >/dev/null || die "recreating the edge failed (falak-ctl logs edge)"
+      ok "the panel is reachable from anywhere again" ;;
+    status)
+      allow="$(env_get FALAK_PANEL_ALLOW)"
+      case "$allow" in
+        "") say "panel access: public" ;;
+        "$PANEL_TAILNET_RANGES") say "panel access: tailnet ($allow)" ;;
+        *) say "panel access: custom ($allow)" ;;
+      esac
+      if ip="$(tailscale ip -4 2>/dev/null | head -1)" && [ -n "$ip" ]; then say "  this machine on the tailnet: $ip"; else say "  this machine is not on a tailnet"; fi ;;
+    *) die "usage: falak-ctl panel-access tailnet | public | status" ;;
+  esac
+}
+
 cmd_admin() {
   require_install
   local sub="${1:-}"; shift || true
@@ -2834,7 +2877,7 @@ cmd_admin() {
   esac
 }
 
-usage() { sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; }
 
 main() {
   local cmd="${1:-help}"; shift || true
@@ -2863,6 +2906,9 @@ main() {
     local-server)
       case "${1:-}" in enable|disable) ctl_lock ;; esac
       cmd_local_server "$@" ;;
+    panel-access)
+      case "${1:-}" in tailnet|public) ctl_lock ;; esac
+      cmd_panel_access "$@" ;;
     ensure-host) cmd_ensure_host ;;
     host-run) require_install; cmd_host_run ;;
     host-job) require_install; cmd_host_job "$@" ;;

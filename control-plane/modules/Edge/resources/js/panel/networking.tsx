@@ -1189,7 +1189,7 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
     const [redirect, setRedirect] = useState({ from: '', to: '', status: '301' });
     const [rule, setRule] = useState({ path: '', username: '', password: '', name: '' });
     const [header, setHeader] = useState({ name: '', value: '' });
-    const [limits, setLimits] = useState({ allow_ips: '', deny_ips: '', max_body_mb: '', encode: true });
+    const [limits, setLimits] = useState({ allow_ips: '', deny_ips: '', max_body_mb: '', encode: true, tailnet_only: false });
     const [errors, setErrors] = useState<Record<string, Record<string, string>>>({});
     const [saving, setSaving] = useState<string | null>(null);
     // Compose sites: rules for every service ('') or for one public service.
@@ -1204,6 +1204,7 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
             deny_ips: own.deny_ips.join('\n'),
             max_body_mb: data.settings.max_body_bytes ? String(Math.round((data.settings.max_body_bytes / MB) * 100) / 100) : '',
             encode: data.settings.encode,
+            tailnet_only: data.settings.tailnet_only,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [settingsKey]);
@@ -1459,6 +1460,7 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
                                               deny_ips: lines(limits.deny_ips),
                                               max_body_bytes: limits.max_body_mb === '' ? null : Math.round(Number(limits.max_body_mb) * MB),
                                               encode: limits.encode,
+                                              tailnet_only: limits.tailnet_only,
                                           },
                                     'Access & limits saved',
                                 )
@@ -1504,6 +1506,22 @@ export function RoutingSettings({ ctx }: ServiceTabProps) {
                             checked={limits.encode}
                             disabled={!manage || scope !== ''}
                             onCheckedChange={(encode) => setLimits({ ...limits, encode })}
+                        />
+                    </Field>
+                    <Field
+                        inline
+                        label="Tailscale only"
+                        error={errors.limits?.tailnet_only}
+                        hint={
+                            data.tailnet.configured || limits.tailnet_only
+                                ? 'Only your tailnet devices (plus the Allow only entries and Falak’s own checks) reach the site; everyone else gets 403. Keep the domains DNS only (not proxied by Cloudflare).'
+                                : 'Save a Tailscale auth key in Settings → Tailscale and put the site’s servers on the tailnet first.'
+                        }
+                    >
+                        <Switch
+                            checked={limits.tailnet_only}
+                            disabled={!manage || scope !== '' || (!data.tailnet.configured && !limits.tailnet_only)}
+                            onCheckedChange={(tailnet_only) => setLimits({ ...limits, tailnet_only })}
                         />
                     </Field>
                 </div>

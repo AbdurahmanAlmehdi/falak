@@ -93,6 +93,9 @@ var Features = []string{
 	// Sandboxes v0.21: sandbox.snapshot, sandbox.snapshot.delete, sandbox.create from_snapshot (restore / fork),
 	// sandbox.pause, sandbox.resume, sandbox.db.import, and sandbox.inventory's snapshots.
 	"sandbox.v2",
+	// Tailscale (docs/plans/TAILSCALE.md): net.tailscale.apply (pinned tailscale + tailscaled, joins the tailnet
+	// advertising the server's own public IPs as host routes).
+	"net.tailscale",
 }
 
 var (

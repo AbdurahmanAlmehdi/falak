@@ -13,7 +13,7 @@ use Falak\Servers\Contracts\ServerSshKeys;
  * The exposed-ports audit (docs/plans/network/connections.md): a public listener of the host is exposed when it is
  * reachable from anywhere (the firewall is not applied, the first rule that matches it from anywhere accepts it, or a
  * container publishes it: Docker's DNAT runs before the input chain) and Falak does not expose it on purpose (the edge,
- * SSH, private networks' WireGuard ports, a database published with public access).
+ * SSH, private networks' WireGuard ports, Tailscale's direct-connection port, a database published with public access).
  */
 final class ExposedPorts
 {
@@ -125,8 +125,8 @@ final class ExposedPorts
     }
 
     /**
-     * Ports Falak exposes on purpose: the edge, SSH, the WireGuard ports of its private networks, databases published
-     * with public access (behind their allowlist).
+     * Ports Falak exposes on purpose: the edge, SSH, the WireGuard ports of its private networks, Tailscale's port,
+     * databases published with public access (behind their allowlist).
      *
      * @param  array<string, mixed>  $payload  the compiled firewall
      * @return array<string, true>
@@ -137,7 +137,7 @@ final class ExposedPorts
             'tcp/'.$this->keys->sshPort($serverId) => true];
 
         foreach ($payload['rules'] as $rule) {
-            if (str_starts_with((string) $rule['id'], 'wg-')) {
+            if (str_starts_with((string) $rule['id'], 'wg-') || $rule['id'] === 'tailscale-direct') {
                 foreach ($rule['ports'] ?? [] as $port) {
                     $ports["udp/{$port}"] = true;
                 }

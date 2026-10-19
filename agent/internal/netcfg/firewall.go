@@ -45,6 +45,7 @@ func (n *Net) Register(reg *commands.Registry) {
 	reg.Register("net.firewall.apply", commands.Typed(n.FirewallApply))
 	reg.Register("net.wireguard.apply", commands.Typed(n.WireGuardApply))
 	reg.Register("net.tunnel.apply", commands.Typed(n.TunnelApply))
+	reg.Register("net.tailscale.apply", commands.Typed(n.TailscaleApply))
 }
 
 // Rule is one firewall rule.

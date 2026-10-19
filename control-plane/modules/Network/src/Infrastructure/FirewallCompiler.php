@@ -2,17 +2,19 @@
 
 namespace Falak\Network\Infrastructure;
 
+use Falak\Network\Application\Tailscale;
 use Falak\Network\Contracts\WebOriginPolicy;
 use Falak\Network\Domain\Enums\RuleAction;
 use Falak\Network\Domain\Models\FirewallRule;
 use Falak\Network\Domain\Models\PrivateNetworkMember;
+use Falak\Network\Domain\Models\TailscaleNode;
 use Falak\Servers\Contracts\ServerDirectory;
 
 /**
  * Compiles a server's firewall rules (plus rules implied by its private networks) into the FULL
  * `net.firewall.apply` desired state.
  *
- * Order: private-network rules first (so user deny rules never cut the mesh), then deny rules,
+ * Order: private-network and Tailscale rules first (so user deny rules never cut the mesh), then deny rules,
  * then allow rules, each by position. Everything else is dropped (input_policy drop); the SSH
  * port is always accepted by the agent to avoid lock-out.
  */
@@ -148,6 +150,14 @@ final class FirewallCompiler
                 'interface' => $network->interface,
                 'comment' => mb_substr("Private network {$network->name}", 0, 120),
             ];
+        }
+
+        // On the tailnet: everything from tailscale0 (like a private network's interface), and tailscaled's port for
+        // direct connections from anywhere (else traffic goes through Tailscale's relays).
+        if (TailscaleNode::query()->whereKey($serverId)->exists()) {
+            $rules[] = ['id' => 'tailscale-interface', 'action' => 'accept', 'protocol' => 'any', 'interface' => Tailscale::INTERFACE, 'comment' => 'Tailscale'];
+            $rules[] = ['id' => 'tailscale-direct', 'action' => 'accept', 'protocol' => 'udp', 'ports' => [(string) config('network.tailscale.port', 41641)],
+                'comment' => 'Tailscale direct connections'];
         }
 
         return $rules;

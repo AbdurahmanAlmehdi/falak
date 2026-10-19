@@ -1,0 +1,1 @@
+{"state": "present", "version": "1.104.1", "url": "https://pkgs.tailscale.com/stable/tailscale_1.104.1_amd64.tgz", "sha256": "77e26d8d900e0b8469f416239d14b5f296525fdf79fee6f511ef55609e3fbac2", "auth_key": "tskey-auth-example", "hostname": "falak-main-1", "advertise_routes": ["203.0.113.10/32", "2001:db8::10/128"]}
