@@ -2,7 +2,7 @@
 # Scripted test for deploy/compose.yml as `docker compose config` renders it: the edge's fixed address (FALAK_EDGE_IP)
 # and the app trusting only it (the whole edge subnet with an older .env that lacks it); every service but the builder
 # in falakcp.slice with OOM score -900; state/host writable only in control-plane, horizon and scheduler, which wait
-# for host-init (no network, read-only, CHOWN/FOWNER only). Needs docker compose (skipped without it).
+# for host-init (no network, read-only, CHOWN/FOWNER only); the edge's FALAK_PANEL_ALLOW (everyone unless set). Needs docker compose (skipped without it).
 #   deploy/tests/compose-config.sh
 set -euo pipefail
 
@@ -49,3 +49,11 @@ if ! { [ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = "" ] &
 render $'FALAK_BUILD_MIN_FREE_GB=20\nFALAK_BUILD_ABORT_FREE_GB=4'
 if ! { [ "$(q '.services.builder.environment.FALAK_BUILD_MIN_FREE_GB')" = 20 ] && [ "$(q '.services.builder.environment.FALAK_BUILD_ABORT_FREE_GB')" = 4 ]; }; then fail "builder disk floors not passed"; fi
 pass "host-init: 2 s healthcheck without start_interval, group = FALAK_APP_UID (33); the builder gets FALAK_BUILD_MIN/ABORT_FREE_GB (empty: its defaults)"
+
+for line in '' 'FALAK_PANEL_ALLOW='; do
+  render "$line"
+  [ "$(q '.services.edge.environment.FALAK_PANEL_ALLOW')" = "0.0.0.0/0 ::/0" ] || fail "FALAK_PANEL_ALLOW default ($line): $(q '.services.edge.environment.FALAK_PANEL_ALLOW')"
+done
+render 'FALAK_PANEL_ALLOW=100.64.0.0/10 fd7a:115c:a1e0::/48'
+[ "$(q '.services.edge.environment.FALAK_PANEL_ALLOW')" = "100.64.0.0/10 fd7a:115c:a1e0::/48" ] || fail "FALAK_PANEL_ALLOW: $(q '.services.edge.environment.FALAK_PANEL_ALLOW')"
+pass "the edge gets FALAK_PANEL_ALLOW (unset or empty: everyone)"

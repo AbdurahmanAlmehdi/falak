@@ -64,4 +64,17 @@ return [
         // Expired blocks are kept this long (listed as history in the audit log only).
         'retention_days' => 7,
     ],
+
+    // Tailscale (docs/plans/TAILSCALE.md): the pinned static release net.tailscale.apply installs (checksum-verified).
+    'tailscale' => [
+        'version' => '1.104.1',
+        'url' => 'https://pkgs.tailscale.com/stable/tailscale_{version}_{arch}.tgz',
+        'sha256' => [
+            'amd64' => '108d1d96ecf410d305571e173516f27038f870919a9b89c914a167c6d33a4528',
+            'arm64' => 'f60294374967f3dfd8cf57bbbd474d6cfce32d123e3a8ddeab82a87940daa806',
+        ],
+        // tailscaled --port: accepted from anywhere for direct (peer-to-peer) connections.
+        'port' => 41641,
+        'apply_timeout' => 300,
+    ],
 ];

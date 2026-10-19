@@ -117,7 +117,9 @@ export interface RoutingData {
     redirects: { id: string; service: string | null; from: string; to: string; status: number; managed?: ManagedConfig | null }[];
     rules: { id: string; service: string | null; name: string | null; path: string | null; username: string }[];
     headers: { id: string; service: string | null; name: string; value: string; managed?: ManagedConfig | null }[];
-    settings: { allow_ips: string[]; deny_ips: string[]; max_body_bytes: number | null; encode: boolean };
+    settings: { allow_ips: string[]; deny_ips: string[]; max_body_bytes: number | null; encode: boolean; tailnet_only: boolean };
+    /** The organization saved a Tailscale auth key (Settings → Tailscale): "Tailscale only" can be turned on. */
+    tailnet: { configured: boolean };
     /** IP lists per compose service: its allow list replaces the site's, its deny list adds to it. */
     serviceSettings: Record<string, { allow_ips: string[]; deny_ips: string[] }>;
     behindLoadBalancer: boolean;

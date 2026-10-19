@@ -26,6 +26,7 @@ use Falak\Edge\Contracts\DnsCheck;
 use Falak\Edge\Contracts\DomainRecords;
 use Falak\Edge\Contracts\EdgeRoutes;
 use Falak\Edge\Contracts\PreviewDomains;
+use Falak\Edge\Contracts\TailnetSites;
 use Falak\Edge\Events\CertificateInstallFailed;
 use Falak\Edge\Events\CertificateIssued;
 use Falak\Edge\Events\DomainAdded;
@@ -41,6 +42,7 @@ use Falak\Edge\Infrastructure\EloquentDomainRecords;
 use Falak\Edge\Infrastructure\EloquentEdgeRoutes;
 use Falak\Edge\Infrastructure\EloquentPreviewDomains;
 use Falak\Edge\Infrastructure\EloquentSiteDomains;
+use Falak\Edge\Infrastructure\EloquentTailnetSites;
 use Falak\Edge\Infrastructure\ResolverDnsCheck;
 use Falak\Edge\Infrastructure\RouteCompiler;
 use Falak\Fleet\Contracts\AgentGateway;
@@ -84,6 +86,7 @@ class EdgeServiceProvider extends ModuleServiceProvider
         DnsCheck::class => ResolverDnsCheck::class,
         DomainRecords::class => EloquentDomainRecords::class,
         TlsProbe::class => StreamTlsProbe::class,
+        TailnetSites::class => EloquentTailnetSites::class,
     ];
 
     /**

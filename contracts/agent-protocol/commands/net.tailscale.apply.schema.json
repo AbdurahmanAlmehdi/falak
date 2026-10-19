@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://falak.sh/agent-protocol/commands/net.tailscale.apply.schema.json",
+  "title": "net.tailscale.apply — Tailscale: install (pinned, sha256-verified) tailscale + tailscaled and join the tailnet advertising the server's own public IPs as host routes, or log out and remove it (docs/plans/TAILSCALE.md). Feature net.tailscale",
+  "x-falak-forget-secrets": [
+    "auth_key"
+  ],
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state"
+  ],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "present",
+        "absent"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d{1,3}\\.\\d{1,4}\\.\\d{1,4}$",
+      "description": "tailscale release (required when present)"
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https://",
+      "description": "tailscale_<version>_<arch>.tgz of that release"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "of the tarball"
+    },
+    "auth_key": {
+      "type": "string",
+      "pattern": "^tskey-\\S+$",
+      "description": "a reusable, pre-approved auth key; passed to tailscale up as a 0600 temp file, never stored"
+    },
+    "hostname": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    },
+    "advertise_routes": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "string",
+        "description": "a host route: <ipv4>/32 or <ipv6>/128"
+      }
+    }
+  },
+  "$defs": {
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changed",
+        "active",
+        "routes_approved"
+      ],
+      "properties": {
+        "changed": {
+          "type": "boolean",
+          "description": "true when the host state was modified (install, unit, or the node was not yet on the tailnet)"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "backend_state is Running"
+        },
+        "version": {
+          "type": "string"
+        },
+        "backend_state": {
+          "type": "string",
+          "description": "tailscale status BackendState (Running, NeedsLogin, NeedsMachineAuth, Stopped, …)"
+        },
+        "hostname": {
+          "type": "string",
+          "description": "the device name on the tailnet"
+        },
+        "ipv4": {
+          "type": "string"
+        },
+        "ipv6": {
+          "type": "string"
+        },
+        "routes_approved": {
+          "type": "boolean",
+          "description": "every advertised route is in Self.PrimaryRoutes (true when none are advertised)"
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "state": {
+        "const": "present"
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "version",
+      "url",
+      "sha256",
+      "auth_key",
+      "hostname"
+    ]
+  }
+}

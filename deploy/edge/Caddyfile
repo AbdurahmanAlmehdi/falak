@@ -76,8 +76,18 @@
 		not vars {http.request.tls.client.certificate_der_base64} ""
 	}
 	@machine path /agent/* /install/* /api/internal/*
+	# Panel over Tailscale only (falak-ctl panel-access tailnet): browser paths answer 403 outside FALAK_PANEL_ALLOW
+	# (space-separated CIDRs; unset: everyone). Machine paths stay public: agents, installers and builders, the token
+	# API with webhooks and deploy hooks (/api/*), the terminal relay (CLI), OTLP, health and public status pages.
+	# No trusted_proxies on this edge, so client_ip is the TCP peer (a client-sent X-Forwarded-For / CF-Connecting-IP
+	# changes nothing).
+	@panel_denied {
+		not path /agent/* /install/* /api/* /otlp/* /terminal/v1/* /up /status/*
+		not client_ip {$FALAK_PANEL_ALLOW:0.0.0.0/0 ::/0}
+	}
 
 	route {
+		respond @panel_denied "This panel is only reachable over the organization's Tailscale network." 403
 		respond @agent_without_cert `{"message":"client certificate required"}` 401
 
 		handle @reverb {

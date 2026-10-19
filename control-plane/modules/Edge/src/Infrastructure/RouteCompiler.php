@@ -22,6 +22,7 @@ use Falak\Edge\Domain\Models\ServiceSetting;
 use Falak\Edge\Domain\Models\SiteSetting;
 use Falak\Edge\Domain\Models\Upstream;
 use Falak\Fleet\Contracts\AgentUpgrades;
+use Falak\Network\Contracts\Tailnet;
 use Falak\Processes\Contracts\OctaneRouting;
 use Falak\Servers\Contracts\ServerDirectory;
 use Falak\Sites\Contracts\Data\SiteData;
@@ -251,7 +252,7 @@ final class RouteCompiler
      */
     private function routeRules(SiteData $site, string $serverId, string $role, ?string $service): array
     {
-        $rules = $this->rules($site->id, $role, $service);
+        $rules = $this->rules($site->id, $site->organizationId, $role, $service);
 
         if ($role !== 'backend') {
             // Per-site HTTP access log (shipped to Loki as the site's kind=access records).
@@ -591,12 +592,12 @@ final class RouteCompiler
     /**
      * Redirects, headers, auth and site settings. For a compose service's route ($service): the site-wide rows plus
      * that service's (a service's header wins over the site's of the same name), the service's allow list instead of
-     * the site's when it has one, and both deny lists.
+     * the site's when it has one, and both deny lists. A tailnet-only site adds the tailnet to its allow list.
      *
      * @param  'direct'|'backend'|'lb'  $role
      * @return array<string, mixed>
      */
-    private function rules(string $siteId, string $role, ?string $service = null): array
+    private function rules(string $siteId, string $organizationId, string $role, ?string $service = null): array
     {
         $rules = [];
         $settings = SiteSetting::for($siteId);
@@ -637,6 +638,12 @@ final class RouteCompiler
 
             $deny = array_values(array_unique([...$settings->deny_ips, ...($serviceSettings->deny_ips ?? [])]));
             $allow = array_values($serviceSettings !== null && $serviceSettings->allow_ips !== [] ? $serviceSettings->allow_ips : $settings->allow_ips);
+
+            // Tailscale only (docs/plans/TAILSCALE.md): tailnet devices, the site's own entries, and the control plane
+            // (its health and uptime checks come over the public path).
+            if ($settings->tailnet_only) {
+                $allow = array_values(array_unique([...Tailnet::RANGES, ...$allow, ...app(Tailnet::class)->controlPlaneAddresses($organizationId)]));
+            }
 
             if ($deny !== []) {
                 $rules['deny_ips'] = $deny;

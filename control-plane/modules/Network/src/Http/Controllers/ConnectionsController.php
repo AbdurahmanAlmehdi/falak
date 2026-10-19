@@ -14,6 +14,8 @@ use Falak\Network\Application\ConfigureConnections;
 use Falak\Network\Application\Queries\ConnectionQueries;
 use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Domain\Models\NetworkObservation;
+use Falak\Network\Domain\Models\TailscaleNode;
+use Falak\Network\Domain\Models\TailscaleSetting;
 use Falak\Servers\Contracts\ServerHeaders;
 use Falak\Sites\Contracts\SiteDirectory;
 use Falak\Telemetry\Contracts\Data\MetricSeries;
@@ -54,7 +56,16 @@ final class ConnectionsController extends Controller
     {
         $data = $this->server($request->user(), $server);
 
-        return Inertia::render('Network/ServerNetwork', ['server' => app(ServerHeaders::class)->for($data->id)]);
+        $node = TailscaleNode::query()->find($data->id);
+
+        return Inertia::render('Network/ServerNetwork', [
+            'server' => app(ServerHeaders::class)->for($data->id),
+            'tailscale' => [
+                'configured' => TailscaleSetting::query()->whereKey($data->organizationId)->exists(),
+                'node' => $node !== null ? TailscaleController::node($node) : null,
+                'can' => ['manage' => $this->access->can($request->user(), $data->organizationId, 'network.tailscale')],
+            ],
+        ]);
     }
 
     /** GET /network/servers/{server}/connections?range= */

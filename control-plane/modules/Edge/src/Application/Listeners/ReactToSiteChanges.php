@@ -140,6 +140,7 @@ final class ReactToSiteChanges implements ShouldQueue
             'deny_ips' => array_values(array_unique([...$settings->deny_ips, ...$stackSettings->deny_ips, ...($serviceSettings->deny_ips ?? [])])),
             'max_body_bytes' => $settings->max_body_bytes ?? $stackSettings->max_body_bytes,
             'encode' => $stackSettings->encode,
+            'tailnet_only' => $stackSettings->tailnet_only,
         ])->save();
         $serviceSettings?->delete();
     }

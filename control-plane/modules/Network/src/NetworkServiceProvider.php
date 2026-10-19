@@ -11,22 +11,27 @@ use Falak\Fleet\Events\CommandFailed;
 use Falak\Fleet\Events\CommandFinished;
 use Falak\Identity\Contracts\PermissionRegistry;
 use Falak\Identity\Contracts\Role;
+use Falak\Identity\Events\OrganizationDeleted;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Network\Application\Actions\RecordNetworkObservation;
 use Falak\Network\Application\ConfigureEbpf;
 use Falak\Network\Application\Jobs\CheckEbpfAlerts;
 use Falak\Network\Application\Jobs\ConvergeProtection;
+use Falak\Network\Application\Listeners\ForgetDeletedOrganization;
 use Falak\Network\Application\Listeners\ForgetDeletedServer;
 use Falak\Network\Application\Listeners\HandleCommandOutcome;
 use Falak\Network\Application\Listeners\HandleEbpfOutcome;
 use Falak\Network\Application\Listeners\HandleProtectionOutcome;
+use Falak\Network\Application\Listeners\HandleTailscaleOutcome;
 use Falak\Network\Application\Listeners\ReconfigureConnections;
 use Falak\Network\Application\Listeners\ReconvergeProtection;
 use Falak\Network\Application\Listeners\SeedFirewallOnProvisioning;
 use Falak\Network\Application\ProtectionGuards;
+use Falak\Network\Application\Tailscale;
 use Falak\Network\Contracts\BlockableAddresses;
 use Falak\Network\Contracts\Firewalls;
 use Falak\Network\Contracts\PrivateNetwork as PrivateNetworkContract;
+use Falak\Network\Contracts\Tailnet;
 use Falak\Network\Contracts\WebOriginPolicy;
 use Falak\Network\Domain\Models\FirewallRule;
 use Falak\Network\Domain\Models\IpBlock;
@@ -59,6 +64,7 @@ class NetworkServiceProvider extends ModuleServiceProvider
     public array $singletons = [
         PrivateNetworkContract::class => EloquentPrivateNetwork::class,
         Firewalls::class => QueuedFirewalls::class,
+        Tailnet::class => Tailscale::class,
     ];
 
     public function register(): void
@@ -80,6 +86,7 @@ class NetworkServiceProvider extends ModuleServiceProvider
         $registry->register('network.manage', [Role::Admin, Role::Developer], 'Manage firewall rules and private networks', 'network');
         $registry->register('network.protect', [Role::Admin], 'Block IP addresses and configure SSH auto-ban', 'network');
         $registry->register('network.ebpf', [Role::Admin], 'Turn the eBPF probe (TCP and DNS insights) on or off on servers', 'network');
+        $registry->register('network.tailscale', [Role::Admin], 'Manage the Tailscale auth key and put servers on the tailnet', 'network');
 
         $types = $this->app->make(AlertTypes::class);
         $types->register(FirewallApplyFailed::ALERT_TYPE, 'Firewall apply failed', 'Network', Severity::Critical);
@@ -117,6 +124,11 @@ class NetworkServiceProvider extends ModuleServiceProvider
         Event::listen(CommandFailed::class, [HandleEbpfOutcome::class, 'handleFailed']);
         Event::listen(AgentVersionChanged::class, [HandleEbpfOutcome::class, 'handleUpgrade']);
         Event::listen(AgentCameOnline::class, [HandleEbpfOutcome::class, 'handleOnline']);
+
+        // Tailscale (docs/plans/TAILSCALE.md).
+        Event::listen(CommandFinished::class, [HandleTailscaleOutcome::class, 'handleFinished']);
+        Event::listen(CommandFailed::class, [HandleTailscaleOutcome::class, 'handleFailed']);
+        Event::listen(OrganizationDeleted::class, ForgetDeletedOrganization::class);
 
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
             $schedule->call(fn () => IpBlock::query()->where('expires_at', '<', now()->subDays((int) config('network.protection.retention_days', 7)))->delete())
