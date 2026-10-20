@@ -35,6 +35,12 @@ jobs:
       - name: Build (static, all targets)
         run: make build
 
+      - name: falak-db packages match db-images.yml paths
+        # db-images.yml only rebuilds the database images when these packages change; a new import must be added there.
+        run: |
+          got=$(go list -deps ./cmd/falak-db | sed -n "s|^$(go list -m)/||p" | sort | tr '\n' ' ')
+          test "$got" = "cmd/falak-db internal/dbhelper internal/sqlnorm internal/version " || { echo "falak-db now uses: $got — update the agent paths in db-images.yml and this list"; exit 1; }
+
   # Function runtimes: their own logic (telemetry URL redaction, the Python and Go installers). The gateway's
   # redaction test above reads the same cases (runtimes/functions/tests/redact-cases.json).
   runtimes:

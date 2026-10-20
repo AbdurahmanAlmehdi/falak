@@ -17,14 +17,15 @@
 # Actions are pinned by commit; Trivy and cosign run pinned versions.
 name: db-images
 
+# The agent paths are what falak-db compiles (go list -deps ./cmd/falak-db); agent.yml fails if that list changes.
 on:
   push:
     branches: [main, 'release/**']
     tags: ['v*']
-    paths: ['images/db/**', 'agent/**', '.github/workflows/db-images.yml']
+    paths: ['images/db/**', 'agent/go.*', 'agent/cmd/falak-db/**', 'agent/internal/dbhelper/**', 'agent/internal/sqlnorm/**', 'agent/internal/version/**', '.github/workflows/db-images.yml']
   pull_request:
     branches: [main, 'release/**']
-    paths: ['images/db/**', 'agent/**', '.github/workflows/db-images.yml']
+    paths: ['images/db/**', 'agent/go.*', 'agent/cmd/falak-db/**', 'agent/internal/dbhelper/**', 'agent/internal/sqlnorm/**', 'agent/internal/version/**', '.github/workflows/db-images.yml']
   schedule:
     # Weekly: pick up base image security updates (a new -falak<run> tag, offered as a minor upgrade).
     - cron: '23 3 * * 1'

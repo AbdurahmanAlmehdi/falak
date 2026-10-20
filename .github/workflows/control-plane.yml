@@ -48,6 +48,8 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
+          # No Xdebug: with it Pint alone took ~11 minutes.
+          coverage: none
 
       - uses: oven-sh/setup-bun@v2
 
@@ -57,7 +59,7 @@ jobs:
           bun install --frozen-lockfile
 
       - name: Pint
-        run: vendor/bin/pint --test
+        run: vendor/bin/pint --test --parallel
 
       - name: Prettier
         run: bun run format:check

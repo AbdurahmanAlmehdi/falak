@@ -1,20 +1,64 @@
 # PR/main CI for the production install: build the images (amd64, no push), lint the scripts and
-# validate the compose file.
+# validate the compose file. Only the parts a change touches run (`changes` below); tags rebuild
+# everything in release.yml.
 name: images
 
 on:
   push:
     branches: [main]
-    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', '.github/workflows/images.yml']
+    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates/**', 'tools/**', '.github/workflows/images.yml']
   pull_request:
     branches: [main]
-    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', '.github/workflows/images.yml']
+    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates/**', 'tools/**', '.github/workflows/images.yml']
 
 permissions:
   contents: read
 
 jobs:
+  # Which groups below the change touches. Each filter lists what that image COPYs (see its Dockerfile).
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      lint: ${{ steps.filter.outputs.lint }}
+      groups: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            lint:
+              - 'deploy/**'
+              - 'observability/**'
+              - 'tools/check-brand.sh'
+              - 'tools/db-image-digests.sh'
+              - '.github/workflows/images.yml'
+            control-plane:
+              - 'control-plane/**'
+              - 'agent/**'
+              - 'contracts/**'
+              - 'templates/**'
+              - 'observability/grafana/dashboards/**'
+              - 'deploy/control-plane/**'
+              - '.github/workflows/images.yml'
+            builder:
+              - 'agent/**'
+              - 'deploy/builder.Dockerfile'
+              - 'deploy/builder/**'
+              - '.github/workflows/images.yml'
+            edge:
+              - 'deploy/edge/**'
+              - '.github/workflows/images.yml'
+            functions:
+              - 'runtimes/functions/**'
+              - '.github/workflows/images.yml'
+
   lint:
+    needs: changes
+    if: needs.changes.outputs.lint == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -36,38 +80,54 @@ jobs:
 
   build:
     name: build ${{ matrix.image }}
+    needs: changes
+    if: needs.changes.outputs.groups != '[]'
     runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
           - image: control-plane
+            group: control-plane
             dockerfile: control-plane/Dockerfile
             context: .
           - image: builder
+            group: builder
             dockerfile: deploy/builder.Dockerfile
             context: .
           - image: edge
+            group: edge
             dockerfile: deploy/edge/Dockerfile
             context: deploy/edge
           - image: fn-bun
+            group: functions
             dockerfile: runtimes/functions/bun/Dockerfile
             context: runtimes/functions
           - image: fn-node
+            group: functions
             dockerfile: runtimes/functions/node/Dockerfile
             context: runtimes/functions
           - image: fn-deno
+            group: functions
             dockerfile: runtimes/functions/deno/Dockerfile
             context: runtimes/functions
           - image: fn-python
+            group: functions
             dockerfile: runtimes/functions/python/Dockerfile
             context: runtimes/functions
           - image: fn-go
+            group: functions
             dockerfile: runtimes/functions/go/Dockerfile
             context: runtimes/functions
+    # ponytail: step-level skip (a job `if` can't read the matrix); an untouched image costs a few idle seconds.
+    env:
+      BUILD: ${{ contains(fromJSON(needs.changes.outputs.groups), matrix.group) }}
     steps:
       - uses: actions/checkout@v4
+        if: env.BUILD == 'true'
       - uses: docker/setup-buildx-action@v3
+        if: env.BUILD == 'true'
       - uses: docker/build-push-action@v6
+        if: env.BUILD == 'true'
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -78,7 +138,7 @@ jobs:
           tags: falak-ci/falak-${{ matrix.image }}:ci
           cache-from: type=gha,scope=${{ matrix.image }}-amd64
       - name: Smoke-test the control-plane image
-        if: matrix.image == 'control-plane'
+        if: env.BUILD == 'true' && matrix.image == 'control-plane'
         run: |
           docker run --rm --entrypoint sh falak-ci/falak-control-plane:ci -c '
             set -e
