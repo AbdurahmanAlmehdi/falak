@@ -21,7 +21,7 @@ use Symfony\Component\Console\Output\OutputInterface;
  */
 final class RenderTemplateCommand extends Command
 {
-    protected $signature = 'templates:render {template : catalog slug, or a directory with template.yaml + compose.yaml} {--domain=falak.test : test domain base} {--env-file= : write sample input values to this dotenv file}';
+    protected $signature = 'templates:render {template : catalog slug, or a directory with template.yaml + compose.yaml} {--domain=falak.test : test domain base} {--env-file= : write sample input values to this dotenv file} {--public-file= : write the public services (service, port, health check path) as JSON}';
 
     protected $description = 'Validate a catalog template (import + catalog rules) and print its rendered compose file';
 
@@ -76,6 +76,11 @@ final class RenderTemplateCommand extends Command
         }
 
         $this->output->write(FalakPlaceholders::render($template->composeYaml, $domains, $template->slug), false, OutputInterface::OUTPUT_RAW);
+
+        if ($file = $this->option('public-file')) {
+            $public = array_map(fn (array $entry) => ['service' => $entry['service'], 'port' => $entry['port'], 'path' => $entry['health_check_path'] ?? '/'], $template->public);
+            file_put_contents((string) $file, (string) json_encode($public));
+        }
 
         if ($file = $this->option('env-file')) {
             $sample = array_map(fn (TemplateInput $input) => match (true) {

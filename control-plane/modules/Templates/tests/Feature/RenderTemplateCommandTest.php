@@ -80,3 +80,11 @@ it('says so when a directory has no template.yaml', function () {
 
     $this->artisan('templates:render', ['template' => $dir])->assertExitCode(1);
 });
+
+it('writes the public services for a boot test', function () {
+    $dir = render_dir();
+
+    $this->artisan('templates:render', ['template' => $dir, '--public-file' => "{$dir}/public.json"])->assertExitCode(0);
+
+    expect(json_decode((string) file_get_contents("{$dir}/public.json"), true))->toBe([['service' => 'web', 'port' => 80, 'path' => '/']]);
+});
