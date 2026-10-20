@@ -1922,12 +1922,19 @@ TasksMax=$(workload_tasks_max)" && changed=1
 # old release repository or image registry follow it (the old images stay pullable; v0.25.1 is copied to the new
 # registry, so a rollback finds it there too). Runs from the new falak-ctl's ensure-host, before update pulls.
 ensure_org_move() {
-  local key value
+  local key value version
+  version="$(env_get FALAK_VERSION)"
   for key in FALAK_REPO FALAK_IMAGE_PREFIX FALAK_DB_IMAGE_REGISTRY; do
     value="$(env_get "$key")"
     case "${value,,}" in
       othmanhaba/falak) env_set "$key" "falak-sh/falak" ;;
-      ghcr.io/othmanhaba) env_set "$key" "ghcr.io/falak-sh" ;;
+      ghcr.io/othmanhaba)
+        # Only once the new registry serves this version: until then the install keeps pulling from the old one.
+        if ! docker manifest inspect "ghcr.io/falak-sh/falak-control-plane:$version" >/dev/null 2>&1; then
+          warn "$key stays $value: ghcr.io/falak-sh does not serve falak-control-plane:$version yet"
+          continue
+        fi
+        env_set "$key" "ghcr.io/falak-sh" ;;
       *) continue ;;
     esac
     info "$key: $value -> $(env_get "$key") (the project moved to github.com/falak-sh)"

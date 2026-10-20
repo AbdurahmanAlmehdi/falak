@@ -223,8 +223,8 @@ func TestRateLimitRefusalsApplyTheRestOfTheConfig(t *testing.T) {
 func TestRateLimitSwapIsValidatedAndRolledBack(t *testing.T) {
 	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
 
-	// A DNS-01 server: validated as the caddy user, with the tokens of edge.env.
-	m, f, fc, dest, build := rateLimitSetup(t, unit, stockModules)
+	// A DNS-01 server (its Caddy has the DNS provider): validated as the caddy user, with the tokens of edge.env.
+	m, f, fc, dest, build := rateLimitSetup(t, unit, stockModules+"dns.providers.cloudflare\n")
 	dns := payload
 	dns.Sites = append([]Site(nil), payload.Sites...)
 	dns.Sites[1] = Site{ID: "wild", Domains: []string{"w.example.com"}, Kind: "static", Root: "/srv/w", TLS: &TLS{DNS: &DNS{Provider: "cloudflare", APIToken: "tok"}}}
@@ -391,5 +391,62 @@ func TestRateLimitZoneNamesAreUniquePerRoute(t *testing.T) {
 	}
 	if rateLimitZone("shop", rule) == rateLimitZone("shop", RateLimit{Path: "/login", Events: 20, WindowS: 60}) {
 		t.Fatal("a changed rule keeps its zone")
+	}
+}
+
+func loadedDNSChallenge(fc *fakeCaddy) bool {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	b, _ := json.Marshal(fc.cfg)
+	return strings.Contains(string(b), `"dns":{"provider"`)
+}
+
+// v0.25: one DNS-01 domain on a server whose Caddy has no caddy-dns module made Caddy refuse the whole config, so no
+// route of that server could change any more. Falak's build is installed for it now, and an edge without it obtains
+// the certificate over HTTP instead of refusing every route.
+func TestDNSChallengeInstallsFalakCaddyOrFallsBackToHTTP(t *testing.T) {
+	unit := runtime.RenderEdgeUnit(runtime.EdgeUnit{Binary: "/usr/bin/caddy"})
+	dns := payload
+	dns.Sites = append([]Site(nil), payload.Sites...)
+	dns.Sites[1] = Site{ID: "dns", Domains: []string{"w.example.com"}, Kind: "static", Root: "/srv/w", TLS: &TLS{DNS: &DNS{Provider: "cloudflare", APIToken: "tok"}}}
+
+	// No build sent (an older control plane): applied over HTTP, the result says why.
+	m, f, fc, _, build := rateLimitSetup(t, unit, stockModules)
+	r := applied(t, m, dns)
+	if !strings.Contains(r.RateLimitsRefused, "dns.providers.cloudflare") || loadedDNSChallenge(fc) || f.Ran("systemctl") {
+		t.Fatalf("%+v", r)
+	}
+	if r.Routes == 0 {
+		t.Fatal("no routes applied")
+	}
+
+	// With the build: installed, and the certificate keeps its DNS-01 challenge.
+	dns.CaddyBuild = build
+	if r := applied(t, m, dns); r.RateLimitsRefused != "" || !loadedDNSChallenge(fc) || !f.Ran("systemctl") {
+		t.Fatalf("%+v %v", r, f.Lines())
+	}
+
+	// A Caddy that has the provider needs nothing.
+	m, f, fc, _, _ = rateLimitSetup(t, unit, stockModules+"dns.providers.cloudflare\n")
+	dns.CaddyBuild = nil
+	if r := applied(t, m, dns); r.RateLimitsRefused != "" || !loadedDNSChallenge(fc) || f.Ran("systemctl") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+func TestFalakModulesFallbackServesPreviewHostsOverHTTP(t *testing.T) {
+	p := Payload{
+		WildcardCertificates: []WildcardCertificate{{Subject: "*.prv.example.com", DNS: DNS{Provider: "cloudflare", APIToken: "t"}}},
+		Sites:                []Site{{ID: "p", Domains: []string{"pr-1.prv.example.com"}, Kind: "static", Root: "/r", TLS: &TLS{Mode: "wildcard"}}},
+	}
+	if got := p.neededModules(); !slices.Equal(got, []string{"dns.providers.cloudflare"}) {
+		t.Fatalf("needed %v", got)
+	}
+	plain := p.withoutFalakModules()
+	if plain.WildcardCertificates != nil || plain.Sites[0].TLS.Mode != "acme" || p.Sites[0].TLS.Mode != "wildcard" {
+		t.Fatalf("%+v (original %+v)", plain.Sites[0].TLS, p.Sites[0].TLS)
+	}
+	if _, err := Render(plain, ""); err != nil {
+		t.Fatal(err)
 	}
 }

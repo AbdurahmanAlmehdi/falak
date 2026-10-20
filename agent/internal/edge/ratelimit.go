@@ -54,6 +54,43 @@ func (p Payload) needsRateLimit() bool {
 	return false
 }
 
+// dnsModule is the Caddy module of a DNS-01 provider (caddy-dns/<provider>).
+func dnsModule(provider string) string { return "dns.providers." + provider }
+
+// neededModules are the modules outside stock Caddy the payload uses (Falak's build has them): rate_limit for path rate
+// limits, the DNS provider of DNS-01 certificates (per domain or a preview wildcard). Sorted.
+func (p Payload) neededModules() []string {
+	set := map[string]bool{}
+	if p.needsRateLimit() {
+		set[RateLimitModule] = true
+	}
+	for _, s := range p.Sites {
+		if s.TLS != nil && s.TLS.DNS != nil {
+			set[dnsModule(s.TLS.DNS.Provider)] = true
+		}
+	}
+	for _, w := range p.WildcardCertificates {
+		set[dnsModule(w.DNS.Provider)] = true
+	}
+	out := make([]string, 0, len(set))
+	for mod := range set {
+		out = append(out, mod)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// missingModules are the modules of need a Caddy binary does not have.
+func missingModules(have map[string]bool, need []string) []string {
+	var out []string
+	for _, mod := range need {
+		if !have[mod] {
+			out = append(out, mod)
+		}
+	}
+	return out
+}
+
 // rateLimitHandler renders the site's rules as one rate_limit handler: a zone per rule, keyed by the client IP Caddy
 // resolved (behind trusted proxies, the visitor's).
 func rateLimitHandler(s Site) (obj, error) {
@@ -146,29 +183,40 @@ func (m *Manager) markFailed(sha, why string) {
 
 func buildPath(sha string) string { return path.Join(runtime.CaddyBuildDir, "caddy-"+sha[:16]) }
 
-// ensureRateLimit decides whether this apply can carry rate_limit handlers: "" when it can (the edge's Caddy has the
-// module, or Falak's build was installed now), else why not, and the caller applies the config without them (the
-// other sites, and the site's other rules, keep working). err is only for an edge left broken (a failed rollback).
+// ensureCaddyModules decides whether this apply can use the modules only Falak's Caddy build has (rate limits, DNS-01
+// certificates): "" when it can (the edge's Caddy has them, or Falak's build was installed now), else why not, and the
+// caller applies the config without them (rate limits left out, DNS-01 certificates obtained over HTTP instead; the
+// other sites keep working). Without this a single DNS-01 domain made Caddy refuse every route of the server (v0.25).
+// err is only for an edge left broken (a failed rollback).
 //
 // A Falak build the edge already runs is upgraded when the control plane ships a different one (same checks, same
 // rollback); the edge keeps its current build when the new one fails.
-func (m *Manager) ensureRateLimit(ctx context.Context, p Payload, s commands.Stream) (string, error) {
-	if !p.needsRateLimit() {
+func (m *Manager) ensureCaddyModules(ctx context.Context, p Payload, s commands.Stream) (string, error) {
+	need := p.neededModules()
+	if len(need) == 0 {
 		return "", nil
 	}
+	// What the edge runs cannot be checked: DNS-01 alone is applied as before (rate limits are not, they need the
+	// module for sure).
+	unknown := func(why string) (string, error) {
+		if !p.needsRateLimit() {
+			return "", nil
+		}
+		return why, nil
+	}
 	if m.o.Runner == nil {
-		return "the agent cannot run commands", nil
+		return unknown("the agent cannot run commands")
 	}
 	u, ok := runtime.CurrentEdgeUnit(m.o.FS)
 	if !ok {
-		return "no falak-edge.service on this server", nil
+		return unknown("no falak-edge.service on this server")
 	}
 	if u.FrankenPHP {
-		return "the edge is FrankenPHP (its Caddy has no rate_limit module)", nil
+		return fmt.Sprintf("the edge is FrankenPHP (its Caddy has no %s module)", strings.Join(need, ", ")), nil
 	}
 	current, err := m.modules(ctx, u.Binary)
 	if err != nil {
-		return "the edge's Caddy does not list its modules: " + shortErr(err), nil
+		return unknown("the edge's Caddy does not list its modules: " + shortErr(err))
 	}
 	b := p.CaddyBuild
 	if b != nil && !sha256Hex.MatchString(b.SHA256) {
@@ -179,14 +227,15 @@ func (m *Manager) ensureRateLimit(ctx context.Context, p Payload, s commands.Str
 			return "", &commands.PayloadError{Err: fmt.Errorf("caddy_build: invalid url")}
 		}
 	}
-	if current[RateLimitModule] {
+	missing := missingModules(current, need)
+	if len(missing) == 0 {
 		// Upgrade a Falak build to the one shipped now; an operator's own Caddy with the module is left alone.
 		if b != nil && runtime.IsFalakCaddy(u.Binary) && path.Base(u.Binary) != path.Base(buildPath(b.SHA256)) {
 			if why, failed := m.loadRLState().Failed[b.SHA256]; failed {
 				fmt.Fprintf(s.Stdout(), "keeping the current Caddy build (%s failed here before: %s)\n", b.SHA256[:12], why)
 				return "", nil
 			}
-			if why, err := m.installBuild(ctx, u, current, b, s); err != nil {
+			if why, err := m.installBuild(ctx, u, current, need, b, s); err != nil {
 				return "", err
 			} else if why != "" {
 				fmt.Fprintf(s.Stderr(), "Caddy build upgrade failed, keeping the current one: %s\n", why)
@@ -195,12 +244,12 @@ func (m *Manager) ensureRateLimit(ctx context.Context, p Payload, s commands.Str
 		return "", nil
 	}
 	if b == nil {
-		return fmt.Sprintf("the edge's Caddy (%s) has no rate_limit module and no Falak Caddy build was sent for this server", u.Binary), nil
+		return fmt.Sprintf("the edge's Caddy (%s) has no %s module and no Falak Caddy build was sent for this server", u.Binary, strings.Join(missing, ", ")), nil
 	}
 	if why, failed := m.loadRLState().Failed[b.SHA256]; failed {
 		return fmt.Sprintf("Falak's Caddy build %s failed on this server before: %s", b.SHA256[:12], why), nil
 	}
-	return m.installBuild(ctx, u, current, b, s)
+	return m.installBuild(ctx, u, current, need, b, s)
 }
 
 // swapMarker is written before the edge restarts on a new binary and removed once it answers: an agent that dies in
@@ -216,7 +265,7 @@ func (m *Manager) swapMarkerPath() string { return path.Join(m.o.EtcDir, "caddy"
 
 // installBuild downloads, checks and switches the edge to a build: "" when it runs it now, else why not (the edge was
 // kept or put back on its current Caddy). The build is remembered as failed in either case of refusal.
-func (m *Manager) installBuild(ctx context.Context, u runtime.EdgeUnit, current map[string]bool, b *CaddyBuild, s commands.Stream) (string, error) {
+func (m *Manager) installBuild(ctx context.Context, u runtime.EdgeUnit, current map[string]bool, need []string, b *CaddyBuild, s commands.Stream) (string, error) {
 	fail := func(why string) (string, error) {
 		m.markFailed(b.SHA256, why)
 		return why, nil
@@ -226,7 +275,7 @@ func (m *Manager) installBuild(ctx context.Context, u runtime.EdgeUnit, current 
 		if err := m.o.FS.MkdirAll(runtime.CaddyBuildDir, 0o755); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(s.Stdout(), "installing Falak's Caddy build (rate_limit module) %s\n", b.SHA256[:12])
+		fmt.Fprintf(s.Stdout(), "installing Falak's Caddy build (%s) %s\n", strings.Join(need, ", "), b.SHA256[:12])
 		if _, _, err := system.Download(ctx, m.o.HTTP, b.URL, b.SHA256, m.o.FS.P(dest), 0o755, nil); err != nil {
 			// A download can fail transiently: not remembered, the next apply tries again.
 			return "downloading Falak's Caddy build: " + shortErr(err), nil
@@ -243,9 +292,7 @@ func (m *Manager) installBuild(ctx context.Context, u runtime.EdgeUnit, current 
 			missing = append(missing, mod)
 		}
 	}
-	if !mods[RateLimitModule] {
-		missing = append(missing, RateLimitModule)
-	}
+	missing = append(missing, missingModules(mods, need)...)
 	if len(missing) > 0 {
 		sort.Strings(missing)
 		return fail("Falak's Caddy build lacks modules the edge needs: " + strings.Join(missing, ", "))
@@ -352,13 +399,22 @@ func shortErr(err error) string {
 	return s
 }
 
-// withoutRateLimits is the payload with every site's rules (and the build) removed: what an edge that cannot run them
-// applies.
-func (p Payload) withoutRateLimits() Payload {
+// withoutFalakModules is what an edge without Falak's Caddy modules applies: every site's rate limits removed, DNS-01
+// certificates (per domain, the preview wildcard) obtained over HTTP like any other host, and no build.
+func (p Payload) withoutFalakModules() Payload {
 	p.Sites = append([]Site(nil), p.Sites...)
 	for i := range p.Sites {
 		p.Sites[i].RateLimits = nil
+		if t := p.Sites[i].TLS; t != nil && (t.DNS != nil || t.Mode == "wildcard") {
+			c := *t
+			c.DNS = nil
+			if c.Mode == "wildcard" {
+				c.Mode = "acme"
+			}
+			p.Sites[i].TLS = &c
+		}
 	}
+	p.WildcardCertificates = nil
 	p.CaddyBuild = nil
 	return p
 }

@@ -12,10 +12,22 @@ pass() { printf 'ok - %s\n' "$*"; }
 
 export FALAK_DIR="$work/falak" FALAK_CTL_SOURCED=1
 mkdir -p "$FALAK_DIR"
-printf 'FALAK_REPO=OthmanHaba/falak\nFALAK_IMAGE_PREFIX=ghcr.io/othmanhaba\nFALAK_DB_IMAGE_REGISTRY=ghcr.io/OthmanHaba\n' > "$FALAK_DIR/.env"
-
 # shellcheck source=/dev/null
 . "$here/../falak-ctl"
+
+registry_serves=1
+docker() { [ "$1 $2" = "manifest inspect" ] && [ "$registry_serves" = 1 ]; }
+
+# The new registry does not serve the version yet (its packages still private): images stay, the repository follows.
+printf 'FALAK_VERSION=v1.0.0\nFALAK_REPO=OthmanHaba/falak\nFALAK_IMAGE_PREFIX=ghcr.io/othmanhaba\n' > "$FALAK_DIR/.env"
+registry_serves=0
+ensure_org_move > "$work/out" 2>&1
+[ "$(env_get FALAK_IMAGE_PREFIX)" = ghcr.io/othmanhaba ] || fail "switched to a registry that does not serve the version"
+[ "$(env_get FALAK_REPO)" = falak-sh/falak ] || fail "FALAK_REPO: $(env_get FALAK_REPO)"
+grep -q 'does not serve' "$work/out" || fail "no warning: $(cat "$work/out")"
+pass "images stay until the new registry serves the version"
+registry_serves=1
+printf 'FALAK_REPO=OthmanHaba/falak\nFALAK_IMAGE_PREFIX=ghcr.io/othmanhaba\nFALAK_DB_IMAGE_REGISTRY=ghcr.io/OthmanHaba\n' > "$FALAK_DIR/.env"
 
 ensure_org_move > "$work/out" 2>&1
 [ "$(env_get FALAK_REPO)" = falak-sh/falak ] || fail "FALAK_REPO: $(env_get FALAK_REPO)"

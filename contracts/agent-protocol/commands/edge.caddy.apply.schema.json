@@ -400,7 +400,7 @@
         "url",
         "sha256"
       ],
-      "description": "Feature edge.rate_limit: Falak's Caddy build (Caddy + caddy-ratelimit + caddy-dns/cloudflare) for the server's architecture, only sent with rate limits; installed when the edge's Caddy lacks the rate_limit module",
+      "description": "Features edge.rate_limit, edge.caddy_dns: Falak's Caddy build (Caddy + caddy-ratelimit + caddy-dns/cloudflare) for the server's architecture, only sent with rate limits or DNS-01 certificates; installed when the edge's Caddy lacks a module the config uses",
       "properties": {
         "url": {
           "type": "string",
@@ -437,7 +437,7 @@
         "rate_limits_refused": {
           "type": "string",
           "maxLength": 1000,
-          "description": "Feature edge.rate_limit: why the payload rate limits were left out of the applied config (no module and no usable build, a FrankenPHP edge, a build that failed here); the rest of the config is applied"
+          "description": "Features edge.rate_limit, edge.caddy_dns: why the payload's rate limits were left out of the applied config and its DNS-01 certificates obtained over HTTP-01 instead (no module and no usable build, a FrankenPHP edge, a build that failed here); the rest of the config is applied"
         }
       }
     }

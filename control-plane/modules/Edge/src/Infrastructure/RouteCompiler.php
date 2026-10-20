@@ -21,6 +21,7 @@ use Falak\Edge\Domain\Models\SecurityRule;
 use Falak\Edge\Domain\Models\ServiceSetting;
 use Falak\Edge\Domain\Models\SiteSetting;
 use Falak\Edge\Domain\Models\Upstream;
+use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentUpgrades;
 use Falak\Network\Contracts\Tailnet;
 use Falak\Processes\Contracts\OctaneRouting;
@@ -50,6 +51,9 @@ use Illuminate\Support\Collection;
  */
 final class RouteCompiler
 {
+    /** The agent feature that installs Falak's Caddy build for DNS-01 certificates (and falls back to HTTP-01). */
+    public const CADDY_DNS = 'edge.caddy_dns';
+
     /** @var Collection<int, CloudflareZone> managed Cloudflare zones of the server being compiled (see compile()) */
     private Collection $zones;
 
@@ -130,8 +134,13 @@ final class RouteCompiler
             }, $entries);
         }
 
-        // Falak's Caddy build (rate_limit module), only with rate limits: the agent installs it when the edge lacks it.
-        $caddyBuild = collect($entries)->contains(fn (array $entry) => isset($entry['rate_limits']))
+        // Falak's Caddy build (rate_limit and caddy-dns modules), with rate limits or DNS-01 certificates: the agent
+        // installs it when the edge lacks a module the config uses. Stock Caddy has no DNS provider, and one DNS-01
+        // domain made it refuse every route of the server (v0.25). Agents before edge.caddy_dns refuse a build sent
+        // without rate limits, so they only get it with them.
+        $rateLimited = collect($entries)->contains(fn (array $entry) => isset($entry['rate_limits']));
+        $dns = $this->wildcard !== null || collect($entries)->contains(fn (array $entry) => isset($entry['tls']['dns']));
+        $caddyBuild = $rateLimited || ($dns && (app(AgentDirectory::class)->forServer($serverId)?->supports(self::CADDY_DNS) ?? false))
             ? app(EdgeCaddyBuilds::class)->forArch($this->servers->find($serverId)?->arch)
             : null;
 

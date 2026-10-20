@@ -1,7 +1,11 @@
 <?php
 
 use Falak\Edge\Application\Actions\AddDomain;
+use Falak\Edge\Contracts\TlsMode;
+use Falak\Edge\Domain\Models\DnsCredential;
+use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Domain\Models\PathRateLimit;
+use Falak\Edge\Infrastructure\RouteCompiler;
 use Falak\Fleet\Application\PayloadCompatibility;
 use Falak\Fleet\Contracts\AgentDirectory;
 use Falak\Fleet\Contracts\AgentStatus;
@@ -88,6 +92,19 @@ it('renders rules only for the site that has them and sends the build with them'
         $this->delete("/network/rate-limits/{$limit->id}")->assertSessionHasNoErrors();
     }
     expect(edge_compile($this->web->id))->toBe($before);
+});
+
+// v0.25: a DNS-01 domain on a server whose Caddy has no caddy-dns module made Caddy refuse every route of the server.
+it('sends the build with DNS-01 certificates to agents that install it for them', function () {
+    $credential = DnsCredential::query()->create(['organization_id' => $this->organization->id, 'provider' => 'cloudflare', 'name' => 'CF', 'api_token' => 'cf-token']);
+    Domain::query()->where('name', 'shop.example.com')->update(['tls_mode' => TlsMode::Dns->value, 'dns_credential_id' => $credential->id]);
+
+    // Agents before edge.caddy_dns refuse a build sent without rate limits.
+    expect(edge_entry(edge_compile($this->web->id), strtolower($this->shop->id))['tls']['dns']['provider'])->toBe('cloudflare')
+        ->and(edge_compile($this->web->id))->not->toHaveKey('caddy_build');
+
+    rl_agents([$this->web->id => ['edge.rate_limit', RouteCompiler::CADDY_DNS]]);
+    expect(edge_compile($this->web->id)['caddy_build']['sha256'])->toBe(hash('sha256', 'caddy'));
 });
 
 it('validates rules and refuses sites whose edge cannot enforce them', function () {

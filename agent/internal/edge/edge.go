@@ -233,7 +233,8 @@ type ApplyResult struct {
 	Changed      bool   `json:"changed"`
 	ConfigSHA256 string `json:"config_sha256"`
 	Routes       int    `json:"routes"`
-	// RateLimitsRefused says why the payload's rate limits were left out of the applied config (edge.rate_limit).
+	// RateLimitsRefused says why the payload's rate limits and DNS-01 certificates were left out of the applied config
+	// (edge.rate_limit, edge.caddy_dns).
 	RateLimitsRefused string `json:"rate_limits_refused,omitempty"`
 }
 
@@ -247,18 +248,19 @@ func (m *Manager) Apply(ctx context.Context, p Payload, s commands.Stream) (any,
 		return nil, err
 	}
 	p.LocalEdge = local
-	// Rate limits the edge cannot run (no module and no usable build, a FrankenPHP edge): the config is applied without
-	// them and the result says why, so the panel can show it. Validated first: a bad payload is refused as before.
+	// Modules the edge cannot run (no module and no usable build, a FrankenPHP edge): the config is applied without
+	// rate limits and with DNS-01 certificates over HTTP, and the result says why, so the panel can show it. Validated
+	// first: a bad payload is refused as before.
 	if _, err := Render(p, m.certDir()); err != nil {
 		return nil, &commands.PayloadError{Err: err}
 	}
-	refused, err := m.ensureRateLimit(ctx, p, s)
+	refused, err := m.ensureCaddyModules(ctx, p, s)
 	if err != nil {
 		return nil, err
 	}
 	if refused != "" {
-		fmt.Fprintf(s.Stderr(), "rate limits not applied: %s\n", refused)
-		p = p.withoutRateLimits()
+		fmt.Fprintf(s.Stderr(), "rate limits and DNS-01 certificates not applied (HTTP-01 instead): %s\n", refused)
+		p = p.withoutFalakModules()
 	}
 	cfg, err := Render(p, m.certDir())
 	if err != nil {

@@ -32,8 +32,9 @@ type Payload struct {
 	// id is kept, anything else replaced by a UUID; passed upstream and echoed in the response (and so in the access
 	// log). Without it the rendered config is exactly what it was before the feature.
 	RequestID bool `json:"request_id,omitempty"`
-	// CaddyBuild is Falak's Caddy build with the rate_limit module, for this server's architecture (feature
-	// edge.rate_limit): only sent with rate limits, installed only when the edge's Caddy lacks the module.
+	// CaddyBuild is Falak's Caddy build (rate_limit and caddy-dns modules) for this server's architecture: sent with
+	// rate limits (feature edge.rate_limit) or DNS-01 certificates (edge.caddy_dns), installed only when the edge's
+	// Caddy lacks a module the config uses.
 	CaddyBuild *CaddyBuild `json:"caddy_build,omitempty"`
 	// LocalEdge is this host's /etc/falak/local-edge.env (set by the agent, never sent): on the control-plane machine
 	// the edge listens behind the control plane's edge instead of on 80/443.
@@ -226,8 +227,8 @@ func Render(p Payload, certDir string) (obj, error) {
 	var loadFiles []any
 	tlsLoggers, plainLoggers := obj{}, obj{}
 	accessLogs := map[string]bool{}
-	if p.CaddyBuild != nil && !p.needsRateLimit() {
-		return nil, fmt.Errorf("caddy_build is only sent with rate limits")
+	if p.CaddyBuild != nil && len(p.neededModules()) == 0 {
+		return nil, fmt.Errorf("caddy_build is only sent with rate limits or DNS-01 certificates")
 	}
 	sites := append([]Site(nil), p.Sites...)
 	sort.SliceStable(sites, func(i, j int) bool { return sites[i].ID < sites[j].ID })

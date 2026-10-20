@@ -96,6 +96,9 @@ var Features = []string{
 	// Tailscale (docs/plans/TAILSCALE.md): net.tailscale.apply (pinned tailscale + tailscaled, joins the tailnet
 	// advertising the server's own public IPs as host routes).
 	"net.tailscale",
+	// edge.caddy.apply caddy_build with DNS-01 certificates: Falak's Caddy build (caddy-dns/cloudflare) is installed for
+	// them too, and an edge that cannot get it obtains them over HTTP instead of refusing every route.
+	"edge.caddy_dns",
 }
 
 var (
