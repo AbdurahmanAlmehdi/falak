@@ -14,7 +14,7 @@ ifdef SIM_AGENT_ARCH
 export SIM_AGENT_ARCH
 endif
 
-.PHONY: up down logs reset reset-all clean-cache cache-volumes cache-stats enroll e2e e2e-deploy ps build shell ca token enroll-all
+.PHONY: templates up down logs reset reset-all clean-cache cache-volumes cache-stats enroll e2e e2e-deploy ps build shell ca token enroll-all
 
 # Persistent caches (apt, runtime downloads + PPA, Docker Hub, GHCR, builder). External volumes, so
 # `make reset` (down -v) keeps them; `make clean-cache` / `make reset-all` remove them.
@@ -34,13 +34,17 @@ BUILDX_STATE := buildx_buildkit_falak0_state
 	   echo "FALAK_LOCAL_BUILDER_TOKEN=kbt_$$(openssl rand -hex 24)"; } > $@
 	@chmod 600 $@
 
+# The pinned template catalog (sim-prefetch reads ../templates; the image bakes the same release).
+templates:
+	@../tools/fetch-templates.sh
+
 cache-volumes:
 	@for v in $(CACHE_VOLUMES); do docker volume inspect $$v >/dev/null 2>&1 || docker volume create $$v >/dev/null; done
 
-build: .data/secrets.env
+build: .data/secrets.env templates
 	$(COMPOSE) --profile $(METRICS) build
 
-up: .data/secrets.env cache-volumes
+up: .data/secrets.env cache-volumes templates
 	@t0=$$(date +%s); \
 	$(COMPOSE) --profile $(METRICS) up -d --build --wait --wait-timeout 420 || exit 1; \
 	echo "make up: healthy in $$(( $$(date +%s) - t0 ))s"

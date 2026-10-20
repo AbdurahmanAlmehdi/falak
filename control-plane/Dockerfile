@@ -32,6 +32,15 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     done \
  && cp bin/falak-agent-linux-amd64.version bin/falak-agent-linux-arm64.version /out/
 
+# --- catalog: the template catalog release pinned in templates.lock (github.com/falak-sh/templates), sha256-checked.
+# Panels fetch newer releases hourly (templates:sync); this baked copy is the fallback and the first boot's catalog.
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS catalog
+COPY templates.lock /tmp/templates.lock
+RUN read -r version sha256 < /tmp/templates.lock \
+ && curl -fsSL "https://github.com/falak-sh/templates/releases/download/v${version}/catalog.tar.gz" -o /tmp/catalog.tar.gz \
+ && echo "${sha256}  /tmp/catalog.tar.gz" | sha256sum -c - \
+ && mkdir -p /out && tar -xzf /tmp/catalog.tar.gz -C /out --no-same-owner
+
 # --- edge-caddy: Falak's Caddy for servers' edges (docs/plans/network/protection.md, path rate limits) -----------
 # Stock Caddy (the apt package servers run) plus caddy-ratelimit (http.handlers.rate_limit) and caddy-dns/cloudflare
 # (DNS-01, already required of edges). Served to agents at /install/edge/caddy-linux-<arch> with its checksum; an
@@ -99,7 +108,7 @@ COPY --from=edge-caddy /out/ /opt/falak/bin/
 ARG TARGETARCH
 COPY --from=binaries /out-relay/falak-relay-linux-${TARGETARCH} /usr/local/bin/falak-relay
 COPY contracts/ /opt/falak/contracts/
-COPY templates/ /opt/falak/templates/
+COPY --from=catalog /out/ /opt/falak/templates/
 COPY observability/grafana/dashboards/ /opt/falak/observability/grafana/dashboards/
 COPY deploy/control-plane/Caddyfile deploy/control-plane/php-classic.caddyfile deploy/control-plane/php-worker.caddyfile /etc/frankenphp/
 COPY --chmod=0755 deploy/control-plane/entrypoint.sh /usr/local/bin/falak-entrypoint

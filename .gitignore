@@ -7,3 +7,6 @@
 
 # Local Cloudflare API token (never commit)
 cloud-flare-access-key
+
+# The template catalog, fetched from github.com/falak-sh/templates (tools/fetch-templates.sh, templates.lock).
+/templates/

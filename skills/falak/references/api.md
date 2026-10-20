@@ -111,7 +111,7 @@ Never put the token in a URL, a committed file or the transcript. Read it from `
 | `POST /api/v1/projects/{project}/environments/{environment}/services` | `projects.manage` + `databases.manage` / `sites.create` | Canvas create. Database: `{kind: "database", engine: postgresql\|mysql\|mariadb\|redis\|valkey, server_id, name, version?, memory_mb?, disk_gb?}`; site: the `POST /sites` body with `kind: "site"` |
 | `POST /api/v1/projects/{project}/{environment}/templates/{slug}/deploy` | `templates.view` + `projects.manage` + `sites.create` (deploys only with `deployments.create`) | `{server_ids: [...], name?, inputs?: {KEY: value}, domains?: {service: domain choice}, source?: catalog\|custom}` → `201 {data: {site_id, name, service_id, deployment_id, domains, panel_url}, warnings}`. `{project}` must be the project id |
 
-Catalog template slugs (in the repository's `templates/`): adminer, appsmith, bookstack, changedetection,
+Catalog template slugs (github.com/falak-sh/templates; panels fetch new ones hourly): adminer, appsmith, bookstack, changedetection,
 code-server, directus, excalidraw, forgejo, ghost, gitea, grafana, langflow, listmonk, mailpit, matomo, meilisearch,
 metabase, minio, n8n, nextcloud, nocodb, ntfy, ollama, paperless-ngx, plausible, qdrant, redis-stack, umami,
 uptime-kuma, vaultwarden, wikijs, wordpress. Each `template.yaml` lists its `inputs` (keys, types, generated

@@ -1,8 +1,9 @@
 <?php
 
 return [
-    // Curated catalog: templates/<slug>/{template.yaml, compose.yaml, icon.svg?} (docs/COMPOSE_TEMPLATES.md §2).
-    // The production image bakes it into /opt/falak/templates (FALAK_TEMPLATES_PATH).
+    // Curated catalog (github.com/falak-sh/templates): <slug>/{template.yaml, compose.yaml, icon.svg?}. The image bakes
+    // the release pinned in templates.lock into /opt/falak/templates (FALAK_TEMPLATES_PATH); in a checkout,
+    // tools/fetch-templates.sh fills ../templates (git-ignored).
     'catalog_path' => env('FALAK_TEMPLATES_PATH', base_path('../templates')),
 
     // Published catalog (falak-sh/templates releases: catalog.json + catalog.tar.gz), fetched hourly by templates:sync

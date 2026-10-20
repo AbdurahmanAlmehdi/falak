@@ -5,7 +5,7 @@ namespace Falak\Templates\Application\Catalog;
 use Falak\Templates\Domain\Template;
 
 /**
- * The curated catalog shipped with Falak (templates/<slug>/ at the repository root).
+ * The curated catalog (github.com/falak-sh/templates): the synced or the baked copy, {@see CatalogLocation}.
  */
 interface Catalog
 {
