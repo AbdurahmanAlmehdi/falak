@@ -2,7 +2,9 @@
 
 namespace Falak\Templates\Infrastructure;
 
+use Closure;
 use Falak\Templates\Application\Catalog\Catalog;
+use Falak\Templates\Application\Catalog\CatalogLocation;
 use Falak\Templates\Application\Catalog\TemplateParser;
 use Falak\Templates\Domain\InvalidTemplate;
 use Falak\Templates\Domain\Template;
@@ -13,7 +15,7 @@ use Symfony\Component\Yaml\Exception\ParseException;
 use Symfony\Component\Yaml\Yaml;
 
 /**
- * Reads templates/<slug>/{template.yaml, compose.yaml, icon.svg?}. File contents are cached under a key derived
+ * Reads <catalog>/<slug>/{template.yaml, compose.yaml, icon.svg?} (the synced or the baked copy, {@see CatalogLocation}). File contents are cached under a key derived
  * from the files' paths, sizes and modification times (edits are picked up without clearing the cache); parsed
  * templates are memoized per process. Templates that fail to parse are skipped and logged — the catalog test
  * (TemplateCatalogTest) keeps them from shipping.
@@ -23,12 +25,23 @@ final class FilesystemCatalog implements Catalog
     /** @var ?array<string, Template> */
     private ?array $templates = null;
 
+    /** The directory $templates was read from: a sync switches it under a long-lived worker. */
+    private ?string $loadedFrom = null;
+
+    /**
+     * @param  string|Closure(): string  $path  the catalog directory, or how to find it on every call ({@see CatalogLocation})
+     */
     public function __construct(
         private readonly Cache $cache,
         private readonly TemplateParser $parser,
-        private readonly string $path,
+        private readonly string|Closure $path,
         private readonly int $ttl = 3600,
     ) {}
+
+    private function path(): string
+    {
+        return is_string($this->path) ? $this->path : ($this->path)();
+    }
 
     public function all(): array
     {
@@ -49,7 +62,7 @@ final class FilesystemCatalog implements Catalog
     {
         $files = [];
 
-        foreach (glob(rtrim($this->path, '/').'/*/template.yaml') ?: [] as $templateFile) {
+        foreach (glob(rtrim($this->path(), '/').'/*/template.yaml') ?: [] as $templateFile) {
             $directory = dirname($templateFile);
             $compose = is_file("{$directory}/compose.yaml") ? (string) file_get_contents("{$directory}/compose.yaml") : '';
             $icon = is_file("{$directory}/icon.svg") ? "{$directory}/icon.svg" : null;
@@ -67,7 +80,9 @@ final class FilesystemCatalog implements Catalog
      */
     private function load(): array
     {
-        if ($this->templates !== null) {
+        $path = $this->path();
+
+        if ($this->templates !== null && $this->loadedFrom === $path) {
             return $this->templates;
         }
 
@@ -99,6 +114,8 @@ final class FilesystemCatalog implements Catalog
         }
 
         uasort($templates, fn (Template $a, Template $b) => strcasecmp($a->name, $b->name));
+
+        $this->loadedFrom = $path;
 
         return $this->templates = $templates;
     }
@@ -136,9 +153,9 @@ final class FilesystemCatalog implements Catalog
 
     private function fingerprint(): string
     {
-        $parts = [$this->path];
+        $parts = [$path = $this->path()];
 
-        foreach (glob(rtrim($this->path, '/').'/*/{template.yaml,compose.yaml,icon.svg}', GLOB_BRACE) ?: [] as $file) {
+        foreach (glob(rtrim($path, '/').'/*/{template.yaml,compose.yaml,icon.svg}', GLOB_BRACE) ?: [] as $file) {
             $parts[] = $file.':'.filesize($file).':'.filemtime($file);
         }
 
