@@ -83,25 +83,36 @@ final class ServiceController extends Controller
     }
 
     /**
-     * PATCH /projects/{project}/{environment}/services/{service} {name} — rename the canvas service.
+     * PATCH /projects/{project}/{environment}/services/{service} {name?, icon?} — rename the canvas service and/or set
+     * its icon (a Cool Icons slug; null brings back the derived one). The icon is canvas-only: falak.yaml ignores it.
      */
     public function update(Request $request, Project $project, string $environment, string $service, RenameService $rename): JsonResponse
     {
         $this->authorize('manage', $project);
         $model = $this->resolveEnvironment($project, $environment);
 
-        $data = $request->validate(['name' => ['required', 'string', 'max:60', 'regex:/^[^\x00-\x1F\x7F]+$/u']]);
+        $data = $request->validate([
+            // `icon: null` (back to the derived icon) is a request too: required_without would count it as missing.
+            'name' => [Rule::requiredIf(! $request->has('icon')), 'string', 'max:60', 'regex:/^[^\x00-\x1F\x7F]+$/u'],
+            'icon' => ['sometimes', ...ProjectRules::ICON],
+        ], ProjectRules::ICON_MESSAGES);
 
         $record = Service::query()->where('environment_id', $model->id)->find(strtolower($service)) ?? throw new NotFoundHttpException('Service not found.');
 
-        // A service falak.yaml manages is named by its unit key: renaming it would make the file look for another one.
-        if (trim((string) $data['name']) !== $record->name && ($managed = $this->managedUnit($record))->any()) {
-            throw ValidationException::withMessages(['name' => $managed->badge().': the service is a unit of the file; rename it there.']);
+        if (isset($data['name'])) {
+            // A service falak.yaml manages is named by its unit key: renaming it would make the file look for another one.
+            if (trim((string) $data['name']) !== $record->name && ($managed = $this->managedUnit($record))->any()) {
+                throw ValidationException::withMessages(['name' => $managed->badge().': the service is a unit of the file; rename it there.']);
+            }
+
+            $rename($record, (string) $data['name']);
         }
 
-        $rename($record, (string) $data['name']);
+        if (array_key_exists('icon', $data)) {
+            $record->forceFill(['icon' => $data['icon'] ?: null])->save();
+        }
 
-        return response()->json(['data' => ['id' => $record->id, 'name' => $record->name]]);
+        return response()->json(['data' => ['id' => $record->id, 'name' => $record->name, 'icon' => $record->icon]]);
     }
 
     /**

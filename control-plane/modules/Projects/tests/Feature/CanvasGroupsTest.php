@@ -40,12 +40,12 @@ it('groups services around their top-left without moving them on screen, and ung
         ->and($db->refresh()->only(['group_id', 'x', 'y']))->toBe(['group_id' => $groupId, 'x' => 0, 'y' => 300]);
 
     $canvas = $this->getJson("{$this->base}/canvas")->assertOk();
-    expect($canvas->json('groups'))->toBe([['id' => $groupId, 'name' => 'Commerce', 'position' => ['x' => 100, 'y' => 200], 'collapsed' => false]])
+    expect($canvas->json('groups'))->toBe([['id' => $groupId, 'name' => 'Commerce', 'icon' => null, 'position' => ['x' => 100, 'y' => 200], 'collapsed' => false]])
         ->and(collect($canvas->json('services'))->pluck('group_id')->unique()->all())->toBe([$groupId]);
 
     // Moving / renaming / collapsing the group is one row; members keep their relative positions.
     $this->patchJson("{$this->base}/groups/{$groupId}", ['x' => 140, 'y' => 260, 'name' => ' Shop ', 'collapsed' => true])
-        ->assertOk()->assertJsonPath('data', ['id' => $groupId, 'name' => 'Shop', 'position' => ['x' => 140, 'y' => 260], 'collapsed' => true]);
+        ->assertOk()->assertJsonPath('data', ['id' => $groupId, 'name' => 'Shop', 'icon' => null, 'position' => ['x' => 140, 'y' => 260], 'collapsed' => true]);
     expect($web->refresh()->only(['x', 'y']))->toBe(['x' => 300, 'y' => 0]);
 
     $this->deleteJson("{$this->base}/groups/{$groupId}")->assertNoContent();

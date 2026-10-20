@@ -75,6 +75,8 @@ export interface SharedData {
     falak?: FalakShared | null;
     flash?: FlashMessages;
     quote: { message: string; author: string };
+    /** Cool Icons base URL (FALAK_ICONS_URL); null: picker off, bundled logos only. */
+    icons_url?: string | null;
     auth: Auth;
     organization: OrganizationProps | null;
     /** Guests only: who may sign up (FALAK_REGISTRATION). */
@@ -118,8 +120,10 @@ export interface CanvasService {
     /** Site id / database id (the owning module's ULID). */
     ref_id: string;
     name: string;
-    /** ServiceIcon key. */
+    /** ServiceIcon key: the picked icon, else derived from the site / engine. */
     icon: string;
+    /** Icon picked on the canvas (Cool Icons slug[/variant]); null: derived. Optional for older payloads / fixtures. */
+    custom_icon?: string | null;
     position: { x: number; y: number };
     status: CanvasStatus;
     status_label: string;
@@ -164,6 +168,8 @@ export interface CanvasVolume {
 export interface CanvasGroup {
     id: string;
     name: string;
+    /** Icon picked on the canvas (Cool Icons slug[/variant]). */
+    icon?: string | null;
     position: { x: number; y: number };
     collapsed: boolean;
 }

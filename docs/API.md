@@ -444,6 +444,11 @@ to the environment's network. SQL engines get a database and a user named after 
 `default` user (`eviction`: `noeviction` default, `allkeys-lru`, …; `persistence`: `rdb` default, `aof`, `none`). A
 major this release ships no pinned image of is a `422` on `version`. Sites: the `POST /sites` body with
 `kind: "site"`. `201 {data: <canvas service>, warnings[]}`; the service is `provisioning` until the container runs.
+### `PATCH /api/v1/projects/{project}/environments/{environment}/services/{service}` `{name?, icon?}` — `projects.manage`
+Rename a canvas service, or set its icon: a [Cool Icons](https://coolicon.falak.sh) slug, optionally with a variant
+(`docker`, `docker/svgl-dark`); `null` brings back the icon derived from the site or engine. Projects take the same
+`icon` (`PATCH /api/v1/projects/{project}`). Icons are canvas-only: `falak.yaml` ignores them.
+`200 {data: {id, name, icon}}`.
 
 Database containers can be listed, read and deleted over `/api/v1` (see Databases); the rest of their lifecycle and
 backups have no `/api/v1` endpoints yet. The session routes (CSRF, `Accept: application/json`

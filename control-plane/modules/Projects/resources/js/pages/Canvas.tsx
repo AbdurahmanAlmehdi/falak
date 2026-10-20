@@ -1,11 +1,23 @@
-import { AppShell, Button, EmptyCanvas, IconButton, PanelStack, SERVICE_CARD, toast, type PanelLayer } from '@/components/falak';
+import {
+    AppShell,
+    Button,
+    EmptyCanvas,
+    IconButton,
+    IconPicker,
+    PanelStack,
+    SERVICE_CARD,
+    ServiceIcon,
+    toast,
+    useIconsUrl,
+    type PanelLayer,
+} from '@/components/falak';
 import { errorMessage, requestJson } from '@/lib/http';
 import { allServiceLayers, shellContext, type ServicePanelContext } from '@/lib/registry';
 import { cn } from '@/lib/utils';
 import { type CanvasGroup, type CanvasService, type SharedData } from '@/types';
 import { Head, router, usePage } from '@inertiajs/react';
 import { ReactFlowProvider, useReactFlow } from '@xyflow/react';
-import { Activity, Grid3x3, Group as GroupIcon, Layers, Maximize, Minus, Plus, Redo2, Settings, Undo2, X } from 'lucide-react';
+import { Activity, FolderKanban, Grid3x3, Group as GroupIcon, Layers, Maximize, Minus, Plus, Redo2, Settings, Undo2, X } from 'lucide-react';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityRail } from '../components/activity-rail';
 import { CanvasBoard, type ComposeAction, type GroupAction, type LayoutChange } from '../components/canvas-board';
@@ -104,6 +116,31 @@ function Toolbar({
 }
 
 /** Appears while top-level cards are multi-selected (⇧-drag / ⌘-click): put them into a new group. */
+/** The project's icon (switcher, Projects dashboard): a click opens the icon picker. Canvas-only, like every icon. */
+function ProjectIcon({ project }: { project: CanvasPageProps['project'] }) {
+    if (!useIconsUrl()) return null;
+
+    const pick = async (icon: string | null) => {
+        try {
+            await requestJson(`/projects/${project.id}`, 'PATCH', { icon });
+            router.reload({ only: ['project', 'falak'] });
+        } catch (error) {
+            toast.error('Could not change the project icon', errorMessage(error));
+        }
+    };
+
+    return (
+        <IconPicker value={project.icon} onPick={(icon) => void pick(icon)} label={`Icon of ${project.name}`}>
+            <IconButton
+                label="Project icon"
+                tooltip={false}
+                variant="secondary"
+                icon={<ServiceIcon name={project.icon} size={16} fallback={<FolderKanban />} />}
+            />
+        </IconPicker>
+    );
+}
+
 function SelectionBar({ count, onGroup, onClear }: { count: number; onGroup: () => void; onClear: () => void }) {
     return (
         <div
@@ -389,6 +426,22 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
         [home, setCanvas, refresh],
     );
 
+    const onGroupIcon = useCallback(
+        async (group: CanvasGroup, icon: string | null) => {
+            setCanvas((current) => ({
+                ...current,
+                groups: (current.groups ?? []).map((item) => (item.id === group.id ? { ...item, icon } : item)),
+            }));
+            try {
+                await requestJson(`${home}/groups/${group.id}`, 'PATCH', { icon });
+            } catch (error) {
+                toast.error('Could not change the group icon', errorMessage(error));
+                void refresh();
+            }
+        },
+        [home, setCanvas, refresh],
+    );
+
     const onCompose = useCallback(
         async (service: CanvasService, action: ComposeAction) => {
             if (action === 'open') {
@@ -494,6 +547,15 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
     const rename = (service: CanvasService | null) => (name: string) =>
         setCanvas((current) => ({ ...current, services: current.services.map((item) => (item.id === service?.id ? { ...item, name } : item)) }));
 
+    // A cleared pick shows the derived icon again once the canvas is re-read.
+    const changeIcon = (service: CanvasService | null) => (icon: string | null) => {
+        setCanvas((current) => ({
+            ...current,
+            services: current.services.map((item) => (item.id === service?.id ? { ...item, custom_icon: icon, icon: icon ?? item.icon } : item)),
+        }));
+        void refresh();
+    };
+
     const layers: PanelLayer[] = [];
     const panelFor = (which: 'base' | 'peek', ref: ServiceRef, service: CanvasService | null, index: number) => {
         const base = contextFor(which, ref, index === (route.peek ? 1 : 0));
@@ -509,6 +571,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                     tab={ref.tab}
                     renameUrl={can.manage && service ? `${home}/services/${service.id}` : null}
                     onRenamed={rename(service)}
+                    onIconChanged={changeIcon(service)}
                     onClose={() => dismiss(index)}
                 />
             ),
@@ -589,6 +652,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                         onLayout={(changes) => void apply(changes, 'undo')}
                         onGroup={(group, action) => void onGroup(group, action)}
                         onRename={(group, name) => void onRename(group, name)}
+                        onGroupIcon={(group, icon) => void onGroupIcon(group, icon)}
                         onCompose={(service, action) => void onCompose(service, action)}
                         onSelectionChange={(ids) => setSelection((current) => (current.join() === ids.join() ? current : ids))}
                         selectionReset={selectionReset}
@@ -597,6 +661,7 @@ function CanvasPage({ project, environment, canvas: initial, can }: CanvasPagePr
                 </div>
 
                 <div className="absolute top-3 right-3 z-10 flex items-center gap-2 md:right-4">
+                    {can.manage && <ProjectIcon project={project} />}
                     <IconButton
                         label="Activity"
                         icon={<Activity />}

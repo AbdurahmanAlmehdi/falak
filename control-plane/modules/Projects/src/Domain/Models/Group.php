@@ -18,6 +18,7 @@ use Illuminate\Support\Carbon;
  * @property string $project_id
  * @property string $environment_id
  * @property string $name
+ * @property ?string $icon
  * @property int $x
  * @property int $y
  * @property bool $collapsed
@@ -60,10 +61,10 @@ class Group extends Model
     }
 
     /**
-     * @return array{id: string, name: string, position: array{x: int, y: int}, collapsed: bool}
+     * @return array{id: string, name: string, icon: ?string, position: array{x: int, y: int}, collapsed: bool}
      */
     public function toCanvas(): array
     {
-        return ['id' => $this->id, 'name' => $this->name, 'position' => ['x' => $this->x, 'y' => $this->y], 'collapsed' => $this->collapsed];
+        return ['id' => $this->id, 'name' => $this->name, 'icon' => $this->icon, 'position' => ['x' => $this->x, 'y' => $this->y], 'collapsed' => $this->collapsed];
     }
 }

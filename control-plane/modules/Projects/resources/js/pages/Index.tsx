@@ -18,7 +18,6 @@ import {
     StatusDot,
     Textarea,
     defaultSetupSteps,
-    hasServiceIcon,
     toast,
     type SetupProgress,
 } from '@/components/falak';
@@ -162,7 +161,7 @@ function Preview({ project }: { project: ProjectSummary }) {
                             className="border-border bg-surface-1 flex size-10 items-center justify-center rounded-lg border shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-transform duration-200 group-hover:-translate-y-0.5"
                             style={{ transitionDelay: `${index * 25}ms` }}
                         >
-                            <ServiceIcon name={hasServiceIcon(service.icon) ? service.icon : 'compose'} size={18} title={service.name} />
+                            <ServiceIcon name={service.icon} size={18} title={service.name} fallback={<ServiceIcon name="compose" size={18} />} />
                         </span>
                     ))}
                     {extra > 0 && (
@@ -183,6 +182,7 @@ function ProjectCard({ project, onToggle }: { project: ProjectSummary; onToggle:
             data-testid="project-card"
         >
             <div className="flex items-center gap-1 pt-3 pr-2 pl-4">
+                {project.icon && <ServiceIcon name={project.icon} size={16} className="mr-1" fallback={null} />}
                 <Link
                     href={hrefOf(project)}
                     className="text-fg min-w-0 flex-1 truncate text-sm font-semibold after:absolute after:inset-0 after:rounded-xl"
@@ -222,7 +222,7 @@ function ProjectRow({ project, onToggle }: { project: ProjectSummary; onToggle: 
                         className="border-border bg-surface-1 flex size-7 items-center justify-center rounded-md border"
                         title={service.name}
                     >
-                        <ServiceIcon name={hasServiceIcon(service.icon) ? service.icon : 'compose'} size={14} title={service.name} />
+                        <ServiceIcon name={service.icon} size={14} title={service.name} fallback={<ServiceIcon name="compose" size={14} />} />
                     </span>
                 ))}
             </span>

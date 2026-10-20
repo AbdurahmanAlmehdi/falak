@@ -43,6 +43,8 @@ class HandleInertiaRequests extends Middleware
             ...parent::share($request),
             'name' => config('app.name'),
             'quote' => ['message' => trim($message), 'author' => trim($author)],
+            // Cool Icons base URL (canvas icon picker, picked icons); null when turned off.
+            'icons_url' => config('kernel.icons_url') ?: null,
             'auth' => [
                 'user' => $request->user(),
             ],

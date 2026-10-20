@@ -1,4 +1,14 @@
-import { Menu, SERVICE_CARD, ServiceCard, ServiceIcon, StatusDot, serviceIconKey, type MenuAction } from '@/components/falak';
+import {
+    IconPicker,
+    Menu,
+    SERVICE_CARD,
+    ServiceCard,
+    ServiceIcon,
+    StatusDot,
+    serviceIconKey,
+    useIconsUrl,
+    type MenuAction,
+} from '@/components/falak';
 import { cn } from '@/lib/utils';
 import { type CanvasEdge, type CanvasGroup, type CanvasService, type ComposeChild } from '@/types';
 import {
@@ -77,6 +87,7 @@ interface BoardActions {
     onOpenVolume?: (service: CanvasService, volumeId: string) => void;
     onGroup: (group: CanvasGroup, action: GroupAction) => void;
     onRename: (group: CanvasGroup, name: string | null) => void;
+    onGroupIcon: (group: CanvasGroup, icon: string | null) => void;
     onCompose: (service: CanvasService, action: ComposeAction) => void;
 }
 
@@ -246,7 +257,9 @@ function GroupFrame({
 
 const GroupNodeView = memo(function GroupNodeView({ data }: NodeProps<GroupNode>) {
     const board = useBoard();
+    const iconsUrl = useIconsUrl();
     const { group, members } = data;
+    const icon = group.icon ? <ServiceIcon name={group.icon} size={16} /> : <GroupIcon className="text-fg-muted size-4" aria-hidden />;
     const menu: MenuAction[] = board.editable
         ? [
               { label: 'Rename', icon: <Pencil />, onSelect: () => board.onGroup(group, 'rename') },
@@ -265,7 +278,22 @@ const GroupNodeView = memo(function GroupNodeView({ data }: NodeProps<GroupNode>
     return (
         <GroupFrame
             label={`${group.name} group`}
-            icon={<GroupIcon className="text-fg-muted size-4" aria-hidden />}
+            icon={
+                board.editable && iconsUrl ? (
+                    <IconPicker value={group.icon} onPick={(next) => board.onGroupIcon(group, next)} label={`Icon of the ${group.name} group`}>
+                        <button
+                            type="button"
+                            title="Change icon"
+                            aria-label={`Change the icon of the ${group.name} group`}
+                            className="nodrag hover:bg-surface-2 -m-0.5 rounded-sm p-0.5"
+                        >
+                            {icon}
+                        </button>
+                    </IconPicker>
+                ) : (
+                    icon
+                )
+            }
             name={group.name}
             statuses={members.map((member) => member.status)}
             icons={members.map((member) => member.icon || member.kind)}
@@ -398,6 +426,8 @@ export interface CanvasBoardProps {
     onLayout: (changes: LayoutChange[]) => void;
     onGroup: (group: CanvasGroup, action: GroupAction) => void;
     onRename: (group: CanvasGroup, name: string | null) => void;
+    /** A group's icon was picked (null: back to the default). */
+    onGroupIcon: (group: CanvasGroup, icon: string | null) => void;
     onCompose: (service: CanvasService, action: ComposeAction) => void;
     /** Top-level services picked with ⇧-drag / ⌘-click (to group them). */
     onSelectionChange: (ids: string[]) => void;
@@ -556,6 +586,7 @@ export function CanvasBoard({
     onLayout,
     onGroup,
     onRename,
+    onGroupIcon,
     onCompose,
     onSelectionChange,
     selectionReset,
@@ -780,8 +811,8 @@ export function CanvasBoard({
     );
 
     const board = useMemo<BoardActions>(
-        () => ({ editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onCompose }),
-        [editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onCompose],
+        () => ({ editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onGroupIcon, onCompose }),
+        [editable, selectedId, dropTarget, renaming, onOpen, onOpenVolume, onGroup, onRename, onGroupIcon, onCompose],
     );
 
     return (

@@ -44,4 +44,10 @@ return [
         'rotate_batch' => (int) env('FALAK_KEYS_ROTATE_BATCH', 200),
     ],
 
+    /*
+    | Icon library the canvas icon picker searches and loads picked icons from (Cool Icons: /search.json, /i/<slug>.svg).
+    | Empty: no picker, only the logos bundled with the panel.
+    */
+    'icons_url' => rtrim((string) env('FALAK_ICONS_URL', 'https://coolicon.falak.sh'), '/'),
+
 ];

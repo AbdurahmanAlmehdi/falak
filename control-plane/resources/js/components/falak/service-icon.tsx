@@ -1,6 +1,9 @@
 import { brandFillProps } from '@/lib/brand-color';
 import { cn } from '@/lib/utils';
+import { type SharedData } from '@/types';
+import { usePage } from '@inertiajs/react';
 import { Box, Code2, Database, FileCode2, Globe, HardDrive, Server, SquareFunction, type LucideIcon } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
 import {
     siAppsmith,
     siBun,
@@ -116,6 +119,19 @@ export function hasServiceIcon(name: string | null | undefined): boolean {
     return Boolean(name && (BRANDS[name.toLowerCase()] || GENERIC[name.toLowerCase()]));
 }
 
+/** A Cool Icons key as the picker stores it: a slug, optionally with a variant ("docker", "docker/svgl-dark"). */
+const COOL_ICON = /^[a-z0-9][a-z0-9-]{0,63}(\/[a-z0-9][a-z0-9-]{0,47})?$/;
+
+/** URL of a Cool Icons key's SVG, or null when the library is off (FALAK_ICONS_URL empty) or the key is not one. */
+export function coolIconUrl(base: string | null | undefined, key: string): string | null {
+    return base && COOL_ICON.test(key) ? `${base}/i/${key}.svg` : null;
+}
+
+/** The Cool Icons base URL the panel shares (null: picker off). */
+export function useIconsUrl(): string | null {
+    return usePage<SharedData>().props.icons_url ?? null;
+}
+
 export interface ServiceIconProps {
     /** 'laravel' | 'next' | 'bun' | 'postgresql' | … or a generic kind ('site', 'database', 'server'). */
     name: string | null | undefined;
@@ -125,12 +141,17 @@ export interface ServiceIconProps {
     /** Accessible label; decorative when omitted. */
     title?: string;
     className?: string;
+    /** Drawn for an unknown key or an icon that fails to load (default: a box; null: nothing). */
+    fallback?: ReactNode;
 }
 
-export function ServiceIcon({ name, size = 16, mono = false, title, className }: ServiceIconProps) {
+export function ServiceIcon({ name, size = 16, mono = false, title, className, fallback }: ServiceIconProps) {
     const key = (name ?? '').toLowerCase();
     const brand = BRANDS[key];
     const a11y = title ? { role: 'img' as const, 'aria-label': title } : { 'aria-hidden': true as const };
+    const iconsUrl = useIconsUrl();
+    const remote = brand || GENERIC[key] ? null : coolIconUrl(iconsUrl, key);
+    const [failed, setFailed] = useState<string | null>(null);
 
     if (brand) {
         const monochrome = mono || MONOCHROME.has(brand.slug);
@@ -153,14 +174,41 @@ export function ServiceIcon({ name, size = 16, mono = false, title, className }:
         );
     }
 
+    // Anything else is a Cool Icons pick. Its default variant is drawn for light backgrounds: on the dark theme it
+    // sits on a light tile, unless the user picked a variant made for dark ones.
+    if (remote && failed !== remote) {
+        return (
+            <img
+                src={remote}
+                width={size}
+                height={size}
+                alt={title ?? ''}
+                loading="lazy"
+                draggable={false}
+                onError={() => setFailed(remote)}
+                className={cn('shrink-0 object-contain', !key.includes('dark') && 'dark:rounded-[3px] dark:bg-white dark:p-px', className)}
+            />
+        );
+    }
+
+    if (!GENERIC[key] && fallback !== undefined) return <>{fallback}</>;
+
     const Generic = GENERIC[key] ?? Box;
 
     return <Generic width={size} height={size} className={cn('text-fg-muted shrink-0', className)} {...a11y} />;
 }
 
-/** Icon key of a canvas service: a compose site made from a template shows the template's logo when there is one. */
-export function serviceIconKey(service: { icon: string; kind: string; compose?: { template: string | null } | null }): string {
+/**
+ * Icon key of a canvas service: the icon picked for it, else a compose site made from a template shows the template's
+ * logo when there is one.
+ */
+export function serviceIconKey(service: {
+    icon: string;
+    kind: string;
+    custom_icon?: string | null;
+    compose?: { template: string | null } | null;
+}): string {
     const template = service.compose?.template;
 
-    return template && hasServiceIcon(template) ? template : service.icon || service.kind;
+    return service.custom_icon || (template && hasServiceIcon(template) ? template : service.icon || service.kind);
 }
