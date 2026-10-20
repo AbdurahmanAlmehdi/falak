@@ -86,3 +86,11 @@ it('reads a public service\'s health check path', function () {
 
     expect($template->public)->toBe([['service' => 's3', 'port' => 9000, 'health_check_path' => '/minio/health/live'], ['service' => 'web', 'port' => 80]]);
 });
+
+it('reads min_falak, a plain semantic version', function () {
+    $template = (new TemplateParser)->parse(TEMPLATES_FIXTURE_TEMPLATE."\nmin_falak: 1.2.0", TEMPLATES_FIXTURE_COMPOSE);
+
+    expect($template->minFalak)->toBe('1.2.0')
+        ->and((new TemplateParser)->parse(TEMPLATES_FIXTURE_TEMPLATE, TEMPLATES_FIXTURE_COMPOSE)->minFalak)->toBeNull()
+        ->and(parse_errors(TEMPLATES_FIXTURE_TEMPLATE."\nmin_falak: 1.2", TEMPLATES_FIXTURE_COMPOSE))->toContain('template.yaml: min_falak must be a version like 1.2.0');
+});

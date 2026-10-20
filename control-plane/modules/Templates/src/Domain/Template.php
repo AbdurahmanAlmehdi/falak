@@ -35,6 +35,8 @@ final readonly class Template
         public ?string $id = null,
         /** Catalog templates: absolute path of icon.svg when the template ships one. */
         public ?string $iconPath = null,
+        /** The oldest Falak release that runs this template (catalog: older panels skip it). */
+        public ?string $minFalak = null,
     ) {}
 
     public function input(string $key): ?TemplateInput
@@ -69,7 +71,7 @@ final readonly class Template
         return new self(
             $this->slug, $this->name, $this->version, $this->description, $this->category, $this->icon, $this->docs,
             $this->stateful, $this->minMemoryMb, $this->popular, $this->tags, $this->public, $this->inputs,
-            $this->templateYaml, $this->composeYaml, $source, $id, $iconPath,
+            $this->templateYaml, $this->composeYaml, $source, $id, $iconPath, $this->minFalak,
         );
     }
 }

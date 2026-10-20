@@ -23,7 +23,7 @@ final class TemplateParser
 
     public const KEY_PATTERN = '/^[A-Z_][A-Z0-9_]{0,127}$/';
 
-    private const KEYS = ['name', 'slug', 'version', 'description', 'category', 'icon', 'docs', 'stateful', 'min_memory_mb', 'popular', 'tags', 'public', 'inputs', 'compose'];
+    private const KEYS = ['name', 'slug', 'version', 'description', 'category', 'icon', 'docs', 'stateful', 'min_memory_mb', 'min_falak', 'popular', 'tags', 'public', 'inputs', 'compose'];
 
     private const INPUT_KEYS = ['key', 'type', 'label', 'description', 'default', 'generate', 'options', 'required', 'placeholder'];
 
@@ -99,6 +99,11 @@ final class TemplateParser
             }
         }
 
+        $minFalak = $this->string($doc, 'min_falak', 32, required: false);
+        if ($minFalak !== null && preg_match('/^\d+\.\d+\.\d+$/', $minFalak) !== 1) {
+            $this->error('min_falak', 'must be a version like 1.2.0');
+        }
+
         $tags = [];
         if (array_key_exists('tags', $doc)) {
             if (! is_array($doc['tags']) || ! array_is_list($doc['tags']) || count($doc['tags']) > 10) {
@@ -133,6 +138,7 @@ final class TemplateParser
             inputs: $inputs,
             templateYaml: $composeYaml === null ? $this->withoutCompose($templateYaml) : $templateYaml,
             composeYaml: $compose,
+            minFalak: $minFalak,
         );
     }
 

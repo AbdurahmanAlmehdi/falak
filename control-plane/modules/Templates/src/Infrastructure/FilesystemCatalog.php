@@ -9,6 +9,8 @@ use Falak\Templates\Domain\Template;
 use Falak\Templates\Domain\TemplateSource;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Support\Facades\Log;
+use Symfony\Component\Yaml\Exception\ParseException;
+use Symfony\Component\Yaml\Yaml;
 
 /**
  * Reads templates/<slug>/{template.yaml, compose.yaml, icon.svg?}. File contents are cached under a key derived
@@ -72,8 +74,13 @@ final class FilesystemCatalog implements Catalog
         /** @var array<string, array{template: string, compose: string, icon: ?string}> $files */
         $files = $this->cache->remember('templates:catalog:'.$this->fingerprint(), $this->ttl, fn () => $this->files());
         $templates = [];
+        $panel = self::panelVersion();
 
         foreach ($files as $directory => $file) {
+            if (! self::supported($file['template'], $panel)) {
+                continue;
+            }
+
             try {
                 $template = $this->parser->parse($file['template'], $file['compose']);
             } catch (InvalidTemplate $e) {
@@ -94,6 +101,37 @@ final class FilesystemCatalog implements Catalog
         uasort($templates, fn (Template $a, Template $b) => strcasecmp($a->name, $b->name));
 
         return $this->templates = $templates;
+    }
+
+    /**
+     * Whether a panel of version $panel (null: development, no release) can run the template. Reads only
+     * min_falak, before strict parsing: a template for a newer Falak may use keys this panel does not know yet.
+     */
+    public static function supported(string $templateYaml, ?string $panel): bool
+    {
+        if ($panel === null) {
+            return true;
+        }
+
+        try {
+            $min = Yaml::parse($templateYaml)['min_falak'] ?? null;
+        } catch (ParseException) {
+            return true; // reported by the parser
+        }
+
+        return ! is_string($min) || preg_match('/^\d+\.\d+\.\d+$/', $min) !== 1 || version_compare(ltrim($panel, 'v'), $min, '>=');
+    }
+
+    /** The release this panel runs (as ControlPlane's ReleaseCheck reads it; modules share config, not internals). */
+    private static function panelVersion(): ?string
+    {
+        $version = trim((string) config('controlplane.version'));
+
+        if ($version === '' && is_readable($file = (string) config('controlplane.version_file'))) {
+            $version = trim((string) file_get_contents($file));
+        }
+
+        return $version !== '' ? $version : null;
     }
 
     private function fingerprint(): string
