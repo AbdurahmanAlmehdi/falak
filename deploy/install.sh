@@ -12,7 +12,7 @@
 #   --observability          also run Grafana/Loki/Tempo/VictoriaMetrics (grafana.NAME)      [FALAK_OBSERVABILITY=1]
 #   --tls acme|internal      internal = Caddy's local CA, for testing only (default: acme)    [FALAK_TLS]
 #   --allow-local-server     let the panel make this machine a server (it then acts as root here) [FALAK_ALLOW_LOCAL_SERVER=1]
-#   --repo OWNER/NAME        GitHub repository of the release (default: OthmanHaba/falak)         [FALAK_REPO]
+#   --repo OWNER/NAME        GitHub repository of the release (default: falak-sh/falak)         [FALAK_REPO]
 #   --image-prefix PREFIX    image registry prefix (default: ghcr.io/<owner>)                [FALAK_IMAGE_PREFIX]
 #   --build-from-source      build images locally from --ref instead of pulling them         [FALAK_BUILD_FROM_SOURCE=1]
 #   --ref REF                git ref for --build-from-source (default: --version or main)    [FALAK_REF]
@@ -48,7 +48,7 @@ HTTPS_PORT="${FALAK_HTTPS_PORT:-}"
 SKIP_DNS="${FALAK_SKIP_DNS_CHECK:-0}"
 RESTORE_FROM="${FALAK_RESTORE_FROM:-}"
 FORCE=0
-DEFAULT_REPO="OthmanHaba/falak"
+DEFAULT_REPO="falak-sh/falak"
 
 if [ -t 1 ]; then B=$'\e[1m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; N=$'\e[0m'; else B=; R=; G=; Y=; N=; fi
 info() { printf '%s==>%s %s\n' "$B" "$N" "$*"; }

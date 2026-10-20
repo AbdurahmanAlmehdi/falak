@@ -44,7 +44,7 @@
         "image": {
           "type": "string",
           "pattern": "^[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9_.-]+)?$",
-          "description": "tag reference, e.g. ghcr.io/othmanhaba/falak-postgres:17"
+          "description": "tag reference, e.g. ghcr.io/falak-sh/falak-postgres:17"
         },
         "digest": {
           "type": "string",

@@ -54,7 +54,7 @@ COMPOSE_FILE="$FALAK_DIR/deploy/compose.yml"
 BACKUP_DIR="$FALAK_DIR/backups"
 APP_SERVICES="control-plane agent-api horizon reverb scheduler relay builder"
 PHP_SERVICES="control-plane agent-api horizon reverb scheduler"
-FALAK_REPO_DEFAULT="OthmanHaba/falak"
+FALAK_REPO_DEFAULT="falak-sh/falak"
 # Disaster recovery: the DR bucket's credentials and the passphrase live in dr/dr.env (dir 0700, file 0600, root;
 # never mounted into a container, never in a backup). What the panel shows is in state/dr.json (no secrets), mounted
 # read-only into the PHP containers.
@@ -1918,8 +1918,25 @@ TasksMax=$(workload_tasks_max)" && changed=1
 }
 
 # ensure-host: host directory, units and slices, as this version of falak-ctl writes them (install, up, update).
+# v0.26: the project moved from the OthmanHaba account to the falak-sh GitHub organization. Installs still naming the
+# old release repository or image registry follow it (the old images stay pullable; v0.25.1 is copied to the new
+# registry, so a rollback finds it there too). Runs from the new falak-ctl's ensure-host, before update pulls.
+ensure_org_move() {
+  local key value
+  for key in FALAK_REPO FALAK_IMAGE_PREFIX FALAK_DB_IMAGE_REGISTRY; do
+    value="$(env_get "$key")"
+    case "${value,,}" in
+      othmanhaba/falak) env_set "$key" "falak-sh/falak" ;;
+      ghcr.io/othmanhaba) env_set "$key" "ghcr.io/falak-sh" ;;
+      *) continue ;;
+    esac
+    info "$key: $value -> $(env_get "$key") (the project moved to github.com/falak-sh)"
+  done
+}
+
 cmd_ensure_host() {
   require_install
+  ensure_org_move
   ensure_host_dir
   host_reap_stuck
   ensure_edge_ip

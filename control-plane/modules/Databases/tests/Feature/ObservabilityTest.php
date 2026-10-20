@@ -288,7 +288,7 @@ it('creates PostgreSQL and MariaDB (from 1 GiB) instances with query insights th
 
 it('keeps query insights through a major upgrade where the agent applies it', function () {
     $agents = FakeAgentGateway::install();
-    [, , $instance] = databases_service($this->organization, 'postgresql', 'shop', $this->server, ['version' => '16', 'image' => 'ghcr.io/othmanhaba/falak-postgres:16', 'query_insights' => true]);
+    [, , $instance] = databases_service($this->organization, 'postgresql', 'shop', $this->server, ['version' => '16', 'image' => 'ghcr.io/falak-sh/falak-postgres:16', 'query_insights' => true]);
     fleet_enroll($this->organization->id, $this->server->id, ['features' => ['db.observability']]);
 
     $this->post("/databases/instances/{$instance->id}/upgrade", ['version' => '17'])->assertSessionHasNoErrors();

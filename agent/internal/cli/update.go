@@ -17,7 +17,7 @@ import (
 )
 
 // defaultReleases is where install-cli.sh downloads from; FALAK_RELEASES_URL overrides it (mirrors, tests).
-const defaultReleases = "https://github.com/OthmanHaba/falak/releases"
+const defaultReleases = "https://github.com/falak-sh/falak/releases"
 
 // cmdUpdate replaces the running falak binary with a release's, checked against the release's SHA256SUMS,
 // the same way install-cli.sh installs it.

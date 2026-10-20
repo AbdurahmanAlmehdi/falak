@@ -1,0 +1,40 @@
+# One-off for the move to the falak-sh organization (v0.26): copy images published under ghcr.io/othmanhaba to
+# ghcr.io/falak-sh with their digests unchanged, so pinned digests, rollbacks and existing database containers keep
+# resolving. App images by tag (default: v0.25.1, the rollback target of the v0.26 update); database images with
+# every tag (their cosign signatures are tags too). Run from Actions → mirror-images → Run workflow.
+name: mirror-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: App image tags to copy (space-separated)
+        default: v0.25.1
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    env:
+      FROM: ghcr.io/othmanhaba
+      TO: ghcr.io/falak-sh
+      TAGS: ${{ inputs.tags }}
+    steps:
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: App images
+        run: |
+          for image in control-plane builder edge fn-bun fn-node fn-deno fn-python fn-go; do
+            for tag in $TAGS; do
+              skopeo copy --all --preserve-digests --retry-times 3 "docker://$FROM/falak-$image:$tag" "docker://$TO/falak-$image:$tag"
+            done
+          done
+      - name: Database images (every tag)
+        run: |
+          for engine in postgres mysql mariadb redis valkey; do
+            skopeo sync --all --preserve-digests --retry-times 3 --src docker --dest docker "$FROM/falak-$engine" "$TO"
+          done

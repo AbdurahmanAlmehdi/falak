@@ -7,7 +7,7 @@ return [
 
     // Release check: GitHub's latest (non-draft, non-pre-release) release of this repository, every 6 h.
     'update_check' => (bool) env('FALAK_UPDATE_CHECK', true),
-    'repository' => env('FALAK_REPO', 'OthmanHaba/falak'),
+    'repository' => env('FALAK_REPO', 'falak-sh/falak'),
 
     /*
     | The host channel (falak-ctl ≥ v0.23): the panel writes request.json here (rw mount), falak-host.service on the

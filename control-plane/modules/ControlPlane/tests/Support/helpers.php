@@ -41,7 +41,7 @@ function github_release(array $overrides = []): array
 {
     return [
         'tag_name' => 'v0.24.0',
-        'html_url' => 'https://github.com/OthmanHaba/falak/releases/tag/v0.24.0',
+        'html_url' => 'https://github.com/falak-sh/falak/releases/tag/v0.24.0',
         'published_at' => '2026-10-17T10:00:00Z',
         'draft' => false,
         'prerelease' => false,

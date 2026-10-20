@@ -1,7 +1,7 @@
 <?php
 
 // Compose passes an empty FALAK_IMAGE_PREFIX when the install's .env has none.
-$prefix = rtrim((string) (env('FALAK_IMAGE_PREFIX') ?: 'ghcr.io/othmanhaba'), '/');
+$prefix = rtrim((string) (env('FALAK_IMAGE_PREFIX') ?: 'ghcr.io/falak-sh'), '/');
 $version = (string) (env('FALAK_VERSION') ?: 'latest');
 $tag = preg_match('/^v\d+\.\d+\.\d+/', $version) === 1 ? $version : 'latest';
 

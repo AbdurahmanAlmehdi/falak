@@ -10,7 +10,7 @@ require_once __DIR__.'/../Support/helpers.php';
 
 beforeEach(function () {
     Cache::forget(ReleaseCheck::CACHE_KEY);
-    config(['controlplane.version' => 'v0.23.0', 'controlplane.repository' => 'OthmanHaba/falak', 'controlplane.update_check' => true]);
+    config(['controlplane.version' => 'v0.23.0', 'controlplane.repository' => 'falak-sh/falak', 'controlplane.update_check' => true]);
 });
 
 it('compares versions as semver', function (?string $candidate, ?string $current, bool $newer) {
@@ -37,7 +37,7 @@ it('fetches the latest release from GitHub and caches the fields it keeps', func
 
     expect($result)->toMatchArray([
         'tag' => 'v0.24.0',
-        'url' => 'https://github.com/OthmanHaba/falak/releases/tag/v0.24.0',
+        'url' => 'https://github.com/falak-sh/falak/releases/tag/v0.24.0',
         'published_at' => '2026-10-17T10:00:00Z',
         // Trimmed, kept as text (the UI escapes it).
         'notes' => "## What's new\n<script>alert(1)</script>",
@@ -46,7 +46,7 @@ it('fetches the latest release from GitHub and caches the fields it keeps', func
         ->and($releases->latest())->toBe($result)
         ->and($releases->updateAvailable())->toBeTrue();
 
-    Http::assertSent(fn (Request $request) => $request->url() === 'https://api.github.com/repos/OthmanHaba/falak/releases/latest'
+    Http::assertSent(fn (Request $request) => $request->url() === 'https://api.github.com/repos/falak-sh/falak/releases/latest'
         && str_starts_with($request->header('User-Agent')[0] ?? '', 'falak-control-plane/v0.23.0')
         && ! $request->hasHeader('Authorization'));
 });

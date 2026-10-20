@@ -53,7 +53,7 @@ it('maps compose images and tags to engines and supported majors', function () {
         ->and(Engine::PostgreSql->versionFromTag('12'))->toBe('17')
         ->and(Engine::MySql->versionFromTag('8.0.39'))->toBe('8.0')
         ->and(Engine::Redis->versionFromTag(null))->toBe('8')
-        ->and(Engine::PostgreSql->image('17'))->toBe('ghcr.io/othmanhaba/falak-postgres:17');
+        ->and(Engine::PostgreSql->image('17'))->toBe('ghcr.io/falak-sh/falak-postgres:17');
 });
 
 it('publishes the port on the private address other servers of the environment reach it on, and only then', function () {

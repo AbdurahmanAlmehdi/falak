@@ -373,9 +373,9 @@ func TestDatabaseSchemas(t *testing.T) {
 		{"db.create", `{` + inst + `,"engine":"redis","name":"x"}`, false},
 		{"db.create", `{"instance":"../x","engine":"postgres","name":"x"}`, false},
 		{"db.user.apply", `{` + inst + `,"engine":"postgres","username":"app","remote":true}`, false},
-		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/othmanhaba/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":1024},"password":"x"}`, false},
-		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/othmanhaba/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":536870912,"network":"bridge"},"password":"x"}`, false},
-		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/othmanhaba/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":536870912},"password":""}`, false},
+		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/falak-sh/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":1024},"password":"x"}`, false},
+		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/falak-sh/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":536870912,"network":"bridge"},"password":"x"}`, false},
+		{"db.instance.create", `{"instance":{"id":"01hzyinst00000000000000001","engine":"postgres","version":"17","image":"ghcr.io/falak-sh/falak-postgres:17","volume_id":"01hzyvol000000000000000001","memory_bytes":536870912},"password":""}`, false},
 		{"db.instance.upgrade", `{"mode":"minor","source":{"id":"01hzyinst00000000000000001","engine":"postgres"},"target":{"id":"01hzyinst00000000000000002","engine":"postgres"},"databases":[],"alias":"a"}`, false},
 		{"db.instance.upgrade", `{"mode":"major","source":{"id":"01hzyinst00000000000000001","engine":"redis"},"target":{"id":"01hzyinst00000000000000002","engine":"redis"},"databases":[],"alias":"a"}`, false},
 	} {

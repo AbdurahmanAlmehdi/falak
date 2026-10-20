@@ -18,7 +18,7 @@ cd "$(git rev-parse --show-toplevel)"
 suffix=$1
 shift
 wait=0
-owner=othmanhaba
+owner=falak-sh
 out=control-plane/modules/Databases/config/db-image-digests.json
 while [ $# -gt 0 ]; do
 	case "$1" in

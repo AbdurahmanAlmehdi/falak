@@ -225,7 +225,7 @@ func TestRestoreKeyValueStopsTheInstance(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	p := createPayload()
-	p.Instance.Engine, p.Instance.Version, p.Instance.Image, p.Instance.TLS = "redis", "8", "ghcr.io/othmanhaba/falak-redis:8", nil
+	p.Instance.Engine, p.Instance.Version, p.Instance.Image, p.Instance.TLS = "redis", "8", "ghcr.io/falak-sh/falak-redis:8", nil
 	if _, err := h.db.InstanceCreate(ctx, p, stream()); err != nil {
 		t.Fatal(err)
 	}

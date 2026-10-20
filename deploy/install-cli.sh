@@ -1,7 +1,7 @@
 #!/bin/sh
 # install-cli.sh — install the `falak` CLI on macOS or Linux (amd64/arm64).
 #
-#   curl -fsSL https://github.com/OthmanHaba/falak/releases/latest/download/install-cli.sh | sh
+#   curl -fsSL https://github.com/falak-sh/falak/releases/latest/download/install-cli.sh | sh
 #
 # Then log in (the token comes from <panel>/settings/api-tokens):
 #   falak login --url https://falak.example.com
@@ -14,7 +14,7 @@
 # This is the client CLI. falak-ctl (the server admin tool) is installed on the control-plane host by install.sh.
 set -eu
 
-DEFAULT_REPO="OthmanHaba/falak"
+DEFAULT_REPO="falak-sh/falak"
 VERSION="${FALAK_VERSION:-}"
 REPO="${FALAK_REPO:-$DEFAULT_REPO}"
 

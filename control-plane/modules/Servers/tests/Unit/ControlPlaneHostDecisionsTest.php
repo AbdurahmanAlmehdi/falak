@@ -18,7 +18,7 @@ uses(RefreshDatabase::class);
 function cp_report(): array
 {
     $report = mc_docker_ce(mc_report(['hostname' => 'falak-cp']));
-    $report['containers'][] = ['name' => 'falak-edge-1', 'image' => 'ghcr.io/othmanhaba/falak-edge:v0.23.0', 'ports' => [['host_port' => 80, 'proto' => 'tcp'], ['host_port' => 443, 'proto' => 'tcp']]];
+    $report['containers'][] = ['name' => 'falak-edge-1', 'image' => 'ghcr.io/falak-sh/falak-edge:v0.23.0', 'ports' => [['host_port' => 80, 'proto' => 'tcp'], ['host_port' => 443, 'proto' => 'tcp']]];
     $report = mc_listen($report, 80, 'docker-proxy', 'docker.service', container: true);
 
     return mc_listen($report, 443, 'docker-proxy', 'docker.service', container: true);

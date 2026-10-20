@@ -27,10 +27,10 @@ foreach ($versions as $engine => $majors) {
 }
 
 return [
-    // Every managed database is a container of a Falak database image (docs/DB_IMAGES.md): ghcr.io/othmanhaba/
+    // Every managed database is a container of a Falak database image (docs/DB_IMAGES.md): ghcr.io/falak-sh/
     // falak-<engine>:<major>, always run by the pinned digest above (the agent refuses anything else). The first version
     // of each engine is the default of a new instance; a new digest for a major is a minor upgrade.
-    'registry' => rtrim((string) env('FALAK_DB_IMAGE_REGISTRY', 'ghcr.io/othmanhaba'), '/'),
+    'registry' => rtrim((string) env('FALAK_DB_IMAGE_REGISTRY', 'ghcr.io/falak-sh'), '/'),
     'tag_suffix' => (string) env('FALAK_DB_IMAGE_TAG_SUFFIX', ''),
     'versions' => $versions,
     'digests' => $digests,

@@ -255,7 +255,7 @@ curl -fsSL https://falak.sh/install.sh \
 ```
 
 `https://falak.sh/install.sh` redirects to the script on GitHub `main`
-(`https://raw.githubusercontent.com/OthmanHaba/falak/main/deploy/install.sh`), so either URL works.
+(`https://raw.githubusercontent.com/falak-sh/falak/main/deploy/install.sh`), so either URL works.
 
 The installer runs preflight checks, installs Docker, generates `/opt/falak/.env`, pulls the release images
 from GHCR, starts the Compose stack (`deploy/compose.yml`: FrankenPHP web, Horizon, Reverb, scheduler,

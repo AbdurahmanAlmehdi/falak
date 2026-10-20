@@ -67,7 +67,7 @@ enum Engine: string
         return $this->versions()[0] ?? throw new LogicException("No {$this->label()} version is configured.");
     }
 
-    /** The image tag of a major, e.g. ghcr.io/othmanhaba/falak-postgres:17. */
+    /** The image tag of a major, e.g. ghcr.io/falak-sh/falak-postgres:17. */
     public function image(string $version): string
     {
         return config('databases.registry').'/falak-'.$this->protocol().':'.$version.config('databases.tag_suffix');

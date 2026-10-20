@@ -18,7 +18,7 @@ import (
 	"github.com/OthmanHaba/falak/agent/internal/runner/runnertest"
 )
 
-var pinned = "ghcr.io/othmanhaba/falak-postgres@sha256:" + strings.Repeat("a", 64)
+var pinned = "ghcr.io/falak-sh/falak-postgres@sha256:" + strings.Repeat("a", 64)
 
 func TestCreateBody(t *testing.T) {
 	db := New(Deps{FS: hostfs.FS{}})
@@ -224,7 +224,7 @@ func TestInstanceCreateRunsTheContainerWithItsSecretsAsFiles(t *testing.T) {
 
 func TestInstanceCreateRefusesAnotherDigest(t *testing.T) {
 	h := newHarness(t)
-	h.dock.images[pinned] = []string{"ghcr.io/othmanhaba/falak-postgres@sha256:" + strings.Repeat("b", 64)}
+	h.dock.images[pinned] = []string{"ghcr.io/falak-sh/falak-postgres@sha256:" + strings.Repeat("b", 64)}
 	if _, err := h.db.InstanceCreate(context.Background(), createPayload(), stream()); err == nil || !strings.Contains(err.Error(), "pinned digest") {
 		t.Errorf("digest mismatch: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestInstancePasswordRotatesThroughAFile(t *testing.T) {
 func TestRedisPasswordsOverlapUntilRetired(t *testing.T) {
 	h := newHarness(t)
 	p := createPayload()
-	p.Instance.Engine, p.Instance.Version, p.Instance.Image = "redis", "8", "ghcr.io/othmanhaba/falak-redis:8"
+	p.Instance.Engine, p.Instance.Version, p.Instance.Image = "redis", "8", "ghcr.io/falak-sh/falak-redis:8"
 	if _, err := h.db.InstanceCreate(context.Background(), p, stream()); err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +466,7 @@ func upgradeHarness(t *testing.T) (*harness, UpgradePayload) {
 		t.Fatal(err)
 	}
 	target := createPayload()
-	target.Instance.ID, target.Instance.Version, target.Instance.Image = instID2, "18", "ghcr.io/othmanhaba/falak-postgres:18"
+	target.Instance.ID, target.Instance.Version, target.Instance.Image = instID2, "18", "ghcr.io/falak-sh/falak-postgres:18"
 	if _, err := h.db.InstanceCreate(ctx, target, stream()); err != nil {
 		t.Fatal(err)
 	}

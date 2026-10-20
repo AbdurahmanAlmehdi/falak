@@ -166,7 +166,7 @@ func TestCustomerHeldBackupRestores(t *testing.T) {
 func drillPayload(b *bucket, br BackupResult) DrillPayload {
 	return DrillPayload{
 		Drill:    "01hzydrill0000000000000001",
-		Instance: DrillInstance{Engine: "postgres", Version: "17", Image: "ghcr.io/othmanhaba/falak-postgres:17", Digest: "sha256:" + strings.Repeat("a", 64), MemoryBytes: 256 << 20},
+		Instance: DrillInstance{Engine: "postgres", Version: "17", Image: "ghcr.io/falak-sh/falak-postgres:17", Digest: "sha256:" + strings.Repeat("a", 64), MemoryBytes: 256 << 20},
 		Database: "app", Source: Location{Kind: "url", URL: b.url("app.fkb")}, SHA256: br.SHA256, PlaintextSHA256: br.PlaintextSHA256,
 		ArchiveBytes: br.SizeBytes, UncompressedBytes: br.UncompressedBytes, Encryption: testEnc,
 		Checks: DrillChecks{TableCounts: br.TableCounts, Query: "SELECT 1 FROM users"},

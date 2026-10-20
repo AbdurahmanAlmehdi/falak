@@ -303,6 +303,6 @@ const (
 )
 
 func spec() InstanceSpec {
-	return InstanceSpec{ID: instID, Engine: "postgres", Version: "17", Image: "ghcr.io/othmanhaba/falak-postgres:17", VolumeID: volID,
+	return InstanceSpec{ID: instID, Engine: "postgres", Version: "17", Image: "ghcr.io/falak-sh/falak-postgres:17", VolumeID: volID,
 		Digest: "sha256:" + strings.Repeat("a", 64), HostPort: 20001, MemoryBytes: 512 << 20, Settings: []byte(`{"max_connections": 200}`), Network: "falak-env-01hzyenv000000000000000001"}
 }

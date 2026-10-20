@@ -40,7 +40,7 @@ skill). `--json` prints the directory and the files written.
 Copy the folder from the repository (or a release's source archive):
 
 ```bash
-git clone --depth 1 https://github.com/OthmanHaba/falak /tmp/falak
+git clone --depth 1 https://github.com/falak-sh/falak /tmp/falak
 cp -R /tmp/falak/skills/falak ~/.claude/skills/            # user-wide, Claude Code
 cp -R /tmp/falak/skills/falak .claude/skills/              # one project, Claude Code
 ```
@@ -51,7 +51,7 @@ cp -R /tmp/falak/skills/falak .claude/skills/              # one project, Claude
   `~/.codex/skills/` at the time of writing — check your harness's docs), or use `falak skill install --dir`.
 - **Tools without skill support** (Cursor rules, a system prompt): point them at the raw files, or paste `SKILL.md`
   and the reference you need:
-  `https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/SKILL.md` and
+  `https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/SKILL.md` and
   `…/skills/falak/references/<file>`. `references/llms.txt` is the index for tools that read `/llms.txt`.
 
 ## MCP server (sandboxes)

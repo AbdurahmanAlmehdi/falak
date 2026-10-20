@@ -508,7 +508,7 @@ only say a rotation is pending.
 {"data": {
   "id": "01k…", "name": "shop", "server_id": "01k…", "server_name": "db-1", "environment_id": "01k…",
   "engine": "postgresql", "engine_label": "PostgreSQL", "kind": "sql", "version": "17",
-  "image": "ghcr.io/othmanhaba/falak-postgres:17", "image_digest": "sha256:…",
+  "image": "ghcr.io/falak-sh/falak-postgres:17", "image_digest": "sha256:…",
   "hostname": "falak-db-01k…", "port": 5432, "host_port": 20000, "published_addresses": [], "public_access": false,
   "require_tls": true, "memory_mb": 512, "cpus": null, "settings": {}, "pitr_enabled": false, "volume_id": "01k…",
   "status": "active", "status_message": null, "health": "healthy", "rotating_password": false,

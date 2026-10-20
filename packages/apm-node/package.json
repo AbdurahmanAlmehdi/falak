@@ -6,7 +6,7 @@
   "homepage": "https://falak.sh",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OthmanHaba/falak.git",
+    "url": "git+https://github.com/falak-sh/falak.git",
     "directory": "packages/apm-node"
   },
   "publishConfig": {

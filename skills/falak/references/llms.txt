@@ -13,26 +13,26 @@ Key facts for agents:
 
 ## Agent skill
 
-- [SKILL.md](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/SKILL.md): the Agent Skill (Claude Code, Codex and other SKILL.md harnesses) — core workflows and ground rules
-- [CLI reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/cli.md): every `falak` command, flag and exit code
-- [falak.yaml reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/config.md): units, environments, references, risky changes
-- [API reference](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/api.md): tokens, abilities and the main `/api/v1` endpoints
-- [Workflows](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/workflows.md): deploy from a repo or a template, databases, functions, secrets, domains, logs, consoles, network tools, sandboxes
-- [Safety](https://raw.githubusercontent.com/OthmanHaba/falak/main/skills/falak/references/safety.md): what needs a human's confirmation, secret handling, least-privilege tokens
+- [SKILL.md](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/SKILL.md): the Agent Skill (Claude Code, Codex and other SKILL.md harnesses) — core workflows and ground rules
+- [CLI reference](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/references/cli.md): every `falak` command, flag and exit code
+- [falak.yaml reference](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/references/config.md): units, environments, references, risky changes
+- [API reference](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/references/api.md): tokens, abilities and the main `/api/v1` endpoints
+- [Workflows](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/references/workflows.md): deploy from a repo or a template, databases, functions, secrets, domains, logs, consoles, network tools, sandboxes
+- [Safety](https://raw.githubusercontent.com/falak-sh/falak/main/skills/falak/references/safety.md): what needs a human's confirmation, secret handling, least-privilege tokens
 
 ## Docs
 
-- [Installing the AI skill](https://github.com/OthmanHaba/falak/blob/main/docs/AI_SKILL.md): install the skill and authenticate an agent
-- [Config as code](https://github.com/OthmanHaba/falak/blob/main/docs/CONFIG_AS_CODE.md): the full falak.yaml guide
-- [HTTP API](https://github.com/OthmanHaba/falak/blob/main/docs/API.md): every endpoint and payload
-- [Cloud Functions](https://github.com/OthmanHaba/falak/blob/main/docs/FUNCTIONS.md): runtimes, versions, schedules, access
-- [Sandboxes](https://github.com/OthmanHaba/falak/blob/main/docs/SANDBOXES.md): disposable machines for agents and untrusted code, the MCP server
-- [Compose and templates](https://github.com/OthmanHaba/falak/blob/main/docs/COMPOSE_TEMPLATES.md): Docker Compose sites and the template catalog
-- [Backups](https://github.com/OthmanHaba/falak/blob/main/docs/BACKUPS.md): encryption, keys, restore drills, point-in-time recovery
+- [Installing the AI skill](https://github.com/falak-sh/falak/blob/main/docs/AI_SKILL.md): install the skill and authenticate an agent
+- [Config as code](https://github.com/falak-sh/falak/blob/main/docs/CONFIG_AS_CODE.md): the full falak.yaml guide
+- [HTTP API](https://github.com/falak-sh/falak/blob/main/docs/API.md): every endpoint and payload
+- [Cloud Functions](https://github.com/falak-sh/falak/blob/main/docs/FUNCTIONS.md): runtimes, versions, schedules, access
+- [Sandboxes](https://github.com/falak-sh/falak/blob/main/docs/SANDBOXES.md): disposable machines for agents and untrusted code, the MCP server
+- [Compose and templates](https://github.com/falak-sh/falak/blob/main/docs/COMPOSE_TEMPLATES.md): Docker Compose sites and the template catalog
+- [Backups](https://github.com/falak-sh/falak/blob/main/docs/BACKUPS.md): encryption, keys, restore drills, point-in-time recovery
 
 ## Optional
 
-- [Install](https://github.com/OthmanHaba/falak/blob/main/docs/INSTALL.md): production install of the control plane
-- [Disaster recovery](https://github.com/OthmanHaba/falak/blob/main/docs/DISASTER_RECOVERY.md): control-plane backups, the emergency kit, drills
-- [Cloudflare](https://github.com/OthmanHaba/falak/blob/main/docs/CLOUDFLARE.md): managed DNS zones, proxying, rate limits
-- [Secret providers](https://github.com/OthmanHaba/falak/blob/main/docs/SECRET_PROVIDERS.md): Vault, AWS, 1Password, Doppler, Infisical, webhook
+- [Install](https://github.com/falak-sh/falak/blob/main/docs/INSTALL.md): production install of the control plane
+- [Disaster recovery](https://github.com/falak-sh/falak/blob/main/docs/DISASTER_RECOVERY.md): control-plane backups, the emergency kit, drills
+- [Cloudflare](https://github.com/falak-sh/falak/blob/main/docs/CLOUDFLARE.md): managed DNS zones, proxying, rate limits
+- [Secret providers](https://github.com/falak-sh/falak/blob/main/docs/SECRET_PROVIDERS.md): Vault, AWS, 1Password, Doppler, Infisical, webhook

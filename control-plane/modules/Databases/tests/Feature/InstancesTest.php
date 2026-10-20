@@ -44,7 +44,7 @@ it('creates a PostgreSQL container on a new sized volume with a sealed password,
     expect($instance->status)->toBe(InstanceStatus::Pending)
         ->and($instance->engine->value)->toBe('postgresql')
         ->and($instance->version)->toBe('17')
-        ->and($instance->image)->toBe('ghcr.io/othmanhaba/falak-postgres:17')
+        ->and($instance->image)->toBe('ghcr.io/falak-sh/falak-postgres:17')
         ->and($instance->hostname)->toBe("falak-db-{$instance->id}")
         ->and($instance->host_port)->toBe(20000)
         ->and($instance->memory_bytes)->toBe(1024 * 1024 ** 2)
@@ -346,11 +346,11 @@ it('refuses versions this release ships no pinned image of', function () {
 });
 
 it('upgrades Redis majors in place on the same volume', function () {
-    [, , $instance] = databases_service($this->organization, 'redis', 'cache', attributes: ['version' => '7.4', 'image' => 'ghcr.io/othmanhaba/falak-redis:7.4']);
+    [, , $instance] = databases_service($this->organization, 'redis', 'cache', attributes: ['version' => '7.4', 'image' => 'ghcr.io/falak-sh/falak-redis:7.4']);
 
     $this->post("/databases/instances/{$instance->id}/upgrade", ['version' => '8'])->assertSessionHasNoErrors();
 
-    expect($this->agents->last('db.instance.update')['payload']['instance'])->toMatchArray(['version' => '8', 'image' => 'ghcr.io/othmanhaba/falak-redis:8', 'volume_id' => $instance->volume_id]);
+    expect($this->agents->last('db.instance.update')['payload']['instance'])->toMatchArray(['version' => '8', 'image' => 'ghcr.io/falak-sh/falak-redis:8', 'volume_id' => $instance->volume_id]);
 });
 
 it('never downgrades', function () {
@@ -360,7 +360,7 @@ it('never downgrades', function () {
 });
 
 it('upgrades a PostgreSQL major into a new container, copies the data and hands over the name and port', function () {
-    [$database, $user, $instance] = databases_service($this->organization, 'postgresql', 'shop', attributes: ['version' => '16', 'image' => 'ghcr.io/othmanhaba/falak-postgres:16', 'environment_id' => strtolower((string) Str::ulid())]);
+    [$database, $user, $instance] = databases_service($this->organization, 'postgresql', 'shop', attributes: ['version' => '16', 'image' => 'ghcr.io/falak-sh/falak-postgres:16', 'environment_id' => strtolower((string) Str::ulid())]);
     $schedule = $instance->schedules()->create(['organization_id' => $this->organization->id, 'storage_provider_id' => databases_provider($this->organization)->id, 'name' => 'nightly', 'cron' => '0 3 * * *']);
     $oldPort = $instance->host_port;
     $oldHostname = $instance->hostname;
@@ -414,7 +414,7 @@ it('upgrades a PostgreSQL major into a new container, copies the data and hands 
 });
 
 it('leaves the old container running when the major upgrade copy fails', function () {
-    [$database, , $instance] = databases_service($this->organization, 'mysql', 'shop', attributes: ['version' => '8.0', 'image' => 'ghcr.io/othmanhaba/falak-mysql:8.0']);
+    [$database, , $instance] = databases_service($this->organization, 'mysql', 'shop', attributes: ['version' => '8.0', 'image' => 'ghcr.io/falak-sh/falak-mysql:8.0']);
 
     $this->post("/databases/instances/{$instance->id}/upgrade", ['version' => '8.4'])->assertSessionHasNoErrors();
     $target = DatabaseInstance::query()->where('upgrade_of', $instance->id)->firstOrFail();

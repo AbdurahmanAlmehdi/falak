@@ -15,7 +15,7 @@ control-plane · horizon · reverb · scheduler ─► postgres 17 · valkey
 builder (falak-builder serve: PHP/Composer, Node, Bun) ─► edge
 ```
 
-Releases are published from [github.com/OthmanHaba/falak](https://github.com/OthmanHaba/falak); a fork can install its own releases with `--repo OWNER/NAME`.
+Releases are published from [github.com/falak-sh/falak](https://github.com/falak-sh/falak); a fork can install its own releases with `--repo OWNER/NAME`.
 
 ## 1. Requirements
 
@@ -92,10 +92,10 @@ curl -fsSL https://falak.sh/install.sh \
 ```
 
 `https://falak.sh/install.sh` redirects to the script on GitHub `main`
-(`https://raw.githubusercontent.com/OthmanHaba/falak/main/deploy/install.sh`), so either URL works.
+(`https://raw.githubusercontent.com/falak-sh/falak/main/deploy/install.sh`), so either URL works.
 
 Or pin a release with its own copy of the script:
-`curl -fsSL https://github.com/OthmanHaba/falak/releases/download/v1.2.3/install.sh | sudo bash -s -- --domain ... --email ...`
+`curl -fsSL https://github.com/falak-sh/falak/releases/download/v1.2.3/install.sh | sudo bash -s -- --domain ... --email ...`
 
 What it does:
 
@@ -121,7 +121,7 @@ What it does:
 | `--version TAG` | `FALAK_VERSION` | latest release |
 | `--observability` | `FALAK_OBSERVABILITY=1` | off |
 | `--tls acme\|internal` | `FALAK_TLS` | `acme` (`internal` = Caddy's local CA, for testing only) |
-| `--repo OWNER/NAME` | `FALAK_REPO` | `OthmanHaba/falak` |
+| `--repo OWNER/NAME` | `FALAK_REPO` | `falak-sh/falak` |
 | `--image-prefix PREFIX` | `FALAK_IMAGE_PREFIX` | `ghcr.io/<owner>` |
 | `--build-from-source [--ref REF]` | `FALAK_BUILD_FROM_SOURCE=1` | clones the repo and builds images locally (no registry) |
 | `--source-dir PATH` | `FALAK_DEPLOY_SOURCE` | use deploy files from a local checkout |
@@ -527,7 +527,7 @@ v0.10.0 falak-ctl first; it creates the KEK during the update. The `agent-api`, 
 services wait until the `control-plane` service has run the migrations:
 
 ```bash
-curl -fsSL https://github.com/OthmanHaba/falak/releases/download/v0.10.0/falak-ctl -o /usr/local/bin/falak-ctl
+curl -fsSL https://github.com/falak-sh/falak/releases/download/v0.10.0/falak-ctl -o /usr/local/bin/falak-ctl
 chmod 755 /usr/local/bin/falak-ctl
 falak-ctl update --version v0.10.0
 falak-ctl kek export /root/falak-emergency-kit.txt   # then store it offline and delete it here

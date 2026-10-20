@@ -3,7 +3,7 @@
 # (git, PHP 8.4 + Composer, Node 22 with corepack pnpm/yarn, Bun). Multi-arch: linux/amd64, linux/arm64.
 #
 #   docker buildx build -f deploy/builder.Dockerfile --build-arg FALAK_VERSION=v1.2.3 \
-#     --platform linux/amd64,linux/arm64 -t ghcr.io/othmanhaba/falak-builder:v1.2.3 .
+#     --platform linux/amd64,linux/arm64 -t ghcr.io/falak-sh/falak-builder:v1.2.3 .
 #
 # Build context: the REPOSITORY ROOT. Proven in sim/builder. Docker-mode builds need a `builder`
 # server (this container has no Docker daemon/BuildKit).
