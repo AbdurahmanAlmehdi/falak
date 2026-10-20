@@ -21,6 +21,9 @@ final class TemplateParser
 {
     public const SLUG_PATTERN = '/^[a-z0-9][a-z0-9-]{0,49}$/';
 
+    /** A Cool Icons key (coolicon.falak.sh): slug or slug/variant — the same keys the canvas icon picker stores. */
+    public const ICON_PATTERN = '/^[a-z0-9][a-z0-9-]{0,63}(\/[a-z0-9][a-z0-9-]{0,47})?$/';
+
     public const KEY_PATTERN = '/^[A-Z_][A-Z0-9_]{0,127}$/';
 
     private const KEYS = ['name', 'slug', 'version', 'description', 'category', 'icon', 'docs', 'stateful', 'min_memory_mb', 'min_falak', 'popular', 'tags', 'public', 'inputs', 'compose'];
@@ -77,9 +80,9 @@ final class TemplateParser
             }
         }
 
-        $icon = $this->string($doc, 'icon', 64, required: false);
-        if ($icon !== null && $icon !== './icon.svg' && preg_match('/^[a-z0-9]{1,64}$/', $icon) !== 1) {
-            $this->error('icon', 'must be a simple-icons key (e.g. n8n) or ./icon.svg');
+        $icon = $this->string($doc, 'icon', 112, required: false);
+        if ($icon !== null && $icon !== './icon.svg' && preg_match(self::ICON_PATTERN, $icon) !== 1) {
+            $this->error('icon', 'must be a Cool Icons key (e.g. n8n, docker/svgl-dark) or ./icon.svg');
         }
 
         $docs = $this->string($doc, 'docs', 255, required: false);
