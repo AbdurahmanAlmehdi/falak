@@ -249,6 +249,13 @@ that selection any time with **Manage access on GitHub**; GitHub sends you back 
 Configure that app with Setup URL `https://<panel>/source-control/github-app/setup` ("Redirect on update" on),
 permissions Contents: read and Metadata: read, and the `push` event.
 
+### Canvas icons (optional)
+
+The canvas icon picker (projects, services and groups) searches [Cool Icons](https://coolicon.falak.sh), and browsers
+load picked icons from it. To use a self-hosted copy, set `FALAK_ICONS_URL` (its base URL, serving `/search.json` and
+`/i/<slug>.svg`) in `/opt/falak/custom.env`; set it empty to turn the picker off and keep only the logos bundled with the
+panel. Then `falak-ctl up`. Icons are canvas-only: `falak.yaml` never reads or sets them.
+
 ### Runtime download mirrors (optional)
 
 Servers download FrankenPHP, Node.js, Bun and Deno release binaries during provisioning (sha256-verified).

@@ -46,10 +46,10 @@ use Illuminate\Support\Carbon;
  *
  * @phpstan-import-type ComposeChild from ComposeGroup
  *
- * @phpstan-type CanvasService array{id: string, kind: string, ref_id: string, name: string, icon: string, position: array{x: int, y: int}, group_id: ?string, status: string, status_label: string, url: ?string, subtitle: ?string, servers: list<array{id: string, name: string, leader: bool, online: bool}>, badges: list<string>, volumes: list<CanvasVolume>, compose: ?array{template: ?string, collapsed: bool, services: list<ComposeChild>}, last_deployment: ?array{id: string, status: string, commit: ?string, message: ?string, finished_at: ?string}}
+ * @phpstan-type CanvasService array{id: string, kind: string, ref_id: string, name: string, icon: string, custom_icon: ?string, position: array{x: int, y: int}, group_id: ?string, status: string, status_label: string, url: ?string, subtitle: ?string, servers: list<array{id: string, name: string, leader: bool, online: bool}>, badges: list<string>, volumes: list<CanvasVolume>, compose: ?array{template: ?string, collapsed: bool, services: list<ComposeChild>}, last_deployment: ?array{id: string, status: string, commit: ?string, message: ?string, finished_at: ?string}}
  * @phpstan-type CanvasVolume array{id: ?string, name: string, detail: ?string, used_bytes: ?int, limit_bytes: ?int, url: ?string}
  * @phpstan-type CanvasEdge array{from: string, to: string, kind: string, problem?: string}
- * @phpstan-type CanvasGroup array{id: string, name: string, position: array{x: int, y: int}, collapsed: bool}
+ * @phpstan-type CanvasGroup array{id: string, name: string, icon: ?string, position: array{x: int, y: int}, collapsed: bool}
  */
 final class CanvasReadModel
 {
@@ -172,7 +172,7 @@ final class CanvasReadModel
 
         return [
             ...$this->base($service),
-            'icon' => self::siteIcon($site),
+            'icon' => $service->icon ?? self::siteIcon($site),
             'status' => $status,
             'status_label' => $label,
             'url' => $host !== null ? "https://{$host}" : null,
@@ -212,7 +212,7 @@ final class CanvasReadModel
 
         return [
             ...$this->base($service),
-            'icon' => $database->engine,
+            'icon' => $service->icon ?? $database->engine,
             'status' => $status,
             'status_label' => $label,
             'url' => null,
@@ -303,6 +303,8 @@ final class CanvasReadModel
             'kind' => $service->kind->value,
             'ref_id' => $service->ref_id,
             'name' => $service->name,
+            // Picked on the canvas; `icon` is this, else the one derived from the site / engine.
+            'custom_icon' => $service->icon,
             'position' => ['x' => $service->x, 'y' => $service->y],
             'group_id' => $service->group_id,
         ];

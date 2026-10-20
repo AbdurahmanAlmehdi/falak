@@ -13,8 +13,8 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
- * Canvas groups (UI_DESIGN §4.3): frame services, rename, move, collapse, ungroup. Layout only — nothing here touches
- * the sites or databases behind the cards.
+ * Canvas groups (UI_DESIGN §4.3): frame services, rename, set an icon, move, collapse, ungroup. Layout only — nothing
+ * here touches the sites or databases behind the cards.
  */
 final class GroupController extends Controller
 {
@@ -38,7 +38,7 @@ final class GroupController extends Controller
     }
 
     /**
-     * PATCH /projects/{project}/{environment}/groups/{group} {name?, x?, y?, collapsed?}
+     * PATCH /projects/{project}/{environment}/groups/{group} {name?, icon?, x?, y?, collapsed?}
      * Moving the group moves its services (their positions are relative to it).
      */
     public function update(Request $request, Project $project, string $environment, string $group): JsonResponse
@@ -51,7 +51,12 @@ final class GroupController extends Controller
             'x' => ['sometimes', 'required_with:y', ...ProjectRules::COORDINATE],
             'y' => ['sometimes', 'required_with:x', ...ProjectRules::COORDINATE],
             'collapsed' => ['sometimes', 'boolean'],
-        ]);
+            'icon' => ['sometimes', ...ProjectRules::ICON],
+        ], ProjectRules::ICON_MESSAGES);
+
+        if (array_key_exists('icon', $data)) {
+            $data['icon'] = $data['icon'] ?: null;
+        }
 
         if (isset($data['name'])) {
             $data['name'] = trim((string) $data['name']);

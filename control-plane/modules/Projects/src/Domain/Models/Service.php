@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
  * @property ServiceKind $kind
  * @property string $ref_id
  * @property string $name
+ * @property ?string $icon Picked on the canvas (Cool Icons slug); null: derived from the site / engine
  * @property int $x
  * @property int $y
  * @property ?string $group_id

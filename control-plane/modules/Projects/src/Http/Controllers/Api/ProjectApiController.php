@@ -10,6 +10,7 @@ use Falak\Projects\Application\Actions\CreateProject;
 use Falak\Projects\Application\Actions\CreateService;
 use Falak\Projects\Application\Actions\DeleteEnvironment;
 use Falak\Projects\Application\Actions\DeleteProject;
+use Falak\Projects\Application\Actions\RenameService;
 use Falak\Projects\Application\Actions\UpdateEnvironment;
 use Falak\Projects\Application\Actions\UpdateProject;
 use Falak\Projects\Application\Canvas\CanvasReadModel;
@@ -121,6 +122,15 @@ final class ProjectApiController extends Controller
     public function storeService(Request $request, string $project, string $environment, ServiceController $services, CreateService $create, CanvasReadModel $canvas): JsonResponse
     {
         return $services->store($request, $this->resolve($request, $project, ProjectPolicy::MANAGE), $environment, $create, $canvas);
+    }
+
+    /**
+     * PATCH /api/v1/projects/{project}/environments/{environment}/services/{service} {name?, icon?}: the canvas' rename
+     * and icon picker (ServiceController).
+     */
+    public function updateService(Request $request, string $project, string $environment, string $service, ServiceController $services, RenameService $rename): JsonResponse
+    {
+        return $services->update($request, $this->resolve($request, $project, ProjectPolicy::MANAGE), $environment, $service, $rename);
     }
 
     private function resolve(Request $request, string $project, string $permission): Project

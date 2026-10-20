@@ -3,11 +3,13 @@ import { type SharedData } from '@/types';
 import { usePage } from '@inertiajs/react';
 import { Check, FolderKanban, LayoutGrid } from 'lucide-react';
 import { MenuContent, MenuLabel, MenuLink, MenuRoot, MenuSeparator, MenuTrigger } from './menu';
-import { ServiceIcon, hasServiceIcon } from './service-icon';
+import { ServiceIcon } from './service-icon';
 import { SwitcherTrigger } from './switcher-trigger';
 
 function ProjectIcon({ icon }: { icon: string | null }) {
-    return icon && hasServiceIcon(icon) ? <ServiceIcon name={icon} size={14} /> : <FolderKanban className="text-fg-muted size-3.5" aria-hidden />;
+    const folder = <FolderKanban className="text-fg-muted size-3.5" aria-hidden />;
+
+    return icon ? <ServiceIcon name={icon} size={14} fallback={folder} /> : folder;
 }
 
 /** Project switcher from the `falak` shared prop (§9); renders nothing until the Projects module provides it. */

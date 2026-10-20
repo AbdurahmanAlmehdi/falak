@@ -19,4 +19,6 @@ Route::middleware(['auth:sanctum', 'org'])->prefix('v1')->name('api.v1.')->group
     Route::delete('projects/{project}/environments/{environment}', [ProjectApiController::class, 'destroyEnvironment'])->name('projects.environments.destroy');
     // Same as the canvas' Create: a database (PostgreSQL, MySQL, MariaDB) or a Redis / Valkey instance, or a site.
     Route::post('projects/{project}/environments/{environment}/services', [ProjectApiController::class, 'storeService'])->where($patterns)->name('projects.services.store');
+    // Rename a service or set its canvas icon (same as the canvas).
+    Route::patch('projects/{project}/environments/{environment}/services/{service}', [ProjectApiController::class, 'updateService'])->where([...$patterns, 'service' => '[0-9A-Za-z]{26}'])->name('projects.services.update');
 });

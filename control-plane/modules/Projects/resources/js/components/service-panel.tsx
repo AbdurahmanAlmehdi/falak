@@ -1,5 +1,6 @@
 import {
     Button,
+    IconPicker,
     Menu,
     PanelHeader,
     ServiceIcon,
@@ -13,6 +14,7 @@ import {
     TabsTrigger,
     Tag,
     toast,
+    useIconsUrl,
     type MenuAction,
 } from '@/components/falak';
 import { errorMessage, requestJson } from '@/lib/http';
@@ -30,7 +32,38 @@ interface ServicePanelProps {
     tab: string | null;
     renameUrl: string | null;
     onRenamed: (name: string) => void;
+    /** A new icon was picked (null: back to the derived one). */
+    onIconChanged: (icon: string | null) => void;
     onClose: () => void;
+}
+
+/** The header icon; with `url` (the user may manage the canvas) a click opens the icon picker. Canvas-only. */
+function HeaderIcon({ service, url, onChanged }: { service: CanvasService; url: string | null; onChanged: (icon: string | null) => void }) {
+    const iconsUrl = useIconsUrl();
+    const icon = <ServiceIcon name={serviceIconKey(service)} size={22} />;
+    if (!iconsUrl || !url) return icon;
+
+    const pick = async (next: string | null) => {
+        try {
+            const body = await requestJson<{ data: { icon: string | null } }>(url, 'PATCH', { icon: next });
+            onChanged(body.data.icon);
+        } catch (error) {
+            toast.error('Could not change the icon', errorMessage(error));
+        }
+    };
+
+    return (
+        <IconPicker value={service.custom_icon} onPick={(next) => void pick(next)} label={`Icon of ${service.name}`}>
+            <button
+                type="button"
+                title="Change icon"
+                aria-label={`Change the icon of ${service.name}`}
+                className="hover:bg-surface-2 -m-1 rounded-md p-1"
+            >
+                {icon}
+            </button>
+        </IconPicker>
+    );
 }
 
 /** Click-to-edit service name (canvas service name = the handle `${{ name.KEY }}` references use). */
@@ -173,7 +206,7 @@ function HeaderActions({ ctx }: { ctx: ServicePanelContext }) {
  * primary action, `⋯`, ✕), underline tabs with a sliding indicator, and the active tab — each tab loads its own data from
  * the owning module. `[` / `]` switch tabs while this panel is on top.
  */
-export function ServicePanel({ base, service, kind, refId, tab, renameUrl, onRenamed, onClose }: ServicePanelProps) {
+export function ServicePanel({ base, service, kind, refId, tab, renameUrl, onRenamed, onIconChanged, onClose }: ServicePanelProps) {
     const tabs = useMemo(() => serviceTabsFor(kind, base, service), [kind, base, service]);
     const active = tabs.find((item) => item.id === tab)?.id ?? tabs[0]?.id ?? '';
     const baseUrl = `${base.canvasUrl}/service/${kind}/${refId}`;
@@ -203,7 +236,7 @@ export function ServicePanel({ base, service, kind, refId, tab, renameUrl, onRen
     return (
         <div ref={root} className="flex min-h-0 flex-1 flex-col" data-testid="service-panel">
             <PanelHeader
-                icon={<ServiceIcon name={service ? serviceIconKey(service) : kind} size={22} />}
+                icon={service ? <HeaderIcon service={service} url={renameUrl} onChanged={onIconChanged} /> : <ServiceIcon name={kind} size={22} />}
                 title={service ? <InlineName name={service.name} url={renameUrl} onRenamed={onRenamed} /> : <Skeleton className="h-6 w-44" />}
                 status={
                     service && (

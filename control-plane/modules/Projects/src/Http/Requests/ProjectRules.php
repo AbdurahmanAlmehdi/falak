@@ -13,6 +13,11 @@ final class ProjectRules
 
     public const COORDINATE = ['integer', 'between:-1000000,1000000'];
 
+    /** A Cool Icons slug, optionally with a variant ("docker", "docker/svgl-dark"); the bundled keys fit too ("php-fpm"). */
+    public const ICON = ['nullable', 'string', 'regex:/^[a-z0-9][a-z0-9-]{0,63}(\\/[a-z0-9][a-z0-9-]{0,47})?$/'];
+
+    public const ICON_MESSAGES = ['icon.regex' => 'Use an icon slug from the icon picker.'];
+
     /**
      * @return array<string, mixed>
      */
@@ -21,7 +26,7 @@ final class ProjectRules
         return [
             'name' => [$creating ? 'required' : 'sometimes', ...self::NAME],
             'description' => ['sometimes', 'nullable', 'string', 'max:500'],
-            'icon' => ['sometimes', 'nullable', 'string', 'regex:/^[a-z0-9-]{1,32}$/'],
+            'icon' => ['sometimes', ...self::ICON],
         ];
     }
 
@@ -43,7 +48,7 @@ final class ProjectRules
     {
         return [
             'name.regex' => 'Use letters, numbers, spaces, dots, dashes and underscores.',
-            'icon.regex' => 'Use a lowercase icon key.',
+            ...self::ICON_MESSAGES,
         ];
     }
 }

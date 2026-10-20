@@ -127,7 +127,7 @@ final class ProjectSummaries
             return $database === null ? null : [
                 'kind' => 'database',
                 'name' => $service->name,
-                'icon' => $database->engine,
+                'icon' => $service->icon ?? $database->engine,
                 'health' => match ($database->status) {
                     'active' => 'online',
                     'failed' => 'failing',
@@ -162,7 +162,7 @@ final class ProjectSummaries
         }
 
         // Compose sites made from a template show the template's logo (the dashboard falls back to Docker).
-        return ['kind' => 'site', 'name' => $service->name, 'icon' => $site->compose?->template['slug'] ?? CanvasReadModel::siteIcon($site), 'health' => $health];
+        return ['kind' => 'site', 'name' => $service->name, 'icon' => $service->icon ?? $site->compose?->template['slug'] ?? CanvasReadModel::siteIcon($site), 'health' => $health];
     }
 
     /**
