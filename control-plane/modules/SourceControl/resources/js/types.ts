@@ -5,8 +5,9 @@ export type AuthType = 'oauth' | 'app' | 'token' | 'basic' | 'none';
 /** GitHub App installations can be suspended or uninstalled on GitHub. */
 export type ConnectionStatus = 'active' | 'suspended' | 'disconnected';
 
-/** The app new installations go through: the operator's env app, or this organization's registered one. */
+/** An app new installations go through: the operator's env app, or one of this organization's registered apps (one per GitHub owner). */
 export interface GitHubAppInfo {
+    id: string;
     source: 'env' | 'registered';
     name: string;
     slug: string | null;
@@ -15,6 +16,7 @@ export interface GitHubAppInfo {
     html_url: string | null;
     settings_url: string | null;
     installable: boolean;
+    install_url: string;
     webhook_url: string;
     last_delivery_at: string | null;
     created_at: string | null;
@@ -22,6 +24,8 @@ export interface GitHubAppInfo {
 
 export interface GitHubInstallation {
     id: string;
+    /** The app it was installed through ("env" for the operator's app). */
+    app_id: string;
     name: string;
     account: string | null;
     target_type: 'User' | 'Organization' | null;
@@ -33,7 +37,7 @@ export interface GitHubInstallation {
 }
 
 export interface GitHubAppState {
-    app: GitHubAppInfo | null;
+    apps: GitHubAppInfo[];
     permissions: Record<string, string>;
     events: string[];
     installations: GitHubInstallation[];

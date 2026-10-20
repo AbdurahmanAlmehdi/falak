@@ -16,7 +16,7 @@ import { type SharedData } from '@/types';
 import { useForm, usePage } from '@inertiajs/react';
 import { FolderGit2, GitBranch, GitCommitHorizontal, Unplug } from 'lucide-react';
 import { useEffect, useState, type FormEventHandler } from 'react';
-import { GitHubAppCard } from '../components/github-app-card';
+import { GitHubAppCard, withReturn } from '../components/github-app-card';
 import { ProviderIcon } from '../components/provider-icon';
 import { RepositoryBrowser } from '../components/repository-browser';
 import { AUTH_LABELS, type ConnectionRow, type GitHubAppState, type ProviderOption, type ProviderValue, type PushRow } from '../types';
@@ -109,8 +109,10 @@ function useConnectIntent(githubApp: GitHubAppState, canManage: boolean): string
 
         if (params.get('connect') !== 'github' || !canManage) return;
 
-        if (githubApp.app?.installable) {
-            window.location.assign(route('source-control.github-app', returnTo ? { return_to: returnTo } : {}));
+        // Several apps: the user picks which one (they are installable on their own owner only).
+        const [app, ...more] = githubApp.apps;
+        if (app?.installable && more.length === 0) {
+            window.location.assign(withReturn(app.install_url, returnTo));
         } else {
             document.querySelector('[data-testid="github-app"]')?.scrollIntoView({ block: 'center' });
         }

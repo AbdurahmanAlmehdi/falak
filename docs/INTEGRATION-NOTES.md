@@ -263,8 +263,12 @@ one broken E2E check. The rest is sim-side caching; see `sim/README.md` → *Cac
 
 ## GitHub App (feat/github-app)
 "Connect GitHub" registers a GitHub App through the manifest flow instead of asking for a personal access token.
-- **Scoping decision: one registered app per Falak organization** (`source_control_github_apps.organization_id` is
-  unique), created by its owners/admins (`source_control.manage`). Not instance-wide, because Falak has open
+- **Scoping decision: registered apps belong to one Falak organization, one per GitHub owner** (v0.26; before that
+  `organization_id` was unique), created by its owners/admins (`source_control.manage`). A private app can only be
+  installed on the account that owns it, so reaching a personal account and a GitHub organization takes two apps
+  (Dokploy does the same). Same owner twice → 409 (`manifest`, org owners) or refused after conversion (personal
+  owners). `connect/github-app?app=<id>` picks the app (none → env app, else the oldest); the install state carries the
+  app id, so `setup` connects the installation to that app; `DELETE github-app/{app}`. Not instance-wide, because Falak has open
   registration and multiple organizations: an instance-wide app would hand its private key and every installation's
   pushes to whichever tenant created it, and GitHub only lets a private (`public: false`) app be installed on its
   owning account anyway. An operator who wants one shared app sets `GITHUB_APP_*` (instance-wide, overrides registered

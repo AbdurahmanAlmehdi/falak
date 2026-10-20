@@ -25,7 +25,8 @@ use Illuminate\Validation\Rule;
  * "Connect GitHub" through a GitHub App:
  *
  * 1. {@see manifest()} — builds the app manifest + a state; the browser POSTs it to GitHub (personal account or an
- *    organization), where the user confirms the new app.
+ *    organization), where the user confirms the new app. An organization may register one app per GitHub owner: the
+ *    apps are private, and GitHub only lets a private app be installed on the account that owns it.
  * 2. {@see manifestCallback()} — GitHub redirects back with a code; Falak converts it into the app's credentials
  *    (stored encrypted) and sends the user straight to the app's installation page.
  * 3. {@see setup()} — GitHub's setup URL after installing (and, with `setup_on_update`, after changing repository
@@ -53,12 +54,18 @@ final class GitHubAppController extends Controller
             return response()->json(['message' => 'This Falak instance uses the GitHub App configured by its operator.'], 409);
         }
 
-        if (GitHubApp::query()->where('organization_id', $organizationId)->exists()) {
-            return response()->json(['message' => 'This organization already has a GitHub App.'], 409);
+        $owner = ($data['organization'] ?? null) ?: null;
+
+        // A personal account's login is only known after GitHub converts the manifest ({@see RegisterGitHubApp}).
+        if ($owner !== null && GitHubApp::query()
+            ->where('organization_id', $organizationId)
+            ->where('owner_type', 'Organization')
+            ->whereRaw('lower(owner_login) = ?', [strtolower($owner)])
+            ->exists()) {
+            return response()->json(['message' => "This organization already has a GitHub App for {$owner}."], 409);
         }
 
         $appKey = strtolower((string) Str::ulid());
-        $owner = ($data['organization'] ?? null) ?: null;
         $state = $this->remember($request, 'github-app-manifest', $organizationId, ['app' => $appKey, 'owner' => $owner, 'return_to' => self::safeReturn($data['return_to'] ?? null)]);
 
         return response()->json(['data' => [
@@ -85,10 +92,13 @@ final class GitHubAppController extends Controller
         return redirect()->away($this->installUrl($request, GitHubAppResolver::fromModel($app), $organizationId, $flow['return_to'] ?? null));
     }
 
+    /** `?app=` picks one of the organization's registered apps; without it, the env app or the oldest one. */
     public function install(Request $request): RedirectResponse
     {
         $organizationId = $this->authorizeManage($request);
-        $app = $this->apps->forOrganization($organizationId);
+        $app = $request->filled('app')
+            ? GitHubAppResolver::fromModel($this->ownApp($organizationId, (string) $request->query('app')))
+            : $this->apps->forOrganization($organizationId);
 
         abort_unless($app !== null && $app->installable(), 404);
 
@@ -119,8 +129,13 @@ final class GitHubAppController extends Controller
         // this organization already has. New installations must start in Falak.
         abort_unless($hasState || $existing !== null, 403, 'Start the GitHub installation from Falak (Settings → Source control).');
 
-        $app = $existing ? $this->apps->forConnection($existing) : $this->apps->forOrganization($organizationId);
-        abort_unless($app !== null, 404);
+        // New installations use the app the state was issued for (states from before multiple apps carry none).
+        $app = match (true) {
+            $existing !== null => $this->apps->forConnection($existing),
+            isset($flow['app']) => $this->apps->find((string) $flow['app']),
+            default => $this->apps->forOrganization($organizationId),
+        };
+        abort_unless($app !== null && ($app->fromEnv() || $app->organizationId === $organizationId), 404);
 
         try {
             $connect($app, $organizationId, $request->user()?->getAuthIdentifier(), $installationId);
@@ -131,10 +146,10 @@ final class GitHubAppController extends Controller
         return $done()->with('success', $existing ? 'GitHub repository access updated.' : 'GitHub connected.');
     }
 
-    public function destroy(Request $request, DeleteGitHubApp $delete): RedirectResponse
+    public function destroy(Request $request, string $app, DeleteGitHubApp $delete): RedirectResponse
     {
         $organizationId = $this->authorizeManage($request);
-        $app = GitHubApp::query()->where('organization_id', $organizationId)->firstOrFail();
+        $app = $this->ownApp($organizationId, $app);
 
         $request->validate(['name' => ['required', 'string', Rule::in([$app->name])]], ['name.in' => 'Type the app name to confirm.']);
 
@@ -145,9 +160,14 @@ final class GitHubAppController extends Controller
 
     private function installUrl(Request $request, AppCredentials $app, string $organizationId, ?string $returnTo): string
     {
-        $state = $this->remember($request, 'github-app', $organizationId, ['return_to' => $returnTo]);
+        $state = $this->remember($request, 'github-app', $organizationId, ['app' => $app->key, 'return_to' => $returnTo]);
 
         return rtrim((string) config('source_control.github.url'), '/')."/apps/{$app->slug}/installations/new?".http_build_query(['state' => $state]);
+    }
+
+    private function ownApp(string $organizationId, string $id): GitHubApp
+    {
+        return GitHubApp::query()->where('organization_id', $organizationId)->whereKey($id)->firstOrFail();
     }
 
     private function authorizeManage(Request $request): string

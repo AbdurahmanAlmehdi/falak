@@ -11,6 +11,7 @@ use Falak\SourceControl\Infrastructure\Providers\GitHubClient;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Testing\TestResponse;
 
 require_once __DIR__.'/../Support/helpers.php';
 
@@ -34,6 +35,19 @@ function fake_installation(string $id = '555', string $account = 'acme', array $
         "api.github.com/app/installations/{$id}" => Http::response(['id' => (int) $id, 'account' => ['login' => $account], 'target_type' => 'Organization']),
         'api.github.com/installation/repositories*' => Http::response(['total_count' => 1, 'repositories' => [['full_name' => "{$account}/shop", 'default_branch' => 'main', 'private' => true, 'ssh_url' => '', 'clone_url' => "https://github.com/{$account}/shop.git"]]]),
     ], $extra));
+}
+
+/** Runs the manifest flow up to the callback, GitHub converting it into an app owned by $owner. */
+function register_app(string $owner, string $type, ?string $organization = null): TestResponse
+{
+    $body = test()->postJson('/source-control/github-app/manifest', ['organization' => $organization])->assertOk()->json('data');
+    Http::fake(["api.github.com/app-manifests/c-{$owner}/conversions" => Http::response([
+        'id' => crc32($owner), 'slug' => "falak-{$owner}", 'name' => "Falak ({$owner})", 'owner' => ['login' => $owner, 'type' => $type],
+        'html_url' => "https://github.com/apps/falak-{$owner}", 'client_id' => 'Iv1.abc', 'client_secret' => 'cs',
+        'webhook_secret' => 'wh', 'pem' => sc_rsa_pem(),
+    ], 201)]);
+
+    return test()->get("/source-control/github-app/manifest/callback?code=c-{$owner}&state=".app_state($body['action']));
 }
 
 describe('manifest', function () {
@@ -68,9 +82,11 @@ describe('manifest', function () {
         $this->postJson('/source-control/github-app/manifest', ['organization' => 'bad name/..'])->assertJsonValidationErrors('organization');
     });
 
-    it('refuses when the operator configured an env app or the organization has one', function () {
+    it('refuses when the operator configured an env app or the organization has one for that GitHub organization', function () {
         sc_github_app($this->organization->id);
-        $this->postJson('/source-control/github-app/manifest')->assertStatus(409);
+        $this->postJson('/source-control/github-app/manifest', ['organization' => 'ACME'])->assertStatus(409)->assertJson(['message' => 'This organization already has a GitHub App for ACME.']);
+        $this->postJson('/source-control/github-app/manifest', ['organization' => 'acme-labs'])->assertOk();
+        $this->postJson('/source-control/github-app/manifest')->assertOk();
 
         GitHubApp::query()->delete();
         config(['source_control.github.app' => ['id' => '7', 'slug' => 'ops', 'private_key' => sc_rsa_pem()]]);
@@ -82,7 +98,7 @@ describe('manifest', function () {
 
         $this->postJson('/source-control/github-app/manifest')->assertForbidden();
         $this->get('/source-control/github-app/manifest/callback?code=x&state=y')->assertForbidden();
-        $this->delete('/source-control/github-app', ['name' => 'x'])->assertForbidden();
+        $this->delete('/source-control/github-app/'.sc_github_app($this->organization->id)->id, ['name' => 'x'])->assertForbidden();
     })->with([Role::Developer, Role::Viewer]);
 });
 
@@ -333,20 +349,85 @@ describe('app connections', function () {
     it('deletes the app with its installations after confirmation', function () {
         Http::fake(['api.github.com/app/installations/555' => Http::response(null, 204)]);
 
-        $this->delete('/source-control/github-app', ['name' => 'wrong'])->assertSessionHasErrors('name');
-        $this->delete('/source-control/github-app', ['name' => 'Falak (acme)'])->assertRedirect('/settings/source-control');
+        $this->delete("/source-control/github-app/{$this->githubApp->id}", ['name' => 'wrong'])->assertSessionHasErrors('name');
+        $this->delete("/source-control/github-app/{$this->githubApp->id}", ['name' => 'Falak (acme)'])->assertRedirect('/settings/source-control');
 
         expect(GitHubApp::query()->count())->toBe(0)->and(Connection::query()->count())->toBe(0);
     });
 
     it('shows the app and its installations on the settings page', function () {
         $this->get('/settings/source-control')->assertInertia(fn ($page) => $page
-            ->where('githubApp.app.source', 'registered')
-            ->where('githubApp.app.name', 'Falak (acme)')
-            ->where('githubApp.app.settings_url', 'https://github.com/organizations/acme/settings/apps/falak-acme')
+            ->where('githubApp.apps.0.source', 'registered')
+            ->where('githubApp.apps.0.name', 'Falak (acme)')
+            ->where('githubApp.apps.0.settings_url', 'https://github.com/organizations/acme/settings/apps/falak-acme')
             ->where('githubApp.installations.0.account', 'acme')
             ->where('githubApp.installations.0.status', 'active')
             ->where('githubApp.installations.0.manage_url', 'https://github.com/organizations/acme/settings/installations/555')
-            ->missing('githubApp.app.webhook_secret'));
+            ->missing('githubApp.apps.0.webhook_secret'));
+    });
+});
+
+describe('several apps', function () {
+    it('registers one app per GitHub owner', function () {
+        register_app('jane', 'User')->assertRedirect();
+        register_app('falak-sh', 'Organization', 'falak-sh')->assertRedirect();
+
+        expect(GitHubApp::query()->where('organization_id', $this->organization->id)->orderBy('owner_login')->pluck('owner_login')->all())->toBe(['falak-sh', 'jane']);
+
+        // Same personal account again: only known after the conversion.
+        register_app('Jane', 'User')->assertRedirect('/settings/source-control')->assertSessionHasErrors('github_app');
+        expect(session('errors')->first('github_app'))->toBe('This organization already has a GitHub App owned by Jane.')
+            ->and(GitHubApp::query()->count())->toBe(2);
+    });
+
+    it('installs the requested app, defaulting to the oldest', function () {
+        sc_github_app($this->organization->id, ['created_at' => now()->subDay()]);
+        $new = sc_github_app($this->organization->id, ['slug' => 'falak-jane', 'name' => 'Falak (jane)', 'owner_login' => 'jane', 'owner_type' => 'User']);
+        [, $other] = memberOf(null, Role::Owner);
+        $foreign = sc_github_app($other->id, ['slug' => 'falak-other']);
+
+        expect($this->get("/source-control/connect/github-app?app={$new->id}")->headers->get('Location'))->toStartWith('https://github.com/apps/falak-jane/installations/new?state=')
+            ->and($this->get('/source-control/connect/github-app')->headers->get('Location'))->toStartWith('https://github.com/apps/falak-acme/installations/new?state=');
+        $this->get("/source-control/connect/github-app?app={$foreign->id}")->assertNotFound();
+    });
+
+    it('connects a new installation through the app its state was issued for', function () {
+        sc_github_app($this->organization->id, ['created_at' => now()->subDay()]);
+        $b = sc_github_app($this->organization->id, ['slug' => 'falak-jane', 'name' => 'Falak (jane)', 'owner_login' => 'jane', 'owner_type' => 'User']);
+
+        $location = $this->get("/source-control/connect/github-app?app={$b->id}")->headers->get('Location');
+        fake_installation('555', 'jane');
+        $this->get('/source-control/github-app/setup?installation_id=555&state='.app_state($location))->assertSessionHasNoErrors();
+
+        expect(Connection::query()->sole()->github_app_id)->toBe($b->id);
+    });
+
+    it('deletes only the addressed app', function () {
+        $a = sc_github_app($this->organization->id);
+        $b = sc_github_app($this->organization->id, ['slug' => 'falak-jane', 'name' => 'Falak (jane)', 'owner_login' => 'jane', 'owner_type' => 'User']);
+        [, $other] = memberOf(null, Role::Owner);
+        $foreign = sc_github_app($other->id, ['name' => 'Falak (jane)']);
+
+        $this->delete("/source-control/github-app/{$foreign->id}", ['name' => 'Falak (jane)'])->assertNotFound();
+        $this->delete("/source-control/github-app/{$b->id}", ['name' => 'Falak (jane)'])->assertRedirect('/settings/source-control');
+
+        expect(GitHubApp::query()->pluck('id')->sort()->values()->all())->toBe(collect([$a->id, $foreign->id])->sort()->values()->all());
+    });
+
+    it('lists every app with its installations on the settings page', function () {
+        $a = sc_github_app($this->organization->id, ['created_at' => now()->subDay()]);
+        $b = sc_github_app($this->organization->id, ['slug' => 'falak-jane', 'name' => 'Falak (jane)', 'owner_login' => 'jane', 'owner_type' => 'User']);
+        sc_app_connection($this->organization->id, $a);
+        sc_app_connection($this->organization->id, $b, '556', ['account' => 'jane']);
+
+        $this->get('/settings/source-control')->assertInertia(fn ($page) => $page
+            ->has('githubApp.apps', 2)
+            ->where('githubApp.apps.0.id', $a->id)
+            ->where('githubApp.apps.0.install_url', route('source-control.github-app', ['app' => $a->id]))
+            ->where('githubApp.apps.1.id', $b->id)
+            ->where('githubApp.apps.1.owner', 'jane')
+            ->where('githubApp.apps.1.settings_url', 'https://github.com/settings/apps/falak-jane')
+            ->has('githubApp.installations', 2)
+            ->where('githubApp.installations', fn ($installations) => collect($installations)->pluck('app_id', 'account')->sortKeys()->all() === ['acme' => $a->id, 'jane' => $b->id]));
     });
 });

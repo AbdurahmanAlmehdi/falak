@@ -9,7 +9,7 @@ use Falak\SourceControl\Infrastructure\GitHubApp\AppManifest;
 
 /**
  * Finish the manifest flow: exchange GitHub's one-time code for the new app's credentials and store them
- * (encrypted) for the organization.
+ * (encrypted) for the organization — one app per GitHub owner.
  */
 final class RegisterGitHubApp
 {
@@ -23,11 +23,13 @@ final class RegisterGitHubApp
      */
     public function __invoke(string $organizationId, ?string $userId, string $appKey, string $code): GitHubApp
     {
-        if (GitHubApp::query()->where('organization_id', $organizationId)->exists()) {
-            throw new SourceControlException('This organization already has a GitHub App. Delete it first to create another one.');
-        }
-
         $converted = $this->manifest->convert($code);
+
+        // One app per GitHub owner. A personal app's owner is only known now, after the conversion.
+        $owner = (string) $converted['owner_login'];
+        if ($owner !== '' && GitHubApp::query()->where('organization_id', $organizationId)->whereRaw('lower(owner_login) = ?', [strtolower($owner)])->exists()) {
+            throw new SourceControlException("This organization already has a GitHub App owned by {$owner}.");
+        }
 
         $app = new GitHubApp([
             'organization_id' => $organizationId,

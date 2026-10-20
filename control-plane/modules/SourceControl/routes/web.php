@@ -23,7 +23,7 @@ Route::middleware(['auth', 'org'])->prefix('source-control')->name('source-contr
     Route::get('github-app/manifest/callback', [GitHubAppController::class, 'manifestCallback'])->name('github-app.manifest.callback');
     Route::get('connect/github-app', [GitHubAppController::class, 'install'])->name('github-app');
     Route::get('github-app/setup', [GitHubAppController::class, 'setup'])->name('github-app.setup');
-    Route::delete('github-app', [GitHubAppController::class, 'destroy'])->name('github-app.destroy');
+    Route::delete('github-app/{app}', [GitHubAppController::class, 'destroy'])->name('github-app.destroy');
     Route::get('connect/{provider}', [OAuthController::class, 'redirect'])->name('connect');
     Route::get('callback/{provider}', [OAuthController::class, 'callback'])->name('callback');
 });

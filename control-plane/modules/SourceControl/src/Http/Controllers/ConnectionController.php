@@ -16,6 +16,7 @@ use Falak\SourceControl\Domain\Models\Connection;
 use Falak\SourceControl\Domain\Models\GitHubApp;
 use Falak\SourceControl\Domain\Models\Push;
 use Falak\SourceControl\Http\Requests\StoreConnectionRequest;
+use Falak\SourceControl\Infrastructure\GitHubApp\AppCredentials;
 use Falak\SourceControl\Infrastructure\GitHubApp\AppManifest;
 use Falak\SourceControl\Infrastructure\GitHubApp\GitHubAppResolver;
 use Falak\SourceControl\Infrastructure\Providers\GitHubClient;
@@ -89,8 +90,8 @@ final class ConnectionController extends Controller
     }
 
     /**
-     * The GitHub App card: which app new installations use (operator's env app, this organization's registered
-     * app, or none yet) and its installations in this organization.
+     * The GitHub App card: the apps new installations go through (the operator's env app, or this organization's
+     * registered apps, one per GitHub owner, oldest first) and the installations in this organization.
      *
      * @param  Collection<int, Connection>  $connections
      * @return array<string, mixed>
@@ -99,46 +100,46 @@ final class ConnectionController extends Controller
     {
         $github = rtrim((string) config('source_control.github.url'), '/');
         $env = $apps->env();
-        $registered = GitHubApp::query()->where('organization_id', $organizationId)->first();
 
-        $app = match (true) {
-            $env !== null => [
-                'source' => 'env',
-                'name' => $env->slug ?: 'GitHub App '.$env->appId,
-                'slug' => $env->slug,
-                'owner' => null,
-                'owner_type' => null,
-                'html_url' => $env->slug ? "{$github}/apps/{$env->slug}" : null,
-                'settings_url' => null,
-                'installable' => $env->installable(),
-                'webhook_url' => AppManifest::webhookUrl('env'),
-                'last_delivery_at' => null,
-                'created_at' => null,
-            ],
-            $registered !== null => [
-                'source' => 'registered',
-                'name' => $registered->name,
-                'slug' => $registered->slug,
-                'owner' => $registered->owner_login,
-                'owner_type' => $registered->owner_type,
-                'html_url' => $registered->html_url ?: "{$github}/apps/{$registered->slug}",
-                'settings_url' => $registered->owner_type === 'Organization' && $registered->owner_login
-                    ? "{$github}/organizations/{$registered->owner_login}/settings/apps/{$registered->slug}"
-                    : "{$github}/settings/apps/{$registered->slug}",
-                'installable' => true,
-                'webhook_url' => AppManifest::webhookUrl($registered->id),
-                'last_delivery_at' => $registered->last_delivery_at?->toIso8601String(),
-                'created_at' => $registered->created_at->toIso8601String(),
-            ],
-            default => null,
-        };
+        $list = $env !== null ? [[
+            'id' => AppCredentials::ENV,
+            'source' => 'env',
+            'name' => $env->slug ?: 'GitHub App '.$env->appId,
+            'slug' => $env->slug,
+            'owner' => null,
+            'owner_type' => null,
+            'html_url' => $env->slug ? "{$github}/apps/{$env->slug}" : null,
+            'settings_url' => null,
+            'installable' => $env->installable(),
+            'install_url' => route('source-control.github-app'),
+            'webhook_url' => AppManifest::webhookUrl('env'),
+            'last_delivery_at' => null,
+            'created_at' => null,
+        ]] : $apps->apps($organizationId)->map(fn (GitHubApp $registered) => [
+            'id' => $registered->id,
+            'source' => 'registered',
+            'name' => $registered->name,
+            'slug' => $registered->slug,
+            'owner' => $registered->owner_login,
+            'owner_type' => $registered->owner_type,
+            'html_url' => $registered->html_url ?: "{$github}/apps/{$registered->slug}",
+            'settings_url' => $registered->owner_type === 'Organization' && $registered->owner_login
+                ? "{$github}/organizations/{$registered->owner_login}/settings/apps/{$registered->slug}"
+                : "{$github}/settings/apps/{$registered->slug}",
+            'installable' => true,
+            'install_url' => route('source-control.github-app', ['app' => $registered->id]),
+            'webhook_url' => AppManifest::webhookUrl($registered->id),
+            'last_delivery_at' => $registered->last_delivery_at?->toIso8601String(),
+            'created_at' => $registered->created_at->toIso8601String(),
+        ])->values()->all();
 
         return [
-            'app' => $app,
+            'apps' => $list,
             'permissions' => AppManifest::PERMISSIONS,
             'events' => AppManifest::EVENTS,
             'installations' => $connections->filter(fn (Connection $connection) => $connection->isApp())->map(fn (Connection $connection) => [
                 'id' => $connection->id,
+                'app_id' => $connection->github_app_id ?: AppCredentials::ENV,
                 'name' => $connection->name,
                 'account' => $connection->account,
                 'target_type' => $connection->credential('target_type'),

@@ -4,11 +4,12 @@ namespace Falak\SourceControl\Infrastructure\GitHubApp;
 
 use Falak\SourceControl\Domain\Models\Connection;
 use Falak\SourceControl\Domain\Models\GitHubApp;
+use Illuminate\Database\Eloquent\Collection;
 
 /**
  * Which GitHub App to use. Precedence: the operator's `GITHUB_APP_*` env app (instance-wide) overrides the
- * organization's manifest-registered app for new installations; existing connections keep the app they were
- * installed with.
+ * organization's manifest-registered apps (one per GitHub owner) for new installations; existing connections keep
+ * the app they were installed with.
  */
 class GitHubAppResolver
 {
@@ -37,12 +38,18 @@ class GitHubAppResolver
         return $this->env() ?? $this->registered($organizationId);
     }
 
-    /** The organization's manifest-registered app, ignoring the env override. */
+    /** The organization's oldest manifest-registered app, ignoring the env override (the default for links without `?app=`). */
     public function registered(string $organizationId): ?AppCredentials
     {
-        $app = GitHubApp::query()->where('organization_id', $organizationId)->first();
+        $app = $this->apps($organizationId)->first();
 
         return $app ? self::fromModel($app) : null;
+    }
+
+    /** @return Collection<int, GitHubApp> the organization's registered apps, oldest first */
+    public function apps(string $organizationId): Collection
+    {
+        return GitHubApp::query()->where('organization_id', $organizationId)->orderBy('created_at')->orderBy('id')->get();
     }
 
     public function find(string $key): ?AppCredentials
