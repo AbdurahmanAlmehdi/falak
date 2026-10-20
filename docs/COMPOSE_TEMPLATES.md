@@ -172,8 +172,12 @@ stack's public services.
 
 ## 2. Template format (lane B)
 
-`templates/<slug>/template.yaml` + `templates/<slug>/compose.yaml` (+ optional `icon.svg`), in the repo
-(**curated catalog, versioned with Falak**) **[decision]**. Organizations can add **custom templates** (same format,
+`<slug>/template.yaml` + `<slug>/compose.yaml` (+ optional `icon.svg`) in the **curated catalog**, which lives in its
+own repository, [falak-sh/templates](https://github.com/falak-sh/templates), and ships without a Falak release: every
+merge publishes a catalog release, panels fetch it hourly (`templates:sync`, `FALAK_TEMPLATES_URL`) and fall back to the
+copy baked into the image (docs/superpowers/specs/2026-10-20-templates-repo-design.md). Authors check a template with
+the panel's own code: `php artisan templates:render <dir>` (import + catalog rules, rendered compose), or the templates
+repo's `./test <slug>` (that, plus a boot on Docker). Organizations can add **custom templates** (same format,
 stored in the DB, imported from YAML or created from an existing compose site: "Save as template").
 
 ```yaml
@@ -182,7 +186,8 @@ slug: n8n
 version: 1.0.0            # template version (bumped when the compose changes)
 description: Workflow automation with 400+ integrations.
 category: automation      # automation | analytics | cms | databases | dev-tools | monitoring | storage | communication | ai | business
-icon: n8n                 # simple-icons key or ./icon.svg
+icon: n8n                 # Cool Icons key (slug or slug/variant, coolicon.falak.sh) or ./icon.svg
+min_falak: 1.2.0          # optional: the oldest Falak that runs it (older panels skip the template)
 docs: https://docs.n8n.io
 stateful: true            # warn when deploying to more than one server
 min_memory_mb: 512

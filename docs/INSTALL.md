@@ -256,6 +256,16 @@ load picked icons from it. To use a self-hosted copy, set `FALAK_ICONS_URL` (its
 `/i/<slug>.svg`) in `/opt/falak/custom.env`; set it empty to turn the picker off and keep only the logos bundled with the
 panel. Then `falak-ctl up`. Icons are canvas-only: `falak.yaml` never reads or sets them.
 
+### Template catalog updates (optional)
+
+The panel fetches the curated template catalog from the [falak-sh/templates](https://github.com/falak-sh/templates)
+releases every hour (`catalog.json` + a sha256-checked `catalog.tar.gz`), so new and fixed templates arrive without a
+Falak update. It serves whichever is newer: the last good download or the catalog baked into the image; a failed
+download never replaces it. To follow a fork, set `FALAK_TEMPLATES_URL` to its release download base (e.g.
+`https://github.com/<owner>/templates/releases/latest/download`) in `/opt/falak/custom.env`; set it empty to use only
+the baked catalog (air-gapped installs). Then `falak-ctl up`. Settings → Templates shows the catalog version in use;
+`php artisan templates:sync` runs a fetch now. Sites already deployed from a template are never changed by an update.
+
 ### Runtime download mirrors (optional)
 
 Servers download FrankenPHP, Node.js, Bun and Deno release binaries during provisioning (sha256-verified).
