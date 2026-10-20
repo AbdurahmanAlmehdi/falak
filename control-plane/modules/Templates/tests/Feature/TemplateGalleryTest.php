@@ -3,6 +3,8 @@
 use Falak\Identity\Contracts\Role;
 use Falak\Templates\Application\Catalog\Catalog;
 use Falak\Templates\Domain\Models\CustomTemplate;
+use Falak\Templates\Infrastructure\FilesystemCatalog;
+use Illuminate\Support\Facades\Log;
 use Inertia\Testing\AssertableInertia as Assert;
 
 require_once __DIR__.'/../Support/helpers.php';
@@ -84,4 +86,25 @@ it('skips templates that do not parse and caches the files', function () {
 
 it('requires a session', function () {
     $this->get('/templates')->assertRedirect('/login');
+});
+
+it('skips templates that need a newer Falak, quietly, even when they use keys this panel does not know', function () {
+    $future = str_replace('slug: hello', "slug: future\nmin_falak: 9.0.0\nbrand_new: true", TEMPLATES_FIXTURE_TEMPLATE);
+    templates_fixture_catalog(['hello' => [TEMPLATES_FIXTURE_TEMPLATE, TEMPLATES_FIXTURE_COMPOSE], 'future' => [$future, TEMPLATES_FIXTURE_COMPOSE]]);
+    config(['controlplane.version' => 'v1.2.0']);
+    Log::spy();
+
+    expect(array_map(fn ($t) => $t->slug, app(Catalog::class)->all()))->toBe(['hello']);
+    Log::shouldNotHaveReceived('warning');
+
+    // A panel without a release version (development) offers everything that parses.
+    expect(FilesystemCatalog::supported("min_falak: 9.0.0\n", null))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'v1.2.0'))->toBeFalse()
+        ->and(FilesystemCatalog::supported("min_falak: 1.2.0\n", 'v1.2.0'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("name: x\n", 'v1.2.0'))->toBeTrue()
+        // Builds that are not a release (sim/local `dev`, CI `ci-<sha>`) offer everything; a release candidate counts as its release.
+        ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'dev'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'ci-0123abc'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 1.2.0\n", 'v1.2.0-rc.1'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 1.3.0\n", 'v1.2.0-rc.1'))->toBeFalse();
 });

@@ -26,6 +26,8 @@ interface Props {
     categories: Category[];
     limits: { max_kb: number };
     can: { manage: boolean };
+    /** The curated catalog this panel serves: synced from falak-sh/templates, or the copy baked into the image. */
+    catalog: { version: string | null; source: 'remote' | 'built-in'; synced_at: string | null };
 }
 
 type ImportMode = 'paste' | 'upload' | 'url';
@@ -254,7 +256,7 @@ function EditDialog({ row, onOpenChange }: { row: CustomTemplateRow; onOpenChang
 }
 
 /** Settings → Templates: the organization's own templates (docs/COMPOSE_TEMPLATES.md §3). */
-export default function Settings({ templates, limits, can }: Props) {
+export default function Settings({ templates, limits, can, catalog }: Props) {
     const [importing, setImporting] = useState(false);
     const [editing, setEditing] = useState<CustomTemplateRow | null>(null);
     const [deleting, setDeleting] = useState<CustomTemplateRow | null>(null);
@@ -332,6 +334,15 @@ export default function Settings({ templates, limits, can }: Props) {
                 )
             }
         >
+            <p className="text-fg-muted mb-4 text-sm">
+                {catalog.source === 'remote' ? (
+                    <>
+                        Catalog {catalog.version} · updated <RelativeTime value={catalog.synced_at} />
+                    </>
+                ) : (
+                    `Built-in catalog${catalog.version ? ` ${catalog.version}` : ''}`
+                )}
+            </p>
             <Section
                 title="Organization templates"
                 description="Same format as the catalog (template.yaml + compose.yaml). Create one from a running compose service with ⋯ → Save as template."

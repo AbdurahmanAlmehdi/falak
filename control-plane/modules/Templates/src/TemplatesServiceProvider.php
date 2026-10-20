@@ -7,10 +7,12 @@ use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\ModuleServiceProvider;
 use Falak\Sites\Contracts\ComposeInspector;
 use Falak\Templates\Application\Catalog\Catalog;
+use Falak\Templates\Application\Catalog\CatalogLocation;
 use Falak\Templates\Application\Catalog\TemplateParser;
 use Falak\Templates\Application\Compose\ComposeAnalyzer;
 use Falak\Templates\Application\Compose\SiteCompose;
 use Falak\Templates\Application\Console\RenderTemplateCommand;
+use Falak\Templates\Application\Console\SyncTemplatesCommand;
 use Falak\Templates\Application\Import\HostResolver;
 use Falak\Templates\Application\Import\RemoteFetcher;
 use Falak\Templates\Infrastructure\DnsHostResolver;
@@ -18,6 +20,7 @@ use Falak\Templates\Infrastructure\FilesystemCatalog;
 use Falak\Templates\Infrastructure\GuardedHttpFetcher;
 use Falak\Templates\Infrastructure\InspectorComposeAnalyzer;
 use Falak\Templates\Infrastructure\SiteDataCompose;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Cache\Repository as Cache;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Client\Factory as Http;
@@ -47,7 +50,7 @@ class TemplatesServiceProvider extends ModuleServiceProvider
         $this->app->singleton(Catalog::class, fn (Application $app) => new FilesystemCatalog(
             $app->make(Cache::class),
             $app->make(TemplateParser::class),
-            (string) config('templates.catalog_path'),
+            fn () => $app->make(CatalogLocation::class)->current()['path'],
             (int) config('templates.cache_ttl', 3600),
         ));
 
@@ -70,7 +73,12 @@ class TemplatesServiceProvider extends ModuleServiceProvider
         $registry->register(self::MANAGE, [Role::Admin, Role::Developer], 'Import, edit and delete the organization\'s templates', 'templates');
 
         if ($this->app->runningInConsole()) {
-            $this->commands([RenderTemplateCommand::class]);
+            $this->commands([RenderTemplateCommand::class, SyncTemplatesCommand::class]);
         }
+
+        // New and fixed templates reach the panel without a Falak release (falak-sh/templates, FALAK_TEMPLATES_URL).
+        $this->callAfterResolving(Schedule::class, function (Schedule $schedule) {
+            $schedule->command('templates:sync')->hourly()->name('templates:sync')->withoutOverlapping();
+        });
     }
 }

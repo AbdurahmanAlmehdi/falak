@@ -95,10 +95,11 @@ final class SaveCustomTemplate
         $errors = $this->validator->problems($template);
 
         if ($template->icon === './icon.svg') {
-            $errors[] = 'template.yaml: icon: custom templates use a simple-icons key (e.g. n8n), not ./icon.svg';
+            $errors[] = 'template.yaml: icon: custom templates use an icon key (e.g. n8n, docker/svgl-dark), not ./icon.svg';
         }
 
-        if ($this->catalog->find($template->slug) !== null) {
+        // A slug the catalog ships later (hourly sync) does not lock the organization's existing template out.
+        if ($this->catalog->find($template->slug) !== null && $existing?->slug !== $template->slug) {
             $errors[] = "template.yaml: slug {$template->slug} is used by a catalog template; pick another one";
         }
 

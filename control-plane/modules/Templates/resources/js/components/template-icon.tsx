@@ -1,3 +1,4 @@
+import { ServiceIcon } from '@/components/falak/service-icon';
 import { brandFillProps } from '@/lib/brand-color';
 import { cn } from '@/lib/utils';
 import { LayoutTemplate } from 'lucide-react';
@@ -46,8 +47,8 @@ import {
 import { type TemplateIconRef } from '../types';
 
 /**
- * Brand icons (simple-icons) the catalog uses. Keep in sync with CATALOG_BRAND_ICONS in TemplateCatalogTest.php;
- * unknown keys (custom templates) fall back to a generic icon.
+ * Brand icons (simple-icons) bundled for the catalog;
+ * other keys load from Cool Icons, or fall back to a generic icon.
  */
 export const BRANDS: Record<string, SimpleIcon> = {
     adminer: siAdminer,
@@ -99,7 +100,10 @@ export function TemplateIcon({ icon, name, size = 20, className }: { icon: Templ
     const brand = icon?.type === 'brand' ? BRANDS[icon.key] : undefined;
 
     if (!brand) {
-        return <LayoutTemplate width={size} height={size} className={cn('text-fg-muted shrink-0', className)} aria-hidden />;
+        const generic = <LayoutTemplate width={size} height={size} className={cn('text-fg-muted shrink-0', className)} aria-hidden />;
+
+        // Any other key is a Cool Icons key (coolicon.falak.sh), so a new catalog template needs no panel release for its logo.
+        return icon?.type === 'brand' ? <ServiceIcon name={icon.key} size={size} className={className} fallback={generic} /> : generic;
     }
 
     // Brand colors are data (the logo's identity), adjusted per theme to stay visible (lib/brand-color).
