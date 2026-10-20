@@ -12,7 +12,7 @@ final readonly class Template
      * @param  list<array{service: string, port: int, health_check_path?: string}>  $public
      * @param  list<TemplateInput>  $inputs
      * @param  list<string>  $tags
-     * @param  ?string  $icon  simple-icons key, or "./icon.svg" (catalog only)
+     * @param  ?string  $icon  Cool Icons key (slug or slug/variant), or "./icon.svg" (catalog only)
      */
     public function __construct(
         public string $slug,

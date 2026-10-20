@@ -70,7 +70,7 @@ it('validates imports like the catalog', function (callable $payload, string $me
     'schema' => [fn () => ['template_yaml' => "name: x\n", 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE], 'slug is required'],
     'compose' => [fn () => ['template_yaml' => custom_yaml(), 'compose_yaml' => str_replace('nginx:1.29.1-alpine', 'nginx:latest', TEMPLATES_FIXTURE_COMPOSE)], 'not latest'],
     'catalog slug' => [fn () => ['template_yaml' => custom_yaml('hello'), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE], 'used by a catalog template'],
-    'svg icon' => [fn () => ['template_yaml' => str_replace('icon: docker', 'icon: ./icon.svg', custom_yaml()), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE], 'simple-icons key'],
+    'svg icon' => [fn () => ['template_yaml' => str_replace('icon: docker', 'icon: ./icon.svg', custom_yaml()), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE], 'icon key'],
     'policy' => [fn () => ['template_yaml' => custom_yaml(), 'compose_yaml' => str_replace('    image: nginx:1.29.1-alpine', "    image: nginx:1.29.1-alpine\n    privileged: true", TEMPLATES_FIXTURE_COMPOSE)], 'privileged'],
 ]);
 
@@ -121,4 +121,23 @@ it('authorizes template management', function () {
 
     actingAsMember(Role::Owner);
     $this->getJson("/settings/templates/{$id}")->assertNotFound();
+});
+
+it('shows which catalog the panel serves', function () {
+    $this->get('/settings/templates')->assertInertia(fn (Assert $page) => $page
+        ->where('catalog', ['version' => null, 'source' => 'built-in', 'synced_at' => null]));
+});
+
+it('keeps a custom template editable when the catalog later ships its slug', function () {
+    $id = $this->postJson('/settings/templates', ['template_yaml' => custom_yaml('hello2'), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE])->assertCreated()->json('data.id');
+
+    // An hourly sync brings a catalog template with the same slug.
+    templates_fixture_catalog(['hello2' => [str_replace('slug: hello', 'slug: hello2', TEMPLATES_FIXTURE_TEMPLATE), TEMPLATES_FIXTURE_COMPOSE]]);
+
+    $this->putJson("/settings/templates/{$id}", ['template_yaml' => custom_yaml('hello2', '1.1.0'), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE])->assertOk()
+        ->assertJsonPath('data.version', '1.1.0');
+
+    // A new custom template still cannot take a catalog slug.
+    $this->postJson('/settings/templates', ['template_yaml' => str_replace('name: Ours', 'name: Other', custom_yaml('hello2')), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE])
+        ->assertUnprocessable()->assertJsonFragment(['template.yaml: slug hello2 is used by a catalog template; pick another one']);
 });

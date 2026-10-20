@@ -10,12 +10,14 @@ use Falak\Templates\Application\Actions\DeleteCustomTemplate;
 use Falak\Templates\Application\Actions\DraftTemplateFromSite;
 use Falak\Templates\Application\Actions\FetchTemplate;
 use Falak\Templates\Application\Actions\SaveCustomTemplate;
+use Falak\Templates\Application\Catalog\CatalogLocation;
 use Falak\Templates\Application\Catalog\TemplateRepository;
 use Falak\Templates\Domain\Models\CustomTemplate;
 use Falak\Templates\Domain\Models\CustomTemplateRevision;
 use Falak\Templates\TemplatesServiceProvider;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Illuminate\Validation\Rule;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -32,6 +34,7 @@ final class CustomTemplateController extends Controller
         private readonly CurrentOrganization $organization,
         private readonly OrganizationAccess $access,
         private readonly TemplateRepository $templates,
+        private readonly CatalogLocation $location,
     ) {}
 
     public function index(Request $request): Response
@@ -43,6 +46,7 @@ final class CustomTemplateController extends Controller
         return Inertia::render('Templates/Settings', [
             'templates' => $rows->map(fn (CustomTemplate $row) => $this->row($row))->values(),
             'categories' => $this->categories(),
+            'catalog' => Arr::except($this->location->current(), 'path'),
             'limits' => ['max_kb' => intdiv((int) config('templates.max_bytes', 262144), 1024)],
             'can' => ['manage' => $this->access->can($request->user(), $organizationId, TemplatesServiceProvider::MANAGE)],
         ]);
