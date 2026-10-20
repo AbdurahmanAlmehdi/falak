@@ -184,7 +184,7 @@ enc="$(find "$BACKUP_DIR" -name 'falak-backup-*.fdr')"
 [ -n "$enc" ] || fail "no encrypted backup written"
 [ -z "$(find "$BACKUP_DIR" -name '*.tmp' -o -name '*.ct')" ] || fail "temporary archives left behind"
 FALAK_DR_PASS='a long enough passphrase' dr_open "$enc" "$work/opened.tar.gz"
-tar -tzf "$work/opened.tar.gz" | grep -q '^\./secrets/kek$' || fail "the encrypted backup lacks the KEK"
+tar -tzf "$work/opened.tar.gz" | grep '^\./secrets/kek$' >/dev/null || fail "the encrypted backup lacks the KEK"
 pass "an encrypted backup carries the KEK and leaves no temporary archive"
 
 # --- entrypoint: roles other than web wait for the migrations, every role checks the KEK first -------------

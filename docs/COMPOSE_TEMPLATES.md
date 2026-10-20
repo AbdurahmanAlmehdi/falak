@@ -285,5 +285,5 @@ site fields:
 and `Sites\Contracts\ComposeInspector::parse(string $yaml): ComposeSummary` (services, exposed ports, volumes,
 policy violations) — lane B uses it for validation and the "Save as template" flow.
 
-**Lane B** (templates) owns the new **Templates** module, `templates/` catalog, rendering of Falak placeholders +
+**Lane B** (templates) owns the new **Templates** module, the catalog (now github.com/falak-sh/templates), rendering of Falak placeholders +
 input generation, and the template UIs; it calls only the contracts above (with test fakes until lane A merges).

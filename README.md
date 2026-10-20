@@ -68,6 +68,7 @@ cd control-plane
 composer install && bun install
 cp .env.example .env && php artisan key:generate
 ./vendor/bin/pest
+../tools/fetch-templates.sh   # the template catalog (github.com/falak-sh/templates) for a local panel; tests don't need it
 vendor/bin/pint --test && bun run types && bun run lint:check && bun run format:check && bun run build
 
 # Agent, CLI, builder

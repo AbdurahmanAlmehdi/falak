@@ -3,10 +3,10 @@ name: control-plane
 on:
   push:
     branches: [main, "release/**"]
-    paths: ['control-plane/**', 'contracts/**', 'tools/**', '.github/workflows/control-plane.yml']
+    paths: ['control-plane/**', 'contracts/**', 'tools/**', 'templates.lock', '.github/workflows/control-plane.yml']
   pull_request:
     branches: [main, "release/**"]
-    paths: ['control-plane/**', 'contracts/**', 'tools/**', '.github/workflows/control-plane.yml']
+    paths: ['control-plane/**', 'contracts/**', 'tools/**', 'templates.lock', '.github/workflows/control-plane.yml']
 
 defaults:
   run:
@@ -39,6 +39,22 @@ jobs:
 
       - name: Tests (unit, feature, architecture)
         run: ./vendor/bin/pest
+
+      # A panel change must not reject a template already published (github.com/falak-sh/templates): the catalog
+      # pinned in templates.lock (baked into the image) and the latest release both pass this code's checks.
+      - name: Published template catalogs pass this panel's checks
+        env:
+          CACHE_STORE: array
+          FALAK_TEMPLATES_URL: ''
+        run: |
+          ../tools/fetch-templates.sh /tmp/catalog-pinned
+          mkdir -p /tmp/catalog-latest
+          curl -fsSL https://github.com/falak-sh/templates/releases/latest/download/catalog.tar.gz | tar -xz -C /tmp/catalog-latest
+          failed=0
+          for dir in /tmp/catalog-pinned/*/ /tmp/catalog-latest/*/; do
+            php artisan templates:render "$dir" > /dev/null || { echo "::error::${dir} fails this panel's template checks"; failed=1; }
+          done
+          exit "$failed"
 
   quality:
     runs-on: ubuntu-latest

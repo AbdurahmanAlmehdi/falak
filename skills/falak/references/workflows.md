@@ -77,7 +77,7 @@ api -X POST "$FALAK_URL/api/v1/projects/<project-id>/production/templates/n8n/de
   -d '{"server_ids": ["<server-id>"], "name": "n8n", "domains": {"n8n": {"type": "generated"}}}'
 ```
 
-- `inputs`: `{KEY: value}` for the template's inputs (`templates/<slug>/template.yaml`). Inputs with `generate:` are
+- `inputs`: `{KEY: value}` for the template's inputs (`<slug>/template.yaml` in github.com/falak-sh/templates). Inputs with `generate:` are
   generated when omitted; required ones without a default must be sent (`422 inputs.<KEY>` otherwise). Never print
   generated secret values back.
 - `domains`: per public service, a name (`"n8n.example.com"`) or `{"type": "generated" | "test" | "custom", "name"?}`.

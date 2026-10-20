@@ -6,10 +6,10 @@ name: images
 on:
   push:
     branches: [main]
-    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates/**', 'tools/**', '.github/workflows/images.yml']
+    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates.lock', 'tools/**', '.github/workflows/images.yml']
   pull_request:
     branches: [main]
-    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates/**', 'tools/**', '.github/workflows/images.yml']
+    paths: ['control-plane/**', 'agent/**', 'contracts/**', 'deploy/**', 'observability/**', 'runtimes/**', 'templates.lock', 'tools/**', '.github/workflows/images.yml']
 
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
               - 'control-plane/**'
               - 'agent/**'
               - 'contracts/**'
-              - 'templates/**'
+              - 'templates.lock'
               - 'observability/grafana/dashboards/**'
               - 'deploy/control-plane/**'
               - '.github/workflows/images.yml'
