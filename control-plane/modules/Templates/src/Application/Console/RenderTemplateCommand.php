@@ -3,36 +3,66 @@
 namespace Falak\Templates\Application\Console;
 
 use Falak\Templates\Application\Catalog\Catalog;
+use Falak\Templates\Application\Catalog\CatalogRules;
+use Falak\Templates\Application\Catalog\TemplateParser;
 use Falak\Templates\Application\Catalog\TemplateValidator;
 use Falak\Templates\Application\Compose\FalakPlaceholders;
 use Falak\Templates\Application\Inputs\InputResolver;
 use Falak\Templates\Domain\InputType;
+use Falak\Templates\Domain\InvalidTemplate;
 use Falak\Templates\Domain\TemplateInput;
 use Illuminate\Console\Command;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * Template authoring aid: validate a catalog template and print its compose file as Falak would render it (test
+ * Template authoring aid (falak-sh/templates' ./test runs it): validate a catalog template, or a template directory, and print its compose file as Falak would render it (test
  * domains under --domain), optionally with a dotenv of sample input values — pipe into
  * `docker compose -f - --env-file <file> config` to check that Compose accepts it.
  */
 final class RenderTemplateCommand extends Command
 {
-    protected $signature = 'templates:render {slug : catalog template} {--domain=falak.test : test domain base} {--env-file= : write sample input values to this dotenv file}';
+    protected $signature = 'templates:render {template : catalog slug, or a directory with template.yaml + compose.yaml} {--domain=falak.test : test domain base} {--env-file= : write sample input values to this dotenv file}';
 
-    protected $description = 'Validate a catalog template and print its rendered compose file';
+    protected $description = 'Validate a catalog template (import + catalog rules) and print its rendered compose file';
 
-    public function handle(Catalog $catalog, TemplateValidator $validator, InputResolver $inputs): int
+    public function handle(Catalog $catalog, TemplateParser $parser, TemplateValidator $validator, CatalogRules $rules, InputResolver $inputs): int
     {
-        $template = $catalog->find((string) $this->argument('slug'));
+        $argument = (string) $this->argument('template');
+        $iconFile = null;
 
-        if ($template === null) {
-            $this->error('Unknown catalog template (or it does not parse — check the logs).');
+        if (is_dir($argument)) {
+            $directory = rtrim($argument, '/');
 
-            return self::FAILURE;
+            if (! is_file("{$directory}/template.yaml")) {
+                $this->error("{$directory} has no template.yaml.");
+
+                return self::FAILURE;
+            }
+
+            try {
+                $template = $parser->parse((string) file_get_contents("{$directory}/template.yaml"), is_file("{$directory}/compose.yaml") ? (string) file_get_contents("{$directory}/compose.yaml") : '');
+            } catch (InvalidTemplate $e) {
+                foreach ($e->errors as $error) {
+                    $this->output->getErrorStyle()->writeln("<error>{$error}</error>");
+                }
+
+                return self::FAILURE;
+            }
+
+            $iconFile = is_file("{$directory}/icon.svg") ? "{$directory}/icon.svg" : null;
+        } else {
+            $template = $catalog->find($argument);
+
+            if ($template === null) {
+                $this->error('Unknown catalog template (or it does not parse — check the logs).');
+
+                return self::FAILURE;
+            }
+
+            $iconFile = $template->iconPath;
         }
 
-        $problems = $validator->problems($template);
+        $problems = [...$validator->problems($template), ...$rules->problems($template, $iconFile)];
 
         foreach ($problems as $problem) {
             $this->output->getErrorStyle()->writeln("<error>{$problem}</error>");

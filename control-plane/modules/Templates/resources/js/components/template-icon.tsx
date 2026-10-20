@@ -47,7 +47,7 @@ import {
 import { type TemplateIconRef } from '../types';
 
 /**
- * Brand icons (simple-icons) the catalog uses. Keep in sync with CATALOG_BRAND_ICONS in TemplateCatalogTest.php;
+ * Brand icons (simple-icons) bundled for the catalog;
  * other keys load from Cool Icons, or fall back to a generic icon.
  */
 export const BRANDS: Record<string, SimpleIcon> = {
