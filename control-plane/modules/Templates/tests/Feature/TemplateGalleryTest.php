@@ -101,5 +101,10 @@ it('skips templates that need a newer Falak, quietly, even when they use keys th
     expect(FilesystemCatalog::supported("min_falak: 9.0.0\n", null))->toBeTrue()
         ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'v1.2.0'))->toBeFalse()
         ->and(FilesystemCatalog::supported("min_falak: 1.2.0\n", 'v1.2.0'))->toBeTrue()
-        ->and(FilesystemCatalog::supported("name: x\n", 'v1.2.0'))->toBeTrue();
+        ->and(FilesystemCatalog::supported("name: x\n", 'v1.2.0'))->toBeTrue()
+        // Builds that are not a release (sim/local `dev`, CI `ci-<sha>`) offer everything; a release candidate counts as its release.
+        ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'dev'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 9.0.0\n", 'ci-0123abc'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 1.2.0\n", 'v1.2.0-rc.1'))->toBeTrue()
+        ->and(FilesystemCatalog::supported("min_falak: 1.3.0\n", 'v1.2.0-rc.1'))->toBeFalse();
 });

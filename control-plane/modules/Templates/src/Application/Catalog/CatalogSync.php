@@ -3,9 +3,11 @@
 namespace Falak\Templates\Application\Catalog;
 
 use Illuminate\Http\Client\Factory as Http;
+use Illuminate\Http\Client\HttpClientException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\File;
 use PharData;
+use RecursiveIteratorIterator;
 use RuntimeException;
 use Throwable;
 
@@ -86,13 +88,25 @@ final class CatalogSync
         File::put($file, $archive);
 
         try {
+            $phar = new PharData($file);
+            $unpacked = 0;
+
+            foreach (new RecursiveIteratorIterator($phar) as $entry) {
+                $unpacked += $entry->getSize();
+            }
+
+            // A small archive can unpack to gigabytes and fill the storage every role shares.
+            if ($unpacked > (int) config('templates.max_extracted_bytes')) {
+                throw new RuntimeException('The catalog archive unpacks to more than '.config('templates.max_extracted_bytes').' bytes.');
+            }
+
             // PharData keeps every entry inside $staging ("../x" and "/x" land inside it) and writes link entries as
             // plain files — CatalogSyncTest pins both.
-            (new PharData($file))->extractTo($staging, null, true);
+            $phar->extractTo($staging, null, true);
         } catch (Throwable $e) {
             File::deleteDirectory($staging);
 
-            throw new RuntimeException("The catalog archive could not be read: {$e->getMessage()}");
+            throw $e instanceof RuntimeException ? $e : new RuntimeException("The catalog archive could not be read: {$e->getMessage()}");
         } finally {
             File::delete($file);
         }
@@ -109,7 +123,12 @@ final class CatalogSync
 
     private function get(string $url): Response
     {
-        $response = $this->http->timeout((int) config('templates.fetch.timeout', 10))->get($url);
+        try {
+            $response = $this->http->timeout((int) config('templates.fetch.timeout', 10))->get($url);
+        } catch (HttpClientException $e) {
+            // No route, DNS, timeout: the common failure on installs without outbound access.
+            throw new RuntimeException("{$url}: {$e->getMessage()}", previous: $e);
+        }
 
         if (! $response->successful()) {
             throw new RuntimeException("{$url} answered {$response->status()}.");

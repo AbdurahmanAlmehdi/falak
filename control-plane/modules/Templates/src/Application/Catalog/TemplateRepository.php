@@ -39,21 +39,20 @@ final class TemplateRepository
     }
 
     /**
-     * A template by slug. Without an explicit source the catalog wins over a custom template of the same slug.
+     * A template by slug. Without an explicit source the organization's own template wins: the catalog may gain the
+     * same slug at any hourly sync, and a call that deployed the custom one must keep doing so.
      */
     public function find(string $organizationId, string $slug, ?TemplateSource $source = null): ?Template
     {
-        if ($source !== TemplateSource::Custom && ($template = $this->catalog->find($slug)) !== null) {
-            return $template;
+        if ($source !== TemplateSource::Catalog) {
+            $row = CustomTemplate::query()->where('organization_id', $organizationId)->where('slug', $slug)->first();
+
+            if ($row !== null || $source === TemplateSource::Custom) {
+                return $row !== null ? $this->fromModel($row) : null;
+            }
         }
 
-        if ($source === TemplateSource::Catalog) {
-            return null;
-        }
-
-        $row = CustomTemplate::query()->where('organization_id', $organizationId)->where('slug', $slug)->first();
-
-        return $row !== null ? $this->fromModel($row) : null;
+        return $this->catalog->find($slug);
     }
 
     public function fromModel(CustomTemplate $row): ?Template

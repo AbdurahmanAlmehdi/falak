@@ -1,9 +1,11 @@
 <?php
 
 use Falak\Identity\Contracts\Role;
+use Falak\Templates\Application\Catalog\TemplateRepository;
 use Falak\Templates\Application\Import\HostResolver;
 use Falak\Templates\Domain\Models\CustomTemplate;
 use Falak\Templates\Domain\Models\CustomTemplateRevision;
+use Falak\Templates\Domain\TemplateSource;
 use Falak\Templates\Tests\Support\FakeHostResolver;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -140,4 +142,14 @@ it('keeps a custom template editable when the catalog later ships its slug', fun
     // A new custom template still cannot take a catalog slug.
     $this->postJson('/settings/templates', ['template_yaml' => str_replace('name: Ours', 'name: Other', custom_yaml('hello2')), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE])
         ->assertUnprocessable()->assertJsonFragment(['template.yaml: slug hello2 is used by a catalog template; pick another one']);
+});
+
+it('prefers the organization\'s own template when a lookup names no source (API deploys)', function () {
+    $this->postJson('/settings/templates', ['template_yaml' => custom_yaml('hello2'), 'compose_yaml' => TEMPLATES_FIXTURE_COMPOSE])->assertCreated();
+    templates_fixture_catalog(['hello' => [TEMPLATES_FIXTURE_TEMPLATE, TEMPLATES_FIXTURE_COMPOSE], 'hello2' => [str_replace('slug: hello', 'slug: hello2', TEMPLATES_FIXTURE_TEMPLATE), TEMPLATES_FIXTURE_COMPOSE]]);
+    $templates = app(TemplateRepository::class);
+
+    expect($templates->find($this->organization->id, 'hello2')?->source)->toBe(TemplateSource::Custom)
+        ->and($templates->find($this->organization->id, 'hello2', TemplateSource::Catalog)?->source)->toBe(TemplateSource::Catalog)
+        ->and($templates->find($this->organization->id, 'hello')?->source)->toBe(TemplateSource::Catalog);
 });

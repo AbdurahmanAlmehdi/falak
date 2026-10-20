@@ -126,7 +126,8 @@ final class FilesystemCatalog implements Catalog
      */
     public static function supported(string $templateYaml, ?string $panel): bool
     {
-        if ($panel === null) {
+        // Builds that are not a release (sim/local `dev`, CI `ci-<sha>`) run everything; v1.2.0-rc.1 counts as 1.2.0.
+        if ($panel === null || preg_match('/^v?(\d+\.\d+\.\d+)/', $panel, $release) !== 1) {
             return true;
         }
 
@@ -136,7 +137,7 @@ final class FilesystemCatalog implements Catalog
             return true; // reported by the parser
         }
 
-        return ! is_string($min) || preg_match('/^\d+\.\d+\.\d+$/', $min) !== 1 || version_compare(ltrim($panel, 'v'), $min, '>=');
+        return ! is_string($min) || preg_match('/^\d+\.\d+\.\d+$/', $min) !== 1 || version_compare($release[1], $min, '>=');
     }
 
     /** The release this panel runs (as ControlPlane's ReleaseCheck reads it; modules share config, not internals). */

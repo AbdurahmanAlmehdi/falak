@@ -226,7 +226,9 @@ Per slug:
    one in the script): `docker run --rm --network tpl-<slug>_default curlimages/curl:8.11.1 -s -o /dev/null -w '%{http_code}'
    http://<service>:<port><health_check_path or />` → must be < 500. Check the rendered compose's network name first;
    if Falak's render references an external environment network, the script creates it before `up`.
-5. Always `down -v` in a trap unless `--keep`. Print `PASS <slug>` / `FAIL <slug>: <reason>`.
+5. The template's `slug` must equal its directory name (panels skip a mismatch; the render runs on `/t`, so it cannot
+   see the name).
+6. Always `down -v` in a trap unless `--keep`. Print `PASS <slug>` / `FAIL <slug>: <reason>`.
 
 - [ ] **Step 1:** Write the script; `shellcheck test` clean.
 - [ ] **Step 2:** `./test uptime-kuma` and `./test umami` locally → PASS; break a healthcheck in a copy → FAIL with a

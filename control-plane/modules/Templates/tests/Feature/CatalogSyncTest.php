@@ -3,6 +3,7 @@
 use Falak\Templates\Application\Catalog\Catalog;
 use Falak\Templates\Application\Catalog\CatalogLocation;
 use Falak\Templates\Application\Catalog\CatalogSync;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Http;
 
@@ -90,6 +91,10 @@ it('keeps the last good catalog when a download is bad', function (string $case)
         config(['templates.max_archive_bytes' => 10]);
     }
 
+    if ($case === 'an archive that unpacks too large') {
+        config(['templates.max_extracted_bytes' => 4096]);
+    }
+
     match ($case) {
         'a wrong checksum' => sync_fake([
             SYNC_URL.'/catalog.json' => Http::response(['version' => '2026.10.21.1', 'sha256' => str_repeat('a', 64)]),
@@ -99,13 +104,15 @@ it('keeps the last good catalog when a download is bad', function (string $case)
         'an HTML page' => sync_fake([SYNC_URL.'/catalog.json' => Http::response('<html>rate limited</html>')]),
         'a version that is not a version' => sync_fake([SYNC_URL.'/catalog.json' => Http::response(['version' => '../../etc', 'sha256' => str_repeat('a', 64)])]),
         'an archive over the size limit' => sync_release('2026.10.21.1'),
+        'no connection' => sync_fake([SYNC_URL.'/*' => fn () => throw new ConnectionException('Could not resolve host: github.com')]),
+        'an archive that unpacks too large' => sync_release('2026.10.21.1', archive: sync_archive(['VERSION' => '2026.10.21.1', 'big/template.yaml' => str_repeat("\n", 64 * 1024)])),
         'an archive without templates' => sync_release('2026.10.21.1', archive: sync_archive(['VERSION' => '2026.10.21.1', 'README.md' => 'hi'])),
     };
 
     expect(fn () => app(CatalogSync::class)->sync())->toThrow(RuntimeException::class)
         ->and(sync_slugs())->toBe(['hello'])
         ->and(app(CatalogLocation::class)->current()['version'])->toBe('2026.10.20.3');
-})->with(['a wrong checksum', 'no release (404)', 'an HTML page', 'a version that is not a version', 'an archive over the size limit', 'an archive without templates']);
+})->with(['a wrong checksum', 'no release (404)', 'an HTML page', 'a version that is not a version', 'an archive over the size limit', 'no connection', 'an archive that unpacks too large', 'an archive without templates']);
 
 it('never writes outside its directory, whatever the archive names', function () {
     $outside = dirname($this->synced).'/falak-escape-'.bin2hex(random_bytes(4));
