@@ -20,7 +20,7 @@ cleanup() { docker rm -f "$p-front" "$p-off" "$p-back" "$p-bad" >/dev/null 2>&1 
 trap cleanup EXIT
 
 docker build -q -t "$img" "$here/../edge" >/dev/null
-docker run --rm --entrypoint caddy "$img" list-modules | grep -q '^layer4.handlers.proxy$' || fail "the image has no caddy-l4"
+docker run --rm --entrypoint caddy "$img" list-modules | grep '^layer4.handlers.proxy$' >/dev/null || fail "the image has no caddy-l4"
 docker run --rm --entrypoint jq "$img" --version >/dev/null || fail "the image has no jq"
 pass "the edge image builds with caddy-l4 and jq"
 
