@@ -27,7 +27,7 @@ return [
     'control_plane_reserve_mb' => (int) env('FALAK_CP_RESERVE_MB', 1536),
 
     'frankenphp' => [
-        'version' => env('FALAK_FRANKENPHP_VERSION', '1.9.1'),
+        'version' => env('FALAK_FRANKENPHP_VERSION', '1.13.2'),
         'sha256' => env('FALAK_FRANKENPHP_SHA256'),
     ],
 

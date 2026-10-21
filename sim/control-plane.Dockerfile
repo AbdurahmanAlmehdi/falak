@@ -7,7 +7,7 @@
 # Roles (production entrypoint): web (panel; migrations with FALAK_MIGRATE=1), agent-api, horizon, reverb, scheduler.
 # Differences from control-plane/Dockerfile: no baked agent binaries (the sim mounts the repository).
 
-ARG PHP_IMAGE=dunglas/frankenphp:1.12.7-php8.4-trixie
+ARG PHP_IMAGE=dunglas/frankenphp:1.13.2-php8.4-trixie
 
 # --- base: PHP runtime + extensions ---------------------------------------------------
 FROM ${PHP_IMAGE} AS base
