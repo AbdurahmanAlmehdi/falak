@@ -230,7 +230,7 @@ func TestRuntimeMirrorsArePassedToTheInstallers(t *testing.T) {
 		t.Fatal("expected the downloads to fail against the stub mirror")
 	}
 	got := strings.Join(paths, " ")
-	for _, want := range []string{"/gh/php/frankenphp/releases/download/v1.4.0/frankenphp-linux-x86_64", "/nodejs/v22.11.0/SHASUMS256.txt"} {
+	for _, want := range []string{"/gh/php/frankenphp/releases/download/v1.4.0/frankenphp-linux-x86_64-gnu", "/nodejs/v22.11.0/SHASUMS256.txt"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("mirror not used: want %s in %s", want, got)
 		}

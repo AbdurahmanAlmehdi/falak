@@ -20,7 +20,7 @@
       "type": "string",
       "format": "uri",
       "default": "https://github.com/php/frankenphp/releases/download",
-      "description": "Release download base: <mirror>/v<version>/frankenphp-linux-<arch> (an HTTPS mirror or caching proxy of GitHub releases)"
+      "description": "Release download base: <mirror>/v<version>/frankenphp-linux-<arch>-gnu (an HTTPS mirror or caching proxy of GitHub releases)"
     },
     "ini": {
       "type": "object",
