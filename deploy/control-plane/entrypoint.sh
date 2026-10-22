@@ -151,8 +151,9 @@ configure_php() {
       if [ "${FALAK_WORKER_MODE:-1}" != "0" ]; then
         mode=worker
         workers="$(max 1 "$(int_or "${FALAK_PHP_WORKERS:-}" $((cpus * 2)))")"
-        # Worker threads plus two regular threads (direct /index.php hits, e.g. from old links).
-        threads=$((workers + 2))
+        # Two regular threads (direct /index.php hits, e.g. from old links). FrankenPHP >= 1.13 starts the
+        # worker threads on top of num_threads and wants max_threads >= num_threads + workers.
+        threads=2
       else
         threads="$(max 1 "$(int_or "${FALAK_PHP_THREADS:-}" "$(max 4 $((cpus * 2)))")")"
       fi
@@ -163,7 +164,7 @@ configure_php() {
       threads="$(min 32 "$ceiling")"
       ;;
   esac
-  ceiling="$(max "$ceiling" "$threads")"
+  ceiling="$(max "$ceiling" $((threads + workers)))"
 
   if [ -n "$legacy" ] || [ "$legacy_max" = 1 ]; then
     log "FRANKENPHP_CONFIG sets the PHP thread count (${FRANKENPHP_CONFIG}); it overrides the $1 defaults. Remove it from custom.env to use the FALAK_* sizing (docs/INSTALL.md)."
