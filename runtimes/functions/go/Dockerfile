@@ -1,12 +1,12 @@
 # Falak function runtime: Go (net/http handlers). See README.md for the falak-fn-install / falak-fn-serve /
 # falak-fn-run convention. Build context: runtimes/functions (this file: go/Dockerfile).
-FROM golang:1.27.1-alpine AS installer
+FROM golang:1.27.3-alpine AS installer
 
 WORKDIR /src
 COPY go/install/ .
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /falak-fn-install .
 
-FROM golang:1.27.1-alpine
+FROM golang:1.27.3-alpine
 
 # git for modules that are not on the module proxy.
 RUN apk add --no-cache git ca-certificates

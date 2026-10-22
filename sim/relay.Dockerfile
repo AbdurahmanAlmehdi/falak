@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 # Falak terminal relay for the local simulation (production bakes it into the control-plane image, role `relay`).
 #   build context: ../agent
-ARG GO_IMAGE=golang:1.25-trixie
+ARG GO_IMAGE=golang:1.27-trixie
 
 FROM ${GO_IMAGE} AS build
 WORKDIR /src
