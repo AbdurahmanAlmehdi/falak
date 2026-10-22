@@ -20,7 +20,7 @@ type FrankenPHPPayload struct {
 	INI     map[string]any `json:"ini"`
 	AsEdge  *bool          `json:"as_edge"`
 	// Mirror replaces the release download base (default https://github.com/php/frankenphp/releases/download):
-	// <mirror>/v<version>/frankenphp-linux-<arch>.
+	// <mirror>/v<version>/frankenphp-linux-<arch>-gnu.
 	Mirror string `json:"mirror"`
 	// EdgeGroups are extra groups for the edge user (set by provisioning, not the wire payload): PHP runs
 	// as the edge user under FrankenPHP and must read site .env files and write storage/.
@@ -76,7 +76,9 @@ func (rt *Runtime) FrankenPHPConfigure(ctx context.Context, p FrankenPHPPayload,
 		if base == "" {
 			base = rt.d.FrankenPHPBase
 		}
-		url := fmt.Sprintf("%s/v%s/frankenphp-linux-%s", strings.TrimRight(base, "/"), ver, arch)
+		// The glibc build (needs glibc >= 2.28): 1.13.2's musl build dies with SIGILL on CPUs without SHA-NI
+		// (php/frankenphp#2743).
+		url := fmt.Sprintf("%s/v%s/frankenphp-linux-%s-gnu", strings.TrimRight(base, "/"), ver, arch)
 		fmt.Fprintf(st.Stdout(), "downloading %s\n", url)
 		if _, _, err := Download(ctx, rt.d.HTTP, url, p.SHA256, rt.d.FS.P(FrankenPHPBinary), 0o755, nil); err != nil {
 			return nil, err

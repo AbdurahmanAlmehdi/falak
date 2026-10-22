@@ -54,7 +54,7 @@ use `SIM_AGENT_ARCH=amd64 make up`. Emulation is required on arm64 hosts.
 
 | Service | Built from / image |
 |---|---|
-| control-plane / agent-api / horizon / reverb | `control-plane.Dockerfile` (context `../control-plane`, plus `../deploy/control-plane` for the production Caddyfile, php.ini and entrypoint): `dunglas/frankenphp:1.12.7-php8.4-trixie` + pdo_pgsql, redis, pcntl, intl, zip, bcmath, gmp, sockets. Composer deps come from `composer:2.10.3`, the frontend is built with `oven/bun:1.4.2`. Entrypoint roles `web` (runs migrations with `FALAK_MIGRATE=1`, then the panel in worker mode), `agent-api`, `horizon`, `reverb`. |
+| control-plane / agent-api / horizon / reverb | `control-plane.Dockerfile` (context `../control-plane`, plus `../deploy/control-plane` for the production Caddyfile, php.ini and entrypoint): `dunglas/frankenphp:1.13.2-php8.4-trixie` + pdo_pgsql, redis, pcntl, intl, zip, bcmath, gmp, sockets. Composer deps come from `composer:2.10.3`, the frontend is built with `oven/bun:1.4.2`. Entrypoint roles `web` (runs migrations with `FALAK_MIGRATE=1`, then the panel in worker mode), `agent-api`, `horizon`, `reverb`. |
 | postgres | `postgres:17.11` |
 | valkey | `valkey/valkey:9.1.2-alpine` |
 | edge | `edge/Dockerfile` (`caddy:2.11.4-alpine` + openssl, curl) |

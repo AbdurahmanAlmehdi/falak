@@ -11,7 +11,7 @@
 # FALAK_MIGRATE=1), agent-api (FrankenPHP for agent/builder long-polls, own thread pool), horizon, reverb,
 # scheduler, relay (the Go terminal relay). Runs as www-data. Proven topology: sim/compose.yml; production: deploy/compose.yml.
 
-ARG PHP_IMAGE=dunglas/frankenphp:1.12.7-php8.4-trixie
+ARG PHP_IMAGE=dunglas/frankenphp:1.13.2-php8.4-trixie
 ARG GO_IMAGE=golang:1.25-trixie
 # Caddy needs a newer Go than the agent does (v2.11.7: Go >= 1.26).
 ARG CADDY_GO_IMAGE=golang:1.26-trixie

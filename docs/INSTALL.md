@@ -274,7 +274,7 @@ an HTTPS mirror with the same path layout. Set these in `/opt/falak/custom.env`,
 
 | Variable | Replaces | Fetched path |
 |---|---|---|
-| `FALAK_FRANKENPHP_MIRROR` | `https://github.com/php/frankenphp/releases/download` | `<mirror>/v<version>/frankenphp-linux-<arch>` |
+| `FALAK_FRANKENPHP_MIRROR` | `https://github.com/php/frankenphp/releases/download` | `<mirror>/v<version>/frankenphp-linux-<arch>-gnu` |
 | `FALAK_NODE_MIRROR` | `https://nodejs.org/dist` | `<mirror>/v<version>/SHASUMS256.txt`, `node-v<version>-linux-<arch>.tar.gz` |
 | `FALAK_BUN_MIRROR` | `https://github.com/oven-sh/bun/releases/download` | `<mirror>/bun-v<version>/SHASUMS256.txt`, `bun-linux-<arch>.zip` |
 | `FALAK_DENO_MIRROR` | `https://github.com/denoland/deno/releases/download` | `<mirror>/v<version>/deno-<arch>-unknown-linux-gnu.zip{,.sha256sum}` |

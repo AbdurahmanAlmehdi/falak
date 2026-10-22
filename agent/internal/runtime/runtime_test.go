@@ -376,7 +376,7 @@ func TestFrankenPHP(t *testing.T) {
 	bin := []byte("frankenphp-binary")
 	sum := sha256.Sum256(bin)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1.4.0/frankenphp-linux-x86_64" {
+		if r.URL.Path != "/v1.4.0/frankenphp-linux-x86_64-gnu" {
 			http.NotFound(w, r)
 			return
 		}
@@ -435,7 +435,7 @@ func TestFrankenPHPDownloadsFromThePayloadMirror(t *testing.T) {
 	var paths []string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
-		if r.URL.Path != "/mirror/php/frankenphp/v1.4.0/frankenphp-linux-aarch64" {
+		if r.URL.Path != "/mirror/php/frankenphp/v1.4.0/frankenphp-linux-aarch64-gnu" {
 			http.NotFound(w, r)
 			return
 		}
