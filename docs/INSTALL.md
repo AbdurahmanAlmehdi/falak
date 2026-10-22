@@ -645,7 +645,7 @@ Sizing (in `/opt/falak/.env`, then `falak-ctl up`):
   booted app, about 12 MB.
 - `FALAK_WORKER_MODE=0`: fallback to classic mode for the panel. It is about 2–4× slower per request but
   keeps no state between requests. `FALAK_PHP_THREADS` then sets the starting thread count.
-- Each container logs its pool at start, e.g. `falak: web: PHP worker mode, 4 workers, num_threads 6
+- Each container logs its pool at start, e.g. `falak: web: PHP worker mode, 4 workers, num_threads 2
   max_threads 8`. `falak-ctl status` shows live usage (`PHP threads: panel 1/8 busy · agent-api 5/128
   busy`), and `falak-ctl doctor` flags a pool that is ≥ 80 % busy or saturated.
 
