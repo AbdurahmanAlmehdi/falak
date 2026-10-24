@@ -753,7 +753,7 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                     </span>
                                                     {manage && (
                                                         <Button
-                                                            size="xs"
+                                                            size="sm"
                                                             variant="primary"
                                                             onClick={() =>
                                                                 void mutate(
