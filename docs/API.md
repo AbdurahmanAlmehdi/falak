@@ -971,6 +971,13 @@ Rate limited to 30/min.
 organization); builder servers get one installed automatically when they finish provisioning; external
 builders are created under *Builds → Builders* (organization-scoped). `401` for unknown/disabled tokens.
 
+Docker-mode builds run in a BuildKit container (buildx `docker-container` driver) that falak-builder creates and
+recreates, keeping its cache, when these change: `FALAK_BUILD_MEMORY_MB`, `FALAK_BUILD_CPUS`,
+`FALAK_BUILD_CGROUP_PARENT` (its limits) and `FALAK_BUILD_NETWORK` (its network: `host`, `bridge` or a Docker
+network name). That container resolves names on its own Docker network, not through the host's `/etc/hosts`, and it
+is what pushes to the registry: on a builder that reaches the registry host under a private address (split DNS, a
+private network), set `FALAK_BUILD_NETWORK=host` so the push takes the same route as the host.
+
 ### `GET /api/internal/builds/next?wait=<s>&builder=<name>&run=<run id>`
 `run` identifies the falak-builder process (random, new at every start). A poll with a new run id first fails the
 builds that an earlier run with the same `builder` name had claimed (`Builder <name> restarted during the build.`),

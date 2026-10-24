@@ -283,8 +283,12 @@ func (b *Builder) buildDocker(ctx context.Context, j *job) (*ImageResult, error)
 }
 
 // buildxDriverOpts are the BuildKit container's limits (docker-container driver options, buildx 0.12+) from
-// FALAK_BUILD_MEMORY_MB (no swap on top), FALAK_BUILD_CPUS (a CFS quota) and FALAK_BUILD_CGROUP_PARENT. None set =
-// none: the builder is created exactly as before.
+// FALAK_BUILD_MEMORY_MB (no swap on top), FALAK_BUILD_CPUS (a CFS quota) and FALAK_BUILD_CGROUP_PARENT, and its
+// network from FALAK_BUILD_NETWORK. None set = none: the builder is created exactly as before.
+//
+// The BuildKit container resolves names on its own Docker network, never through the host's /etc/hosts, and it is
+// what pushes to the registry. FALAK_BUILD_NETWORK=host gives it the host's network and /etc/hosts, so a registry the
+// host reaches under a private address (split DNS, a private network) is reached the same way by the push.
 func buildxDriverOpts() ([]string, error) {
 	var opts []string
 	if v := os.Getenv("FALAK_BUILD_MEMORY_MB"); v != "" {
@@ -307,7 +311,25 @@ func buildxDriverOpts() ([]string, error) {
 		}
 		opts = append(opts, "cgroup-parent="+v)
 	}
+	if v := os.Getenv("FALAK_BUILD_NETWORK"); v != "" {
+		if !dockerNetworkName(v) {
+			return nil, fmt.Errorf("FALAK_BUILD_NETWORK %q: host, bridge or a Docker network name", v)
+		}
+		opts = append(opts, "network="+v)
+	}
 	return opts, nil
+}
+
+// dockerNetworkName reports whether s is a name Docker accepts for a network ([a-zA-Z0-9][a-zA-Z0-9_.-]*), which
+// also keeps it from smuggling another driver option into the comma-separated --driver-opt value.
+func dockerNetworkName(s string) bool {
+	for i, r := range s {
+		alnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if !alnum && (i == 0 || !strings.ContainsRune("_.-", r)) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func suffix(s string) string {
