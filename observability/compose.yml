@@ -27,9 +27,12 @@ services:
     volumes:
       - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
     environment:
+      # /v1/* needs "Authorization: Bearer $FALAK_OTLP_TOKEN"; no token = 401, unless FALAK_OTLP_ALLOW_ANONYMOUS=1.
       FALAK_OTLP_TOKEN: ${FALAK_OTLP_TOKEN:-}
+      FALAK_OTLP_ALLOW_ANONYMOUS: ${FALAK_OTLP_ALLOW_ANONYMOUS:-0}
     ports:
-      - "${FALAK_OTLP_BIND:-0.0.0.0}:${FALAK_OTLP_PORT:-4318}:4318"
+      # Loopback by default; FALAK_OTLP_BIND=0.0.0.0 to take OTLP from other hosts.
+      - "${FALAK_OTLP_BIND:-127.0.0.1}:${FALAK_OTLP_PORT:-4318}:4318"
       - "127.0.0.1:${FALAK_METRICS_QUERY_PORT:-9090}:9090"
     healthcheck:
       # Aggregate readiness: Loki, Tempo and the active metrics backend must all be ready
@@ -131,7 +134,7 @@ services:
     logging: *logging
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD (see .env.example)}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"

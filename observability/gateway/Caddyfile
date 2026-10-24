@@ -14,7 +14,8 @@
 # The metrics pool actively health-checks both adapters; only the backend whose compose
 # profile is running is healthy, so traffic follows the selected profile automatically.
 #
-# Optional auth: set FALAK_OTLP_TOKEN and agents must send "Authorization: Bearer <token>".
+# Auth: agents must send "Authorization: Bearer $FALAK_OTLP_TOKEN" on /v1/*. Without a token every /v1/* request
+# is refused, unless FALAK_OTLP_ALLOW_ANONYMOUS=1 (a loopback-only trial).
 
 {
 	admin off
@@ -47,7 +48,7 @@
 
 	@unauthorized {
 		path /v1/*
-		expression `"{$FALAK_OTLP_TOKEN}" != "" && {http.request.header.Authorization} != "Bearer {$FALAK_OTLP_TOKEN}"`
+		expression `"{$FALAK_OTLP_ALLOW_ANONYMOUS}" != "1" && ("{$FALAK_OTLP_TOKEN}" == "" || {http.request.header.Authorization} != "Bearer {$FALAK_OTLP_TOKEN}")`
 	}
 
 	# route = literal order (handle blocks would be re-sorted by path specificity).
