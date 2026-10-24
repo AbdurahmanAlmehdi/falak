@@ -69,3 +69,17 @@ it('answers refusal() with the reason, or null when allowed', function () {
     expect($guard->refusal('https://minio.lan', false))->toBe('The host minio.lan resolves to 10.0.0.5, a private or reserved address (allowed only where private networks are enabled).')
         ->and($guard->refusal('https://minio.lan', true))->toBeNull();
 });
+
+it('takes other schemes only when the caller allows them', function () {
+    $guard = new EndpointGuard(fn () => ['93.184.216.34']);
+
+    expect(fn () => $guard->check('http://hooks.example.com', false))->toThrow(EndpointRefused::class, 'https://')
+        ->and($guard->check('http://hooks.example.com', false, ['http', 'https']))->toBe(['93.184.216.34'])
+        ->and(fn () => $guard->check('ftp://hooks.example.com', false, ['http', 'https']))->toThrow(EndpointRefused::class, 'http:// or https://');
+});
+
+it('pins a request to the checked address, whatever host curl derives', function () {
+    expect(EndpointGuard::pin('https://hooks.example.com/x', '93.184.216.34'))->toBe([CURLOPT_CONNECT_TO => ['::93.184.216.34:443']])
+        ->and(EndpointGuard::pin('http://hooks.example.com:8080/x', '2001:db8::1'))->toBe([CURLOPT_CONNECT_TO => ['::[2001:db8::1]:8080']])
+        ->and(EndpointGuard::pin('http://hooks.example.com/x', '93.184.216.34'))->toBe([CURLOPT_CONNECT_TO => ['::93.184.216.34:80']]);
+});

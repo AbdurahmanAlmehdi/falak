@@ -3,6 +3,7 @@
 use Falak\Databases\Domain\Enums\StorageDriver;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Databases\Infrastructure\ObjectStorage\ObjectStores;
+use Falak\Databases\Infrastructure\ObjectStorage\StorageRequestFailed;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\Aws\SigV4Signer;
 use Illuminate\Http\Client\Request;
@@ -118,6 +119,14 @@ it('sends a PUT whose headers are exactly the ones it signed (one Content-Type)'
 
         return true;
     });
+});
+
+it('follows no redirects from a storage endpoint', function () {
+    Http::fake(['*' => Http::response('', 307, ['Location' => 'http://169.254.169.254/latest/meta-data'])]);
+    $provider = databases_provider($this->organization);
+
+    expect(fn () => app(ObjectStores::class)->for($provider)->put('acme/probe.txt', 'falak', 'text/plain'))->toThrow(StorageRequestFailed::class, 'HTTP 307');
+    Http::assertSentCount(1);
 });
 
 it('reports storage errors without leaking secrets', function () {

@@ -4,8 +4,19 @@ use Falak\Alerting\Domain\Enums\ChannelType;
 use Falak\Alerting\Domain\Models\Channel;
 use Falak\Alerting\Domain\Models\Rule;
 use Falak\Insights\Events\IssueOpened;
+use Falak\Kernel\Network\EndpointGuard;
 
 const ALERTING_SLACK_URL = 'https://hooks.slack.com/services/T000/B000/SECRETSECRETSECRET';
+
+/**
+ * Webhook hosts resolve to a public address in tests (no DNS), or to the addresses given per host.
+ *
+ * @param  array<string, list<string>>  $hosts
+ */
+function alerting_guard(array $hosts = []): void
+{
+    app()->instance(EndpointGuard::class, new EndpointGuard(fn (string $host) => $hosts[$host] ?? ['93.184.216.34']));
+}
 
 function alerting_channel(string $organizationId, ChannelType $type = ChannelType::Slack, array $config = [], array $attributes = []): Channel
 {

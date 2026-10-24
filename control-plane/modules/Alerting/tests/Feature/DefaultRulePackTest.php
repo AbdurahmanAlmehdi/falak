@@ -21,6 +21,7 @@ use Illuminate\Support\Facades\Http;
 require_once __DIR__.'/../Support/helpers.php';
 
 beforeEach(function () {
+    alerting_guard();
     Http::preventStrayRequests();
     Http::fake(fn () => Http::response('ok'));
 });

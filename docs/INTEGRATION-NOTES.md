@@ -487,6 +487,5 @@ certificates, alert delivery to real Slack/Discord/Telegram, the Grafana provisi
 - SourceControl: no Bitbucket Server; OAuth for only one self-hosted GitLab (others via token).
 - Providers: AWS is Lightsail only (no EC2).
 - Deleting an org revokes agents but does not destroy provider machines.
-- Alerting webhook SSRF guard doesn't resolve DNS (rebinding not blocked).
 - Grafana dashboards are copied per org folder but not org-filtered inside Grafana.
 - Laravel generated Dockerfile builds assets before composer (projects importing CSS from vendor/ need own Dockerfile).

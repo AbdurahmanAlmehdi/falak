@@ -3,14 +3,16 @@
 namespace Falak\Kernel\Network;
 
 /**
- * Keeps control-plane requests to user-supplied endpoints (secret providers, backup object storage) away from
- * the control plane's own network (SSRF): an endpoint must be https and resolve only to public addresses.
+ * Keeps control-plane requests to user-supplied endpoints (secret providers, backup object storage, alert
+ * webhooks) away from the control plane's own network (SSRF): an endpoint must be https (or a scheme the caller
+ * allows) and resolve only to public addresses.
  * Callers that allow private networks (a self-hosted Vault, a MinIO on the LAN) may also reach private, loopback
  * and CGNAT ranges. Link-local and cloud metadata addresses (169.254.169.254 and friends) are refused always,
  * including when embedded in an IPv6 address; numeric hosts other than a dotted quad are refused.
  *
  * Check when an endpoint is saved and before every request; pin the request to the addresses returned by
- * {@see check()}, so a DNS answer that changes in between (rebinding) can't redirect it.
+ * {@see check()} ({@see pin()}), so a DNS answer that changes in between (rebinding) can't redirect it, and don't
+ * follow redirects (the target of one is unchecked).
  */
 class EndpointGuard
 {
@@ -46,14 +48,15 @@ class EndpointGuard
     }
 
     /**
+     * @param  list<string>  $schemes
      * @return list<string> the addresses the host resolves to (all allowed)
      *
-     * @throws EndpointRefused when the URL is not https, does not resolve, or reaches a refused address
+     * @throws EndpointRefused when the URL is not https (or one of $schemes), does not resolve, or reaches a refused address
      */
-    public function check(string $url, bool $allowPrivate): array
+    public function check(string $url, bool $allowPrivate, array $schemes = ['https']): array
     {
-        if (strtolower((string) parse_url($url, PHP_URL_SCHEME)) !== 'https') {
-            throw new EndpointRefused('Endpoints must use https://.');
+        if (! in_array(strtolower((string) parse_url($url, PHP_URL_SCHEME)), $schemes, true)) {
+            throw new EndpointRefused('Endpoints must use '.implode(' or ', array_map(fn (string $scheme) => "{$scheme}://", $schemes)).'.');
         }
 
         $host = trim((string) parse_url($url, PHP_URL_HOST), '[]');
@@ -87,16 +90,31 @@ class EndpointGuard
 
     /**
      * Why the URL is refused, or null when it is allowed (the {@see check()} message, without the exception).
+     *
+     * @param  list<string>  $schemes
      */
-    public function refusal(string $url, bool $allowPrivate): ?string
+    public function refusal(string $url, bool $allowPrivate, array $schemes = ['https']): ?string
     {
         try {
-            $this->check($url, $allowPrivate);
+            $this->check($url, $allowPrivate, $schemes);
         } catch (EndpointRefused $e) {
             return $e->getMessage();
         }
 
         return null;
+    }
+
+    /**
+     * curl options that connect a request for $url to $address (one {@see check()} returned) and nothing else.
+     * Name-agnostic (any host, any port), so a host curl derives differently from the URL (%xx decoded) is pinned too.
+     *
+     * @return array<int, mixed>
+     */
+    public static function pin(string $url, string $address): array
+    {
+        $port = (int) (parse_url($url, PHP_URL_PORT) ?: (strtolower((string) parse_url($url, PHP_URL_SCHEME)) === 'http' ? 80 : 443));
+
+        return [CURLOPT_CONNECT_TO => ['::'.(str_contains($address, ':') ? "[{$address}]" : $address).":{$port}"]];
     }
 
     private function addressRefusal(string $address, bool $allowPrivate): ?string

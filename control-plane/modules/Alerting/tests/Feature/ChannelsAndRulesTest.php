@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Http;
 require_once __DIR__.'/../Support/helpers.php';
 
 beforeEach(function () {
+    alerting_guard();
     Http::preventStrayRequests();
     [$this->user, $this->organization] = actingAsMember(Role::Admin);
 });
@@ -50,6 +51,19 @@ it('validates channel config per type', function (string $type, array $config, s
     ['webhook', ['url' => 'https://hooks.example.com/x', 'secret' => 'short'], 'config.secret'],
     ['pager', ['x' => 'y'], 'type'],
 ]);
+
+it('refuses webhook hosts that resolve to private addresses, also when allowed on a managed install', function () {
+    alerting_guard(['127.0.0.1.nip.io' => ['127.0.0.1'], 'lan.example.com' => ['10.0.0.5']]);
+    $webhook = fn (string $url) => $this->post('/alerting/channels', ['name' => 'Hook', 'type' => 'webhook', 'config' => ['url' => $url, 'secret' => 'a-long-enough-secret']]);
+
+    $webhook('http://127.0.0.1.nip.io/hook')->assertSessionHasErrors('config.url');
+
+    config(['alerting.allow_private_webhooks' => true, 'controlplane.managed' => true]);
+    $webhook('http://lan.example.com/hook')->assertSessionHasErrors('config.url');
+
+    config(['controlplane.managed' => false]);
+    $webhook('http://lan.example.com/hook')->assertSessionHasNoErrors();
+});
 
 it('never sends channel secrets to the UI', function () {
     alerting_channel($this->organization->id, ChannelType::Slack);

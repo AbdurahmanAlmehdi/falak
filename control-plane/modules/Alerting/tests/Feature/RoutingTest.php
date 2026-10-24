@@ -42,6 +42,7 @@ final class DeploymentFailedForTest implements Alertable
 }
 
 beforeEach(function () {
+    alerting_guard();
     Http::preventStrayRequests();
     $this->slackResponse = ['ok', 200];
     Http::fake(fn () => Http::response(...$this->slackResponse));
