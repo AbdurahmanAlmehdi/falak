@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1090 500" width="1090" height="500" font-family="Virgil, 'Segoe Print', 'Comic Sans MS', cursive" fill="#1e1e1e">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10" fill="none" stroke="#1e1e1e" stroke-width="1.6"/></marker></defs>
+<rect width="1090" height="500" fill="#ffffff"/>
+<path d="M20.4 69.0 L220.1 69.7 L218.9 200.0 L18.9 199.8 Z" fill="#a5d8ff" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="120.0" y="119.0" font-size="18" text-anchor="middle" font-weight="bold">You</text>
+<text x="120.0" y="133.0" font-size="14" text-anchor="middle">browser · falak CLI</text>
+<text x="120.0" y="151.0" font-size="14" text-anchor="middle">AI agent (skill, MCP)</text>
+<text x="120.0" y="169.0" font-size="14" text-anchor="middle">CI (API token)</text>
+<path d="M19.8 330.1 L220.2 330.1 L220.4 409.0 L20.2 409.3 Z" fill="#e9ecef" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="120.0" y="372.0" font-size="18" text-anchor="middle" font-weight="bold">GitHub / GitLab</text>
+<text x="120.0" y="386.0" font-size="14" text-anchor="middle">repos · push webhooks</text>
+<path d="M299.7 19.4 L679.2 20.7 L679.0 489.5 L300.0 489.6 Z" fill="none" fill-opacity="0" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 6" stroke-linejoin="round"/>
+<text x="490.0" y="52.0" font-size="18" text-anchor="middle" font-weight="bold">Control-plane host  ·  /opt/falak</text>
+<path d="M329.2 60.0 L648.9 60.4 L650.6 130.2 L330.9 129.6 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="490.0" y="88.0" font-size="18" text-anchor="middle" font-weight="bold">edge — Caddy</text>
+<text x="490.0" y="102.0" font-size="14" text-anchor="middle">TLS · agent mTLS</text>
+<text x="490.0" y="120.0" font-size="14" text-anchor="middle">/  /api  /agent  /otlp  /terminal</text>
+<path d="M329.5 159.7 L480.4 158.9 L479.9 249.2 L329.1 248.9 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="405.0" y="207.0" font-size="18" text-anchor="middle" font-weight="bold">panel + API</text>
+<text x="405.0" y="221.0" font-size="14" text-anchor="middle">Laravel · FrankenPHP</text>
+<path d="M500.9 160.8 L650.9 159.5 L649.8 249.7 L500.9 251.1 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="575.0" y="207.0" font-size="18" text-anchor="middle" font-weight="bold">agent-api</text>
+<text x="575.0" y="221.0" font-size="14" text-anchor="middle">terminal relay</text>
+<path d="M329.5 279.1 L480.1 280.3 L479.6 359.1 L330.9 361.1 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="405.0" y="322.0" font-size="18" text-anchor="middle" font-weight="bold">Horizon queues</text>
+<text x="405.0" y="336.0" font-size="14" text-anchor="middle">Reverb · scheduler</text>
+<path d="M500.3 278.9 L649.0 279.3 L649.2 359.6 L498.9 358.8 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="575.0" y="322.0" font-size="18" text-anchor="middle" font-weight="bold">Postgres 17</text>
+<text x="575.0" y="336.0" font-size="14" text-anchor="middle">Valkey</text>
+<path d="M331.1 390.2 L479.9 389.1 L480.0 471.1 L330.0 469.5 Z" fill="#ffec99" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="405.0" y="432.0" font-size="18" text-anchor="middle" font-weight="bold">builder</text>
+<text x="405.0" y="446.0" font-size="14" text-anchor="middle">image registry</text>
+<path d="M500.5 391.0 L650.6 389.5 L650.3 469.0 L500.8 470.0 Z" fill="#d0bfff" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="575.0" y="432.0" font-size="18" text-anchor="middle" font-weight="bold">telemetry (opt.)</text>
+<text x="575.0" y="446.0" font-size="14" text-anchor="middle">Loki · Tempo · Grafana</text>
+<path d="M840.8 60.6 L1069.3 60.0 L1069.7 358.9 L838.9 359.5 Z" fill="#b2f2bb" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="955.0" y="149.0" font-size="18" text-anchor="middle" font-weight="bold">Your servers (N)</text>
+<text x="955.0" y="181.0" font-size="14" text-anchor="middle">falak-agent (Go)</text>
+<text x="955.0" y="217.0" font-size="14" text-anchor="middle">edge: Caddy / FrankenPHP</text>
+<text x="955.0" y="235.0" font-size="14" text-anchor="middle">sites · workers · cron</text>
+<text x="955.0" y="253.0" font-size="14" text-anchor="middle">Docker / compose apps</text>
+<text x="955.0" y="271.0" font-size="14" text-anchor="middle">databases · functions</text>
+<text x="955.0" y="289.0" font-size="14" text-anchor="middle">firewall (nftables)</text>
+<path d="M839.8 411.1 L1070.5 409.2 L1069.1 479.2 L841.0 480.7 Z" fill="#e9ecef" fill-opacity="0.85" stroke="#1e1e1e" stroke-width="2" stroke-linejoin="round"/>
+<text x="955.0" y="447.0" font-size="18" text-anchor="middle" font-weight="bold">Visitors</text>
+<text x="955.0" y="461.0" font-size="14" text-anchor="middle">HTTPS to your sites</text>
+<path d="M220.0 120.0 Q274.2 112.0 330.0 95.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<text x="240" y="101" font-size="13">HTTPS</text>
+<path d="M220.0 360.0 Q278.2 237.9 330.0 120.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<text x="228" y="263" font-size="13">webhooks</text>
+<path d="M840.0 100.0 Q746.9 101.3 650.0 95.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<path d="M955.0 410.0 Q955.3 379.2 955.0 360.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<path d="M405.0 130.0 Q408.3 140.8 405.0 160.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<path d="M575.0 130.0 Q572.9 145.2 575.0 160.0" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#a)"/>
+<text x="690" y="133" font-size="13">agent dials out (mTLS):</text>
+<text x="690" y="151" font-size="13">· long-poll commands</text>
+<text x="690" y="169" font-size="13">· heartbeat every 15 s</text>
+<text x="690" y="187" font-size="13">· command output</text>
+<text x="690" y="205" font-size="13">· OTLP telemetry</text>
+<text x="690" y="223" font-size="13">· pulls built images</text>
+</svg>

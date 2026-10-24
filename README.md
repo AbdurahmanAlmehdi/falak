@@ -1,7 +1,168 @@
 # Falak
 
-Self-hosted server management, deployment and observability — a replacement for Laravel Forge + Envoyer
-(multi-server deploys) + Coolify-style Docker/native builds + Nightwatch-style APM, on an LGTM stack.
+**Falak is a self-hosted platform for running your apps on your own servers.** You install one control plane, connect
+any number of Linux servers to it, and then deploy, scale, watch and debug everything from one panel, a CLI or an
+API. It covers what you would otherwise put together from Laravel Forge (server provisioning), Envoyer (zero-downtime,
+multi-server deploys), Coolify or Railway (Docker and native builds, compose apps, a project canvas) and Nightwatch
+with a Grafana LGTM stack (APM, logs, traces, metrics, alerts).
+
+- **Servers:** provisioned from a cloud provider (Hetzner, DigitalOcean, Vultr, Linode, AWS Lightsail, Contabo) or any
+  Ubuntu 22.04–26.04 box with one install command. Falak sets up the firewall, SSH hardening and the runtimes the server
+  needs.
+- **Apps:** Laravel (with Octane), PHP, WordPress, Node, Bun, Deno, static sites, Dockerfiles, compose apps from 45+
+  templates, and serverless-style functions that scale to zero. Push-to-deploy, health checks, automatic rollback,
+  preview environments.
+- **Data:** PostgreSQL, MySQL, MariaDB, Redis and Valkey containers with scheduled backups to S3-compatible storage and
+  one-click restore.
+- **Operations:** a web terminal and `falak console`, `.env` and secrets management, Cloudflare DNS, Tailscale,
+  `falak.yaml` config as code with plans and approvals, gVisor sandboxes for untrusted code, and an Agent Skill and
+  MCP server so AI agents can operate it.
+
+## How it works
+
+![How Falak's components talk to each other](docs/architecture.svg)
+
+<sub>Source: [`docs/architecture.excalidraw`](docs/architecture.excalidraw). Open it at
+[excalidraw.com](https://excalidraw.com) to edit it.</sub>
+
+- **The control plane** is one Docker Compose stack on one host. Caddy terminates TLS and routes requests to the panel
+  and REST API (a Laravel app on FrankenPHP), the agent API and the terminal relay. Behind them run Horizon queues,
+  Reverb websockets, the scheduler, Postgres 17, Valkey, the builder and its image registry, and, with
+  `--observability`, Loki, Tempo, VictoriaMetrics and Grafana.
+- **Every server runs `falak-agent`**, a small Go binary (~10 MB on disk, ~17 MB RAM). The agent always dials out to
+  the control plane over mTLS, using a certificate it got at enrollment, so servers need no inbound SSH. It long-polls
+  for commands, streams their output back, sends a heartbeat every 15 s and forwards OTLP telemetry.
+- **Commands are declarative and idempotent.** For example, `edge.caddy.apply`, `proc.apply` and `net.firewall.apply`
+  carry the full desired state and the agent converges to it, so a command can safely run again after a restart. Their
+  JSON Schemas in [`contracts/`](contracts) are shared by the PHP and Go code.
+- **Deploys:** a push webhook (or `falak deploy`) starts a build on the builder: native via Railpack, or Docker via
+  BuildKit. Each target server then fetches the build, runs migrations once on the leader, switches traffic atomically
+  and health-checks it, rolling back automatically if a check fails.
+- **Visitors never touch the control plane:** each server's own Caddy or FrankenPHP edge serves its sites.
+
+---
+
+## Quick start
+
+### 1. Install the control plane
+
+Use a fresh Ubuntu 22.04/24.04/26.04 or Debian 12 host with 4 GB RAM (8 GB with `--observability`) and ports 80 and
+443 open. First point DNS for `falak.example.com` and `agents.falak.example.com` at it, then run:
+
+```bash
+curl -fsSL https://falak.sh/install.sh \
+  | sudo bash -s -- --domain falak.example.com --email you@example.com [--observability]
+```
+
+The installer checks the host and installs Docker. It then pulls the release images, starts the stack,
+requests Let's Encrypt certificates and prints the first admin's password. Open `https://falak.example.com` and sign
+in. Running the installer again is safe.
+
+### 2. Install the CLI on your laptop
+
+On macOS or Linux (amd64/arm64), this one line installs the CLI, checks it against the release's `SHA256SUMS` and
+signs you in through the browser:
+
+```bash
+curl -fsSL https://falak.sh/install-cli.sh | FALAK_URL=https://falak.example.com sh
+falak whoami
+```
+
+Leave out `FALAK_URL` to only install, then run `falak login --url …` later. `falak update` updates the CLI in place.
+
+### 3. Add a server
+
+In the panel, open **Servers → Create** and pick a cloud provider, or pick *Custom* and run the printed one-line command
+as root on a fresh Ubuntu 22.04, 24.04 or 26.04 box:
+
+```bash
+curl -fsSL https://falak.example.com/install/<one-time-token> | sh
+```
+
+The agent enrolls and the server is provisioned for its type (app, web, db, cache, worker, load balancer, builder).
+`falak servers list` shows it once it is online.
+
+### 4. Deploy something
+
+Create a site in the panel (**Sites → Create**, or **Canvas → Create** for databases, templates and functions), or
+describe it in code:
+
+```bash
+cd my-app
+falak init          # writes falak.yaml from what it finds in the repo
+falak plan          # what would change
+falak apply --wait  # create it and stream the deployment
+```
+
+### 5. Give your AI agent the keys (optional)
+
+```bash
+falak skill install                 # teaches Claude Code, Codex & co. the CLI, falak.yaml and the API
+claude mcp add falak -- falak mcp   # sandboxes as MCP tools
+```
+
+---
+
+## Manage Falak with an AI agent
+
+These prompts are written for Claude Code or another coding agent that has a shell. Replace the `<placeholders>` and
+paste them in. The [`falak` skill](skills/falak) covers everything that goes through the panel's API (servers, sites,
+agents). Control-plane host work runs as root over SSH with `falak-ctl`.
+
+**Create a control plane**
+
+```text
+Install a Falak control plane on <user>@<host-ip> (fresh Ubuntu 24.04, sudo works). The panel domain is
+<falak.example.com> and the Let's Encrypt email is <you@example.com>. [Enable --observability.]
+1. Before anything else, check that <falak.example.com> and agents.<falak.example.com> resolve to <host-ip>.
+   If they don't, stop and tell me which records to create.
+2. Run the official installer from https://falak.sh/install.sh with those flags, then show me
+   `sudo falak-ctl status` and `sudo falak-ctl doctor`.
+3. Give me the panel URL and the first admin's password exactly as the installer printed it, and don't save it
+   anywhere else.
+4. Install the falak CLI on this machine with https://falak.sh/install-cli.sh, sign in (browser login) and run
+   `falak whoami`.
+```
+
+**Update the control plane**
+
+```text
+Update the Falak control plane on <user>@<host-ip> to <vX.Y.Z | the latest release>.
+1. Show the current version (`sudo falak-ctl status`) and read the release notes for every version in between on
+   https://github.com/falak-sh/falak/releases. Tell me about anything breaking before going on.
+2. Run the update detached so a dropped SSH session can't kill it:
+   sudo bash -c "setsid nohup falak-ctl update --version <vX.Y.Z> > /tmp/falak-update.log 2>&1 < /dev/null &"
+   Then follow /tmp/falak-update.log until it finishes. falak-ctl takes a backup first and rolls back by itself
+   if the update fails.
+3. Afterwards check that `sudo falak-ctl status` shows every service healthy and that https://<falak.example.com>/up
+   returns 200. If it rolled back, show me the error from the log and find the cause before trying again.
+4. Tell me how many server agents are now older than the control plane.
+```
+
+**Add a server and keep its agent current**
+
+```text
+Using the falak CLI and the Falak API (skill: falak):
+1. Create a Custom server named <name> of type <app|db|…> and give me its install command. Run it as root on
+   <user>@<server-ip> only if I say so.
+2. Wait until the server is online and provisioned, then show `falak servers show <name>`.
+3. List every server whose agent version is older than the control plane's. Upgrade them one at a time with
+   POST /api/v1/servers/<id>/agent/upgrade, and wait for each one to report the new version before starting the next.
+   Stop at the first failure and show me why it failed.
+```
+
+**Health check and troubleshooting**
+
+```text
+Do a read-only health check of my Falak install (skill: falak; control-plane host <user>@<host-ip>):
+the control-plane version and `falak-ctl status`/`doctor`; every server (online, agent version, disk, memory); the
+sites and their last deployment; failed backups; and open alerts or Insights issues. Change nothing. Give me a short
+list of problems, ordered by severity, each with the command you would run to fix it, and wait for my go-ahead.
+```
+
+---
+
+## Repository layout
 
 | Part | What it is |
 |---|---|
@@ -18,7 +179,7 @@ Architecture and module boundaries: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
-## 1. Try everything locally (simulation)
+## Try everything locally (simulation)
 
 Requirements: Docker (with ~8 GB RAM for Docker), Go 1.25, `make`, `jq`, `curl`, `openssl`.
 
@@ -60,7 +221,7 @@ Ports differ from the defaults (13000, 14318, 8443, …) to avoid clashing with 
 
 ---
 
-## 2. Run the tests
+## Run the tests
 
 ```bash
 # Control plane (unit, feature, architecture/boundary tests) + quality gates
@@ -86,7 +247,7 @@ CI runs the same in `.github/workflows/` (control-plane, agent, packages with a 
 
 ---
 
-## 3. Use it
+## Use it
 
 ### First run
 ```bash
@@ -119,15 +280,8 @@ gateway starts it on the first request and adds instances under load. Details: [
 
 ### CLI (on your own machine)
 `falak` controls a Falak install from a developer laptop or CI: deploys, rollbacks, env files, logs, SSH. Install it
-on macOS or Linux (amd64/arm64) in one line. The script picks the right binary from the latest release, checks it
-against `SHA256SUMS` and puts it in `/usr/local/bin` (or `~/.local/bin`):
-```bash
-curl -fsSL https://falak.sh/install-cli.sh | sh
-
-# install and log in in one go
-curl -fsSL https://falak.sh/install-cli.sh | FALAK_URL=https://falak.example.com sh
-```
-`FALAK_VERSION=v0.2.6` pins a version and `FALAK_INSTALL_DIR` changes the target. Later, `falak update` updates the CLI in place.
+as shown in [Quick start](#2-install-the-cli-on-your-laptop); `FALAK_VERSION=vX.Y.Z` pins a version and `FALAK_INSTALL_DIR`
+changes the target.
 
 `falak login --url https://falak.example.com` signs in through the browser: it shows a code, opens the panel's
 approval page (sign in there as usual, confirm your password and 2FA code, check the code matches, approve) and
@@ -245,28 +399,24 @@ Grafana (dashboards are provisioned per organization).
 
 ---
 
-## 4. Production install
-
-One command on a fresh Ubuntu 22.04/24.04/26.04 or Debian 12 host (4 GB RAM recommended). Point DNS for
-`falak.example.com` and `agents.falak.example.com` at the host first:
-
-```bash
-curl -fsSL https://falak.sh/install.sh \
-  | sudo bash -s -- --domain falak.example.com --email you@example.com [--observability]
-```
-
-`https://falak.sh/install.sh` redirects to the script on GitHub `main`
-(`https://raw.githubusercontent.com/falak-sh/falak/main/deploy/install.sh`), so either URL works.
-
-The installer runs preflight checks, installs Docker, generates `/opt/falak/.env`, pulls the release images
-from GHCR, starts the Compose stack (`deploy/compose.yml`: FrankenPHP web, Horizon, Reverb, scheduler,
-Postgres 17, Valkey, a Caddy edge with Let's Encrypt and agent mTLS, and the builder) and prints the first
-admin password. Day-2 operations use `falak-ctl`: `status`, `logs`, `update` (backup, then automatic
-rollback if the update fails), `backup`/`restore` (database, storage, **Fleet CA**, `.env`), `doctor`,
-`domain set` and `admin reset-password`.
+## Operating the control plane
 
 Full guide (requirements, DNS, upgrade, backup/restore, uninstall, troubleshooting, releasing):
-[`docs/INSTALL.md`](docs/INSTALL.md).
+[`docs/INSTALL.md`](docs/INSTALL.md). `https://falak.sh/install.sh` redirects to
+[`deploy/install.sh`](deploy/install.sh) on `main`. Day-2 work on the host uses `falak-ctl` as root:
+
+```bash
+falak-ctl status                    # services, versions, health
+falak-ctl update [--version vX.Y.Z] # backup first, automatic rollback if the update fails (or Update in the panel)
+falak-ctl backup && falak-ctl restore <file>   # database, storage, Fleet CA, .env
+falak-ctl doctor                    # preflight + live checks
+falak-ctl logs [service]
+falak-ctl domain set <domain>
+falak-ctl admin reset-password <email>
+```
+
+Server agents are updated separately: **Servers → Update all agents**, or
+`POST /api/v1/servers/{server}/agent/upgrade` for one server.
 
 Known limits and deferred items are listed in [`docs/INTEGRATION-NOTES.md`](docs/INTEGRATION-NOTES.md).
 
