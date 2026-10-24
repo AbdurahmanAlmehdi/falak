@@ -21,6 +21,11 @@ const BinaryPath = "/usr/local/bin/falak-agent"
 
 // Unit renders the systemd unit. KillMode=mixed sends SIGTERM to the agent only, letting the built-in
 // supervisor stop its programs gracefully (stop signals + timeouts) before systemd kills leftovers.
+//
+// No sandboxing directives (NoNewPrivileges, PrivateTmp, ProtectSystem/Home, Restrict*, ...): the supervisor starts
+// sites' programs as the agent's own children (systemd-run --scope keeps the caller's process), so every one of them
+// would inherit the restriction (no sudo/setuid for site users and consoles, a /tmp and mount view of their own),
+// and the agent itself writes across /etc, /var, /home and the package database.
 func Unit(binary string) string {
 	return fmt.Sprintf(`[Unit]
 Description=Falak agent
