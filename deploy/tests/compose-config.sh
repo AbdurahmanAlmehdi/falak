@@ -2,7 +2,8 @@
 # Scripted test for deploy/compose.yml as `docker compose config` renders it: the edge's fixed address (FALAK_EDGE_IP)
 # and the app trusting only it (the whole edge subnet with an older .env that lacks it); every service but the builder
 # in falakcp.slice with OOM score -900; state/host writable only in control-plane, horizon and scheduler, which wait
-# for host-init (no network, read-only, CHOWN/FOWNER only); the edge's FALAK_PANEL_ALLOW (everyone unless set). Needs docker compose (skipped without it).
+# for host-init (no network, read-only, CHOWN/FOWNER/DAC_READ_SEARCH only; Tempo waits for it too); the stateful,
+# edge, builder and observability services drop every capability but the few they add, with no-new-privileges; the edge's FALAK_PANEL_ALLOW (everyone unless set). Needs docker compose (skipped without it).
 #   deploy/tests/compose-config.sh
 set -euo pipefail
 
@@ -35,11 +36,20 @@ pass "every service but the builder runs in falakcp.slice with OOM score -900; t
 
 [ "$(q '[.services | to_entries[] | select([.value.volumes[]? | .target] | index("/falak/host")) | .key] | sort | join(",")')" = control-plane,horizon,scheduler ] \
   || fail "/falak/host mounted in: $(q '[.services | to_entries[] | select([.value.volumes[]? | .target] | index("/falak/host")) | .key] | join(",")')"
-[ "$(q '[.services | to_entries[] | select(.value.depends_on["host-init"].condition == "service_healthy") | .key] | sort | join(",")')" = control-plane,horizon,scheduler ] \
+[ "$(q '[.services | to_entries[] | select(.value.depends_on["host-init"].condition == "service_healthy") | .key] | sort | join(",")')" = control-plane,horizon,scheduler,tempo ] \
   || fail "host-init dependants"
-[ "$(q '.services["host-init"] | [.network_mode, (.read_only|tostring), (.cap_drop|join(",")), (.cap_add|join(",")), (.security_opt|join(","))] | join(" ")')" = "none true ALL CHOWN,FOWNER no-new-privileges:true" ] \
+[ "$(q '.services["host-init"] | [.network_mode, (.read_only|tostring), (.cap_drop|join(",")), (.cap_add|join(",")), (.security_opt|join(","))] | join(" ")')" = "none true ALL CHOWN,FOWNER,DAC_READ_SEARCH no-new-privileges:true" ] \
   || fail "host-init hardening: $(q '.services["host-init"]')"
-pass "state/host only in control-plane/horizon/scheduler, after host-init (no network, read-only, CHOWN+FOWNER, no-new-privileges)"
+pass "state/host only in control-plane/horizon/scheduler, after host-init (no network, read-only, CHOWN+FOWNER+DAC_READ_SEARCH, no-new-privileges)"
+caps() { q ".services[\"$1\"] | [(.cap_drop // [] | join(\",\")), (.cap_add // [] | sort | join(\",\")), (.security_opt // [] | join(\",\"))] | join(\" \")"; }
+for want in "postgres ALL CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID" "valkey ALL " "registry ALL " "edge ALL DAC_READ_SEARCH,NET_BIND_SERVICE" \
+  "builder ALL CHOWN,DAC_OVERRIDE,FOWNER,FSETID,KILL,SETGID,SETUID" "gateway ALL NET_BIND_SERVICE" "loki ALL " "tempo ALL " "victoriametrics ALL " "grafana ALL "; do
+  svc="${want%% *}"
+  [ "$(caps "$svc")" = "${want#* } no-new-privileges:true" ] || fail "$svc capabilities: $(caps "$svc")"
+done
+[ "$(q '.services.tempo.user // "image"')" = image ] || fail "tempo runs as $(q '.services.tempo.user')"
+[ "$(q '[.services.registry.read_only, .services.gateway.read_only] | map(tostring) | join(" ")')" = "true true" ] || fail "registry/gateway read-only"
+pass "postgres, valkey, registry, edge, builder and the observability services: cap_drop ALL + their few caps, no-new-privileges; Tempo as its own uid"
 
 [ "$(q '.services["host-init"].healthcheck | [.interval, (.start_interval // "none")] | join(" ")')" = "2s none" ] || fail "host-init healthcheck: $(q '.services["host-init"].healthcheck')"
 q '.services["host-init"].entrypoint | join(" ")' | grep -q 'chown 0:33 /state/host' || fail "host-init chown (default uid 33)"

@@ -65,11 +65,24 @@ services:
         limits: { memory: 512m }
     networks: [observability]
 
+  # Hands Tempo's volume to the image's uid 10001 (older stacks ran Tempo as root), then exits.
+  tempo-init:
+    image: caddy:2.11.4-alpine   # already pulled for the gateway; only its shell is used
+    user: "0"
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    entrypoint: ["sh", "-c", "find /tempo \\! -user 10001 -exec chown 10001:10001 {} +"]
+    volumes:
+      - tempo-data:/tempo
+
   tempo:
     image: grafana/tempo:2.10.8
     restart: unless-stopped
     logging: *logging
-    user: "0"  # named volume is root-owned; tempo image runs as 10001 by default
+    depends_on:
+      tempo-init: { condition: service_completed_successfully }
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     environment:
       FALAK_TRACES_RETENTION: ${FALAK_TRACES_RETENTION:-360h}
