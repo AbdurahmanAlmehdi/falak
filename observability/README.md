@@ -22,10 +22,10 @@ backend is up. Choosing the compose profile is the only step needed to switch ba
 
 ```bash
 cd observability
-cp .env.example .env            # optional; defaults are fine for a trial
+cp .env.example .env            # then set GRAFANA_ADMIN_PASSWORD and FALAK_OTLP_TOKEN (both required)
 docker compose --profile victoriametrics up -d
-./smoke-test.sh                 # verifies traces, logs, metrics and span-metrics end to end
-open http://localhost:3000      # admin / admin (change GRAFANA_ADMIN_PASSWORD)
+FALAK_OTLP_TOKEN=<token> ./smoke-test.sh   # verifies traces, logs, metrics and span-metrics end to end
+open http://localhost:3000      # admin / GRAFANA_ADMIN_PASSWORD
 ```
 
 To bring the stack up, test it and tear it down (including volumes) in one run:
@@ -80,9 +80,11 @@ directly: `http://victoriametrics:8428` or `http://mimir:9009/prometheus`.
 
 ## Security
 
-* `:4318` is the only port meant to be public. Set `FALAK_OTLP_TOKEN` to require
-  `Authorization: Bearer …` on `/v1/*`. For TLS, reach it over the private network
-  (WireGuard, see `net.wireguard.apply`) or put it behind the edge Caddy.
+* `:4318` is the only port meant to be public, and binds to `127.0.0.1` unless
+  `FALAK_OTLP_BIND=0.0.0.0`. `/v1/*` requires `Authorization: Bearer $FALAK_OTLP_TOKEN`; without
+  a token every request is refused (`FALAK_OTLP_ALLOW_ANONYMOUS=1` turns that off, for a loopback
+  trial only). For TLS, reach it over the private network (WireGuard, see `net.wireguard.apply`)
+  or put it behind the edge Caddy.
 * Grafana, Loki, Tempo and the metrics query port bind to `127.0.0.1` by default.
 
 ## What is provisioned

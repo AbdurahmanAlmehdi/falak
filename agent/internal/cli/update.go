@@ -3,8 +3,12 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
+	_ "embed"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +22,29 @@ import (
 
 // defaultReleases is where install-cli.sh downloads from; FALAK_RELEASES_URL overrides it (mirrors, tests).
 const defaultReleases = "https://github.com/falak-sh/falak/releases"
+
+//go:embed release-signing.pub
+var releaseSigningPub []byte
+
+// releaseKey checks SHA256SUMS.sig. Nil while release-signing.pub holds no key: SHA256SUMS is then trusted unsigned
+// (release.yml publishes no release from such a build).
+var releaseKey, releaseKeyErr = parseReleaseKey(releaseSigningPub)
+
+func parseReleaseKey(p []byte) (ed25519.PublicKey, error) {
+	b, _ := pem.Decode(p)
+	if b == nil {
+		return nil, nil
+	}
+	k, err := x509.ParsePKIXPublicKey(b.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("release signing key of this build: %w", err)
+	}
+	ek, ok := k.(ed25519.PublicKey)
+	if !ok {
+		return nil, errors.New("release signing key of this build is not an Ed25519 key")
+	}
+	return ek, nil
+}
 
 // cmdUpdate replaces the running falak binary with a release's, checked against the release's SHA256SUMS,
 // the same way install-cli.sh installs it.
@@ -66,6 +93,18 @@ func cmdUpdate(ctx context.Context, a *App, args []string) error {
 	sums, err := fetch(ctx, hc, base+"/SHA256SUMS")
 	if err != nil {
 		return err
+	}
+	if releaseKeyErr != nil {
+		return releaseKeyErr
+	}
+	if releaseKey != nil {
+		sig, err := fetch(ctx, hc, base+"/SHA256SUMS.sig")
+		if err != nil {
+			return fmt.Errorf("%s is not signed: %w: not installed", tag, err)
+		}
+		if !ed25519.Verify(releaseKey, sums, sig) {
+			return fmt.Errorf("SHA256SUMS of %s does not match its signature: not installed", tag)
+		}
 	}
 	sum, err := checksumFor(sums, asset)
 	if err != nil {

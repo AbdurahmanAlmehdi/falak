@@ -24,6 +24,10 @@ TEMPO_URL="${TEMPO_URL:-http://127.0.0.1:${FALAK_TEMPO_PORT:-3200}}"
 METRICS_URL="${METRICS_URL:-http://127.0.0.1:${FALAK_METRICS_QUERY_PORT:-9090}/prometheus}"
 TIMEOUT="${SMOKE_TIMEOUT:-120}"
 COMPOSE="${COMPOSE:-docker compose}"
+if [[ "${1:-}" == "--stack" ]]; then # a throwaway stack gets throwaway credentials unless they are set
+  export FALAK_OTLP_TOKEN="${FALAK_OTLP_TOKEN:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}"
+  export GRAFANA_ADMIN_PASSWORD="${GRAFANA_ADMIN_PASSWORD:-$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}"
+fi
 
 pass=0; fail=0
 ok()   { printf '  \033[32mPASS\033[0m %s\n' "$*"; pass=$((pass+1)); }

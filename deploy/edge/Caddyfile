@@ -41,6 +41,9 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 		Cross-Origin-Opener-Policy same-origin
+		# Baseline for responses without a policy of their own (Grafana, Horizon, files). Panel pages send their
+		# full nonce-based policy from the control plane (HandleInertiaRequests), which this never replaces.
+		?Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
 		-Server
 		-X-Powered-By
 	}
@@ -87,6 +90,28 @@
 	}
 
 	route {
+		# Brute-force brake per client address (Laravel also throttles per account): 30 POSTs a minute to the
+		# sign-in, sign-up, password-reset, two-factor and CLI login endpoints, and 30 enrollments. Over it: 429.
+		rate_limit {
+			zone auth {
+				match {
+					method POST
+					path /login /register /forgot-password /reset-password /two-factor-challenge /cli/authorize /api/v1/cli/login
+				}
+				key {http.vars.client_ip}
+				events 30
+				window 1m
+			}
+			zone enroll {
+				match {
+					method POST
+					path /agent/v1/enroll
+				}
+				key {http.vars.client_ip}
+				events 30
+				window 1m
+			}
+		}
 		respond @panel_denied "This panel is only reachable over the organization's Tailscale network." 403
 		respond @agent_without_cert `{"message":"client certificate required"}` 401
 

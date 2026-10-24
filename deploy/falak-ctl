@@ -616,6 +616,7 @@ fetch_bundle() { # fetch_bundle VERSION DEST_DIR
   # Fail closed: a bundle is never installed unverified (FALAK_DEPLOY_SOURCE copies above are the operator's own).
   curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "https://github.com/$repo/releases/download/$version/SHA256SUMS" \
     || { rm -rf "$tmp"; die "could not download SHA256SUMS for $version from github.com/$repo: refusing to install an unverified bundle"; }
+  verify_sums_sig "$tmp" "https://github.com/$repo/releases/download/$version"
   local want got
   want="$(awk '$2 == "falak-deploy.tar.gz" { print $1 }' "$tmp/SHA256SUMS")"
   [[ "$want" =~ ^[0-9a-f]{64}$ ]] \
@@ -696,16 +697,52 @@ pull_retry() {
   rm -f "$err"
 }
 
+# RELEASE_PUBKEY: the Ed25519 release signing key (base64 SPKI, the body of agent/internal/cli/release-signing.pub),
+# pinned in by deploy/tools/release-assets.sh. Empty in a source checkout: SHA256SUMS is then trusted unsigned.
+RELEASE_PUBKEY=""
+
+# verify_sums_sig DIR BASE_URL : DIR/SHA256SUMS must carry a valid BASE_URL/SHA256SUMS.sig once a key is pinned;
+# anything else (no signature, a bad one, no OpenSSL 3) is fatal. Kept identical in deploy/install.sh and
+# deploy/falak-ctl (deploy/tests/release-signing.sh checks it).
+verify_sums_sig() {
+  if [ -z "$RELEASE_PUBKEY" ]; then
+    warn "no release signing key in this script: SHA256SUMS is checked unsigned"
+    return 0
+  fi
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to check the release signature (apt-get install openssl)"
+  curl -fsSL --retry 3 -o "$1/SHA256SUMS.sig" "$2/SHA256SUMS.sig" \
+    || die "could not download $2/SHA256SUMS.sig: refusing an unsigned release"
+  printf '%s\n' "-----BEGIN PUBLIC KEY-----" "$RELEASE_PUBKEY" "-----END PUBLIC KEY-----" > "$1/release-signing.pub"
+  openssl pkeyutl -verify -rawin -pubin -inkey "$1/release-signing.pub" -in "$1/SHA256SUMS" -sigfile "$1/SHA256SUMS.sig" >/dev/null 2>&1 \
+    || die "SHA256SUMS does not match its signature (SHA256SUMS.sig, needs OpenSSL 3): refusing this release"
+}
+
+# verify_image_digests FILE PREFIX VERSION : the Falak images PREFIX/falak-*:VERSION on this host are the ones the
+# release recorded in FILE (deploy/image-digests in the signed bundle). No FILE (a source checkout): nothing to check.
+# Kept identical in deploy/install.sh and deploy/falak-ctl.
+verify_image_digests() {
+  local name digest
+  [ -f "$1" ] || return 0
+  while read -r name digest; do
+    case "$name" in falak-control-plane | falak-edge | falak-builder) ;; *) continue ;; esac
+    if ! docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$2/$name:$3" 2>/dev/null | grep -qF "@$digest"; then
+      warn "$2/$name:$3 is not the image release $3 recorded ($digest)"
+      return 1
+    fi
+  done < "$1"
+}
+
 pull_images() { # pull_images [missing] : all images (update), or only the ones not present yet (up)
   if [ "$(env_get FALAK_PULL 1)" = "0" ]; then
     info "FALAK_PULL=0: using local images"
     return 0
   fi
   if [ "${1:-}" = missing ]; then
-    pull_retry compose pull --quiet --policy missing
+    pull_retry compose pull --quiet --policy missing || return 1
   else
-    pull_retry compose pull --quiet
+    pull_retry compose pull --quiet || return 1
   fi
+  verify_image_digests "$FALAK_DIR/deploy/image-digests" "$(env_get FALAK_IMAGE_PREFIX)" "$(env_get FALAK_VERSION)"
 }
 
 # The images this install pulls or builds itself (never third-party images such as postgres or grafana).

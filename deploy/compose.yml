@@ -45,6 +45,13 @@ x-caps: &caps
   cgroup_parent: ${FALAK_CP_SLICE-falakcp.slice}
   oom_score_adj: -900
 
+# Least privilege for the services that need no Linux capabilities beyond the few each one adds (cap_add):
+# no-new-privileges stops setuid binaries and file capabilities from raising a process's privileges. A root process
+# changing its own ids by syscall (gosu, setpriv, the builder dropping to a build uid) is not affected.
+x-hardened: &hardened
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
 x-control-plane: &control-plane
   <<: *caps
   image: ${FALAK_IMAGE_PREFIX:?set FALAK_IMAGE_PREFIX}/falak-control-plane:${FALAK_VERSION:?set FALAK_VERSION}
@@ -173,10 +180,12 @@ x-host-volumes: &host-volumes
 
 services:
   postgres:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: postgres:17.11
     logging: *logging
     restart: unless-stopped
+    # The entrypoint (root) fixes the data directory's owner and mode, then gosu drops to postgres.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID]
     environment:
       POSTGRES_DB: falak
       POSTGRES_USER: falak
@@ -221,7 +230,7 @@ services:
         limits: { memory: 512m }
 
   valkey:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: valkey/valkey:9.1.2-alpine
     logging: *logging
     restart: unless-stopped
@@ -257,12 +266,14 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER]
     security_opt: ["no-new-privileges:true"]
     # The group is the panel containers' www-data (FALAK_APP_UID, as falak-ctl uses it; 33 in the image).
-    entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:${FALAK_APP_UID:-33} /state/host && chmod 1770 /state/host && exec sleep infinity"]
+    # Also hands Tempo's volume (written as root before Tempo ran as its own uid) to Tempo's 10001.
+    cap_add: [CHOWN, FOWNER, DAC_READ_SEARCH]
+    entrypoint: ["sh", "-c", "mkdir -p /state/host && chown 0:${FALAK_APP_UID:-33} /state/host && chmod 1770 /state/host && find /tempo \\! -user 10001 -exec chown 10001:10001 {} + && exec sleep infinity"]
     volumes:
       - ../state:/state
+      - tempo-data:/tempo
     healthcheck:
       # 2 s: the panel services wait for it (start_interval would need Docker Engine 25+).
       test: ["CMD-SHELL", "test -k /state/host"]
@@ -394,11 +405,13 @@ services:
         limits: { memory: 256m }
 
   edge:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: ${FALAK_IMAGE_PREFIX}/falak-edge:${FALAK_VERSION}
     logging: *logging
     restart: unless-stopped
     init: true
+    # Ports 80/443; reading the agent API key the control plane (www-data) wrote 0600 into falak-ca.
+    cap_add: [NET_BIND_SERVICE, DAC_READ_SEARCH]
     environment:
       FALAK_DOMAIN: ${FALAK_DOMAIN:?set FALAK_DOMAIN}
       FALAK_AGENT_API_HOST: ${FALAK_AGENT_API_HOST}
@@ -462,8 +475,12 @@ services:
   # panel down: memory, FALAK_BUILDER_CPUS (falak-ctl: cores - 1, min 1), pids, and killed before any panel service.
   # With a local server it runs in falak.slice next to the sites (FALAK_BUILDER_SLICE); otherwise Docker's default.
   builder:
+    <<: *hardened
     image: ${FALAK_IMAGE_PREFIX}/falak-builder:${FALAK_VERSION}
     logging: *logging
+    # Root installs dependencies and owns the build trees; SETUID/SETGID/KILL to run (and stop) build steps under other
+    # uids. no-new-privileges still lets root change ids by syscall.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, FSETID, KILL, SETUID, SETGID]
     cgroup_parent: ${FALAK_BUILDER_SLICE:-}
     oom_score_adj: 500
     restart: unless-stopped
@@ -496,10 +513,12 @@ services:
   # control plane's token server (the realm) and present a short-lived JWT signed with secrets/registry-token.key;
   # the registry verifies it with the certificate (falak-ctl creates both). Deletes are enabled for `falak-ctl registry gc`.
   registry:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: registry:2.8.3
     logging: *logging
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
     environment:
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
       # Behind the edge: Location headers relative, so redirects keep the public https host.
@@ -526,8 +545,12 @@ services:
 
   # --- observability profile (configs from ../observability; VictoriaMetrics backend) ------------------
   gateway:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: caddy:2.11.4-alpine
+    read_only: true
+    tmpfs: [/data, /config]
+    # Stock Caddy carries the file capability cap_net_bind_service: without it in the bounding set the exec fails.
+    cap_add: [NET_BIND_SERVICE]
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
@@ -547,7 +570,7 @@ services:
         limits: { memory: 64m }
 
   loki:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: grafana/loki:3.7.8
     profiles: [observability]
     restart: unless-stopped
@@ -564,12 +587,14 @@ services:
         limits: { memory: 384m }
 
   tempo:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: grafana/tempo:2.10.8
     profiles: [observability]
     restart: unless-stopped
     logging: *logging
-    user: "0"
+    # The image's uid (10001); host-init hands it the volume.
+    depends_on:
+      host-init: { condition: service_healthy }
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     environment:
       FALAK_TRACES_RETENTION: ${FALAK_TRACES_RETENTION:-360h}
@@ -582,7 +607,7 @@ services:
         limits: { memory: 384m }
 
   victoriametrics:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: victoriametrics/victoria-metrics:v1.152.0
     profiles: [observability]
     restart: unless-stopped
@@ -608,7 +633,7 @@ services:
         limits: { memory: 384m }
 
   grafana:
-    <<: *caps
+    <<: [*caps, *hardened]
     image: grafana/grafana:13.2.2
     profiles: [observability]
     restart: unless-stopped

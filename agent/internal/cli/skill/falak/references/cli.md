@@ -201,6 +201,6 @@ the running one). Abilities: `sandboxes.view` (ls, show) and `sandboxes.use` (ev
 
 | Command | What |
 |---|---|
-| `falak update [--version vX.Y.Z] [--check]` | Replace this binary with the latest (or a given) release, verified against `SHA256SUMS`. `--check` only reports |
+| `falak update [--version vX.Y.Z] [--check]` | Replace this binary with the latest (or a given) release, verified against `SHA256SUMS` and its signature. `--check` only reports |
 | `falak skill install [--user \| --project \| --dir DIR] [--force]` | Write this skill (`SKILL.md` + `references/`) into `~/.claude/skills/falak` (`--user`, default), `./.claude/skills/falak` (`--project`), or `DIR`. Refuses to overwrite existing files without `--force`. Only in CLIs that ship it (`falak help` lists it) |
 | `falak version` | Print the version |

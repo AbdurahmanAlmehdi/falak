@@ -2,9 +2,13 @@
 
 namespace App\Http\Middleware;
 
+use Closure;
 use Falak\Kernel\Support\SharedProps;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Vite;
+use Illuminate\View\View;
 use Inertia\Middleware;
 
 class HandleInertiaRequests extends Middleware
@@ -17,6 +21,51 @@ class HandleInertiaRequests extends Middleware
      * @var string
      */
     protected $rootView = 'app';
+
+    /**
+     * Pages rendered from the root view get a Content-Security-Policy whose nonce the view's scripts (@vite, @routes,
+     * the theme script) carry. Other responses (Horizon, files, JSON) keep the edge's baseline policy.
+     */
+    public function handle(Request $request, Closure $next)
+    {
+        $nonce = Vite::useCspNonce();
+        $response = parent::handle($request, $next);
+
+        if ($response instanceof Response && $response->getOriginalContent() instanceof View
+            && $response->getOriginalContent()->name() === $this->rootView && ! Vite::isRunningHot()) {
+            $response->headers->set('Content-Security-Policy', self::contentSecurityPolicy($nonce));
+        }
+
+        return $response;
+    }
+
+    public static function contentSecurityPolicy(string $nonce): string
+    {
+        // The Cool Icons library: the icon picker fetches its index (connect-src); icons are images.
+        $icons = parse_url((string) config('kernel.icons_url'));
+        $iconsOrigin = isset($icons['scheme'], $icons['host'])
+            ? $icons['scheme'].'://'.$icons['host'].(isset($icons['port']) ? ':'.$icons['port'] : '')
+            : '';
+
+        return implode('; ', [
+            "default-src 'self'",
+            "script-src 'self' 'nonce-{$nonce}'",
+            // React style props, Radix, Monaco, xterm and the Inertia progress bar set inline styles.
+            "style-src 'self' 'unsafe-inline'",
+            // Template and service icons may come from any HTTPS host (catalog repositories, Cool Icons).
+            "img-src 'self' data: blob: https:",
+            "font-src 'self' data:",
+            // wss: Reverb (same host behind the edge; listed for browsers whose 'self' does not cover wss).
+            trim("connect-src 'self' wss: {$iconsOrigin}"),
+            // Monaco's editor and TypeScript workers.
+            "worker-src 'self' blob:",
+            "frame-ancestors 'self'",
+            "base-uri 'self'",
+            "object-src 'none'",
+            // The GitHub App manifest flow submits a real form to GitHub (or a GitHub Enterprise host).
+            "form-action 'self' https:",
+        ]);
+    }
 
     /**
      * Determines the current asset version.

@@ -105,6 +105,41 @@ pull_retry() {
   rm -f "$err"
 }
 
+# RELEASE_PUBKEY: the Ed25519 release signing key (base64 SPKI, the body of agent/internal/cli/release-signing.pub),
+# pinned in by deploy/tools/release-assets.sh. Empty in a source checkout: SHA256SUMS is then trusted unsigned.
+RELEASE_PUBKEY=""
+
+# verify_sums_sig DIR BASE_URL : DIR/SHA256SUMS must carry a valid BASE_URL/SHA256SUMS.sig once a key is pinned;
+# anything else (no signature, a bad one, no OpenSSL 3) is fatal. Kept identical in deploy/install.sh and
+# deploy/falak-ctl (deploy/tests/release-signing.sh checks it).
+verify_sums_sig() {
+  if [ -z "$RELEASE_PUBKEY" ]; then
+    warn "no release signing key in this script: SHA256SUMS is checked unsigned"
+    return 0
+  fi
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to check the release signature (apt-get install openssl)"
+  curl -fsSL --retry 3 -o "$1/SHA256SUMS.sig" "$2/SHA256SUMS.sig" \
+    || die "could not download $2/SHA256SUMS.sig: refusing an unsigned release"
+  printf '%s\n' "-----BEGIN PUBLIC KEY-----" "$RELEASE_PUBKEY" "-----END PUBLIC KEY-----" > "$1/release-signing.pub"
+  openssl pkeyutl -verify -rawin -pubin -inkey "$1/release-signing.pub" -in "$1/SHA256SUMS" -sigfile "$1/SHA256SUMS.sig" >/dev/null 2>&1 \
+    || die "SHA256SUMS does not match its signature (SHA256SUMS.sig, needs OpenSSL 3): refusing this release"
+}
+
+# verify_image_digests FILE PREFIX VERSION : the Falak images PREFIX/falak-*:VERSION on this host are the ones the
+# release recorded in FILE (deploy/image-digests in the signed bundle). No FILE (a source checkout): nothing to check.
+# Kept identical in deploy/install.sh and deploy/falak-ctl.
+verify_image_digests() {
+  local name digest
+  [ -f "$1" ] || return 0
+  while read -r name digest; do
+    case "$name" in falak-control-plane | falak-edge | falak-builder) ;; *) continue ;; esac
+    if ! docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$2/$name:$3" 2>/dev/null | grep -qF "@$digest"; then
+      warn "$2/$name:$3 is not the image release $3 recorded ($digest)"
+      return 1
+    fi
+  done < "$1"
+}
+
 usage() { sed -n '2,29p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "see docs/INSTALL.md"; }
 
 while [ $# -gt 0 ]; do
@@ -375,9 +410,10 @@ fetch_files() {
     curl -fsSL --retry 3 -o "$stage/falak-deploy.tar.gz" "$base/falak-deploy.tar.gz" \
       || die "download failed: $base/falak-deploy.tar.gz (does release $VERSION exist?)"
     curl -fsSL --retry 3 -o "$stage/SHA256SUMS" "$base/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
+    verify_sums_sig "$stage" "$base"
     (cd "$stage" && grep ' falak-deploy.tar.gz$' SHA256SUMS | sha256sum -c --quiet -) || die "checksum mismatch for falak-deploy.tar.gz"
     tar -xzf "$stage/falak-deploy.tar.gz" -C "$stage"
-    ok "release bundle verified (SHA256SUMS)"
+    ok "release bundle verified (SHA256SUMS${RELEASE_PUBKEY:+, signed})"
   fi
   local d
   for d in deploy observability; do
@@ -487,6 +523,7 @@ start_stack() {
   info "Starting Falak $VERSION"
   if [ "$(env_get FALAK_PULL 1)" != 0 ]; then
     pull_retry dc pull --quiet || die "pulling images from $IMAGE_PREFIX failed (is release $VERSION published? private packages need 'docker login ghcr.io')"
+    verify_image_digests "$FALAK_DIR/deploy/image-digests" "$IMAGE_PREFIX" "$VERSION" || die "refusing images that differ from release $VERSION"
     ok "images pulled"
   fi
   if ! dc up -d --wait --wait-timeout 600 --remove-orphans; then
@@ -578,6 +615,7 @@ restore_control_plane() {
   collect_restore_settings
   if [ "$(env_get FALAK_PULL 1)" != 0 ]; then
     pull_retry dc pull --quiet || die "pulling images from $IMAGE_PREFIX failed"
+    verify_image_digests "$FALAK_DIR/deploy/image-digests" "$IMAGE_PREFIX" "$VERSION" || die "refusing images that differ from release $VERSION"
     ok "images pulled"
   fi
   # The backup's .env, KEK, Fleet CA and edge PKI replace this fresh install's; this host's version and image source

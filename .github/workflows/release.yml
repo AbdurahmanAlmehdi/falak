@@ -3,8 +3,10 @@
 #        ghcr.io/<owner>/falak-control-plane, falak-builder, falak-edge, falak-fn-bun, falak-fn-node,
 #        falak-fn-deno, falak-fn-python, falak-fn-go  :<tag> and :latest
 #   2. falak-agent / falak / falak-builder / falak-restore binaries (make build), falak-deploy.tar.gz, install.sh, falak-ctl,
-#      SHA256SUMS -> GitHub release assets.
-# Only GITHUB_TOKEN is used. After the first release, make the GHCR packages public
+#      SHA256SUMS, SHA256SUMS.sig -> GitHub release assets. The bundle records the image digests (deploy/image-digests).
+#   SHA256SUMS.sig: Ed25519 signature by the FALAK_RELEASE_SIGNING_KEY secret (PEM PKCS#8); its public key is
+#   agent/internal/cli/release-signing.pub. No secret or no public key = no release.
+# Otherwise only GITHUB_TOKEN is used. After the first release, make the GHCR packages public
 # (Package settings -> Change visibility) so servers can pull without logging in.
 name: release
 
@@ -30,16 +32,24 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Fail before hours of builds: the release job signs SHA256SUMS with this key.
+      - name: Release signing is configured
+        env:
+          FALAK_RELEASE_SIGNING_KEY: ${{ secrets.FALAK_RELEASE_SIGNING_KEY }}
+        run: |
+          [ -n "$FALAK_RELEASE_SIGNING_KEY" ] || { echo "::error::the FALAK_RELEASE_SIGNING_KEY secret is not set: refusing an unsigned release"; exit 1; }
+          grep -q '^-----BEGIN PUBLIC KEY-----$' agent/internal/cli/release-signing.pub \
+            || { echo "::error::agent/internal/cli/release-signing.pub holds no public key"; exit 1; }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve the database image digests of this tag
         run: tools/db-image-digests.sh "-${GITHUB_REF_NAME}" --wait 7200 --owner "${GITHUB_REPOSITORY_OWNER}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: db-image-digests
           path: control-plane/modules/Databases/config/db-image-digests.json
@@ -90,11 +100,11 @@ jobs:
             dockerfile: runtimes/functions/go/Dockerfile
             context: runtimes/functions
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Pinned database images
         if: matrix.image == 'control-plane'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: db-image-digests
           path: control-plane/modules/Databases/config
@@ -107,9 +117,9 @@ jobs:
         id: name
         run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/falak-${{ matrix.image }}" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -117,7 +127,7 @@ jobs:
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -136,7 +146,7 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digests-${{ matrix.image }}-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -154,15 +164,15 @@ jobs:
       matrix:
         image: [control-plane, builder, edge, fn-bun, fn-node, fn-deno, fn-python, fn-go]
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: /tmp/digests
           pattern: digests-${{ matrix.image }}-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -176,6 +186,16 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) ;; *) tags+=(-t "$image:latest") ;; esac
           docker buildx imagetools create "${tags[@]}" $(printf "$image@sha256:%s " *)
           docker buildx imagetools inspect "$image:${GITHUB_REF_NAME}"
+          mkdir -p /tmp/image-digest
+          digest="$(docker buildx imagetools inspect "$image:${GITHUB_REF_NAME}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "falak-${{ matrix.image }} $digest" > "/tmp/image-digest/falak-${{ matrix.image }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-digest-${{ matrix.image }}
+          path: /tmp/image-digest/*
+          if-no-files-found: error
+          retention-days: 1
 
   release:
     name: GitHub release
@@ -184,9 +204,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
@@ -195,8 +215,28 @@ jobs:
         working-directory: agent
         run: make build VERSION="${GITHUB_REF_NAME}"
 
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: /tmp/image-digest
+          pattern: image-digest-*
+          merge-multiple: true
+
       - name: Assemble assets
-        run: deploy/tools/release-assets.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" dist
+        run: |
+          cat /tmp/image-digest/falak-* > /tmp/image-digests
+          [ "$(grep -cE '^falak-[a-z-]+ sha256:[0-9a-f]{64}$' /tmp/image-digests)" = 8 ] || { cat /tmp/image-digests; exit 1; }
+          FALAK_IMAGE_DIGESTS=/tmp/image-digests deploy/tools/release-assets.sh "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" dist
+
+      - name: Sign SHA256SUMS
+        env:
+          FALAK_RELEASE_SIGNING_KEY: ${{ secrets.FALAK_RELEASE_SIGNING_KEY }}
+        run: |
+          key="$RUNNER_TEMP/release-signing.key"
+          (umask 077 && printf '%s\n' "$FALAK_RELEASE_SIGNING_KEY" > "$key")
+          openssl pkeyutl -sign -rawin -inkey "$key" -in dist/SHA256SUMS -out dist/SHA256SUMS.sig
+          rm -f "$key"
+          # The key pair matches what install.sh, falak-ctl, install-cli.sh and `falak update` check against.
+          openssl pkeyutl -verify -rawin -pubin -inkey agent/internal/cli/release-signing.pub -in dist/SHA256SUMS -sigfile dist/SHA256SUMS.sig
 
       - name: Create release
         env:
