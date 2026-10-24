@@ -1,6 +1,6 @@
 module github.com/OthmanHaba/falak/agent
 
-go 1.25.0
+go 1.26.0
 
 toolchain go1.27.3
 
@@ -21,5 +21,5 @@ require (
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 )
