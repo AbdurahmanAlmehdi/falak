@@ -553,6 +553,10 @@ final class RouteCompiler
         };
 
         foreach ($domains as $domain) {
+            if (config('controlplane.managed', false) && ! $domain->isVerified()) {
+                continue;
+            }
+
             $tls = $role === 'backend' ? ['mode' => 'off'] : $this->tls($domain, $installed);
 
             if ($tls === null) {

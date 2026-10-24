@@ -20,4 +20,8 @@ return [
 
     // A request.json the host has not picked up after this long is stale: a new request may replace it.
     'stale_after_minutes' => (int) env('FALAK_HOST_REQUEST_STALE_MINUTES', 15),
+
+    // Managed multi-tenant mode: domain ownership verification is required before a custom domain is
+    // activated on the edge. Self-hosted installs leave this false (default).
+    'managed' => (bool) env('FALAK_MANAGED', false),
 ];

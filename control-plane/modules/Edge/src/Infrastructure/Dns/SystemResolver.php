@@ -36,4 +36,22 @@ final class SystemResolver implements DnsResolver
 
         return new DnsAnswer(array_values(array_unique($cnames)), array_values(array_unique($ipv4)), array_values(array_unique($ipv6)));
     }
+
+    public function txt(string $name): array
+    {
+        $records = @dns_get_record($name, DNS_TXT);
+
+        if ($records === false) {
+            return [];
+        }
+
+        $values = [];
+        foreach ($records as $record) {
+            if (($record['type'] ?? null) === 'TXT') {
+                $values[] = implode('', (array) ($record['txt'] ?? ($record['entries'] ?? [])));
+            }
+        }
+
+        return $values;
+    }
 }

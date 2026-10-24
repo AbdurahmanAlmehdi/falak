@@ -38,6 +38,9 @@ func (p *Poller) Run(ctx context.Context) {
 			if IsRevoked(err) { // the client reports that one itself, rate-limited
 				d = RevokedRetry
 			} else {
+				if ra := RetryAfterDuration(err); ra > d {
+					d = ra
+				}
 				log.Warn("command poll failed", "err", err, "retry_in", d)
 			}
 			sleep(ctx, d)

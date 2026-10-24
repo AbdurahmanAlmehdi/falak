@@ -33,6 +33,7 @@ Route::middleware(['auth', 'org'])->group(function () {
     Route::post('sites/{site}/cloudflare/purge', [DomainController::class, 'cloudflarePurge'])->middleware('throttle:20,1')->name('edge.cloudflare.purge');
     Route::get('sites/{site}/cloudflare/analytics', [CloudflareAnalyticsController::class, 'show'])->middleware('throttle:30,1')->name('edge.cloudflare.analytics');
     Route::delete('sites/{site}/domains/{domain}', [DomainController::class, 'destroy'])->name('edge.domains.destroy');
+    Route::post('sites/{site}/domains/{domain}/verify', [DomainController::class, 'verify'])->middleware('throttle:10,1')->name('edge.domains.verify');
     Route::post('sites/{site}/edge/apply', [DomainController::class, 'apply'])->name('edge.apply');
 
     Route::post('sites/{site}/certificates', [CertificateController::class, 'store'])->name('edge.certificates.store');

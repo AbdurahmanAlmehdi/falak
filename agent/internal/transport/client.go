@@ -106,6 +106,18 @@ type StatusError struct {
 	Body string
 	// Reason is the body's "error" code when the control plane sent one (e.g. ReasonAgentRevoked).
 	Reason string
+	// RetryAfter is the Retry-After delay from the response header (>0 when present and parseable).
+	RetryAfter time.Duration
+}
+
+// RetryAfterDuration returns the server-requested backoff from err when present (>0), otherwise 0.
+// Callers fall back to their own exponential backoff when this returns 0.
+func RetryAfterDuration(err error) time.Duration {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.RetryAfter
+	}
+	return 0
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Code, e.Body) }
@@ -206,6 +218,11 @@ func (c *Client) doWith(ctx context.Context, method, path, ctype string, body []
 		}
 		if json.Unmarshal(out, &shape) == nil {
 			se.Reason = shape.Error
+		}
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if secs, err := strconv.Atoi(strings.TrimSpace(ra)); err == nil && secs > 0 {
+				se.RetryAfter = time.Duration(secs) * time.Second
+			}
 		}
 		if IsRevoked(se) {
 			c.reportRevoked()

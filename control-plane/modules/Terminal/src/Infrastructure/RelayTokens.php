@@ -35,14 +35,22 @@ final class RelayTokens
     /**
      * What the agent dials the relay with: valid for the session's whole life, reusable.
      *
-     * @param  ?string  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex): the relay only accepts
-     *                                the token from a connection presenting that certificate
+     * The agent's certificate fingerprint (SHA-256 of the DER, lowercase hex) is required: the relay
+     * only accepts the token from a connection presenting that exact certificate (fail closed).
+     *
+     * @param  string  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex)
+     *
+     * @throws \InvalidArgumentException when the fingerprint is absent (the agent's identity is unknown)
      */
     public function agentToken(TerminalSession $session, ?string $fingerprint = null): string
     {
+        if ($fingerprint === null || $fingerprint === '') {
+            throw new \InvalidArgumentException('agentToken requires the agent certificate fingerprint; refusing to issue an unbound relay token.');
+        }
+
         $lifetime = (int) config('terminal.max_duration', 3600) + (int) config('terminal.relay.agent_token_grace', 300);
 
-        $claims = [
+        return $this->sign([
             'v' => 1,
             'sid' => $session->id,
             'aud' => 'agent',
@@ -50,13 +58,8 @@ final class RelayTokens
             'w' => true,
             'exp' => now()->getTimestamp() + $lifetime,
             'n' => Str::random(22),
-        ];
-
-        if ($fingerprint !== null && $fingerprint !== '') {
-            $claims['fp'] = strtolower($fingerprint);
-        }
-
-        return $this->sign($claims);
+            'fp' => strtolower($fingerprint),
+        ]);
     }
 
     /** A browser's or CLI's single-use ticket to connect within ticket_ttl seconds. */

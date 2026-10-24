@@ -145,7 +145,11 @@ func (h *harness) agent(sid string) *websocket.Conn {
 }
 
 func (h *harness) dialAgent(sid string, fingerprint bool) (*websocket.Conn, *http.Response, error) {
-	tok := Sign(h.key, Claims{V: 1, SID: sid, Aud: AudAgent, Sub: "srv-1", W: true, Exp: time.Now().Unix() + 600})
+	fp := ""
+	if fingerprint {
+		fp = "ab12"
+	}
+	tok := Sign(h.key, Claims{V: 1, SID: sid, Aud: AudAgent, Sub: "srv-1", W: true, Exp: time.Now().Unix() + 600, Fp: fp})
 	hdr := http.Header{"Authorization": {"Bearer " + tok}}
 	if fingerprint {
 		hdr.Set(fingerprintHdr, "ab12")
@@ -311,6 +315,19 @@ func TestAgentGrace(t *testing.T) {
 	ag.CloseNow()
 	expect(t, cl, text, waiting)
 	expect(t, cl, text, `{"t":"error","message":"The server lost its connection to this session."}`)
+}
+
+func TestAgentFplessTokenRefused(t *testing.T) {
+	h := newHarness(t, Options{})
+	// A token with no fp claim is rejected even when the connection has a fingerprint header.
+	tok := Sign(h.key, Claims{V: 1, SID: sid, Aud: AudAgent, Sub: "srv-1", W: true, Exp: time.Now().Unix() + 600})
+	hdr := http.Header{"Authorization": {"Bearer " + tok}, fingerprintHdr: {"ab12"}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, resp, err := websocket.Dial(ctx, h.ws("/agent/v1/relay/sessions/"+sid), &websocket.DialOptions{HTTPHeader: hdr, Subprotocols: []string{Subprotocol}})
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("fp-less token: want 403, got %v %v", err, resp)
+	}
 }
 
 func TestRefusedConnections(t *testing.T) {

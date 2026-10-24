@@ -133,6 +133,18 @@ class FleetServiceProvider extends ModuleServiceProvider
         // Agent uploads (POST /agent/v1/uploads/{type}/{id}): chunks per authenticated agent.
         RateLimiter::for('fleet-agent-uploads', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_uploads_per_minute', 300))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/heartbeat: normal cadence is every 15 s (4/min); 10 allows retries.
+        RateLimiter::for('fleet-agent-heartbeat', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_heartbeat_per_minute', 10))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // GET /agent/v1/commands: 30 s long-poll gives 2/min normally; 10 covers reconnects.
+        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 10))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/commands/{command}/events: batched during deploys; 60/min per agent.
+        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 60))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/insights: periodic cron sink; 20/min per agent.
+        RateLimiter::for('fleet-agent-insights', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_insights_per_minute', 20))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
 
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register('fleet.commands.view', [Role::Admin, Role::Developer, Role::Viewer], 'View agent command output', 'fleet');

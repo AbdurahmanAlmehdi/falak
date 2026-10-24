@@ -7,6 +7,7 @@ use Falak\Edge\Application\Actions\AddDomain;
 use Falak\Edge\Application\Actions\MakePrimaryDomain;
 use Falak\Edge\Application\Actions\RemoveDomain;
 use Falak\Edge\Application\Actions\UpdateDomain;
+use Falak\Edge\Application\Actions\VerifyDomain;
 use Falak\Edge\Application\CloudflareEdgeControls;
 use Falak\Edge\Application\CloudflareRateLimits;
 use Falak\Edge\Application\ComposeServiceDomains;
@@ -82,6 +83,8 @@ final class DomainController extends Controller
                 'certificate_id' => $domain->certificate_id,
                 'dns_credential_id' => $domain->dns_credential_id,
                 'hosts' => $domain->hosts(),
+                'verified_at' => $domain->verified_at?->toIso8601String(),
+                'verification_token' => config('controlplane.managed', false) && ! $domain->isVerified() ? $domain->verification_token : null,
                 'served_host' => $domain->servedHost(),
                 'supports_www' => $domain->supportsWwwRedirect(),
                 'wildcard' => $domain->isWildcard(),
@@ -257,6 +260,14 @@ final class DomainController extends Controller
     {
         $siteData = $this->site($request, $site, 'edge.manage');
         $remove($this->domain($siteData->id, $domain));
+
+        return back();
+    }
+
+    public function verify(Request $request, string $site, string $domain, VerifyDomain $verify): RedirectResponse
+    {
+        $siteData = $this->site($request, $site, 'edge.manage');
+        $verify($siteData, $this->domain($siteData->id, $domain));
 
         return back();
     }

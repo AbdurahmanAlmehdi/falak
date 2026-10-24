@@ -33,13 +33,23 @@ it('issues agent tokens and client tickets with the documented claims', function
         return json_decode(base64_decode(strtr($body, '-_', '+/')), true);
     };
 
-    $agent = $claims($tokens->agentToken($session));
+    $fp = str_repeat('a1', 32); // 64-char hex fingerprint
+    $agent = $claims($tokens->agentToken($session, $fp));
     $client = $claims($tokens->clientTicket($session, '01juser', false));
 
-    expect($agent)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'agent', 'sub' => $session->server_id, 'w' => true, 'exp' => 1_800_000_000 + 3900])
+    expect($agent)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'agent', 'sub' => $session->server_id, 'w' => true, 'exp' => 1_800_000_000 + 3900, 'fp' => $fp])
         ->and($agent['n'])->toBeString()->not->toBeEmpty()
         ->and($client)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'client', 'sub' => '01juser', 'w' => false, 'exp' => 1_800_000_060])
         ->and($client['n'])->not->toBe($claims($tokens->clientTicket($session, '01juser', false))['n']);
+});
+
+it('rejects agentToken when the fingerprint is absent (fail closed)', function () {
+    config(['app.key' => RELAY_VECTOR_KEY]);
+    $session = (new TerminalSession)->forceFill(['id' => '01jtestsession0000000000000', 'server_id' => '01jserver00000000000000000']);
+    $tokens = new RelayTokens;
+
+    expect(fn () => $tokens->agentToken($session, null))->toThrow(\InvalidArgumentException::class)
+        ->and(fn () => $tokens->agentToken($session, ''))->toThrow(\InvalidArgumentException::class);
 });
 
 it('derives the client URL from APP_URL unless one is configured', function () {

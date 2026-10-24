@@ -358,6 +358,9 @@ services:
     env_file: []
     environment:
       APP_KEY: ${APP_KEY:?set APP_KEY}
+      # FALAK_URL is the panel's public origin; the relay defaults to restricting browser WebSocket connections to it.
+      # Set FALAK_RELAY_ORIGINS to override (comma-separated patterns, or "*" to disable the check).
+      FALAK_URL: ${FALAK_URL:?set FALAK_URL}
       GOMEMLIMIT: 48MiB
     volumes: []
     # edge: browsers, the CLI and agents; backend: the control plane revokes access (POST /internal/v1/..., never
