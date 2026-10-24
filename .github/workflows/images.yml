@@ -73,8 +73,10 @@ jobs:
           docker compose -p falak --env-file /tmp/falak.env -f deploy/compose.yml config -q
           COMPOSE_PROFILES=observability docker compose -p falak --env-file /tmp/falak.env -f deploy/compose.yml config -q
       - name: edge Caddyfile
-        # The edge's own Caddy build: the Caddyfile uses modules stock Caddy lacks (rate_limit).
+        # The edge's own Caddy build: the Caddyfile uses modules stock Caddy lacks (rate_limit). Own DOCKER_CONFIG:
+        # the deploy tests above leave ~/.docker root-owned.
         run: |
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-edge-lint"
           docker build -q -t falak-edge-lint deploy/edge >/dev/null
           docker run --rm --entrypoint sh -e FALAK_DOMAIN=falak.example.com -e FALAK_ACME_EMAIL=ops@example.com \
             -v "$PWD/deploy/edge/Caddyfile:/etc/caddy/Caddyfile:ro" falak-edge-lint \
