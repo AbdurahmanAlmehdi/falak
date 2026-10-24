@@ -73,10 +73,12 @@ jobs:
           docker compose -p falak --env-file /tmp/falak.env -f deploy/compose.yml config -q
           COMPOSE_PROFILES=observability docker compose -p falak --env-file /tmp/falak.env -f deploy/compose.yml config -q
       - name: edge Caddyfile
+        # The edge's own Caddy build: the Caddyfile uses modules stock Caddy lacks (rate_limit).
         run: |
-          docker run --rm -e FALAK_DOMAIN=falak.example.com -e FALAK_ACME_EMAIL=ops@example.com \
-            -v "$PWD/deploy/edge/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.11.4-alpine \
-            sh -c 'mkdir -p /etc/caddy/global /etc/caddy/sites && caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
+          docker build -q -t falak-edge-lint deploy/edge >/dev/null
+          docker run --rm --entrypoint sh -e FALAK_DOMAIN=falak.example.com -e FALAK_ACME_EMAIL=ops@example.com \
+            -v "$PWD/deploy/edge/Caddyfile:/etc/caddy/Caddyfile:ro" falak-edge-lint \
+            -c 'mkdir -p /etc/caddy/global /etc/caddy/sites && caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile'
 
   build:
     name: build ${{ matrix.image }}
