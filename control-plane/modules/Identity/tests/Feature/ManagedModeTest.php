@@ -4,6 +4,8 @@ use Falak\Identity\Application\Actions\CreateApiToken;
 use Falak\Identity\Application\Notifications\QueuedVerifyEmail;
 use Falak\Identity\Contracts\Role;
 use Falak\Identity\Domain\Models\User;
+use Illuminate\Mail\Transport\ResendTransport;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\URL;
 
@@ -84,4 +86,10 @@ it('marks accounts from before verification as verified', function () {
 
     expect($user->fresh()->email_verified_at)->not->toBeNull()
         ->and($verified->fresh()->email_verified_at->isSameDay(now()->subYear()))->toBeTrue();
+});
+
+it('resolves the Resend mailer from RESEND_API_KEY (services.resend.key)', function () {
+    config(['services.resend.key' => 're_test_not_a_real_key']);
+
+    expect(Mail::mailer('resend')->getSymfonyTransport())->toBeInstanceOf(ResendTransport::class);
 });

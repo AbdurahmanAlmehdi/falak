@@ -175,7 +175,16 @@ compose does not forward it from `.env`. A variable compose passes by name alway
 `custom.env` has no effect.
 
 For e-mail, set `MAIL_MAILER=smtp`, `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD` and
-`MAIL_FROM_ADDRESS` in `/opt/falak/.env`, then run `falak-ctl up`.
+`MAIL_FROM_ADDRESS` in `/opt/falak/.env`, then run `falak-ctl up`. To send through [Resend](https://resend.com)
+instead, set `MAIL_MAILER=resend`, `RESEND_API_KEY=re_…` and a `MAIL_FROM_ADDRESS` on a domain verified in Resend
+(the `MAIL_HOST`/`MAIL_PORT`/`MAIL_USERNAME`/`MAIL_PASSWORD` settings are then unused). Mail covers email
+verification, password resets, invitations and email alerts; it is sent from the queue (`horizon`).
+
+**Managed (multi-tenant) installs.** A panel where strangers sign up sets `FALAK_MANAGED=true` in `.env`: accounts
+must verify their email address before they can use the panel, API tokens or `falak login` (existing accounts
+count as verified), webhook alert channels can never target private addresses
+(`FALAK_ALERTING_ALLOW_PRIVATE_WEBHOOKS` is ignored), and privileged compose services can't be allowed. It needs
+working mail (above). Self-hosted installs leave it unset.
 
 ### Encryption keys
 

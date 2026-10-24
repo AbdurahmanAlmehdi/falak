@@ -96,6 +96,10 @@ x-control-plane: &control-plane
     MAIL_PASSWORD: ${MAIL_PASSWORD:-}
     MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-falak@localhost}
     MAIL_FROM_NAME: Falak
+    # MAIL_MAILER=resend: Resend's API instead of SMTP (MAIL_FROM_ADDRESS on a domain verified in Resend).
+    RESEND_API_KEY: ${RESEND_API_KEY:-}
+    # Managed multi-tenant install (strangers sign up): verified emails, no private webhooks or privileged compose.
+    FALAK_MANAGED: ${FALAK_MANAGED:-false}
     # Fleet / agents
     FALAK_PANEL_URL: ${FALAK_URL}
     FALAK_AGENT_API_URL: ${FALAK_AGENT_API_URL:?set FALAK_AGENT_API_URL}
