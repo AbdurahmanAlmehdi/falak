@@ -15,6 +15,8 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 
+require_once __DIR__.'/../Support/helpers.php';
+
 beforeEach(function () {
     Http::preventStrayRequests();
     alerting_guard(['127.0.0.1.nip.io' => ['127.0.0.1'], 'localhost' => ['127.0.0.1'], 'metadata.internal' => ['169.254.169.254'], 'rebind.example.com' => ['93.184.216.34', '169.254.169.254'], 'lan.example.com' => ['10.0.0.5']]);
