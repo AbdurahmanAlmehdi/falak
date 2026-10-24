@@ -41,7 +41,7 @@ final class SaveSecretProvider
         $type = $provider->type ?? ProviderType::from((string) $data['type']);
         $allowPrivate = (bool) ($data['allow_private_network'] ?? $provider?->allow_private_network ?? false) && $type->selfHostable();
 
-        if ($allowPrivate && ! config('secrets.providers.allow_private_network', false)) {
+        if ($allowPrivate && (! config('secrets.providers.allow_private_network', false) || config('controlplane.managed'))) {
             throw ValidationException::withMessages(['allow_private_network' => 'This Falak instance does not allow providers on private networks.']);
         }
 

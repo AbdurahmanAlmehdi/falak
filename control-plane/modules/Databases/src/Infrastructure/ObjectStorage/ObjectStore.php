@@ -5,9 +5,11 @@ namespace Falak\Databases\Infrastructure\ObjectStorage;
 use Falak\Databases\Domain\Enums\StorageDriver;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Kernel\Network\EndpointGuard;
+use Falak\Kernel\Network\EndpointRefused;
 use Falak\Kernel\Support\Aws\SigV4Signer;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Factory as HttpFactory;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 
 /**
@@ -92,7 +94,7 @@ final class ObjectStore
         // ("text/plain, text/plain"), which no longer matched the signature (SignatureDoesNotMatch).
         $headers = array_filter($headers, fn (string $name) => strtolower($name) !== 'content-type', ARRAY_FILTER_USE_KEY);
 
-        $this->send(fn () => $this->http->withHeaders($headers)->timeout($this->timeout)->withBody($body, $contentType)->put($url), 'PUT', $key);
+        $this->send(fn (PendingRequest $http) => $http->withHeaders($headers)->timeout($this->timeout)->withBody($body, $contentType)->put($url), 'PUT', $key);
     }
 
     /**
@@ -105,7 +107,7 @@ final class ObjectStore
         $url = $this->url($key);
         $headers = $this->signer()->signHeaders('DELETE', $url);
 
-        $this->send(fn () => $this->http->withHeaders($headers)->timeout($this->timeout)->delete($url), 'DELETE', $key, allowNotFound: true);
+        $this->send(fn (PendingRequest $http) => $http->withHeaders($headers)->timeout($this->timeout)->delete($url), 'DELETE', $key, allowNotFound: true);
     }
 
     /**
@@ -117,7 +119,7 @@ final class ObjectStore
     {
         $url = $this->url($key);
         $headers = $this->signer()->signHeaders('HEAD', $url);
-        $response = $this->send(fn () => $this->http->withHeaders($headers)->timeout($this->timeout)->head($url), 'HEAD', $key, allowNotFound: true);
+        $response = $this->send(fn (PendingRequest $http) => $http->withHeaders($headers)->timeout($this->timeout)->head($url), 'HEAD', $key, allowNotFound: true);
 
         return $response->status() === 404 ? null : (int) $response->header('Content-Length');
     }
@@ -132,22 +134,28 @@ final class ObjectStore
         $url = $this->url($key);
         $headers = $this->signer()->signHeaders('GET', $url);
 
-        return hash('sha256', $this->send(fn () => $this->http->withHeaders($headers)->timeout($this->timeout)->get($url), 'GET', $key)->body());
+        return hash('sha256', $this->send(fn (PendingRequest $http) => $http->withHeaders($headers)->timeout($this->timeout)->get($url), 'GET', $key)->body());
     }
 
     /**
-     * @param  callable(): Response  $request
+     * The request goes to the address the guard checked (pinned) and follows no redirects (their target is unchecked).
+     *
+     * @param  callable(PendingRequest): Response  $request
      *
      * @throws StorageRequestFailed
      */
     private function send(callable $request, string $method, string $key, bool $allowNotFound = false): Response
     {
-        if ($refusal = $this->guard->refusal($this->url($key), $this->allowPrivate)) {
-            throw new StorageRequestFailed($refusal);
+        $url = $this->url($key);
+
+        try {
+            $addresses = $this->guard->check($url, $this->allowPrivate);
+        } catch (EndpointRefused $e) {
+            throw new StorageRequestFailed($e->getMessage());
         }
 
         try {
-            $response = $request();
+            $response = $request($this->http->withoutRedirecting()->withOptions(['curl' => EndpointGuard::pin($url, $addresses[0])]));
         } catch (ConnectionException $e) {
             throw new StorageRequestFailed("{$method} {$key}: could not connect to the storage endpoint ({$e->getMessage()}).", 0, $e);
         }

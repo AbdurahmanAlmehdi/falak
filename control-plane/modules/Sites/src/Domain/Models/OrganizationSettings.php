@@ -2,6 +2,7 @@
 
 namespace Falak\Sites\Domain\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -29,6 +30,12 @@ class OrganizationSettings extends Model
     protected function casts(): array
     {
         return ['allow_privileged_compose' => 'boolean'];
+    }
+
+    /** A managed install never runs privileged compose files, whatever an organization saved before. */
+    protected function allowPrivilegedCompose(): Attribute
+    {
+        return Attribute::get(fn (mixed $value) => (bool) $value && ! config('controlplane.managed'));
     }
 
     public static function for(string $organizationId): self

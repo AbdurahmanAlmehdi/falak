@@ -2,8 +2,8 @@
 
 namespace Falak\Identity\Tests\Feature\Auth;
 
+use Falak\Identity\Application\Notifications\QueuedResetPassword as ResetPassword;
 use Falak\Identity\Domain\Models\User;
-use Illuminate\Auth\Notifications\ResetPassword;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Notification;
 use Tests\TestCase;

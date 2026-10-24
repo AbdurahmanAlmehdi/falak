@@ -3,6 +3,7 @@
 use Falak\Databases\Domain\Enums\StorageDriver;
 use Falak\Databases\Domain\Models\StorageProvider;
 use Falak\Databases\Infrastructure\ObjectStorage\ObjectStores;
+use Falak\Databases\Infrastructure\ObjectStorage\StorageRequestFailed;
 use Falak\Identity\Contracts\Role;
 use Falak\Kernel\Support\Aws\SigV4Signer;
 use Illuminate\Http\Client\Request;
@@ -120,6 +121,14 @@ it('sends a PUT whose headers are exactly the ones it signed (one Content-Type)'
     });
 });
 
+it('follows no redirects from a storage endpoint', function () {
+    Http::fake(['*' => Http::response('', 307, ['Location' => 'http://169.254.169.254/latest/meta-data'])]);
+    $provider = databases_provider($this->organization);
+
+    expect(fn () => app(ObjectStores::class)->for($provider)->put('acme/probe.txt', 'falak', 'text/plain'))->toThrow(StorageRequestFailed::class, 'HTTP 307');
+    Http::assertSentCount(1);
+});
+
 it('reports storage errors without leaking secrets', function () {
     Http::fake(['*' => Http::response('<Error><Code>SignatureDoesNotMatch</Code></Error>', 403)]);
     $provider = databases_provider($this->organization, ['verified_at' => now()]);
@@ -163,6 +172,19 @@ it('refuses storage endpoints on private addresses unless allowed', function () 
     $provider = StorageProvider::query()->firstOrFail();
 
     config(['databases.allow_private_endpoints' => false]);
+    $this->post("/databases/storage/{$provider->id}/verify")->assertSessionHasErrors('provider');
+    Http::assertNothingSent();
+});
+
+it('ignores the private-endpoint setting on a managed install', function () {
+    Http::fake(['*' => Http::response('', 200)]);
+    $base = ['name' => 'Lan', 'driver' => 'minio', 'bucket' => 'falak-backups', 'access_key_id' => 'a', 'secret_access_key' => 'b'];
+    config(['databases.allow_private_endpoints' => true]);
+    $this->post('/databases/storage', [...$base, 'endpoint' => 'https://10.1.2.3'])->assertSessionHasNoErrors();
+    $provider = StorageProvider::query()->firstOrFail();
+
+    config(['controlplane.managed' => true]);
+    $this->post('/databases/storage', [...$base, 'name' => 'Lan 2', 'endpoint' => 'https://10.1.2.4'])->assertSessionHasErrors('endpoint');
     $this->post("/databases/storage/{$provider->id}/verify")->assertSessionHasErrors('provider');
     Http::assertNothingSent();
 });

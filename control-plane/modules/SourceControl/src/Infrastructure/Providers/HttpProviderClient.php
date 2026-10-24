@@ -4,6 +4,8 @@ namespace Falak\SourceControl\Infrastructure\Providers;
 
 use DateTimeImmutable;
 use Exception;
+use Falak\Kernel\Network\EndpointGuard;
+use Falak\Kernel\Network\EndpointRefused;
 use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
 use Falak\SourceControl\Domain\Models\Connection;
 use Illuminate\Http\Client\ConnectionException;
@@ -27,8 +29,24 @@ abstract class HttpProviderClient implements ProviderClient
      */
     protected function send(Connection $connection, string $method, string $path, array $query = [], array $body = [], bool $nullOn404 = false): ?Response
     {
+        $request = $this->request($connection)->acceptJson()->timeout(20);
+
+        // A connection's own server (GitHub Enterprise, self-hosted GitLab) is a tenant's URL: on a managed install it
+        // goes through the EndpointGuard (public addresses only, pinned, no redirects, no proxy). Absolute paths (next
+        // page links) are checked as given. Self-hosted panels keep reaching servers on their LAN.
+        if ($connection->base_url && config('controlplane.managed')) {
+            $target = preg_match('#^https?://#i', $path) === 1 ? $path : (string) $connection->base_url;
+
+            try {
+                $addresses = app(EndpointGuard::class)->check($target, false, ['http', 'https']);
+            } catch (EndpointRefused $e) {
+                throw SourceControlException::provider($this->label(), $e->getMessage());
+            }
+
+            $request = $request->withoutRedirecting()->withOptions(['curl' => EndpointGuard::pin($target, $addresses[0]), 'proxy' => '']);
+        }
+
         try {
-            $request = $this->request($connection)->acceptJson()->timeout(20);
             $response = match ($method) {
                 // An empty `query` option would strip the query string of absolute "next page" URLs.
                 'GET' => $query === [] ? $request->get($path) : $request->get($path, $query),

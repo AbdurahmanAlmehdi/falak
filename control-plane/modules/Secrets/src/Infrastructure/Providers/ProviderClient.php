@@ -46,8 +46,8 @@ class ProviderClient
 
         if (! ($options['unguarded'] ?? false)) {
             // Both the provider and the instance must allow private networks, at request time (the instance may have
-            // turned it off since the provider was saved).
-            $allowPrivate = $provider->allow_private_network && $provider->type->selfHostable() && (bool) config('secrets.providers.allow_private_network', false);
+            // turned it off since the provider was saved); never on a managed install.
+            $allowPrivate = $provider->allow_private_network && $provider->type->selfHostable() && (bool) config('secrets.providers.allow_private_network', false) && ! config('controlplane.managed');
             try {
                 $addresses = $this->guard->check($url, $allowPrivate);
             } catch (EndpointRefused $e) {

@@ -5,6 +5,9 @@ return [
     'version' => env('FALAK_VERSION'),
     'version_file' => env('FALAK_VERSION_FILE', '/opt/falak/VERSION'),
 
+    // Managed multi-tenant install (strangers sign up): verified emails, no operator-only escape hatches.
+    'managed' => (bool) env('FALAK_MANAGED', false),
+
     // Release check: GitHub's latest (non-draft, non-pre-release) release of this repository, every 6 h.
     'update_check' => (bool) env('FALAK_UPDATE_CHECK', true),
     'repository' => env('FALAK_REPO', 'falak-sh/falak'),

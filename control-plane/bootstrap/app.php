@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\HandleInertiaRequests;
+use Falak\Identity\Http\Middleware\Authenticate;
 use Falak\Kernel\Http\HostCookies;
 use Falak\Kernel\Http\StreamedUploadsPostSize;
 use Illuminate\Foundation\Application;
@@ -31,6 +32,9 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // The CSRF cookie is `__Host-XSRF-TOKEN` (like the session cookie: previews share the panel's registrable domain).
         $middleware->web(replace: [ValidateCsrfToken::class => HostCookies::class]);
+
+        // `auth` also requires a verified email address on a managed install (Identity's Authenticate).
+        $middleware->alias(['auth' => Authenticate::class]);
 
         $middleware->web(append: [
             HandleInertiaRequests::class,

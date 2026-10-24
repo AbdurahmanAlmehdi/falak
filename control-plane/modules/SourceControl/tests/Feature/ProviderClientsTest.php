@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Identity\Contracts\Role;
+use Falak\Kernel\Network\EndpointGuard;
 use Falak\SourceControl\Contracts\Exceptions\SourceControlException;
 use Falak\SourceControl\Contracts\ProviderType;
 use Falak\SourceControl\Infrastructure\Providers\BitbucketClient;
@@ -97,6 +98,22 @@ describe('GitHub', function () {
         expect($client->account($connection))->toBe('ada')
             ->and($client->sshUrl($connection, 'acme/shop'))->toBe('git@ghe.acme.test:acme/shop.git')
             ->and($client->httpsUrl($connection, 'acme/shop'))->toBe('https://ghe.acme.test/acme/shop.git');
+    });
+
+    it('keeps GitHub Enterprise base URLs off private addresses on a managed install', function () {
+        Http::fake(['*' => Http::response(['login' => 'ada'])]);
+        app()->instance(EndpointGuard::class, new EndpointGuard(fn (string $host) => $host === 'ghe.acme.test' ? ['10.0.0.5'] : ['93.184.216.34']));
+        $connection = sc_connection($this->organization->id, attributes: ['base_url' => 'https://ghe.acme.test']);
+
+        // Self-hosted: a GitHub Enterprise on the LAN works.
+        expect(app(GitHubClient::class)->account($connection))->toBe('ada');
+
+        config(['controlplane.managed' => true]);
+        expect(fn () => app(GitHubClient::class)->account($connection))->toThrow(SourceControlException::class, '10.0.0.5');
+        Http::assertSentCount(1);
+
+        $connection->forceFill(['base_url' => 'https://ghe.public.test'])->save();
+        expect(app(GitHubClient::class)->account($connection->fresh()))->toBe('ada');
     });
 
     it('lists installation repositories with GitHub App tokens', function () {

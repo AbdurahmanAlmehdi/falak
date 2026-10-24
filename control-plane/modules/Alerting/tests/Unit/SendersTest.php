@@ -15,8 +15,11 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 
+require_once __DIR__.'/../Support/helpers.php';
+
 beforeEach(function () {
     Http::preventStrayRequests();
+    alerting_guard(['127.0.0.1.nip.io' => ['127.0.0.1'], 'localhost' => ['127.0.0.1'], 'metadata.internal' => ['169.254.169.254'], 'rebind.example.com' => ['93.184.216.34', '169.254.169.254'], 'lan.example.com' => ['10.0.0.5']]);
     $this->message = new AlertMessage(
         '01JALERT000000000000000001', '01JORG00000000000000000001', 'fleet.agent_offline', Severity::Critical,
         'Server web-1 is offline', 'No heartbeat since 12:00 <UTC>.', 'https://panel.test/servers/1', ['server_id' => 'srv', 'flag' => true], false,
@@ -112,18 +115,53 @@ it('signs generic webhooks with HMAC-SHA256 over timestamp and body', function (
     });
 });
 
-it('refuses to deliver webhooks to private addresses', function (string $url) {
-    expect(WebhookSender::isAllowedHost($url))->toBeFalse();
+it('refuses to deliver webhooks to private addresses, by IP or by name', function (string $url) {
+    Http::fake();
 
     expect(fn () => (new WebhookSender)->send(['url' => $url, 'secret' => 'x'], $this->message))->toThrow(DeliveryFailed::class);
-})->with(['http://127.0.0.1/hook', 'http://10.0.0.5/hook', 'http://192.168.1.1/', 'http://[::1]/', 'http://169.254.169.254/latest', 'http://localhost:8080/', 'http://metadata.internal/', 'http://2130706433/']);
+    Http::assertNothingSent();
+})->with(['http://127.0.0.1/hook', 'http://10.0.0.5/hook', 'http://192.168.1.1/', 'http://[::1]/', 'http://169.254.169.254/latest', 'http://localhost:8080/', 'http://metadata.internal/', 'http://2130706433/', 'http://127.0.0.1.nip.io/hook', 'https://rebind.example.com/hook', 'ftp://hooks.example.com/hook']);
 
-it('allows public hosts and private ones when configured', function () {
-    expect(WebhookSender::isAllowedHost('https://hooks.example.com/x'))->toBeTrue()
-        ->and(WebhookSender::isAllowedHost('https://8.8.8.8/x'))->toBeTrue();
+it('follows no redirects from a webhook target', function () {
+    Http::fake(['hooks.example.com/*' => Http::response('', 302, ['Location' => 'http://169.254.169.254/latest/meta-data'])]);
+    try {
+        (new WebhookSender)->send(['url' => 'https://hooks.example.com/falak', 'secret' => 'x'], $this->message);
+        $this->fail('Expected DeliveryFailed');
+    } catch (DeliveryFailed $e) {
+        expect($e->getMessage())->toBe('HTTP 302');
+    }
 
+    Http::assertSentCount(1);
+});
+
+it('reports webhook error answers by status only, Slack ones with their body', function () {
+    Http::fake([
+        'hooks.example.com/*' => Http::response('internal secrets of the target', 500),
+        'hooks.slack.com/*' => Http::response('invalid_token', 403),
+    ]);
+
+    expect(fn () => (new WebhookSender)->send(['url' => 'https://hooks.example.com/falak', 'secret' => 'x'], $this->message))
+        ->toThrow(DeliveryFailed::class, 'HTTP 500')
+        ->and(fn () => (new SlackSender)->send(['webhook_url' => 'https://hooks.slack.com/services/T/B/X'], $this->message))
+        ->toThrow(DeliveryFailed::class, 'HTTP 403: invalid_token');
+
+    try {
+        (new WebhookSender)->send(['url' => 'https://hooks.example.com/falak', 'secret' => 'x'], $this->message);
+    } catch (DeliveryFailed $e) {
+        expect($e->getMessage())->toBe('HTTP 500');
+    }
+});
+
+it('allows private webhook targets only when configured, and never on a managed install', function () {
+    Http::fake(['10.0.0.5/*' => Http::response('ok'), 'lan.example.com/*' => Http::response('ok')]);
     config(['alerting.allow_private_webhooks' => true]);
-    expect(WebhookSender::isAllowedHost('http://10.0.0.5/hook'))->toBeTrue();
+
+    (new WebhookSender)->send(['url' => 'http://lan.example.com/hook', 'secret' => 'x'], $this->message);
+    Http::assertSentCount(1);
+
+    config(['controlplane.managed' => true]);
+    expect(fn () => (new WebhookSender)->send(['url' => 'http://lan.example.com/hook', 'secret' => 'x'], $this->message))->toThrow(DeliveryFailed::class, 'private');
+    Http::assertSentCount(1);
 });
 
 it('reports connection failures without leaking the URL', function () {

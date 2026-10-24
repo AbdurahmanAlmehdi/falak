@@ -129,3 +129,13 @@ it('manages the organization compose policy', function () {
     actingAsMember(Role::Developer, $this->organization);
     $this->put('/settings/compose', ['allow_privileged' => false])->assertForbidden();
 });
+
+it('locks the compose policy on a managed install', function () {
+    OrganizationSettings::query()->create(['organization_id' => $this->organization->id, 'allow_privileged_compose' => true]);
+    config(['controlplane.managed' => true]);
+
+    $this->get('/settings/compose')->assertInertia(fn ($page) => $page->where('policy.allow_privileged', false)->where('policy.locked', true));
+    $this->put('/settings/compose', ['allow_privileged' => true])->assertSessionHasErrors('allow_privileged');
+    $this->put('/settings/compose', ['allow_privileged' => false])->assertSessionHasNoErrors();
+    expect(OrganizationSettings::for($this->organization->id)->allow_privileged_compose)->toBeFalse();
+});

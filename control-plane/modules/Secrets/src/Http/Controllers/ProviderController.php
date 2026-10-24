@@ -43,7 +43,7 @@ final class ProviderController extends Controller
         return Inertia::render('Secrets/Providers', [
             'providers' => $providers->map(fn (SecretProvider $provider) => $this->presentProvider($provider, $usage))->values(),
             'types' => $this->providerTypes(),
-            'allow_private_network' => (bool) config('secrets.providers.allow_private_network', false),
+            'allow_private_network' => (bool) config('secrets.providers.allow_private_network', false) && ! config('controlplane.managed'),
             'can' => ['manage' => $this->access->can($request->user(), $organizationId, SecretPolicy::PROVIDERS_MANAGE)],
         ]);
     }

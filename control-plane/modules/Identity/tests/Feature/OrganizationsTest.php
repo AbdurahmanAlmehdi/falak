@@ -100,7 +100,11 @@ it('rejects transferring to non-members', function () {
     actingAsMember();
     [$stranger] = memberOf();
 
-    $this->post('/organization/transfer', ['user_id' => $stranger->id, 'password' => 'password'])->assertSessionHasErrors('user_id');
+    $error = ['user_id' => 'The new owner must be another member of this organization.'];
+
+    // A stranger and an unknown id get the same answer.
+    $this->post('/organization/transfer', ['user_id' => $stranger->id, 'password' => 'password'])->assertSessionHasErrors($error);
+    $this->post('/organization/transfer', ['user_id' => '01JUNKNOWN0000000000000000', 'password' => 'password'])->assertSessionHasErrors($error);
 });
 
 it('does not transfer or delete personal organizations', function () {
