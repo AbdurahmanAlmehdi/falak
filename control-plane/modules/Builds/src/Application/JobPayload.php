@@ -58,6 +58,8 @@ final class JobPayload
 
         $job = [
             'id' => $build->id,
+            // Shared builders run each organization's build steps as its own uid, with its own caches.
+            'organization_id' => $build->organization_id,
             'mode' => $build->mode,
             'repo' => $repo,
             'timeout_s' => $build->timeout_s,

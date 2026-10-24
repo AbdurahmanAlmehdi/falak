@@ -72,6 +72,11 @@ func WriteTarball(w io.Writer, root string, excludes []string, mtime time.Time) 
 		return info, err
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return info, err
+	}
+	defer r.Close()
 
 	h := sha256.New()
 	cw := &countWriter{w: io.MultiWriter(w, h)}
@@ -106,7 +111,8 @@ func WriteTarball(w io.Writer, root string, excludes []string, mtime time.Time) 
 			return info, fmt.Errorf("tar %s: %w", e.rel, err)
 		}
 		if hdr.Typeflag == tar.TypeReg {
-			f, err := os.Open(filepath.Join(root, filepath.FromSlash(e.rel)))
+			// Through os.Root: a file swapped for a symlink after the walk cannot pull in anything outside root.
+			f, err := r.Open(filepath.FromSlash(e.rel))
 			if err != nil {
 				return info, err
 			}

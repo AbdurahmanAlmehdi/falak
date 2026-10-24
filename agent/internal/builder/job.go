@@ -37,6 +37,8 @@ type Job struct {
 	Compose  *ComposeSpec      `json:"compose,omitempty"` // docker mode: build the `build:` services of a compose file
 	// Mask names the secret variables of Env and Docker.BuildArgs: their values are masked in the build log.
 	Mask []string `json:"mask,omitempty"`
+	// OrganizationID owns the build: native build steps run as that organization's uid, with its own caches.
+	OrganizationID string `json:"organization_id,omitempty"`
 }
 
 // Repo to clone.
@@ -134,6 +136,9 @@ func (j *Job) Validate() error {
 	var errs []string
 	if !buildIDRe.MatchString(j.ID) {
 		errs = append(errs, "id: must match "+buildIDRe.String())
+	}
+	if j.OrganizationID != "" && !buildIDRe.MatchString(j.OrganizationID) {
+		errs = append(errs, "organization_id: must match "+buildIDRe.String())
 	}
 	if j.Mode == "" {
 		j.Mode = ModeNative

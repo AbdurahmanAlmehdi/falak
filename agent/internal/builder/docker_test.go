@@ -72,7 +72,7 @@ func TestDockerBuildxGeneratedDockerfile(t *testing.T) {
 		}
 	}
 	args := build.Args
-	cache := filepath.Join(b.CacheDir, "buildkit", cacheKey("https://x/y.git", ""))
+	cache := filepath.Join(b.CacheDir, "buildkit", cacheKey("", "https://x/y.git", ""))
 	wantSeq := []string{"buildx", "build", "--progress", "plain", "--builder", "falak", "--file"}
 	if strings.Join(args[:7], " ") != strings.Join(wantSeq, " ") {
 		t.Fatalf("args = %v", args)
@@ -118,7 +118,7 @@ func TestDockerRepoDockerfileAndCacheReuse(t *testing.T) {
 	fakeGit(t, f, fx)
 	f.OnFunc("docker buildx build", writeMetadata)
 	b := newBuilder(t, f)
-	cache := filepath.Join(b.CacheDir, "buildkit", cacheKey("https://x/y.git", ""))
+	cache := filepath.Join(b.CacheDir, "buildkit", cacheKey("", "https://x/y.git", ""))
 	_ = os.MkdirAll(cache, 0o755)
 	_ = os.WriteFile(filepath.Join(cache, "index.json"), []byte("{}"), 0o644)
 	push := false

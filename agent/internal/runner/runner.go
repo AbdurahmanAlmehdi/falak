@@ -21,10 +21,13 @@ import (
 type Cmd struct {
 	Name  string
 	Args  []string
-	Env   []string  // KEY=VALUE, appended to the agent's environment (or to a minimal env when ClearEnv)
+	Env   []string  // KEY=VALUE, appended to the agent's environment (or to a minimal env when ClearEnv); last wins
 	Dir   string    // working directory
 	Stdin io.Reader // optional
 	User  string    // run as this unix user (requires root); "" = agent user
+	// UID/GID run the process as a numeric uid/gid without a passwd entry and no supplementary groups (requires
+	// root; wins over User). 0 = unset.
+	UID, GID uint32
 	// Optional live streams. Output is always also captured (bounded) in Result.
 	Stdout   io.Writer
 	Stderr   io.Writer
@@ -106,6 +109,9 @@ func (e Exec) Run(ctx context.Context, c Cmd) (Result, error) {
 		}
 		cmd.SysProcAttr.Credential = cred
 		env = append(env, "HOME="+home, "USER="+c.User, "LOGNAME="+c.User)
+	}
+	if c.UID != 0 {
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: c.UID, Gid: c.GID} // nil Groups: setgroups(0)
 	}
 	cmd.Env = append(env, c.Env...)
 	outBuf := &capBuf{limit: limit}
