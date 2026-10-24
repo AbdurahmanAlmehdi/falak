@@ -25,7 +25,7 @@
         @endif
 
         @if ($appearance === 'system')
-            <script>
+            <script nonce="{{ \Illuminate\Support\Facades\Vite::cspNonce() }}">
                 (function () {
                     var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                     document.documentElement.classList.toggle('dark', dark);
@@ -36,7 +36,7 @@
 
         <title inertia>{{ config('app.name', 'Falak') }}</title>
 
-        @routes
+        @routes(null, \Illuminate\Support\Facades\Vite::cspNonce())
         @viteReactRefresh
         @vite(['resources/js/app.tsx'])
         @inertiaHead

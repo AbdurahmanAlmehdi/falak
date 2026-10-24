@@ -41,6 +41,9 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
 		Cross-Origin-Opener-Policy same-origin
+		# Baseline for responses without a policy of their own (Grafana, Horizon, files). Panel pages send their
+		# full nonce-based policy from the control plane (HandleInertiaRequests), which this never replaces.
+		?Content-Security-Policy "frame-ancestors 'self'; base-uri 'self'; object-src 'none'"
 		-Server
 		-X-Powered-By
 	}
