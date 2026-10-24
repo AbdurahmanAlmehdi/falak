@@ -64,7 +64,7 @@ func TestDockerEngineReplacesAnOldDockerIOWithDockerCE(t *testing.T) {
 	})
 	f.On("apt-cache policy docker-ce", runner.Result{Stdout: []byte("docker-ce:\n  Installed: (none)\n  Candidate: 5:28.3.2-1~ubuntu.24.04~noble\n")})
 	f.OnFunc("apt-get", func(c runnertest.Call) (runner.Result, error) {
-		if strings.Contains(c.Line, " install ") {
+		if strings.Contains(c.Line, " install ") && strings.Contains(c.Line, "docker") {
 			installed = true
 		}
 		return runner.Result{}, nil
@@ -120,7 +120,7 @@ func TestDockerEngineWithoutADockerSuiteUsesARecentDistroDockerOrFails(t *testin
 	})
 	f.On("apt-cache policy docker.io", runner.Result{Stdout: []byte("docker.io:\n  Candidate: 28.5.1-0ubuntu1\n")})
 	f.OnFunc("apt-get", func(c runnertest.Call) (runner.Result, error) {
-		if strings.Contains(c.Line, " install ") {
+		if strings.Contains(c.Line, " install ") && strings.Contains(c.Line, "docker") {
 			installed = true
 		}
 		return runner.Result{}, nil

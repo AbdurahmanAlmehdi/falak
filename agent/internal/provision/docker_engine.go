@@ -121,6 +121,10 @@ func (p *Provisioner) dockerEngine(ctx context.Context, st commands.Stream, min 
 	if !available {
 		return p.distroDocker(ctx, st, a, have, id, codename, min)
 	}
+	// The key's fingerprint is read with gpg, which minimal images (and servers without the PHP repository) lack.
+	if _, err := a.Ensure(ctx, []string{"gpg"}, true); err != nil {
+		return false, err
+	}
 	if err := p.dockerKey(ctx, repo); err != nil {
 		return false, err
 	}
