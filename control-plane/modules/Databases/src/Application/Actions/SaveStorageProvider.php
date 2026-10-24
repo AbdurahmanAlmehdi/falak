@@ -38,7 +38,7 @@ final class SaveStorageProvider
             throw ValidationException::withMessages([$driver === StorageDriver::R2 ? 'account_id' : 'endpoint' => 'An https endpoint is required.']);
         }
 
-        if ($driver === StorageDriver::Minio && ($refusal = $this->guard->refusal($endpoint, (bool) config('databases.allow_private_endpoints', false)))) {
+        if ($driver === StorageDriver::Minio && ($refusal = $this->guard->refusal($endpoint, (bool) config('databases.allow_private_endpoints', false) && ! config('controlplane.managed')))) {
             throw ValidationException::withMessages(['endpoint' => $refusal]);
         }
 

@@ -101,6 +101,20 @@ it('refuses private endpoints at request time unless both the instance and the p
     Http::assertSentCount(1);
 });
 
+it('ignores the private-network setting on a managed install', function () {
+    secrets_guard(['vault.lan' => ['10.0.0.9']]);
+    config(['secrets.providers.allow_private_network' => true]);
+    $provider = secrets_vault($this->organization, ['address' => 'https://vault.lan'], ['allow_private_network' => true]);
+    Http::fake(['*' => Http::response(['data' => ['data' => ['K' => 'lan-value']]])]);
+
+    config(['controlplane.managed' => true]);
+    expect(fn () => app(ExternalSecretProviders::class)->refresh('vault://kv/data/app#K', $provider->id, $this->organization->id))
+        ->toThrow(SecretProviderUnavailable::class, 'private or reserved')
+        ->and(fn () => secrets_vault($this->organization, ['address' => 'https://vault.lan'], ['allow_private_network' => true]))
+        ->toThrow(ValidationException::class, 'private networks');
+    Http::assertNothingSent();
+});
+
 it('drops a poll whose secret changed while the provider answered', function () {
     $provider = secrets_vault($this->organization);
     $secret = secrets_linked($this->organization, 'DB_PASS', 'vault://kv/data/app#DB_PASS', $provider, ['watch_minutes' => 5]);

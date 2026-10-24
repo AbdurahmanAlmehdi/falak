@@ -12,6 +12,6 @@ final class ObjectStores
 
     public function for(StorageProvider $provider): ObjectStore
     {
-        return new ObjectStore($provider, $this->http, (int) config('databases.storage_timeout', 30), $this->guard, (bool) config('databases.allow_private_endpoints', false));
+        return new ObjectStore($provider, $this->http, (int) config('databases.storage_timeout', 30), $this->guard, (bool) config('databases.allow_private_endpoints', false) && ! config('controlplane.managed'));
     }
 }

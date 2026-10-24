@@ -176,6 +176,19 @@ it('refuses storage endpoints on private addresses unless allowed', function () 
     Http::assertNothingSent();
 });
 
+it('ignores the private-endpoint setting on a managed install', function () {
+    Http::fake(['*' => Http::response('', 200)]);
+    $base = ['name' => 'Lan', 'driver' => 'minio', 'bucket' => 'falak-backups', 'access_key_id' => 'a', 'secret_access_key' => 'b'];
+    config(['databases.allow_private_endpoints' => true]);
+    $this->post('/databases/storage', [...$base, 'endpoint' => 'https://10.1.2.3'])->assertSessionHasNoErrors();
+    $provider = StorageProvider::query()->firstOrFail();
+
+    config(['controlplane.managed' => true]);
+    $this->post('/databases/storage', [...$base, 'name' => 'Lan 2', 'endpoint' => 'https://10.1.2.4'])->assertSessionHasErrors('endpoint');
+    $this->post("/databases/storage/{$provider->id}/verify")->assertSessionHasErrors('provider');
+    Http::assertNothingSent();
+});
+
 it('refuses storage endpoints whose IPv6 addresses embed metadata or private IPv4 ones', function () {
     Http::fake(['*' => Http::response('', 200)]);
     $base = ['name' => 'Lan', 'driver' => 'minio', 'bucket' => 'falak-backups', 'access_key_id' => 'a', 'secret_access_key' => 'b'];

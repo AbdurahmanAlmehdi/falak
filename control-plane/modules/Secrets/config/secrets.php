@@ -16,7 +16,7 @@ return [
     'providers' => [
         // Lets organizations mark a provider "allow private network" (a self-hosted Vault / Infisical on the LAN).
         // Off by default: the control plane's own network (database, cache, internal services) stays out of reach.
-        // Checked when a provider is saved and before every request.
+        // Checked when a provider is saved and before every request. Ignored on a managed install (controlplane.managed).
         'allow_private_network' => (bool) env('FALAK_SECRETS_PROVIDERS_ALLOW_PRIVATE', false),
 
         // A provider that keeps failing: its last good value is used for at most this long, then deploys fail.
