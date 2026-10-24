@@ -160,6 +160,10 @@ func TestGitAllowsOnlyHTTPSAndSSH(t *testing.T) {
 	if got := strings.Join(env, "\n"); !strings.Contains(got, "GIT_CONFIG_COUNT=4") || !strings.Contains(got, "GIT_CONFIG_KEY_3=protocol.http.allow") {
 		t.Fatal(got)
 	}
+	env, _ = gitEnv(Repo{URL: "git://git.lan/acme/app.git"}, t.TempDir())
+	if got := strings.Join(env, "\n"); !strings.Contains(got, "GIT_CONFIG_COUNT=4") || !strings.Contains(got, "GIT_CONFIG_KEY_3=protocol.git.allow") || strings.Contains(got, "protocol.http.allow") {
+		t.Fatal(got)
+	}
 }
 
 func TestDockerCacheMountsAreScopedPerOrganization(t *testing.T) {

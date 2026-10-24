@@ -51,10 +51,13 @@ func gitEnv(repo Repo, secretsDir string) ([]string, error) {
 		basic := base64.StdEncoding.EncodeToString([]byte(user + ":" + repo.Token))
 		cfg = append(cfg, "http.extraHeader", "Authorization: Basic "+basic)
 	}
-	// Clone, fetch and submodules speak https and ssh only (no file://, ext::, git://); http only for an http repo.
+	// Clone, fetch and submodules speak https and ssh only (no file://, ext::); http or git only for a repo that uses it.
 	cfg = append(cfg, "protocol.allow", "never", "protocol.https.allow", "always", "protocol.ssh.allow", "always")
 	if strings.HasPrefix(repo.URL, "http://") {
 		cfg = append(cfg, "protocol.http.allow", "always")
+	}
+	if strings.HasPrefix(repo.URL, "git://") {
+		cfg = append(cfg, "protocol.git.allow", "always")
 	}
 	env = append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(cfg)/2))
 	for i := 0; i < len(cfg); i += 2 {

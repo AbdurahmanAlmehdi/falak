@@ -529,12 +529,14 @@ services:
       REGISTRY_AUTH_TOKEN_SERVICE: falak-registry
       REGISTRY_AUTH_TOKEN_ISSUER: falak
       REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /etc/falak/registry-token.crt
+      # Health on the debug listener: with token auth /v2/ answers 401. Loopback only, inside the container.
+      REGISTRY_HTTP_DEBUG_ADDR: 127.0.0.1:5001
     volumes:
       - registry-data:/var/lib/registry
       - ../secrets/registry-token.crt:/etc/falak/registry-token.crt:ro
     networks: [registry]
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/v2/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5001/debug/health"]
       interval: 10s
       timeout: 3s
       retries: 12

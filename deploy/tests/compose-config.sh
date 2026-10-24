@@ -75,3 +75,8 @@ FALAK_REGISTRY_PASSWORD=operator-secret'
 [ "$(q '.services.registry.volumes[] | select(.target == "/etc/falak/registry-token.crt") | .read_only')" = true ] || fail "token certificate not mounted read-only"
 if q '.services.edge.environment' | grep -q operator-secret; then fail "the edge gets the registry operator credential"; fi
 pass "the registry checks tokens from the control plane's realm; the edge no longer holds the registry credential"
+# /v2/ answers 401 under token auth, so a health check there never passes (v1.3.0 update rolled back on it).
+q '.services.registry.healthcheck.test | join(" ")' | grep -q '/v2/' && fail "registry health check probes /v2/ (401 with token auth)"
+q '.services.registry.healthcheck.test | join(" ")' | grep -q "127.0.0.1:5001/debug/health" || fail "registry health check: $(q '.services.registry.healthcheck.test | join(" ")')"
+[ "$(q '.services.registry.environment.REGISTRY_HTTP_DEBUG_ADDR')" = 127.0.0.1:5001 ] || fail "registry debug listener not on loopback"
+pass "the registry health check uses the loopback debug listener, not /v2/"
