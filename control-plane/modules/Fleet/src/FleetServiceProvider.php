@@ -138,17 +138,17 @@ class FleetServiceProvider extends ModuleServiceProvider
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
         // GET /agent/v1/commands: long-polls return immediately when commands are queued. During an
         // active deploy with many sequential commands the agent re-polls after every response
-        // (round-trip ~200 ms), reaching ~60–300 polls/min. 120 allows fast deploys with headroom
-        // and is impossible to sustain legitimately (each poll blocks for `wait` seconds when empty).
-        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 120))
+        // (round-trip ~200 ms), reaching up to ~300 polls/min. 600 never slows a deploy; an idle agent
+        // polls ~2/min (each poll blocks for `wait` seconds when empty).
+        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 600))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
         // POST /agent/v1/commands/{command}/events: the Outbox flushes every 250 ms per command
-        // (4 posts/sec) and 2 concurrent streams = 480/min. 600 gives ≥5× headroom over one command
-        // and >1× over two concurrent. 429s are retried safely (Outbox queues, not drops).
-        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 600))
+        // (240/min per running command). 3000 covers ~12 concurrent streams; 429s are retried safely
+        // (Outbox queues, not drops).
+        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 3000))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
-        // POST /agent/v1/insights: periodic metric sink; 20/min per agent.
-        RateLimiter::for('fleet-agent-insights', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_insights_per_minute', 20))
+        // POST /agent/v1/insights: the tee flushes every second while spans are pending (60/min); 300 = 5×.
+        RateLimiter::for('fleet-agent-insights', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_insights_per_minute', 300))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
 
         $registry = $this->app->make(PermissionRegistry::class);
