@@ -33,6 +33,10 @@ export interface EdgeDomain {
     served_host: string;
     supports_www: boolean;
     wildcard: boolean;
+    /** ISO timestamp when ownership was confirmed (null: not yet verified in managed mode). */
+    verified_at: string | null;
+    /** TXT record value for ownership verification; non-null only while unverified in managed mode. */
+    verification_token: string | null;
     /** Set by the project's falak.yaml: read-only here (edit the file). Null when the file doesn't manage it. */
     managed?: ManagedConfig | null;
     /** Set when the domain is in a Cloudflare zone Falak manages (records created for it). */

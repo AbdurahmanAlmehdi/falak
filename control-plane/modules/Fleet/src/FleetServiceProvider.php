@@ -136,13 +136,18 @@ class FleetServiceProvider extends ModuleServiceProvider
         // POST /agent/v1/heartbeat: normal cadence is every 15 s (4/min); 10 allows retries.
         RateLimiter::for('fleet-agent-heartbeat', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_heartbeat_per_minute', 10))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
-        // GET /agent/v1/commands: 30 s long-poll gives 2/min normally; 10 covers reconnects.
-        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 10))
+        // GET /agent/v1/commands: long-polls return immediately when commands are queued. During an
+        // active deploy with many sequential commands the agent re-polls after every response
+        // (round-trip ~200 ms), reaching ~60–300 polls/min. 120 allows fast deploys with headroom
+        // and is impossible to sustain legitimately (each poll blocks for `wait` seconds when empty).
+        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 120))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
-        // POST /agent/v1/commands/{command}/events: batched during deploys; 60/min per agent.
-        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 60))
+        // POST /agent/v1/commands/{command}/events: the Outbox flushes every 250 ms per command
+        // (4 posts/sec) and 2 concurrent streams = 480/min. 600 gives ≥5× headroom over one command
+        // and >1× over two concurrent. 429s are retried safely (Outbox queues, not drops).
+        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 600))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
-        // POST /agent/v1/insights: periodic cron sink; 20/min per agent.
+        // POST /agent/v1/insights: periodic metric sink; 20/min per agent.
         RateLimiter::for('fleet-agent-insights', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_insights_per_minute', 20))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
 

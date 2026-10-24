@@ -35,22 +35,18 @@ final class RelayTokens
     /**
      * What the agent dials the relay with: valid for the session's whole life, reusable.
      *
-     * The agent's certificate fingerprint (SHA-256 of the DER, lowercase hex) is required: the relay
-     * only accepts the token from a connection presenting that exact certificate (fail closed).
+     * When the agent's certificate fingerprint is known (SHA-256 of the DER, lowercase hex) it is
+     * bound into the token as `fp`; the relay only accepts the token from a connection presenting that
+     * exact certificate. When no fingerprint is available the claim is omitted — the relay rejects
+     * fp-less tokens, so the relay session will fail at connect time rather than at session creation.
      *
-     * @param  string  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex)
-     *
-     * @throws \InvalidArgumentException when the fingerprint is absent (the agent's identity is unknown)
+     * @param  string|null  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex), or null when unknown
      */
     public function agentToken(TerminalSession $session, ?string $fingerprint = null): string
     {
-        if ($fingerprint === null || $fingerprint === '') {
-            throw new \InvalidArgumentException('agentToken requires the agent certificate fingerprint; refusing to issue an unbound relay token.');
-        }
-
         $lifetime = (int) config('terminal.max_duration', 3600) + (int) config('terminal.relay.agent_token_grace', 300);
 
-        return $this->sign([
+        $payload = [
             'v' => 1,
             'sid' => $session->id,
             'aud' => 'agent',
@@ -58,8 +54,13 @@ final class RelayTokens
             'w' => true,
             'exp' => now()->getTimestamp() + $lifetime,
             'n' => Str::random(22),
-            'fp' => strtolower($fingerprint),
-        ]);
+        ];
+
+        if ($fingerprint !== null && $fingerprint !== '') {
+            $payload['fp'] = strtolower($fingerprint);
+        }
+
+        return $this->sign($payload);
     }
 
     /** A browser's or CLI's single-use ticket to connect within ticket_ttl seconds. */

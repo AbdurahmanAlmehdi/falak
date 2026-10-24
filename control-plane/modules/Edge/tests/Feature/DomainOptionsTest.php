@@ -44,6 +44,11 @@ final class FakeDnsResolver implements DnsResolver
 
         return $answer;
     }
+
+    public function txt(string $name): array
+    {
+        return [];
+    }
 }
 
 final class FakeTlsProbe implements TlsProbe

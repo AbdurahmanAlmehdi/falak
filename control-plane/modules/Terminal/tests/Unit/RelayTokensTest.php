@@ -43,13 +43,15 @@ it('issues agent tokens and client tickets with the documented claims', function
         ->and($client['n'])->not->toBe($claims($tokens->clientTicket($session, '01juser', false))['n']);
 });
 
-it('rejects agentToken when the fingerprint is absent (fail closed)', function () {
+it('omits fp when the fingerprint is absent (relay rejects fp-less tokens)', function () {
     config(['app.key' => RELAY_VECTOR_KEY]);
     $session = (new TerminalSession)->forceFill(['id' => '01jtestsession0000000000000', 'server_id' => '01jserver00000000000000000']);
     $tokens = new RelayTokens;
 
-    expect(fn () => $tokens->agentToken($session, null))->toThrow(\InvalidArgumentException::class)
-        ->and(fn () => $tokens->agentToken($session, ''))->toThrow(\InvalidArgumentException::class);
+    // No certificate yet: fp omitted. The relay rejects the token at connect time; session creation still succeeds.
+    $decode = fn (string $token) => json_decode(base64_decode(strtr(explode('.', $token)[0], '-_', '+/')), true);
+    expect($decode($tokens->agentToken($session, null)))->not->toHaveKey('fp')
+        ->and($decode($tokens->agentToken($session, '')))->not->toHaveKey('fp');
 });
 
 it('derives the client URL from APP_URL unless one is configured', function () {

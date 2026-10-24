@@ -1,6 +1,7 @@
 import {
     Button,
     Callout,
+    CopyButton,
     Dialog,
     EmptyState,
     Field,
@@ -732,6 +733,41 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                 ` · ${WWW.find((item) => item.value === domain.www_redirect)?.label.toLowerCase()}`}
                                         </span>
                                     </div>
+                                    {domain.verification_token && (
+                                        <div className="w-full">
+                                            <Callout tone="warning">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span>Pending verification — add a TXT record, then click Verify:</span>
+                                                    <span className="flex items-center gap-1">
+                                                        <code className="font-mono text-xs">{`_falak-challenge.${domain.name.replace(/^\*\./, '')}`}</code>
+                                                        <CopyButton value={`_falak-challenge.${domain.name.replace(/^\*\./, '')}`} label="Copy name" size="xs" />
+                                                    </span>
+                                                    <span className="text-fg-faint">→</span>
+                                                    <span className="flex items-center gap-1">
+                                                        <code className="font-mono text-xs">{domain.verification_token}</code>
+                                                        <CopyButton value={domain.verification_token} label="Copy value" size="xs" />
+                                                    </span>
+                                                    {manage && (
+                                                        <Button
+                                                            size="xs"
+                                                            variant="primary"
+                                                            onClick={() =>
+                                                                void mutate(
+                                                                    'POST',
+                                                                    `${domainsUrl(siteId)}/${domain.id}/verify`,
+                                                                    {},
+                                                                    `${domain.name} verified — the edge is being updated`,
+                                                                    reload,
+                                                                )
+                                                            }
+                                                        >
+                                                            Verify
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </Callout>
+                                        </div>
+                                    )}
                                     <Tooltip
                                         content={
                                             certificate
