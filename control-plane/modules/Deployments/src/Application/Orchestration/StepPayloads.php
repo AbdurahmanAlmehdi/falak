@@ -219,7 +219,8 @@ final class StepPayloads
             'assets' => $assets === [] ? null : $assets,
             'env' => (object) $env,
             'project_env_file' => '.env',
-            'registry_auth' => $this->composeRegistryAuth($release),
+            // Pull only the organization's own images of the built-in registry (short-lived).
+            'registry_auth' => $this->builds->registryAuth($site->organizationId, $release['yaml']),
             'mask' => $this->mask($site, $env) ?: null,
         ], fn ($v) => $v !== null);
     }
@@ -384,19 +385,6 @@ final class StepPayloads
         $env = [...array_map('strval', (array) $release['env']), 'FALAK_SERVER_ID' => (string) self::upper($serverId)];
 
         return array_filter($env, fn ($v, $k) => preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string) $k) === 1, ARRAY_FILTER_USE_BOTH);
-    }
-
-    /**
-     * @param  array{yaml: string, registry?: bool}  $release
-     * @return ?array<string, string>
-     */
-    private function composeRegistryAuth(array $release): ?array
-    {
-        $registry = rtrim((string) preg_replace('#^https?://#i', '', (string) config('builds.registry.url')), '/');
-
-        return ($release['registry'] ?? false) || ($registry !== '' && str_contains($release['yaml'], $registry.'/'))
-            ? $this->registryAuthFor($registry.'/')
-            : null;
     }
 
     /**
@@ -847,7 +835,7 @@ final class StepPayloads
         if ($deployment->target_release_id !== null) {
             $image = Release::query()->whereKey($deployment->target_release_id)->value('image');
 
-            return [(string) $image, $this->registryAuthFor((string) $image)];
+            return [(string) $image, $this->builds->registryAuth($site->organizationId, (string) $image)];
         }
 
         if ($deployment->build_id !== null) {
@@ -857,21 +845,6 @@ final class StepPayloads
         }
 
         return [(string) $site->dockerImage, null];
-    }
-
-    /**
-     * @return ?array<string, string>
-     */
-    private function registryAuthFor(string $image): ?array
-    {
-        $registry = rtrim((string) preg_replace('#^https?://#i', '', (string) config('builds.registry.url')), '/');
-        $username = (string) config('builds.registry.username');
-
-        if ($registry === '' || $username === '' || ! str_starts_with($image, $registry.'/')) {
-            return null;
-        }
-
-        return ['server' => $registry, 'username' => $username, 'password' => (string) config('builds.registry.password')];
     }
 
     /**
@@ -993,7 +966,7 @@ final class StepPayloads
             'release' => strtolower($releaseId),
             'image' => $source->image,
             'pull' => 'missing',
-            'registry_auth' => $this->registryAuthFor($source->image),
+            'registry_auth' => $this->builds->registryAuth($site->organizationId, $source->image),
             'entrypoint' => $source->entrypoint,
             'files' => $files,
             'env' => (object) array_map('strval', $env),

@@ -9,7 +9,7 @@ internet ──:80/:443──► edge (Caddy)
                         ├─ falak.example.com         Let's Encrypt ─► control-plane (FrankenPHP) · reverb (websockets)
                         │                                                · relay (consoles: /terminal/v1)
                         ├─ agents.falak.example.com  Fleet-CA cert + client-cert (mTLS) check ─► control-plane
-                        ├─ registry.falak.example.com Let's Encrypt + basic auth ─► registry (built-in image registry)
+                        ├─ registry.falak.example.com Let's Encrypt ─► registry (built-in image registry, token auth)
                         └─ grafana.falak.example.com Let's Encrypt ─► grafana            (optional)
 control-plane · horizon · reverb · scheduler ─► postgres 17 · valkey
 builder (falak-builder serve: PHP/Composer, Node, Bun) ─► edge
@@ -71,10 +71,14 @@ Create these records before you install (replace the IP with your server's publi
 | `grafana.falak.example.com` | A (and/or AAAA) | `203.0.113.10` | only with `--observability` |
 
 - The panel, the registry and Grafana get **Let's Encrypt** certificates automatically (HTTP-01/TLS-ALPN on ports 80/443).
-- The **registry** host serves Falak's built-in image registry (Docker Distribution) behind basic auth: docker-mode
+- The **registry** host serves Falak's built-in image registry (Docker Distribution) with token auth: docker-mode
   builds (Dockerfile sites, compose services with `build:`) push there and servers pull from it, pinned by digest.
-  The credentials are generated into `.env` (`FALAK_REGISTRY_USERNAME`, `FALAK_REGISTRY_PASSWORD`); Falak hands them
-  to builders and servers itself. With `--tls internal` its certificate is not trusted by Docker on other hosts,
+  The control plane is the token server (`https://<panel>/api/internal/registry/token`, the registry's realm): it
+  signs short-lived tokens with `secrets/registry-token.key` and the registry checks them with
+  `secrets/registry-token.crt` (both created by `falak-ctl up` / `update`). Builders and servers never get a shared
+  password: each build gets a credential that pushes only to its site's repositories while the build runs, each deploy
+  command one that pulls only the deploying organization's images, for an hour. The operator credential in `.env`
+  (`FALAK_REGISTRY_USERNAME`, `FALAK_REGISTRY_PASSWORD`) is for `falak-ctl registry` and the prune job only. With `--tls internal` its certificate is not trusted by Docker on other hosts,
   so docker builds need `--tls acme` (or the internal root trusted in each Docker daemon).
 - The **agents** host does *not* use Let's Encrypt. Agents pin Falak's own Fleet CA, so the edge serves
   that host with a certificate issued by the Fleet CA, and verifies agent client certificates against it.

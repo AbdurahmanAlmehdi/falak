@@ -88,14 +88,21 @@ final class FakeBuildService implements BuildService
     public function imageFor(string $buildId): ?ImageData
     {
         return ($this->builds[$buildId]['status'] ?? null) === BuildStatus::Succeeded
-            ? new ImageData("registry.falak.local/falak/app@sha256:{$this->sha256}", ['server' => 'registry.falak.local', 'username' => 'falak', 'password' => 'secret'])
+            ? new ImageData("registry.falak.local/falak/app@sha256:{$this->sha256}", ['server' => 'registry.falak.local', 'username' => 'falak-scoped', 'password' => 'scoped-pull'])
             : null;
     }
 
     public function composeFor(string $buildId): ?ComposeBuildData
     {
         return ($this->builds[$buildId]['status'] ?? null) === BuildStatus::Succeeded
-            ? new ComposeBuildData('compose.yaml', $this->composeContent, $this->composeImages, ['server' => 'registry.falak.local', 'username' => 'falak', 'password' => 'secret'], $this->composeAssets)
+            ? new ComposeBuildData('compose.yaml', $this->composeContent, $this->composeImages, ['server' => 'registry.falak.local', 'username' => 'falak-scoped', 'password' => 'scoped-pull'], $this->composeAssets)
+            : null;
+    }
+
+    public function registryAuth(string $organizationId, string $images): ?array
+    {
+        return str_contains($images, 'registry.falak.local/')
+            ? ['server' => 'registry.falak.local', 'username' => 'falak-scoped', 'password' => "scoped-pull:{$organizationId}"]
             : null;
     }
 

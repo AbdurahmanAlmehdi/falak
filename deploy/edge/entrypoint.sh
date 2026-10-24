@@ -2,7 +2,7 @@
 # Falak edge entrypoint (production counterpart of sim/edge/entrypoint.sh).
 #
 #  - renders the global TLS options (FALAK_TLS=acme|internal, FALAK_ACME_CA), the optional Grafana site and the
-#    built-in registry site (FALAK_REGISTRY_HOST, basic auth from FALAK_REGISTRY_USERNAME/PASSWORD);
+#    built-in registry site (FALAK_REGISTRY_HOST; TLS only, the registry checks tokens itself);
 #  - keeps /etc/caddy/trust/ca.pem in sync with the Fleet CA written by the control plane
 #    ($FALAK_EDGE_CA_FILE, default /falak/ca/ca.pem). Until it exists a throwaway placeholder CA (key
 #    discarded) is trusted, so every non-enroll agent call fails closed;
@@ -75,24 +75,20 @@ valid_hosts() {
   return 0
 }
 
-# Built-in image registry: never served without credentials (the registry itself has no auth). Former hosts
-# (falak-ctl domain set --keep-old) keep working, so images referenced by old releases still pull.
-if [ -n "${FALAK_REGISTRY_HOST:-}" ] && [ -n "${FALAK_REGISTRY_USERNAME:-}" ] && [ -n "${FALAK_REGISTRY_PASSWORD:-}" ]; then
-  case "$FALAK_REGISTRY_USERNAME" in *[!A-Za-z0-9_.-]*) echo "falak-edge: FALAK_REGISTRY_USERNAME may only use letters, digits, _ . -" >&2; exit 2 ;; esac
+# Built-in image registry: TLS only here; the registry itself checks the bearer tokens the control plane signs
+# (token auth, deploy/compose.yml). Former hosts (falak-ctl domain set --keep-old) keep working, so images referenced
+# by old releases still pull.
+if [ -n "${FALAK_REGISTRY_HOST:-}" ]; then
   if ! valid_hosts "$FALAK_REGISTRY_HOST" || [ "${FALAK_REGISTRY_HOST#*,}" != "$FALAK_REGISTRY_HOST" ]; then
     echo "falak-edge: FALAK_REGISTRY_HOST must be one host name (letters, digits, - and .)" >&2; exit 2
   fi
   if [ -n "${FALAK_REGISTRY_HOST_ALIASES:-}" ] && ! valid_hosts "$FALAK_REGISTRY_HOST_ALIASES"; then
     echo "falak-edge: FALAK_REGISTRY_HOST_ALIASES must be comma-separated host names (letters, digits, - and .)" >&2; exit 2
   fi
-  REGISTRY_HASH="$(caddy hash-password --plaintext "$FALAK_REGISTRY_PASSWORD")"
   cat > /etc/caddy/sites/registry.caddyfile <<SITE
 ${FALAK_REGISTRY_HOST}$(printf '%s' "${FALAK_REGISTRY_HOST_ALIASES:-}" | sed 's/^/,/; s/,/, /g; s/^, $//') {
 	log
 	header Docker-Distribution-Api-Version registry/2.0
-	basic_auth {
-		${FALAK_REGISTRY_USERNAME} ${REGISTRY_HASH}
-	}
 	# Image layers: no request body limit, stream both ways.
 	reverse_proxy registry:5000 {
 		flush_interval -1
@@ -103,7 +99,6 @@ ${FALAK_REGISTRY_HOST}$(printf '%s' "${FALAK_REGISTRY_HOST_ALIASES:-}" | sed 's/
 	}
 }
 SITE
-  unset REGISTRY_HASH
 fi
 
 # --- local edge: sites on the control-plane machine ------------------------------------------------------

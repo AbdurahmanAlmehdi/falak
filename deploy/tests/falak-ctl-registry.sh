@@ -27,10 +27,25 @@ password="$(env_get FALAK_REGISTRY_PASSWORD)"
 [ "$(stat -c %a "$FALAK_DIR/.env" 2>/dev/null || stat -f %Lp "$FALAK_DIR/.env")" = 600 ] || fail ".env is not mode 600"
 pass "an install without a registry gets host, URL and credentials"
 
+key="$FALAK_DIR/secrets/registry-token.key" crt="$FALAK_DIR/secrets/registry-token.crt"
+[ "$(stat -c %a "$key" 2>/dev/null || stat -f %Lp "$key")" = 400 ] || fail "token key is not mode 400"
+[ "$(stat -c %a "$crt" 2>/dev/null || stat -f %Lp "$crt")" = 644 ] || fail "token certificate is not mode 644"
+[ "$(openssl x509 -in "$crt" -noout -pubkey)" = "$(openssl pkey -in "$key" -pubout)" ] || fail "certificate does not match the key"
+key_sum="$(sha256_hex < "$crt")"
+pass "the registry token signing key and its certificate are created"
+
 ensure_registry_env >/dev/null
 [ "$(env_get FALAK_REGISTRY_PASSWORD)" = "$password" ] || fail "password rotated on a second run"
 [ "$(grep -c '^FALAK_REGISTRY_HOST=' "$FALAK_DIR/.env")" = 1 ] || fail "duplicate FALAK_REGISTRY_HOST lines"
+[ "$(sha256_hex < "$crt")" = "$key_sum" ] || fail "token key rotated on a second run"
 pass "a second run changes nothing"
+
+# The stack started before the certificate existed: Docker created a directory at its path.
+rm -f "$crt"; mkdir "$crt"
+ensure_registry_token_key >/dev/null
+[ -f "$crt" ] || fail "directory at the certificate path not replaced"
+[ "$(openssl x509 -in "$crt" -noout -pubkey)" = "$(openssl pkey -in "$key" -pubout)" ] || fail "new certificate does not match the key"
+pass "a directory Docker left at the certificate path is replaced"
 
 printf 'FALAK_DOMAIN=falak.example.com\nFALAK_HTTPS_PORT=8443\n' > "$FALAK_DIR/.env"
 ensure_registry_env >/dev/null
@@ -56,10 +71,20 @@ cmd_domain set new.example.com >/dev/null
 [ "$(env_get FALAK_REGISTRY_PASSWORD)" = secret ] || fail "domain set rotated the password"
 pass "domain set moves the registry host and keeps the old one as an alias"
 
-# registry status: custom credentials with " and \ still make a valid curl config (stdin, never argv).
+# registry status: custom credentials with " and \ still make a valid curl config (stdin, never argv); the token
+# from the token server (panel host) goes to the registry host as a bearer header.
 printf 'FALAK_DOMAIN=falak.example.com\nFALAK_REGISTRY_HOST=registry.falak.example.com\nFALAK_REGISTRY_USERNAME=falak\nFALAK_REGISTRY_PASSWORD=pa"ss\\word\n' > "$FALAK_DIR/.env"
-edge_curl() { cat > "$work/curl.cfg"; printf 200; }
+edge_curl() {
+  cat > "$work/curl-$1.cfg"
+  case "$1 $2" in
+    "falak.example.com /api/internal/registry/token?service=falak-registry") printf '{"token":"tok.en-1","expires_in":300}' ;;
+    "registry.falak.example.com /v2/") printf 200 ;;
+    *) printf 'unexpected %s %s' "$1" "$2" ;;
+  esac
+}
 [ "$(registry_code --auth)" = 200 ] || fail "registry_code --auth"
+[ "$(cat "$work/curl-registry.falak.example.com.cfg")" = 'header = "Authorization: Bearer tok.en-1"' ] || fail "bearer config: $(cat "$work/curl-registry.falak.example.com.cfg")"
+cp "$work/curl-falak.example.com.cfg" "$work/curl.cfg"
 [ "$(cat "$work/curl.cfg")" = 'user = "falak:pa\"ss\\word"' ] || fail "curl config: $(cat "$work/curl.cfg")"
 if parsed="$(curl -K "$work/curl.cfg" --libcurl - file:///dev/null 2>/dev/null | grep CURLOPT_USERPWD)" && [ -n "$parsed" ]; then
   [ "$parsed" = '  curl_easy_setopt(hnd, CURLOPT_USERPWD, "falak:pa\"ss\\word");' ] || fail "curl parsed: $parsed"

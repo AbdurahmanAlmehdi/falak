@@ -131,8 +131,8 @@ edge_curl() { # edge_curl HOST PATH [curl args...]
 }
 
 # --- built-in image registry ------------------------------------------------------------------------
-# Docker builds push to registry.<domain> and servers pull from it (basic auth at the edge). Installs that
-# predate it get its settings here, from every command that (re)starts the stack.
+# Docker builds push to registry.<domain> and servers pull from it (token auth: the control plane is the token
+# server). Installs that predate it get its settings here, from every command that (re)starts the stack.
 ensure_registry_env() {
   local domain host port suffix
   domain="$(env_get FALAK_DOMAIN)"
@@ -148,8 +148,34 @@ ensure_registry_env() {
   fi
   [ -n "$(env_get FALAK_REGISTRY_USERNAME)" ] || env_set FALAK_REGISTRY_USERNAME falak
   [ -n "$(env_get FALAK_REGISTRY_PASSWORD)" ] || env_set FALAK_REGISTRY_PASSWORD "$(rand_hex 24)"
+  ensure_registry_token_key
   ensure_registry_gc_schedule
   return 0
+}
+
+# The key the control plane signs registry tokens with (secrets/registry-token.key: 0400, the container's www-data)
+# and its self-signed certificate, the registry's rootcertbundle (registry-token.crt, mounted into the registry).
+# Created once and never rotated by this; no backup needed: a new pair only invalidates tokens of the last minutes.
+# A certificate path Docker created as a directory (the stack started before the file existed) is replaced.
+ensure_registry_token_key() {
+  local key="$SECRETS_DIR/registry-token.key" crt="$SECRETS_DIR/registry-token.crt" tmp
+  install -d -m 0711 "$SECRETS_DIR"
+  if [ -d "$crt" ]; then rmdir "$crt" 2>/dev/null || die "$crt is a directory: remove it, then run falak-ctl up"; fi
+  if [ ! -s "$key" ] || [ ! -s "$crt" ]; then
+    command -v openssl >/dev/null 2>&1 || die "openssl is needed to create the registry token key (apt-get install openssl)"
+    tmp="$(mktemp -d "$SECRETS_DIR/.registry-token.XXXXXX")"
+    if ! openssl req -x509 -newkey rsa:3072 -nodes -sha256 -days 3650 -subj /CN=falak-registry-token \
+      -keyout "$tmp/key" -out "$tmp/crt" >/dev/null 2>&1; then
+      rm -rf "$tmp"; die "could not create the registry token key (openssl req)"
+    fi
+    kek_secure "$tmp/key"
+    mv -f "$tmp/key" "$key"
+    mv -f "$tmp/crt" "$crt"
+    rm -rf "$tmp"
+    info "created the registry token signing key $key"
+  fi
+  kek_secure "$key"
+  chmod 0644 "$crt"
 }
 
 # The control plane deletes unneeded images daily (falak:registry-prune); their layers only free disk space once the
@@ -393,12 +419,16 @@ curl_config_quote() { # curl_config_quote VALUE -> "VALUE" for a curl config fil
 }
 
 registry_code() { # registry_code [--auth] -> HTTP status of GET /v2/ through the edge
-  local host
+  local host token
   host="$(env_get FALAK_REGISTRY_HOST)"
   [ -n "$host" ] || { echo none; return 0; }
   if [ "${1:-}" = --auth ]; then
-    # Credentials via a curl config on stdin, never on the command line.
-    printf 'user = %s\n' "$(curl_config_quote "$(env_get FALAK_REGISTRY_USERNAME):$(env_get FALAK_REGISTRY_PASSWORD)")" \
+    # A token for the operator credential from the control plane's token server (the registry's realm), then /v2/
+    # with it. Credentials and token via curl configs on stdin, never on the command line.
+    token="$(printf 'user = %s\n' "$(curl_config_quote "$(env_get FALAK_REGISTRY_USERNAME):$(env_get FALAK_REGISTRY_PASSWORD)")" \
+      | edge_curl "$(env_get FALAK_DOMAIN)" '/api/internal/registry/token?service=falak-registry' -K - 2>/dev/null \
+      | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')" || true
+    printf 'header = %s\n' "$(curl_config_quote "Authorization: Bearer $token")" \
       | edge_curl "$host" /v2/ -o /dev/null -w '%{http_code}' -K - 2>/dev/null || true
     return 0
   fi
@@ -416,8 +446,8 @@ cmd_registry() {
         ok "registry running, $(compose exec -T registry du -sh /var/lib/registry 2>/dev/null | cut -f1 || echo '?') stored"
       else bad "registry is not running (falak-ctl up)"; fi
       local code; code="$(registry_code --auth)"
-      if [ "$code" = 200 ]; then ok "https://$(env_get FALAK_REGISTRY_HOST)/v2/ answers with the credentials (200)"
-      else bad "https://$(env_get FALAK_REGISTRY_HOST)/v2/ with the credentials -> ${code:-no response}"; fi
+      if [ "$code" = 200 ]; then ok "https://$(env_get FALAK_REGISTRY_HOST)/v2/ answers with a token for the credentials (200)"
+      else bad "https://$(env_get FALAK_REGISTRY_HOST)/v2/ with a token for the credentials -> ${code:-no response}"; fi
       ;;
     gc)
       # Removes layers and untagged manifests nothing references. The registry is stopped meanwhile: a push
@@ -1945,6 +1975,8 @@ cmd_ensure_host() {
   require_install
   ensure_org_move
   ensure_host_dir
+  # Updates from releases before registry token auth: the new compose file mounts the certificate.
+  if [ -n "$(env_get FALAK_REGISTRY_HOST)" ]; then ensure_registry_token_key; fi
   host_reap_stuck
   ensure_edge_ip
   ensure_slices

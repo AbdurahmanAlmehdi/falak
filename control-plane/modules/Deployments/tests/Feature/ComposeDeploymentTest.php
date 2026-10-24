@@ -100,7 +100,7 @@ it('deploys a repo compose site: build → pull everywhere → leader command �
         ->and($up['wait'])->toBeTrue()
         ->and($up['wait_timeout_s'])->toBe(300)
         ->and($up['project_env_file'])->toBe('.env')
-        ->and($up['registry_auth']['username'])->toBe('falak')
+        ->and($up['registry_auth'])->toBe(['server' => 'registry.falak.local', 'username' => 'falak-scoped', 'password' => "scoped-pull:{$world->site->organization_id}"])
         ->and($up['env']['APP_KEY'])->toBe('base64:secret')
         ->and($up['env']['FALAK_SERVER_ID'])->toBe(strtoupper($world->servers[1]->id))
         ->and($up['env']['FALAK_RELEASE_ID'])->toBe(strtoupper($deployment->release_id))
