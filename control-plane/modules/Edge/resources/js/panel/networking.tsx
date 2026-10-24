@@ -740,7 +740,11 @@ export function DomainsSettings({ ctx }: ServiceTabProps) {
                                                     <span>Pending verification — add a TXT record, then click Verify:</span>
                                                     <span className="flex items-center gap-1">
                                                         <code className="font-mono text-xs">{`_falak-challenge.${domain.name.replace(/^\*\./, '')}`}</code>
-                                                        <CopyButton value={`_falak-challenge.${domain.name.replace(/^\*\./, '')}`} label="Copy name" size="xs" />
+                                                        <CopyButton
+                                                            value={`_falak-challenge.${domain.name.replace(/^\*\./, '')}`}
+                                                            label="Copy name"
+                                                            size="xs"
+                                                        />
                                                     </span>
                                                     <span className="text-fg-faint">→</span>
                                                     <span className="flex items-center gap-1">
