@@ -133,6 +133,23 @@ class FleetServiceProvider extends ModuleServiceProvider
         // Agent uploads (POST /agent/v1/uploads/{type}/{id}): chunks per authenticated agent.
         RateLimiter::for('fleet-agent-uploads', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_uploads_per_minute', 300))
             ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/heartbeat: normal cadence is every 15 s (4/min); 10 allows retries.
+        RateLimiter::for('fleet-agent-heartbeat', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_heartbeat_per_minute', 10))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // GET /agent/v1/commands: long-polls return immediately when commands are queued. During an
+        // active deploy with many sequential commands the agent re-polls after every response
+        // (round-trip ~200 ms), reaching up to ~300 polls/min. 600 never slows a deploy; an idle agent
+        // polls ~2/min (each poll blocks for `wait` seconds when empty).
+        RateLimiter::for('fleet-agent-commands', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_commands_per_minute', 600))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/commands/{command}/events: the Outbox flushes every 250 ms per command
+        // (240/min per running command). 3000 covers ~12 concurrent streams; 429s are retried safely
+        // (Outbox queues, not drops).
+        RateLimiter::for('fleet-agent-events', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_events_per_minute', 3000))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
+        // POST /agent/v1/insights: the tee flushes every second while spans are pending (60/min); 300 = 5×.
+        RateLimiter::for('fleet-agent-insights', fn (Request $request) => Limit::perMinute((int) config('fleet.agent_insights_per_minute', 300))
+            ->by((string) $request->attributes->get(AuthenticateAgent::AGENT)?->id));
 
         $registry = $this->app->make(PermissionRegistry::class);
         $registry->register('fleet.commands.view', [Role::Admin, Role::Developer, Role::Viewer], 'View agent command output', 'fleet');

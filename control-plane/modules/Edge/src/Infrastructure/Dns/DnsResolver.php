@@ -11,4 +11,13 @@ interface DnsResolver
      * @throws DnsLookupFailed when the resolver could not answer (timeout, SERVFAIL, network)
      */
     public function resolve(string $name): DnsAnswer;
+
+    /**
+     * Returns the TXT record values for $name, or an empty list when the name has none.
+     *
+     * @return list<string>
+     *
+     * @throws DnsLookupFailed when the resolver could not answer (timeout, SERVFAIL, network)
+     */
+    public function txt(string $name): array;
 }

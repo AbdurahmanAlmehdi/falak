@@ -1,6 +1,9 @@
 <?php
 
 use Falak\Edge\Contracts\EdgeRoutes;
+use Falak\Edge\Contracts\TlsMode;
+use Falak\Edge\Domain\Enums\WwwRedirect;
+use Falak\Edge\Domain\Models\Domain;
 use Falak\Edge\Tests\Support\FakeServerDirectory;
 use Falak\Edge\Tests\Support\FakeSiteDirectory;
 use Falak\Edge\Tests\Support\RecordingAgentGateway;
@@ -164,4 +167,9 @@ function edge_self_signed(array $domains, int $days = 90): array
     unlink($config);
 
     return ['cert' => $certPem, 'key' => $keyPem];
+}
+
+function edge_domain(string $org, string $siteId, string $name, array $attributes = []): Domain
+{
+    return Domain::query()->create(['organization_id' => $org, 'site_id' => $siteId, 'name' => $name, 'is_primary' => false, 'www_redirect' => WwwRedirect::None, 'tls_mode' => TlsMode::Auto, ...$attributes]);
 }

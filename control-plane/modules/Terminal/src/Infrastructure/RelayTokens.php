@@ -35,14 +35,18 @@ final class RelayTokens
     /**
      * What the agent dials the relay with: valid for the session's whole life, reusable.
      *
-     * @param  ?string  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex): the relay only accepts
-     *                                the token from a connection presenting that certificate
+     * When the agent's certificate fingerprint is known (SHA-256 of the DER, lowercase hex) it is
+     * bound into the token as `fp`; the relay only accepts the token from a connection presenting that
+     * exact certificate. When no fingerprint is available the claim is omitted — the relay rejects
+     * fp-less tokens, so the relay session will fail at connect time rather than at session creation.
+     *
+     * @param  string|null  $fingerprint  SHA-256 of the agent's client certificate (lowercase hex), or null when unknown
      */
     public function agentToken(TerminalSession $session, ?string $fingerprint = null): string
     {
         $lifetime = (int) config('terminal.max_duration', 3600) + (int) config('terminal.relay.agent_token_grace', 300);
 
-        $claims = [
+        $payload = [
             'v' => 1,
             'sid' => $session->id,
             'aud' => 'agent',
@@ -53,10 +57,10 @@ final class RelayTokens
         ];
 
         if ($fingerprint !== null && $fingerprint !== '') {
-            $claims['fp'] = strtolower($fingerprint);
+            $payload['fp'] = strtolower($fingerprint);
         }
 
-        return $this->sign($claims);
+        return $this->sign($payload);
     }
 
     /** A browser's or CLI's single-use ticket to connect within ticket_ttl seconds. */

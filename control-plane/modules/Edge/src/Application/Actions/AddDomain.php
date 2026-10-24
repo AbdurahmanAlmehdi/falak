@@ -12,6 +12,7 @@ use Falak\Edge\Events\DomainAdded;
 use Falak\Identity\Contracts\AuditLog;
 use Falak\Sites\Contracts\Data\SiteData;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 final class AddDomain
@@ -46,11 +47,23 @@ final class AddDomain
         }
 
         $this->validateDomainTls($site->organizationId, $site->id, $name, $tls, $www, $certificateId, $dnsCredentialId);
-        $this->ensureHostsAvailable($name, $www);
 
-        $domain = DB::transaction(function () use ($site, $name, $tls, $www, $certificateId, $dnsCredentialId, $service) {
+        $managed = (bool) config('controlplane.managed', false);
+
+        // In managed mode a domain requires TXT verification unless it is a Falak-issued preview host
+        // ($preview=true) or the site's test domain. The uniqueness check releases unverified claims
+        // from other orgs so a verified claim can take their place.
+        $this->ensureHostsAvailable($name, $www, null, 'name', $managed);
+
+        $domain = DB::transaction(function () use ($site, $name, $tls, $www, $certificateId, $dnsCredentialId, $service, $managed, $preview) {
             // Primary within the route: the site's own domains, or the service's.
             $primary = ! ComposeServiceDomains::scope(Domain::query()->where('site_id', $site->id), $site, $service)->lockForUpdate()->exists();
+
+            // In managed mode new domains start unverified; the operator must add the TXT record.
+            // Self-hosted (managed = false): mark verified immediately (unchanged behaviour).
+            $needsVerification = $managed && ! $preview;
+            $verifiedAt = $needsVerification ? null : now();
+            $verificationToken = $needsVerification ? Str::random(48) : null;
 
             return Domain::query()->create([
                 'organization_id' => $site->organizationId,
@@ -62,13 +75,18 @@ final class AddDomain
                 'tls_mode' => $tls,
                 'certificate_id' => $tls === TlsMode::Custom ? $certificateId : null,
                 'dns_credential_id' => $tls === TlsMode::Dns ? $dnsCredentialId : null,
+                'verification_token' => $verificationToken,
+                'verified_at' => $verifiedAt,
             ]);
         });
 
         $this->audit->record('edge.domain_added', 'site', $site->id, array_filter(['domain' => $name, 'tls' => $tls->value, 'service' => $service]), $site->organizationId);
 
-        DomainAdded::dispatch($domain->id, $site->id, $site->organizationId, $name, $domain->is_primary);
-        $this->changes->siteChanged($site->id);
+        // Unverified domains are not pushed to the edge yet; DomainAdded fires only once verified.
+        if ($domain->isVerified()) {
+            DomainAdded::dispatch($domain->id, $site->id, $site->organizationId, $name, $domain->is_primary);
+            $this->changes->siteChanged($site->id);
+        }
         $this->services->mirror($site);
 
         return $domain;

@@ -21,10 +21,10 @@ Route::middleware(ForceJson::class)->name('fleet.agent.')->group(function () {
     Route::middleware(AuthenticateAgent::class)->group(function () {
         Route::get('ping', PingController::class)->name('ping');
         Route::post('renew', RenewController::class)->name('renew');
-        Route::post('heartbeat', HeartbeatController::class)->name('heartbeat');
-        Route::get('commands', CommandPollController::class)->name('commands');
-        Route::post('commands/{command}/events', CommandEventsController::class)->name('commands.events');
-        Route::post('insights', InsightsController::class)->name('insights');
+        Route::post('heartbeat', HeartbeatController::class)->middleware('throttle:fleet-agent-heartbeat')->name('heartbeat');
+        Route::get('commands', CommandPollController::class)->middleware('throttle:fleet-agent-commands')->name('commands');
+        Route::post('commands/{command}/events', CommandEventsController::class)->middleware('throttle:fleet-agent-events')->name('commands.events');
+        Route::post('insights', InsightsController::class)->middleware('throttle:fleet-agent-insights')->name('insights');
         Route::post('requests/{type}', RequestController::class)->where('type', '[a-z_]+(\.[a-z_]+)+')->middleware('throttle:fleet-agent-requests')->name('requests');
         Route::post('uploads/{type}/{id}', UploadController::class)->where('type', '[a-z_]+(\.[a-z_]+)+')->where('id', '[A-Za-z0-9_-]{1,64}')->middleware('throttle:fleet-agent-uploads')->name('uploads');
     });

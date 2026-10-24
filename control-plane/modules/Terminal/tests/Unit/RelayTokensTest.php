@@ -33,13 +33,25 @@ it('issues agent tokens and client tickets with the documented claims', function
         return json_decode(base64_decode(strtr($body, '-_', '+/')), true);
     };
 
-    $agent = $claims($tokens->agentToken($session));
+    $fp = str_repeat('a1', 32); // 64-char hex fingerprint
+    $agent = $claims($tokens->agentToken($session, $fp));
     $client = $claims($tokens->clientTicket($session, '01juser', false));
 
-    expect($agent)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'agent', 'sub' => $session->server_id, 'w' => true, 'exp' => 1_800_000_000 + 3900])
+    expect($agent)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'agent', 'sub' => $session->server_id, 'w' => true, 'exp' => 1_800_000_000 + 3900, 'fp' => $fp])
         ->and($agent['n'])->toBeString()->not->toBeEmpty()
         ->and($client)->toMatchArray(['v' => 1, 'sid' => $session->id, 'aud' => 'client', 'sub' => '01juser', 'w' => false, 'exp' => 1_800_000_060])
         ->and($client['n'])->not->toBe($claims($tokens->clientTicket($session, '01juser', false))['n']);
+});
+
+it('omits fp when the fingerprint is absent (relay rejects fp-less tokens)', function () {
+    config(['app.key' => RELAY_VECTOR_KEY]);
+    $session = (new TerminalSession)->forceFill(['id' => '01jtestsession0000000000000', 'server_id' => '01jserver00000000000000000']);
+    $tokens = new RelayTokens;
+
+    // No certificate yet: fp omitted. The relay rejects the token at connect time; session creation still succeeds.
+    $decode = fn (string $token) => json_decode(base64_decode(strtr(explode('.', $token)[0], '-_', '+/')), true);
+    expect($decode($tokens->agentToken($session, null)))->not->toHaveKey('fp')
+        ->and($decode($tokens->agentToken($session, '')))->not->toHaveKey('fp');
 });
 
 it('derives the client URL from APP_URL unless one is configured', function () {

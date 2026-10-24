@@ -429,6 +429,32 @@ func TestRequestPostsJSONAndDecodesTheReply(t *testing.T) {
 	}
 }
 
+func TestRetryAfterParsed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		http.Error(w, `{"error":"too_many_requests"}`, http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	c := NewWithHTTPClient(srv.URL+"/agent/v1", srv.Client())
+	err := c.Heartbeat(context.Background(), map[string]any{})
+	if !Retryable(err) {
+		t.Fatalf("429 must be retryable: %v", err)
+	}
+	if d := RetryAfterDuration(err); d != 30*time.Second {
+		t.Fatalf("RetryAfterDuration = %v, want 30s", d)
+	}
+	// No Retry-After header → duration is 0 (caller uses its own backoff).
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusTooManyRequests)
+	}))
+	defer srv2.Close()
+	c2 := NewWithHTTPClient(srv2.URL+"/agent/v1", srv2.Client())
+	err2 := c2.Heartbeat(context.Background(), map[string]any{})
+	if d := RetryAfterDuration(err2); d != 0 {
+		t.Fatalf("no Retry-After header → 0, got %v", d)
+	}
+}
+
 // A dead HTTP/2 connection (the control plane moved to a new IP) must be detected by pings, not reused forever.
 func TestNewPingsIdleHTTP2Connections(t *testing.T) {
 	tr := New("https://agents.falak.test/agent/v1", &tls.Config{}).hc.Transport.(*http.Transport)

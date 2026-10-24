@@ -34,11 +34,6 @@ beforeEach(function () {
     $this->web = edge_server($this->servers, $this->org, ['privateIpv4' => '10.0.0.2']);
 });
 
-function edge_domain(string $org, string $siteId, string $name, array $attributes = []): Domain
-{
-    return Domain::query()->create(['organization_id' => $org, 'site_id' => $siteId, 'name' => $name, 'is_primary' => false, 'www_redirect' => WwwRedirect::None, 'tls_mode' => TlsMode::Auto, ...$attributes]);
-}
-
 it('compiles every runtime kind', function (SiteRuntime $runtime, array $expected) {
     $site = edge_site($this->sites, $this->org, [$this->web->id], ['slug' => 'app', 'runtime' => $runtime, 'appPort' => 3000, 'healthCheckPath' => '/up']);
     edge_domain($this->org, $site->id, 'app.example.com', ['is_primary' => true]);

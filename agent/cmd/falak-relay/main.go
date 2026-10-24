@@ -5,8 +5,9 @@
 // the compose network; the edge never routes /internal/*.
 //
 //	APP_KEY             required (the control plane's)
+//	FALAK_URL           the panel's public URL; its origin is the default allowed WebSocket origin
 //	FALAK_RELAY_LISTEN  listen address (default :8080)
-//	FALAK_RELAY_ORIGINS optional comma-separated browser origin patterns (default: any; clients carry a ticket)
+//	FALAK_RELAY_ORIGINS comma-separated browser origin patterns; defaults to FALAK_URL's origin
 //	FALAK_LOG_LEVEL     debug|info|warn|error (default info)
 package main
 
@@ -17,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -36,7 +38,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 			fmt.Fprintln(stdout, version.Version)
 			return 0
 		default:
-			fmt.Fprintln(stderr, "usage: falak-relay [version]   (configured by APP_KEY, FALAK_RELAY_LISTEN, FALAK_RELAY_ORIGINS)")
+			fmt.Fprintln(stderr, "usage: falak-relay [version]   (configured by APP_KEY, FALAK_URL, FALAK_RELAY_LISTEN, FALAK_RELAY_ORIGINS)")
 			return 2
 		}
 	}
@@ -48,10 +50,16 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		log.Error("cannot derive the relay key", "err", err)
 		return 1
 	}
-	var origins []string
-	for _, o := range strings.Split(getenv("FALAK_RELAY_ORIGINS"), ",") {
-		if o = strings.TrimSpace(o); o != "" {
-			origins = append(origins, o)
+	origins := parseOrigins(getenv("FALAK_RELAY_ORIGINS"))
+	// When no explicit origins are configured, default to the panel's own origin so cross-origin
+	// browsers are blocked. FALAK_RELAY_ORIGINS can be set to "*" to restore the old open behaviour,
+	// but that is not recommended for managed installs.
+	if len(origins) == 0 {
+		if o := panelOrigin(getenv("FALAK_URL")); o != "" {
+			origins = []string{o}
+			log.Info("WebSocket origin restricted to panel host", "origin", o)
+		} else {
+			log.Warn("FALAK_URL not set; WebSocket origin check is disabled — set FALAK_URL or FALAK_RELAY_ORIGINS")
 		}
 	}
 	rs := relay.New(relay.Options{Key: key, Logger: log, OriginPatterns: origins})
@@ -80,6 +88,31 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 	rs.Close()
 	return 0
+}
+
+// parseOrigins splits a comma-separated FALAK_RELAY_ORIGINS value.
+func parseOrigins(s string) []string {
+	var out []string
+	for _, o := range strings.Split(s, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// panelOrigin extracts the scheme+host origin from the panel's URL (e.g. "https://cloud.falak.sh").
+// Returns "" when the URL is empty or unparseable.
+func panelOrigin(panelURL string) string {
+	panelURL = strings.TrimSpace(panelURL)
+	if panelURL == "" {
+		return ""
+	}
+	u, err := url.Parse(panelURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func envOr(getenv func(string) string, k, def string) string {

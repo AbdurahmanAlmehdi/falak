@@ -14,21 +14,42 @@ trait ValidatesDomainTls
     /**
      * Hosts (served + www redirect) must not be claimed by any other domain, in any organization.
      *
+     * In managed mode an unverified claim from another org may be displaced: the stale row is deleted
+     * so the new claimant can create their own and then verify it. A verified claim from any org always
+     * blocks a new claim from a different org.
+     *
      * @throws ValidationException
      */
-    private function ensureHostsAvailable(string $name, WwwRedirect $www, ?string $ignoreId = null, string $field = 'name'): void
+    private function ensureHostsAvailable(string $name, WwwRedirect $www, ?string $ignoreId = null, string $field = 'name', bool $managed = false): void
     {
         $hosts = (new Domain(['name' => $name, 'www_redirect' => $www]))->hosts();
         $apexes = array_values(array_unique(array_map(fn (string $host) => (string) preg_replace('/^www\./', '', $host), $hosts)));
 
-        $clash = Domain::query()
+        $clashing = Domain::query()
             ->when($ignoreId, fn ($q, $id) => $q->whereKeyNot($id))
             ->where(fn ($q) => $q->whereIn('name', $hosts)->orWhere(fn ($q) => $q->whereIn('name', $apexes)->where('www_redirect', '!=', WwwRedirect::None->value)))
-            ->exists();
+            ->get(['id', 'verified_at']);
 
-        if ($clash) {
-            throw ValidationException::withMessages([$field => count($hosts) > 1 ? 'This domain or its www counterpart is already in use.' : 'This domain is already in use.']);
+        if ($clashing->isEmpty()) {
+            return;
         }
+
+        if ($managed) {
+            // Release unverified claims from any org so a new claimant can attempt verification.
+            $unverified = $clashing->whereNull('verified_at');
+            if ($unverified->isNotEmpty()) {
+                Domain::query()->whereIn('id', $unverified->pluck('id'))->delete();
+            }
+
+            // A verified claim still blocks.
+            if ($clashing->whereNotNull('verified_at')->isNotEmpty()) {
+                throw ValidationException::withMessages([$field => count($hosts) > 1 ? 'This domain or its www counterpart is already in use.' : 'This domain is already in use.']);
+            }
+
+            return;
+        }
+
+        throw ValidationException::withMessages([$field => count($hosts) > 1 ? 'This domain or its www counterpart is already in use.' : 'This domain is already in use.']);
     }
 
     /**
