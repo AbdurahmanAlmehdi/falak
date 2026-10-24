@@ -8,7 +8,7 @@ import { ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useState } from 'react';
 
 interface Props {
-    policy: { allow_privileged: boolean; safe_capabilities: string[] };
+    policy: { allow_privileged: boolean; safe_capabilities: string[]; locked: boolean };
     compose_sites: number;
     can: { manage: boolean };
 }
@@ -55,13 +55,14 @@ export default function ComposePolicy({ policy, compose_sites, can }: Props) {
                     <Switch
                         id="allow-privileged"
                         checked={policy.allow_privileged}
-                        disabled={!can.manage || saving}
+                        disabled={!can.manage || saving || policy.locked}
                         onCheckedChange={(checked) => toggle(checked === true)}
                     />
                 </div>
                 {policy.allow_privileged && (
                     <Callout tone="warning">Privileged compose files are allowed. Only enable this for stacks you trust.</Callout>
                 )}
+                {policy.locked && <p className="text-fg-faint text-xs">Privileged compose files can't be allowed on this Falak.</p>}
                 {!can.manage && <p className="text-fg-faint text-xs">Only organization admins can change the compose policy.</p>}
             </Section>
 

@@ -166,6 +166,15 @@ it('allows policy violations when the organization allows privileged compose', f
     expect($created->site->compose->source)->toBe(ComposeSource::Inline);
 });
 
+it('refuses policy violations on a managed install, whatever the organization saved', function () {
+    config(['controlplane.managed' => true]);
+    OrganizationSettings::query()->create(['organization_id' => $this->organization->id, 'allow_privileged_compose' => true]);
+
+    expect(fn () => app(SiteFactory::class)->create($this->organization->id, $this->user->id, compose_input([$this->server->id], [
+        'compose_content' => "services:\n  n8n:\n    image: x:1\n    privileged: true\n",
+    ])))->toThrow(ValidationException::class);
+});
+
 it('renders a fork preview under the strict policy, whatever the organization allows', function () {
     OrganizationSettings::query()->create(['organization_id' => $this->organization->id, 'allow_privileged_compose' => true]);
     $privileged = "services:\n  n8n:\n    image: x:1\n    privileged: true\n";

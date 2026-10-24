@@ -10,6 +10,7 @@ use Falak\Sites\Domain\Models\OrganizationSettings;
 use Falak\Sites\Domain\Models\Site;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -32,6 +33,8 @@ final class ComposePolicyController extends Controller
             'policy' => [
                 'allow_privileged' => OrganizationSettings::for($organizationId)->allow_privileged_compose,
                 'safe_capabilities' => array_values((array) config('sites.compose.safe_capabilities', [])),
+                // Managed install: privileged compose can't be allowed (OrganizationSettings reads it as off).
+                'locked' => (bool) config('controlplane.managed'),
             ],
             'compose_sites' => Site::query()->where('organization_id', $organizationId)->where('runtime', 'compose')->count(),
             'can' => ['manage' => $this->access->can($request->user(), $organizationId, 'sites.compose.policy')],
@@ -43,6 +46,10 @@ final class ComposePolicyController extends Controller
         $organizationId = $this->organization->requireId();
         $this->access->authorize($request->user(), $organizationId, 'sites.compose.policy');
         $data = $request->validate(['allow_privileged' => ['required', 'boolean']]);
+
+        if ($data['allow_privileged'] && config('controlplane.managed')) {
+            throw ValidationException::withMessages(['allow_privileged' => 'Privileged compose files can\'t be allowed on this Falak.']);
+        }
 
         $settings = OrganizationSettings::for($organizationId);
         $settings->forceFill(['allow_privileged_compose' => (bool) $data['allow_privileged']])->save();
