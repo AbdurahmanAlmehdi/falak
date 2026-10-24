@@ -42,6 +42,11 @@ final class AcceptInvitation
             $organization->members()->syncWithoutDetaching([$user->id]);
             ($this->assignRole)($user, $organization->id, $invitation->role);
             $invitation->update(['accepted_at' => now()]);
+
+            // The invitation link went to this address (checked above): following it proves the mailbox.
+            if (! $user->hasVerifiedEmail()) {
+                $user->markEmailAsVerified();
+            }
         });
 
         ($this->switch)($user, $organization->id);

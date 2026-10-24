@@ -86,6 +86,27 @@ it('accepts an invitation with the matching account', function () {
     $this->post($url)->assertSessionHasErrors('invitation');
 });
 
+it('verifies the address of an unverified account that accepts its invitation on a managed install', function () {
+    config(['controlplane.managed' => true]);
+    actingAsMember();
+    $this->post('/organization/invitations', ['email' => 'joiner@example.com', 'role' => 'developer']);
+    $this->post('/organization/invitations', ['email' => 'other@example.com', 'role' => 'developer']);
+    $url = invitationUrl('joiner@example.com');
+    $otherUrl = invitationUrl('other@example.com');
+
+    $joiner = User::factory()->unverified()->withPersonalOrganization()->create(['email' => 'joiner@example.com']);
+    $this->actingAs($joiner)->get('/projects')->assertRedirect('/verify-email');
+
+    // Another address's invitation proves nothing.
+    $this->post($otherUrl)->assertSessionHasErrors('invitation');
+    expect($joiner->fresh()->hasVerifiedEmail())->toBeFalse();
+
+    $this->get($url)->assertOk();
+    $this->post($url)->assertRedirect('/projects');
+    expect($joiner->fresh()->hasVerifiedEmail())->toBeTrue();
+    $this->actingAs($joiner->fresh())->get('/projects')->assertOk();
+});
+
 it('rejects invitations for a different email address', function () {
     [, $organization] = actingAsMember();
     $this->post('/organization/invitations', ['email' => 'right@example.com', 'role' => 'viewer']);
