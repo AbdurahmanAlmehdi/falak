@@ -49,7 +49,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve the database image digests of this tag
         run: tools/db-image-digests.sh "-${GITHUB_REF_NAME}" --wait 7200 --owner "${GITHUB_REPOSITORY_OWNER}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: db-image-digests
           path: control-plane/modules/Databases/config/db-image-digests.json
@@ -146,7 +146,7 @@ jobs:
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: digests-${{ matrix.image }}-${{ matrix.arch }}
           path: /tmp/digests/*
@@ -190,7 +190,7 @@ jobs:
           digest="$(docker buildx imagetools inspect "$image:${GITHUB_REF_NAME}" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "falak-${{ matrix.image }} $digest" > "/tmp/image-digest/falak-${{ matrix.image }}"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-digest-${{ matrix.image }}
           path: /tmp/image-digest/*
