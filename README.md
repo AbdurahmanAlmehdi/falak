@@ -22,8 +22,8 @@ with a Grafana LGTM stack (APM, logs, traces, metrics, alerts).
 
 ![How Falak's components talk to each other](docs/architecture.svg)
 
-<sub>Source: [`docs/architecture.excalidraw`](docs/architecture.excalidraw). Open it at
-[excalidraw.com](https://excalidraw.com) to edit it.</sub>
+<sub>Click the diagram to see it full size. Source: [`docs/architecture.excalidraw`](docs/architecture.excalidraw).
+Open it at [excalidraw.com](https://excalidraw.com) to edit it, then export it as SVG over `docs/architecture.svg`.</sub>
 
 - **The control plane** is one Docker Compose stack on one host. Caddy terminates TLS and routes requests to the panel
   and REST API (a Laravel app on FrankenPHP), the agent API and the terminal relay. Behind them run Horizon queues,
