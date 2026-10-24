@@ -80,6 +80,9 @@ type job struct {
 	cacheSuffix string
 	// binDir holds corepack's pnpm/yarn shims when the builder has none (prepended to PATH).
 	binDir string
+	// Build steps (sandbox): uid (0 = the builder's own), HOME and the organization's package-manager caches.
+	uid         uint32
+	home, cache string
 }
 
 func (j *job) logf(format string, args ...any) { fmt.Fprintf(j.out, "==> "+format+"\n", args...) }
@@ -270,6 +273,9 @@ func (b *Builder) buildNative(ctx context.Context, j *job) (*ArtifactResult, *Ma
 		fmt.Fprintf(j.out, "note: composer is not installed; using composer %s (checksum verified)\n", composerVersion)
 	}
 	j.st.Progress(0.2)
+	if err := b.sandbox(j); err != nil {
+		return nil, nil, err
+	}
 	if err := b.runSteps(ctx, j, plan.Steps, 0.2, 0.8); err != nil {
 		return nil, nil, err
 	}
@@ -277,6 +283,13 @@ func (b *Builder) buildNative(ctx context.Context, j *job) (*ArtifactResult, *Ma
 	root := filepath.Join(j.app, filepath.FromSlash(plan.OutputDir))
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
 		return nil, nil, fmt.Errorf("build output dir %q not found", plan.OutputDir)
+	}
+	// The steps could have swapped the output dir (or a parent) for a symlink: package only inside the checkout.
+	if err := insideCheckout(j.src, root); err != nil {
+		return nil, nil, fmt.Errorf("build output dir %q: %w", plan.OutputDir, err)
+	}
+	if root, err = filepath.EvalSymlinks(root); err != nil {
+		return nil, nil, err
 	}
 	j.logf("Packaging %s", firstNonEmpty(plan.OutputDir, "app root"))
 	mtime := j.checkout.Time
@@ -411,10 +424,26 @@ func (b *Builder) viaCorepack(p *Plan, binDir string) bool {
 	return true
 }
 
-// buildEnv is the environment for build steps: CI mode, caches under CacheDir, then job env.
+// passEnv is what build steps inherit from the builder's environment (steps start from a clean one).
+var passEnv = []string{"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "TZ"}
+
+// buildEnv is the whole environment of build steps: PATH, HOME, CI mode, the organization's caches, then job env.
 func (b *Builder) buildEnv(j *job) []string {
-	c := b.CacheDir
-	env := []string{
+	c := j.cache
+	path := os.Getenv("PATH")
+	if j.binDir != "" {
+		path = j.binDir + string(os.PathListSeparator) + path
+	}
+	env := []string{"PATH=" + path}
+	if j.home != "" {
+		env = append(env, "HOME="+j.home)
+	}
+	for _, k := range passEnv {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	env = append(env, []string{
 		"CI=true", "FALAK_BUILD=1", "FALAK_BUILD_ID=" + j.ID, "FALAK_COMMIT=" + j.checkout.Commit,
 		"COMPOSER_CACHE_DIR=" + filepath.Join(c, "composer"), "COMPOSER_NO_INTERACTION=1", "COMPOSER_ALLOW_SUPERUSER=1",
 		// Composer refuses to run without HOME or COMPOSER_HOME, and a builder started by systemd has no HOME.
@@ -425,12 +454,9 @@ func (b *Builder) buildEnv(j *job) []string {
 		"COREPACK_HOME=" + filepath.Join(c, "corepack"), "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
 		// Unpinned projects get corepack's known-good release, not "latest" (a newer major may not run under this corepack).
 		"COREPACK_DEFAULT_TO_LATEST=0",
-	}
+	}...)
 	if !j.checkout.Time.IsZero() {
 		env = append(env, fmt.Sprintf("SOURCE_DATE_EPOCH=%d", j.checkout.Time.Unix()))
-	}
-	if j.binDir != "" {
-		env = append(env, "PATH="+j.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	for _, k := range sortedKeys(j.Env) {
 		env = append(env, k+"="+j.Env[k])
@@ -440,15 +466,26 @@ func (b *Builder) buildEnv(j *job) []string {
 
 func (b *Builder) runSteps(ctx context.Context, j *job, steps []Step, from, to float64) error {
 	env := b.buildEnv(j)
+	defer b.reap(j)
+	// PreClean runs as the builder between steps: os.Root keeps a symlink planted by a step from leading it out.
+	src, err := os.OpenRoot(j.src)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	app, err := filepath.Rel(j.src, j.app)
+	if err != nil {
+		return err
+	}
 	for i, s := range steps {
 		for _, p := range s.PreClean {
-			_ = os.RemoveAll(filepath.Join(j.app, filepath.FromSlash(p)))
+			_ = src.RemoveAll(filepath.Join(app, filepath.FromSlash(p)))
 		}
 		line := strings.Join(s.Cmd, " ")
 		j.logf("%s", s.Name)
 		fmt.Fprintf(j.out, "$ %s\n", line)
 		t0 := b.Now()
-		_, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: s.Cmd[0], Args: s.Cmd[1:], Dir: j.app, Env: append(append([]string{}, env...), s.Env...), Stdout: j.out, Stderr: j.errw})
+		_, err := runner.Check(ctx, b.Runner, runner.Cmd{Name: s.Cmd[0], Args: s.Cmd[1:], Dir: j.app, Env: append(append([]string{}, env...), s.Env...), ClearEnv: true, UID: j.uid, GID: j.uid, Stdout: j.out, Stderr: j.errw})
 		if err != nil {
 			return fmt.Errorf("step %q: %w", s.Name, err)
 		}

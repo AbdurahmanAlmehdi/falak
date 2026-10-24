@@ -38,6 +38,7 @@ func gitEnv(repo Repo, secretsDir string) ([]string, error) {
 		}
 		env = append(env, fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile=%s -o StrictHostKeyChecking=%s", key, kh, strict))
 	}
+	var cfg []string // key, value, ...
 	if repo.Token != "" {
 		u, err := url.Parse(repo.URL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
@@ -48,7 +49,16 @@ func gitEnv(repo Repo, secretsDir string) ([]string, error) {
 			user = "x-access-token"
 		}
 		basic := base64.StdEncoding.EncodeToString([]byte(user + ":" + repo.Token))
-		env = append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Basic "+basic)
+		cfg = append(cfg, "http.extraHeader", "Authorization: Basic "+basic)
+	}
+	// Clone, fetch and submodules speak https and ssh only (no file://, ext::, git://); http only for an http repo.
+	cfg = append(cfg, "protocol.allow", "never", "protocol.https.allow", "always", "protocol.ssh.allow", "always")
+	if strings.HasPrefix(repo.URL, "http://") {
+		cfg = append(cfg, "protocol.http.allow", "always")
+	}
+	env = append(env, fmt.Sprintf("GIT_CONFIG_COUNT=%d", len(cfg)/2))
+	for i := 0; i < len(cfg); i += 2 {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", i/2, cfg[i]), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", i/2, cfg[i+1]))
 	}
 	return env, nil
 }

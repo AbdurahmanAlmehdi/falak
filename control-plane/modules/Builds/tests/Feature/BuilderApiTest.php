@@ -100,6 +100,7 @@ it('hands out a native job with short-lived clone credentials and a presigned up
     $job = next_job()->assertOk()->json();
 
     expect($job['id'])->toBe($build->id)
+        ->and($job['organization_id'])->toBe($build->organization_id)
         ->and($job['mode'])->toBe('native')
         ->and($job['repo'])->toBe(['url' => 'git@github.com:acme/shop.git', 'ref' => 'main', 'commit' => str_repeat('a', 40), 'deploy_key' => 'PRIVATE'])
         ->and($job['runtime'])->toBe('php')

@@ -32,6 +32,27 @@ type dockerBuild struct {
 	MetadataFile  string
 	DockerConfig  string // dir containing config.json with registry auth ("" = none)
 	BuildxBuilder string
+	// CacheNS prefixes the ids of `RUN --mount=type=cache` mounts (BUILDKIT_CACHE_MOUNT_NS; railpack's cache-key), so
+	// organizations sharing a BuildKit never share a cache mount. Layer cache stays shared: BuildKit reuses a step's
+	// result only for identical instructions and inputs.
+	CacheNS string
+}
+
+// cacheNSArgs are the build args that scope cache mounts; a job's own value for them is dropped.
+func (d dockerBuild) cacheNSArgs() map[string]string {
+	args := map[string]string{}
+	for k, v := range d.Spec.BuildArgs {
+		if d.CacheNS == "" || (k != "BUILDKIT_CACHE_MOUNT_NS" && k != "cache-key") {
+			args[k] = v
+		}
+	}
+	if d.CacheNS != "" {
+		args["BUILDKIT_CACHE_MOUNT_NS"] = d.CacheNS
+		if d.Railpack {
+			args["cache-key"] = d.CacheNS
+		}
+	}
+	return args
 }
 
 func (d dockerBuild) images() []string {
@@ -59,8 +80,9 @@ func (d dockerBuild) BuildxArgs() []string {
 	if d.Railpack {
 		a = append(a, "--build-arg", "BUILDKIT_SYNTAX="+RailpackFrontend)
 	}
-	for _, k := range sortedKeys(d.Spec.BuildArgs) {
-		a = append(a, "--build-arg", k+"="+d.Spec.BuildArgs[k])
+	args := d.cacheNSArgs()
+	for _, k := range sortedKeys(args) {
+		a = append(a, "--build-arg", k+"="+args[k])
 	}
 	if d.CacheDir != "" {
 		if _, err := os.Stat(filepath.Join(d.CacheDir, "index.json")); err == nil {
@@ -92,8 +114,9 @@ func (d dockerBuild) BuildctlArgs() []string {
 	if len(d.Spec.Platforms) > 0 {
 		a = append(a, "--opt", "platform="+strings.Join(d.Spec.Platforms, ","))
 	}
-	for _, k := range sortedKeys(d.Spec.BuildArgs) {
-		a = append(a, "--opt", "build-arg:"+k+"="+d.Spec.BuildArgs[k])
+	args := d.cacheNSArgs()
+	for _, k := range sortedKeys(args) {
+		a = append(a, "--opt", "build-arg:"+k+"="+args[k])
 	}
 	out := fmt.Sprintf("type=image,%q,push=%t", "name="+strings.Join(d.images(), ","), d.push())
 	a = append(a, "--output", out)
@@ -111,10 +134,14 @@ func (b *Builder) buildDocker(ctx context.Context, j *job) (*ImageResult, error)
 	d := dockerBuild{
 		Spec:         spec,
 		ContextDir:   filepath.Join(j.app, filepath.FromSlash(firstNonEmpty(spec.Context, "."))),
-		CacheDir:     filepath.Join(b.CacheDir, "buildkit", cacheKey(j.Repo.URL, j.Subdir)+suffix(j.cacheSuffix)),
+		CacheDir:     filepath.Join(b.CacheDir, "buildkit", cacheKey(j.OrganizationID, j.Repo.URL, j.Subdir)+suffix(j.cacheSuffix)),
 		MetadataFile: filepath.Join(j.ws, "metadata.json"),
+		CacheNS:      j.OrganizationID,
 	}
-	if err := os.MkdirAll(filepath.Dir(d.CacheDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(d.CacheDir), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Dir(d.CacheDir), 0o700); err != nil { // older builders made it 0755
 		return nil, err
 	}
 	engine := spec.Engine

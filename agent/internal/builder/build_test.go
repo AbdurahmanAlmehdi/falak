@@ -107,7 +107,7 @@ func TestNativeLaravelBuildLocalArtifact(t *testing.T) {
 		}
 		if c.Name == "composer" {
 			env := strings.Join(c.Env, "\n")
-			for _, want := range []string{"COMPOSER_CACHE_DIR=" + filepath.Join(b.CacheDir, "composer"), "COMPOSER_HOME=" + filepath.Join(b.CacheDir, "composer-home"), "VITE_APP_NAME=Acme", "CI=true", "SOURCE_DATE_EPOCH=1700000000"} {
+			for _, want := range []string{"COMPOSER_CACHE_DIR=" + filepath.Join(b.CacheDir, "orgs", "_", "composer"), "COMPOSER_HOME=" + filepath.Join(b.CacheDir, "orgs", "_", "composer-home"), "VITE_APP_NAME=Acme", "CI=true", "SOURCE_DATE_EPOCH=1700000000"} {
 				if !strings.Contains(env, want) {
 					t.Fatalf("composer env missing %s", want)
 				}
@@ -343,7 +343,7 @@ func TestPnpmAndYarnComeFromCorepackShimsWhenNotInstalled(t *testing.T) {
 	}
 
 	// Nested `pnpm …` calls from package scripts find the shim first on PATH.
-	env := strings.Join((&Builder{CacheDir: "/cache"}).buildEnv(&job{binDir: "/ws/bin"}), "\n")
+	env := strings.Join((&Builder{}).buildEnv(&job{binDir: "/ws/bin"}), "\n")
 	if !strings.Contains(env, "PATH=/ws/bin"+string(os.PathListSeparator)) {
 		t.Fatal(env)
 	}
@@ -351,7 +351,7 @@ func TestPnpmAndYarnComeFromCorepackShimsWhenNotInstalled(t *testing.T) {
 
 func TestBuildEnvKeepsCorepackNonInteractiveAndCached(t *testing.T) {
 	b := &Builder{CacheDir: "/cache"}
-	env := strings.Join(b.buildEnv(&job{}), "\n")
+	env := strings.Join(b.buildEnv(&job{cache: "/cache"}), "\n")
 	if !strings.Contains(env, "COREPACK_ENABLE_DOWNLOAD_PROMPT=0") || !strings.Contains(env, "COREPACK_HOME=/cache/corepack") || !strings.Contains(env, "COREPACK_DEFAULT_TO_LATEST=0") {
 		t.Fatal(env)
 	}

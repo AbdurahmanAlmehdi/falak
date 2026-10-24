@@ -90,7 +90,7 @@ func TestComposeBuildBuildsEveryBuildService(t *testing.T) {
 	if !strings.HasSuffix(web, filepath.Join("src", "app")) {
 		t.Errorf("web context: %s", web)
 	}
-	if !strings.Contains(web, cacheKey("https://x/stack.git", "")+"-web") || strings.Contains(strings.Join(builds[1].Args, " "), "-web") {
+	if !strings.Contains(web, cacheKey("", "https://x/stack.git", "")+"-web") || strings.Contains(strings.Join(builds[1].Args, " "), "-web") {
 		t.Errorf("per-service cache dirs: %s", web)
 	}
 	if strings.Contains(out.String(), "hunter2-pass") {

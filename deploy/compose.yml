@@ -462,6 +462,8 @@ services:
     oom_score_adj: 500
     restart: unless-stopped
     init: true
+    # Root drops to a per-organization uid for build steps (setuid needs no new privileges; setuid binaries stay inert).
+    security_opt: ["no-new-privileges:true"]
     command: ["serve"]
     environment:
       FALAK_URL: ${FALAK_URL}
