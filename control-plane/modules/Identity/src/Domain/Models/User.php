@@ -2,8 +2,11 @@
 
 namespace Falak\Identity\Domain\Models;
 
+use Falak\Identity\Application\Notifications\QueuedResetPassword;
+use Falak\Identity\Application\Notifications\QueuedVerifyEmail;
 use Falak\Identity\Database\Factories\UserFactory;
 use Falak\Kernel\Security\Casts\Sealed;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\UseFactory;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -27,7 +30,7 @@ use Spatie\Permission\Traits\HasRoles;
  * @property ?Carbon $two_factor_confirmed_at
  */
 #[UseFactory(UserFactory::class)]
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
     /** @use HasApiTokens<PersonalAccessToken> */
     use HasApiTokens;
@@ -50,7 +53,6 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'current_organization_id',
     ];
 
     /** @var list<string> */
@@ -97,6 +99,22 @@ class User extends Authenticatable
     public function belongsToOrganization(string $organizationId): bool
     {
         return $this->organizations()->whereKey($organizationId)->exists();
+    }
+
+    /**
+     * Verification links go out only where verification is enforced (a managed install): a self-hosted panel
+     * neither asks for nor mails them. Queued, like the other account mail.
+     */
+    public function sendEmailVerificationNotification(): void
+    {
+        if (config('controlplane.managed')) {
+            $this->notify(new QueuedVerifyEmail);
+        }
+    }
+
+    public function sendPasswordResetNotification(#[\SensitiveParameter] $token): void
+    {
+        $this->notify(new QueuedResetPassword($token));
     }
 
     public function hasTwoFactorEnabled(): bool

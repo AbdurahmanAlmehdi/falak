@@ -11,6 +11,7 @@ use Falak\Identity\Domain\Models\User;
 use Falak\Kernel\Http\Controller;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -90,7 +91,11 @@ final class OrganizationController extends Controller
             'password' => ['required', 'current_password'],
         ]);
 
-        $transfer($organization, $this->user($request), User::query()->findOrFail($data['user_id']));
+        // Only members are looked up: an unknown id and a non-member get the same answer (no account probing).
+        $newOwner = $organization->members()->whereKey($data['user_id'])->first()
+            ?? throw ValidationException::withMessages(['user_id' => 'The new owner must be another member of this organization.']);
+
+        $transfer($organization, $this->user($request), $newOwner);
 
         return back();
     }
