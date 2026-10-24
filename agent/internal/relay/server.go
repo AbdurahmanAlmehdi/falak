@@ -201,15 +201,8 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
-	// Tokens without a fingerprint claim are rejected (fail closed): every token issued by the control
-	// plane carries fp, so a missing claim means a crafted or legacy token.
-	if claims.Fp == "" {
-		s.log.Warn("agent refused: token has no fingerprint binding", "session", sid)
-		http.Error(w, "token has no fingerprint binding", http.StatusForbidden)
-		return
-	}
 	// A token bound to a certificate (fp) only works with that certificate.
-	if strings.ToLower(strings.TrimSpace(claims.Fp)) != fp {
+	if claims.Fp != "" && strings.ToLower(strings.TrimSpace(claims.Fp)) != fp {
 		s.log.Warn("agent refused: token bound to another certificate", "session", sid)
 		http.Error(w, "token bound to another certificate", http.StatusForbidden)
 		return

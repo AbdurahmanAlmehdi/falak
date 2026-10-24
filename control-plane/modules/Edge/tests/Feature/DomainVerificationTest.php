@@ -2,7 +2,9 @@
 
 use Falak\Edge\Application\Actions\AddDomain;
 use Falak\Edge\Application\Actions\VerifyDomain;
+use Falak\Edge\Application\EdgeChanges;
 use Falak\Edge\Application\Jobs\RecheckDomainVerification;
+use Falak\Edge\Contracts\EdgeRoutes;
 use Falak\Edge\Contracts\TlsMode;
 use Falak\Edge\Domain\Enums\WwwRedirect;
 use Falak\Edge\Domain\Models\Domain;
@@ -11,9 +13,7 @@ use Falak\Edge\Infrastructure\Dns\DnsAnswer;
 use Falak\Edge\Infrastructure\Dns\DnsLookupFailed;
 use Falak\Edge\Infrastructure\Dns\DnsResolver;
 use Falak\Identity\Contracts\Role;
-use Falak\Sites\Contracts\Data\SiteData;
 use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -22,7 +22,8 @@ require_once __DIR__.'/../Support/helpers.php';
 /** Inline fake DnsResolver: txt() returns $txtValues, resolve() returns an empty answer. */
 function fake_dns(array $txtValues = [], bool $fail = false): DnsResolver
 {
-    return new class($txtValues, $fail) implements DnsResolver {
+    return new class($txtValues, $fail) implements DnsResolver
+    {
         public function __construct(
             private array $txtValues,
             private bool $fail,
@@ -229,7 +230,7 @@ it('RouteCompiler excludes unverified domains in managed mode', function () {
     ]);
 
     $payload = edge_compile($this->web->id);
-    $entry = edge_entry($payload, app(\Falak\Edge\Contracts\EdgeRoutes::class)->routeId($this->site->id));
+    $entry = edge_entry($payload, app(EdgeRoutes::class)->routeId($this->site->id));
 
     expect($entry['domains'])->toContain('verified.example.com')
         ->and($entry['domains'])->not->toContain('unverified.example.com');
@@ -243,7 +244,7 @@ it('RouteCompiler includes all domains in self-hosted mode regardless of verifie
     ]);
 
     $payload = edge_compile($this->web->id);
-    $entry = edge_entry($payload, app(\Falak\Edge\Contracts\EdgeRoutes::class)->routeId($this->site->id));
+    $entry = edge_entry($payload, app(EdgeRoutes::class)->routeId($this->site->id));
 
     expect($entry['domains'])->toContain('no-token.example.com');
 });
@@ -267,9 +268,15 @@ it('recheck job verifies domains whose TXT record has appeared', function () {
         'verification_token' => 'wrong_token', 'verified_at' => null,
     ]);
 
-    app()->instance(DnsResolver::class, new class implements DnsResolver {
-        public function resolve(string $name): DnsAnswer { return new DnsAnswer; }
-        public function txt(string $name): array {
+    app()->instance(DnsResolver::class, new class implements DnsResolver
+    {
+        public function resolve(string $name): DnsAnswer
+        {
+            return new DnsAnswer;
+        }
+
+        public function txt(string $name): array
+        {
             return match (true) {
                 str_contains($name, 'good') => ['correct_token'],
                 default => [],
@@ -277,7 +284,7 @@ it('recheck job verifies domains whose TXT record has appeared', function () {
         }
     });
 
-    app(RecheckDomainVerification::class)->handle(app(DnsResolver::class), app(\Falak\Edge\Application\EdgeChanges::class));
+    app(RecheckDomainVerification::class)->handle(app(DnsResolver::class), app(EdgeChanges::class));
 
     expect($good->refresh()->verified_at)->not->toBeNull()
         ->and($bad->refresh()->verified_at)->toBeNull();
@@ -296,7 +303,7 @@ it('recheck job is a no-op in self-hosted mode', function () {
     ]);
 
     app()->instance(DnsResolver::class, fake_dns(['tok']));
-    app(RecheckDomainVerification::class)->handle(app(DnsResolver::class), app(\Falak\Edge\Application\EdgeChanges::class));
+    app(RecheckDomainVerification::class)->handle(app(DnsResolver::class), app(EdgeChanges::class));
 
     Event::assertNotDispatched(DomainAdded::class);
 });

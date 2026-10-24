@@ -8,6 +8,7 @@ use Falak\Edge\Domain\Enums\WwwRedirect;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * @property string $id
@@ -21,7 +22,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property ?string $certificate_id
  * @property ?string $dns_credential_id
  * @property ?string $verification_token random token placed in _falak-challenge.<domain> TXT record (managed mode)
- * @property ?\Illuminate\Support\Carbon $verified_at set once ownership is confirmed; null = unverified
+ * @property ?Carbon $verified_at set once ownership is confirmed; null = unverified
  * @property ?bool $cloudflare_proxied null = the Cloudflare zone's default
  * @property ?string $cloudflare_cache null = standard | everything | bypass
  * @property ?array{path: ?string, requests: int, period: int, action: string, timeout: int} $cloudflare_rate_limit Cloudflare rate limit rule (null: none)
