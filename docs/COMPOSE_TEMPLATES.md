@@ -40,8 +40,8 @@ names but not the YAML or env-file values.
 ### 1.2 Builds — managed servers never build **[decision]**
 Services with `image:` are pulled on the server. Services with `build:` are built by **falak-builder in docker mode**
 (a `builder` server or a host builder with `FALAK_LOCAL_BUILDER_MODES=native,docker`), pushed to the built-in
-registry (production: `registry` service behind `https://registry.<domain>` with basic auth, `FALAK_REGISTRY_*` in
-`.env`, docs/INSTALL.md §2), and the rendered compose file references them **by digest**. `repo` sources only; `inline` compose may
+registry (production: `registry` service behind `https://registry.<domain>` with token auth and per-build /
+per-deploy credentials, docs/INSTALL.md §2), and the rendered compose file references them **by digest**. `repo` sources only; `inline` compose may
 not use `build:` (validation error). Old images are deleted daily by `falak:registry-prune` (builds past
 `FALAK_ARTIFACTS_KEEP`, never an image a pending, live or rollback release references — Deployments'
 `RetainedImages` contract) and their layers freed by the weekly `falak-ctl registry gc` (docs/INSTALL.md → Registry

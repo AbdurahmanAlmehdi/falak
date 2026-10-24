@@ -460,7 +460,7 @@ it('swaps containers blue/green and records the new upstream with Edge', functio
     expect($deployment->refresh()->status)->toBe(DeploymentStatus::Succeeded)
         ->and(deploy_types($world->agents))->toBe(['deploy.container.swap', 'deploy.container.swap'])
         ->and($swap['image'])->toStartWith('registry.falak.local/falak/app@sha256:')
-        ->and($swap['registry_auth']['username'])->toBe('falak')
+        ->and($swap['registry_auth']['username'])->toBe('falak-scoped')
         ->and($swap['ports'])->toBe(['blue' => 3100, 'green' => 4100])
         ->and($swap['edge_route_id'])->toBe("site-{$world->site->id}")
         ->and($swap['env']['FALAK_RELEASE_ID'])->toBe(strtoupper($deployment->release_id))

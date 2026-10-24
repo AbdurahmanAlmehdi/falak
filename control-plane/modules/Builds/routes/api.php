@@ -4,6 +4,7 @@ use Falak\Builds\Http\Controllers\Internal\ArtifactController;
 use Falak\Builds\Http\Controllers\Internal\BuildEventsController;
 use Falak\Builds\Http\Controllers\Internal\BuildHeartbeatController;
 use Falak\Builds\Http\Controllers\Internal\NextBuildController;
+use Falak\Builds\Http\Controllers\Internal\RegistryTokenController;
 use Falak\Builds\Http\Middleware\AuthenticateBuilder;
 use Illuminate\Support\Facades\Route;
 
@@ -14,6 +15,9 @@ Route::prefix('internal')->group(function () {
         Route::post('builds/{build}/events', BuildEventsController::class)->name('builds.internal.events');
         Route::post('builds/{build}/heartbeat', BuildHeartbeatController::class)->name('builds.internal.heartbeat');
     });
+
+    // Token server of the built-in registry (its realm): authorized by the basic-auth credential itself.
+    Route::get('registry/token', RegistryTokenController::class)->middleware('throttle:600,1')->name('builds.registry.token');
 
     // Local artifact driver: authorized by the signed, expiring URL itself.
     Route::put('artifacts/{key}', [ArtifactController::class, 'upload'])->where('key', '.*')->name('builds.artifacts.upload');

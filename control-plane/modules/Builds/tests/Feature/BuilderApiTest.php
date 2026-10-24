@@ -291,14 +291,20 @@ it('hands docker jobs the registry image and credentials', function () {
         'image' => "registry.falak.local/falak/{$world->site->slug}:{$build->id}",
         'dockerfile' => 'docker/Dockerfile',
         'build_args' => ['APP_ENV' => 'production'], // exposed to the deploy script by the fixture
-        'registry' => ['server' => 'registry.falak.local', 'username' => 'falak', 'password' => 'registry-secret'],
+        'registry' => $job['docker']['registry'],
         'push' => true,
-    ])->and($job)->not->toHaveKey('native');
+    ])->and($job)->not->toHaveKey('native')
+        // A scoped credential (push to this site's repositories), never the operator one.
+        ->and($job['docker']['registry']['username'])->toBe('falak-scoped')
+        ->and(json_encode($job))->not->toContain('registry-secret');
 
     post_events($build->id, [['command_id' => $build->id, 'seq' => 0, 'kind' => 'finished', 'exit_code' => 0, 'at' => now()->toIso8601ZuluString(),
         'result' => ['image' => ['ref' => $job['docker']['image'], 'digest' => 'sha256:'.str_repeat('b', 64)]]]]);
 
-    expect(app(BuildService::class)->imageFor($build->id)->ref)->toBe("registry.falak.local/falak/{$world->site->slug}@sha256:".str_repeat('b', 64));
+    $image = app(BuildService::class)->imageFor($build->id);
+    expect($image->ref)->toBe("registry.falak.local/falak/{$world->site->slug}@sha256:".str_repeat('b', 64))
+        ->and($image->registryAuth['username'])->toBe('falak-scoped')
+        ->and($image->registryAuth['password'])->not->toBe('registry-secret');
 });
 
 it('hands compose sites a compose build job and stores the built images', function () {
@@ -315,8 +321,9 @@ it('hands compose sites a compose build job and stores the built images', functi
             'image_prefix' => $prefix,
             'tag' => $build->id,
             'build_args' => ['APP_ENV' => 'production'], // exposed to the deploy script by the fixture
-            'registry' => ['server' => 'registry.falak.local', 'username' => 'falak', 'password' => 'registry-secret'],
-        ]);
+            'registry' => $job['compose']['registry'],
+        ])
+        ->and($job['compose']['registry']['username'])->toBe('falak-scoped');
 
     post_events($build->id, [['command_id' => $build->id, 'seq' => 0, 'kind' => 'finished', 'exit_code' => 0, 'at' => now()->toIso8601ZuluString(),
         'result' => ['build_id' => $build->id, 'mode' => 'docker', 'duration_ms' => 5, 'compose' => [
@@ -329,7 +336,7 @@ it('hands compose sites a compose build job and stores the built images', functi
     expect($build->refresh()->status)->toBe(BuildStatus::Succeeded)
         ->and($compose->file)->toBe('deploy/compose.yaml')
         ->and($compose->images)->toBe(['app' => "{$prefix}/app@sha256:".str_repeat('c', 64)])
-        ->and($compose->registryAuth['username'])->toBe('falak')
+        ->and($compose->registryAuth['username'])->toBe('falak-scoped')
         ->and(app(BuildService::class)->imageFor($build->id)?->ref)->toBeNull();
 
     // Identical rebuild requests reuse the compose result.
@@ -545,4 +552,94 @@ it('fails a running build whose builder stops heartbeating, and answers heartbea
     $legacy->refresh()->forceFill(['status' => BuildStatus::Running, 'started_at' => now()->subMinutes(5), 'heartbeat_at' => now()->subMinutes(5)])->save();
     (new ExpireBuilds)->handle(app(BuildProgress::class));
     expect($legacy->refresh()->status)->toBe(BuildStatus::Running);
+});
+
+// ---- Registry token server (Docker Registry v2 token auth) ----------------------------------------------------
+
+/**
+ * GET /api/internal/registry/token as dockerd asks it: basic auth, repeated `scope` parameters.
+ *
+ * @param  array{username: string, password: string}  $auth
+ * @param  list<string>  $scopes
+ */
+function registry_token(array $auth, array $scopes)
+{
+    $query = implode('&', ['service=falak-registry', ...array_map(fn (string $s) => 'scope='.rawurlencode($s), $scopes)]);
+
+    return test()->call('GET', "/api/internal/registry/token?{$query}", [], [], [], [
+        'HTTP_AUTHORIZATION' => 'Basic '.base64_encode("{$auth['username']}:{$auth['password']}"),
+        'HTTP_ACCEPT' => 'application/json',
+    ]);
+}
+
+/** The `access` claim of a token, after checking its RS256 signature against the token key. */
+function registry_access(string $jwt): array
+{
+    [$header, $claims, $signature] = explode('.', $jwt);
+    $decode = fn (string $part) => base64_decode(strtr($part, '-_', '+/'));
+    $public = openssl_pkey_get_details(openssl_pkey_get_private(file_get_contents(config('builds.registry.token.key'))))['key'];
+
+    expect(openssl_verify("{$header}.{$claims}", $decode($signature), $public, OPENSSL_ALGO_SHA256))->toBe(1)
+        ->and(json_decode($decode($header), true)['kid'])->toMatch('/^([A-Z2-7]{4}:){11}[A-Z2-7]{4}$/');
+
+    $claims = json_decode($decode($claims), true);
+    expect($claims['aud'])->toBe('falak-registry')->and($claims['exp'])->toBeLessThanOrEqual(now()->getTimestamp() + 300);
+
+    return $claims['access'];
+}
+
+it('grants deploy credentials pull on their own organization\'s repositories only', function () {
+    $other = deploy_world(actingAs: false); // another organization's site
+    $world = builds_world();
+    $own = "falak/{$world->site->slug}";
+    $theirs = "falak/{$other->site->slug}";
+
+    // A compose file naming both: the credential covers only the own site's repositories.
+    $auth = app(BuildService::class)->registryAuth($world->site->organization_id, "image: registry.falak.local/{$own}/app@sha256:aa\nimage: registry.falak.local/{$theirs}:x\n");
+    expect($auth['username'])->toBe('falak-scoped')->and($auth['password'])->not->toBe('registry-secret')
+        ->and(app(BuildService::class)->registryAuth($world->site->organization_id, "registry.falak.local/{$theirs}:x"))->toBeNull();
+
+    $token = registry_token($auth, ["repository:{$own}/app:pull,push", "repository:{$theirs}:pull", 'registry:catalog:*'])->assertOk()->json('token');
+
+    expect(registry_access($token))->toBe([['type' => 'repository', 'name' => "{$own}/app", 'actions' => ['pull']]]);
+});
+
+it('grants builders push only to the repository of the build assigned to them, while it runs', function () {
+    config(['builds.local_builder.modes' => ['native', 'docker']]);
+    $other = deploy_world(actingAs: false);
+    $world = builds_world(site: ['runtime' => 'docker', 'build_mode' => 'docker', 'framework' => 'docker', 'php_version' => null, 'app_port' => 3000]);
+    $build = request_build($world);
+    $auth = next_job()->json('docker.registry');
+    $own = "falak/{$world->site->slug}";
+
+    $token = registry_token($auth, ["repository:{$own}:pull,push", "repository:falak/{$other->site->slug}:pull,push"])->assertOk()->json('token');
+    expect(registry_access($token))->toBe([['type' => 'repository', 'name' => $own, 'actions' => ['pull', 'push']]]);
+
+    // Once the build is over, its credential is worthless.
+    post_events($build->id, [['command_id' => $build->id, 'seq' => 0, 'kind' => 'finished', 'exit_code' => 1, 'at' => now()->toIso8601ZuluString()]]);
+    expect($build->refresh()->status->isTerminal())->toBeTrue();
+    registry_token($auth, ["repository:{$own}:push"])->assertUnauthorized()->assertHeader('WWW-Authenticate', 'Basic realm="falak-registry"');
+});
+
+it('rejects expired, forged and unknown registry credentials; the operator credential gets what it asks for', function () {
+    $world = builds_world();
+    $own = "falak/{$world->site->slug}";
+    $auth = app(BuildService::class)->registryAuth($world->site->organization_id, "registry.falak.local/{$own}:x");
+    registry_token($auth, ["repository:{$own}:pull"])->assertOk();
+
+    // A widened repository list under the old signature.
+    [$body, $mac] = explode('.', $auth['password']);
+    $claims = json_decode(base64_decode(strtr($body, '-_', '+/')), true);
+    $forged = rtrim(strtr(base64_encode(json_encode([...$claims, 'r' => ['falak']])), '+/', '-_'), '=').'.'.$mac;
+    registry_token([...$auth, 'password' => $forged], ['repository:falak/x:pull'])->assertUnauthorized();
+    registry_token(['username' => 'falak', 'password' => 'wrong'], ['repository:falak/x:pull'])->assertUnauthorized();
+
+    $this->travel(config('builds.registry.credential_ttl') + 1)->seconds();
+    registry_token($auth, ["repository:{$own}:pull"])->assertUnauthorized();
+
+    $token = registry_token(['username' => 'falak', 'password' => 'registry-secret'], ['registry:catalog:*', 'repository:falak/any:pull,delete'])->assertOk()->json('token');
+    expect(registry_access($token))->toBe([
+        ['type' => 'registry', 'name' => 'catalog', 'actions' => ['*']],
+        ['type' => 'repository', 'name' => 'falak/any', 'actions' => ['pull', 'delete']],
+    ]);
 });

@@ -10,7 +10,7 @@
 #                           │                        └► gateway :4318 (/otlp/*, observability profile)
 #                           ├─ FALAK_AGENT_API_HOST  ─► agent-api (Fleet-CA server cert, client certs verified)
 #                           ├─ FALAK_GRAFANA_HOST    ─► grafana :3000 (observability profile)
-#                           └─ FALAK_REGISTRY_HOST   ─► registry :5000 (built-in image registry, basic auth)
+#                           └─ FALAK_REGISTRY_HOST   ─► registry :5000 (built-in image registry, token auth)
 #   control-plane · agent-api · horizon · reverb · scheduler ── backend ──► postgres · valkey
 #   builder ── public ──► edge (as FALAK_DOMAIN; artifact upload/download over the panel URL)
 #   registry ── registry (internal) ◄── edge only: builders push and servers pull through FALAK_REGISTRY_HOST
@@ -127,8 +127,9 @@ x-control-plane: &control-plane
     FALAK_IMAGE_PREFIX: ${FALAK_IMAGE_PREFIX}
     # Builds: the builder container below polls with this token.
     FALAK_LOCAL_BUILDER_TOKEN: ${FALAK_BUILDER_TOKEN:?set FALAK_BUILDER_TOKEN}
-    # Built-in image registry (docker builds push, servers pull): registry.<domain>, credentials from .env
-    # (falak-ctl generates them). Unset on installs that predate it until `falak-ctl up` / `update` adds them.
+    # Built-in image registry (docker builds push, servers pull): registry.<domain>. The operator credential from .env
+    # (falak-ctl generates it) is for the control plane and falak-ctl only; agents and builders get short-lived
+    # per-repository credentials, exchanged for registry tokens signed with secrets/registry-token.key.
     FALAK_REGISTRY_URL: ${FALAK_REGISTRY_URL:-registry.falak.local}
     FALAK_REGISTRY_USERNAME: ${FALAK_REGISTRY_USERNAME:-}
     FALAK_REGISTRY_PASSWORD: ${FALAK_REGISTRY_PASSWORD:-}
@@ -398,11 +399,9 @@ services:
       FALAK_DOMAIN_ALIASES: ${FALAK_DOMAIN_ALIASES:-}
       FALAK_URL: ${FALAK_URL}
       FALAK_GRAFANA_HOST: ${FALAK_GRAFANA_HOST:-}
-      # The registry host is served only when its credentials exist (basic auth in front of the registry).
+      # The registry host (TLS here; the registry checks the bearer tokens the control plane signs).
       FALAK_REGISTRY_HOST: ${FALAK_REGISTRY_HOST:-}
       FALAK_REGISTRY_HOST_ALIASES: ${FALAK_REGISTRY_HOST_ALIASES:-}
-      FALAK_REGISTRY_USERNAME: ${FALAK_REGISTRY_USERNAME:-}
-      FALAK_REGISTRY_PASSWORD: ${FALAK_REGISTRY_PASSWORD:-}
       FALAK_TLS: ${FALAK_TLS:-acme}
       FALAK_ACME_EMAIL: ${FALAK_ACME_EMAIL:-}
       FALAK_ACME_CA: ${FALAK_ACME_CA:-}
@@ -484,8 +483,9 @@ services:
         limits: { memory: 1536m, cpus: "${FALAK_BUILDER_CPUS:-1}", pids: 4096 }
 
   # Built-in image registry (distribution): images of docker builds, pushed by builders and pulled by servers
-  # through the edge (https://FALAK_REGISTRY_HOST, basic auth there). Only the edge can reach it. Deletes are
-  # enabled for `falak-ctl registry gc`.
+  # through the edge (https://FALAK_REGISTRY_HOST). Only the edge can reach it. Token auth: clients log in at the
+  # control plane's token server (the realm) and present a short-lived JWT signed with secrets/registry-token.key;
+  # the registry verifies it with the certificate (falak-ctl creates both). Deletes are enabled for `falak-ctl registry gc`.
   registry:
     <<: *caps
     image: registry:2.8.3
@@ -496,8 +496,14 @@ services:
       # Behind the edge: Location headers relative, so redirects keep the public https host.
       REGISTRY_HTTP_RELATIVEURLS: "true"
       REGISTRY_LOG_LEVEL: warn
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: ${FALAK_URL}/api/internal/registry/token
+      REGISTRY_AUTH_TOKEN_SERVICE: falak-registry
+      REGISTRY_AUTH_TOKEN_ISSUER: falak
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /etc/falak/registry-token.crt
     volumes:
       - registry-data:/var/lib/registry
+      - ../secrets/registry-token.crt:/etc/falak/registry-token.crt:ro
     networks: [registry]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5000/v2/"]
@@ -655,6 +661,6 @@ networks:
   backend: {}
   public: {}
   observability: {}
-  # The registry has no auth of its own: only the edge (basic auth) is on this network.
+  # Only the edge (TLS in front of the registry's token auth) is on this network.
   registry:
     internal: true

@@ -57,3 +57,11 @@ done
 render 'FALAK_PANEL_ALLOW=100.64.0.0/10 fd7a:115c:a1e0::/48'
 [ "$(q '.services.edge.environment.FALAK_PANEL_ALLOW')" = "100.64.0.0/10 fd7a:115c:a1e0::/48" ] || fail "FALAK_PANEL_ALLOW: $(q '.services.edge.environment.FALAK_PANEL_ALLOW')"
 pass "the edge gets FALAK_PANEL_ALLOW (unset or empty: everyone)"
+
+render 'FALAK_REGISTRY_USERNAME=falak
+FALAK_REGISTRY_PASSWORD=operator-secret'
+[ "$(q '.services.registry.environment.REGISTRY_AUTH')" = token ] || fail "registry without token auth"
+[ "$(q '.services.registry.environment.REGISTRY_AUTH_TOKEN_REALM')" = https://p.test/api/internal/registry/token ] || fail "realm: $(q '.services.registry.environment.REGISTRY_AUTH_TOKEN_REALM')"
+[ "$(q '.services.registry.volumes[] | select(.target == "/etc/falak/registry-token.crt") | .read_only')" = true ] || fail "token certificate not mounted read-only"
+if q '.services.edge.environment' | grep -q operator-secret; then fail "the edge gets the registry operator credential"; fi
+pass "the registry checks tokens from the control plane's realm; the edge no longer holds the registry credential"

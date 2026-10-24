@@ -85,7 +85,18 @@ return [
         'url' => env('FALAK_REGISTRY_URL', 'registry.falak.local'),
         'namespace' => env('FALAK_REGISTRY_NAMESPACE', 'falak'),
         'username' => env('FALAK_REGISTRY_USERNAME'),
+        // Operator credential (falak-ctl, the prune job): full access through the token server. Agents and builders
+        // never get it; they get short-lived per-repository credentials (Registry::credentials()).
         'password' => env('FALAK_REGISTRY_PASSWORD'),
+        // Token auth (Http\Controllers\Internal\RegistryTokenController): the registry trusts JWTs signed with this
+        // key (falak-ctl creates secrets/registry-token.{key,crt}; the registry gets the certificate).
+        'token' => [
+            'key' => env('FALAK_REGISTRY_TOKEN_KEY', '/opt/falak/secrets/registry-token.key'),
+            'issuer' => env('FALAK_REGISTRY_TOKEN_ISSUER', 'falak'),
+            'service' => env('FALAK_REGISTRY_TOKEN_SERVICE', 'falak-registry'),
+        ],
+        // Lifetime (seconds) of the pull credentials in a deploy command (longest step timeouts + queueing).
+        'credential_ttl' => (int) env('FALAK_REGISTRY_CREDENTIAL_TTL', 3600),
         // Images of a deleted site's builds are deleted this many days after the build (falak:registry-prune).
         'deleted_site_grace_days' => (int) env('FALAK_REGISTRY_DELETED_SITE_GRACE_DAYS', 7),
     ],

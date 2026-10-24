@@ -95,7 +95,7 @@ final class RegistryPruner
                         }
                     }
 
-                    $response = $this->http()->delete($this->url("/v2/{$repository}/manifests/{$digest}"));
+                    $response = $this->http($repository)->delete($this->url("/v2/{$repository}/manifests/{$digest}"));
 
                     if ($response->status() === 405) {
                         return ['deleted' => $deleted, 'kept' => $kept, 'skipped' => 'The registry does not allow deletes (REGISTRY_STORAGE_DELETE_ENABLED).'];
@@ -241,24 +241,27 @@ final class RegistryPruner
     /** @return list<string> */
     private function tags(string $repository): array
     {
-        $response = $this->http()->get($this->url("/v2/{$repository}/tags/list"));
+        $response = $this->http($repository)->get($this->url("/v2/{$repository}/tags/list"));
 
         return $response->status() === 404 ? [] : array_map('strval', (array) ($response->throw()->json('tags') ?? []));
     }
 
     private function digest(string $repository, string $tag): ?string
     {
-        $response = $this->http()->withHeaders(['Accept' => self::MANIFEST_TYPES])->head($this->url("/v2/{$repository}/manifests/{$tag}"));
+        $response = $this->http($repository)->withHeaders(['Accept' => self::MANIFEST_TYPES])->head($this->url("/v2/{$repository}/manifests/{$tag}"));
         $digest = strtolower((string) $response->header('Docker-Content-Digest'));
 
         return $response->successful() && preg_match('/^sha256:[a-f0-9]{64}$/', $digest) === 1 ? $digest : null;
     }
 
-    private function http(): PendingRequest
+    /** A bearer token minted here (this is the token server) for the catalog, or pull + delete on one repository. */
+    private function http(?string $repository = null): PendingRequest
     {
-        $auth = (array) $this->registry->auth();
+        $access = $repository === null
+            ? ['type' => 'registry', 'name' => 'catalog', 'actions' => ['*']]
+            : ['type' => 'repository', 'name' => $repository, 'actions' => ['pull', 'delete']];
 
-        return Http::withBasicAuth((string) $auth['username'], (string) $auth['password'])->timeout(30)->acceptJson();
+        return Http::withToken($this->registry->token('falak-prune', [$access]))->timeout(30)->acceptJson();
     }
 
     private function url(string $path): string

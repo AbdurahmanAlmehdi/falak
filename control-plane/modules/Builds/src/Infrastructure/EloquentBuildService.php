@@ -64,7 +64,7 @@ final class EloquentBuildService implements BuildService
             return null;
         }
 
-        return new ImageData((string) $build->pinnedImage(), $this->registry->auth());
+        return new ImageData((string) $build->pinnedImage(), $this->pullCredentials($build));
     }
 
     public function composeFor(string $buildId): ?ComposeBuildData
@@ -79,10 +79,21 @@ final class EloquentBuildService implements BuildService
             (string) ($build->compose['file'] ?? 'compose.yaml'),
             (string) ($build->compose['content'] ?? ''),
             array_map('strval', (array) ($build->compose['images'] ?? [])),
-            $this->registry->auth(),
+            $this->pullCredentials($build),
             is_array($build->compose['assets'] ?? null) ? array_values($build->compose['assets']) : null,
             array_values(array_map('strval', (array) ($build->compose['missing'] ?? []))),
         );
+    }
+
+    public function registryAuth(string $organizationId, string $images): ?array
+    {
+        return $this->registry->pullCredentials($organizationId, $images);
+    }
+
+    /** @return ?array{server: string, username: string, password: string} pull for the build's own site */
+    private function pullCredentials(Build $build): ?array
+    {
+        return $this->registry->credentials([$this->registry->name($build->site_slug)], ['pull'], (int) config('builds.registry.credential_ttl', 3600));
     }
 
     public function cancel(string $buildId): bool

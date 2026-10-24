@@ -36,6 +36,8 @@
         <env name="FALAK_KEK_PROVIDER" value="local"/>
         <env name="FALAK_KEK_PATH" value="/tmp/falak-tests/kek"/>
         <env name="FALAK_KEK_PREVIOUS_PATH" value="/tmp/falak-tests/kek.previous"/>
+        <!-- Registry token signing key (RSA), created by Tests\TestCase like the KEK. -->
+        <env name="FALAK_REGISTRY_TOKEN_KEY" value="/tmp/falak-tests/registry-token.key"/>
         <env name="CACHE_STORE" value="array"/>
         <env name="FALAK_TEMPLATES_URL" value=""/>
         <env name="DB_CONNECTION" value="sqlite"/>

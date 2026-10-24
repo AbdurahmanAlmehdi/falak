@@ -89,6 +89,9 @@ final class JobPayload
             }
         }
 
+        // Push (and pull, for cache and base layers) to the site's repositories only, while this build runs.
+        $push = $this->registry->credentials([$this->registry->name($site->slug)], ['pull', 'push'], $build->timeout_s + 600, $build->id);
+
         if ($build->mode === 'docker' && $site->runtime === SiteRuntime::Compose) {
             // Every `build:` service of the repository's compose file, pushed as <repo>/<slug>/<service>:<build id>.
             // Several files / profiles need a builder that merges projects (older builders reject the fields).
@@ -101,14 +104,14 @@ final class JobPayload
                 'image_prefix' => $this->registry->repository($site->slug),
                 'tag' => strtolower($build->id),
                 'build_args' => $env === [] ? null : (object) $env,
-                'registry' => $this->registry->auth(),
+                'registry' => $push,
             ], fn ($value) => $value !== null && $value !== '');
         } elseif ($build->mode === 'docker') {
             $docker = array_filter([
                 'image' => $this->registry->image($site->slug, $build->id),
                 'dockerfile' => $site->dockerfile,
                 'build_args' => $env === [] ? null : (object) $env,
-                'registry' => $this->registry->auth(),
+                'registry' => $push,
                 'push' => true,
             ], fn ($value) => $value !== null && $value !== '');
             $job['docker'] = $docker;
