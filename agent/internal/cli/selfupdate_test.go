@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -70,5 +73,75 @@ func TestSelfUpdate(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(exe), ".falak-update-*")); len(left) != 0 {
 		t.Fatalf("temp files left: %v", left)
+	}
+}
+
+func TestReleaseSigningKeyFile(t *testing.T) {
+	if releaseKeyErr != nil {
+		t.Fatalf("release-signing.pub: %v", releaseKeyErr)
+	}
+}
+
+func TestSelfUpdateSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := x509.MarshalPKIXPublicKey(pub)
+	key, err := parseReleaseKey(append([]byte("# comment\n"), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})...))
+	if err != nil || key == nil {
+		t.Fatalf("parse: %v", err)
+	}
+	old := releaseKey
+	releaseKey = key
+	t.Cleanup(func() { releaseKey = old })
+
+	asset := fmt.Sprintf("falak-%s-%s", runtime.GOOS, runtime.GOARCH)
+	newBin := []byte("#!/bin/sh\necho v9.9.9\n")
+	sum := sha256.Sum256(newBin)
+	sums := []byte(hex.EncodeToString(sum[:]) + "  " + asset + "\n")
+	// v7.0.0 is unsigned, v8.0.0 carries a signature over something else.
+	sigs := map[string][]byte{"v9.9.9": ed25519.Sign(priv, sums), "v8.0.0": ed25519.Sign(priv, []byte("other"))}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tag, file, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/releases/download/"), "/")
+		switch file {
+		case "SHA256SUMS":
+			_, _ = w.Write(sums)
+		case "SHA256SUMS.sig":
+			if s, ok := sigs[tag]; ok {
+				_, _ = w.Write(s)
+				return
+			}
+			http.NotFound(w, r)
+		case asset:
+			_, _ = w.Write(newBin)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	exe := filepath.Join(t.TempDir(), "falak")
+	_ = os.WriteFile(exe, []byte("old"), 0o755)
+	h := newHarness(t, nil)
+	h.env["FALAK_RELEASES_URL"] = srv.URL + "/releases"
+	run := func(version string) int {
+		h.out.Reset()
+		h.err.Reset()
+		h.app = h.newApp("")
+		h.app.Version = "v0.11.1"
+		h.app.Executable = func() (string, error) { return exe, nil }
+		return h.app.Run(t.Context(), []string{"update", "--version", version})
+	}
+	read := func() string { b, _ := os.ReadFile(exe); return string(b) }
+
+	if code := run("v7.0.0"); code == 0 || !strings.Contains(h.err.String(), "not signed") || read() != "old" {
+		t.Fatalf("unsigned: %d %q %q", code, h.err, read())
+	}
+	if code := run("v8.0.0"); code == 0 || !strings.Contains(h.err.String(), "does not match its signature") || read() != "old" {
+		t.Fatalf("bad signature: %d %q %q", code, h.err, read())
+	}
+	if code := run("v9.9.9"); code != 0 || read() != string(newBin) {
+		t.Fatalf("signed: %d %q %q", code, h.err, read())
 	}
 }

@@ -1,0 +1,5 @@
+# Falak release signing key: the Ed25519 public key (PEM) that SHA256SUMS.sig of every release is checked against.
+# Single source: `falak update` embeds it (go:embed), deploy/tools/release-assets.sh pins it into install.sh,
+# install-cli.sh and falak-ctl, and release.yml refuses to publish while this file holds no key.
+# PLACEHOLDER: no key yet. Append the output of `openssl pkey -in falak-release-signing.key -pubout` and delete
+# these two lines.

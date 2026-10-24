@@ -11,10 +11,14 @@
 #   FALAK_INSTALL_DIR  where to put the binary (default /usr/local/bin if writable, else ~/.local/bin)
 #   FALAK_URL          if set, run `falak login --url $FALAK_URL` after installing (asks for the token)
 #   FALAK_REPO         GitHub owner/repo to download from
+#   FALAK_SKIP_SIGNATURE=1  skip the SHA256SUMS.sig check (no OpenSSL 3 here); SHA256SUMS is still checked
 # This is the client CLI. falak-ctl (the server admin tool) is installed on the control-plane host by install.sh.
 set -eu
 
 DEFAULT_REPO="falak-sh/falak"
+# The Ed25519 release signing key (base64 SPKI, from agent/internal/cli/release-signing.pub), pinned in by
+# deploy/tools/release-assets.sh. Empty in a source checkout: SHA256SUMS is then trusted unsigned.
+RELEASE_PUBKEY=""
 VERSION="${FALAK_VERSION:-}"
 REPO="${FALAK_REPO:-$DEFAULT_REPO}"
 
@@ -53,6 +57,21 @@ trap 'rm -rf "$tmp"' EXIT INT TERM
 info "Downloading $asset (${VERSION:-latest}) from $REPO"
 curl -fsSL --retry 3 -o "$tmp/$asset" "$base/$asset" || die "download failed: $base/$asset"
 curl -fsSL --retry 3 -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" || die "download failed: $base/SHA256SUMS"
+
+# SHA256SUMS must carry a valid signature once a key is pinned. Ed25519 needs OpenSSL 3 (macOS ships LibreSSL,
+# which cannot: `brew install openssl` provides one). FALAK_SKIP_SIGNATURE=1 falls back to SHA256SUMS alone.
+if [ -n "$RELEASE_PUBKEY" ] && [ "${FALAK_SKIP_SIGNATURE:-0}" != 1 ]; then
+  ossl=
+  for o in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+    if command -v "$o" >/dev/null 2>&1 && "$o" pkeyutl -help 2>&1 | grep -q rawin; then ossl="$o"; break; fi
+  done
+  [ -n "$ossl" ] || die "checking the release signature needs OpenSSL 3 (macOS: brew install openssl; Linux: apt-get install openssl), or set FALAK_SKIP_SIGNATURE=1 to rely on SHA256SUMS alone"
+  curl -fsSL --retry 3 -o "$tmp/SHA256SUMS.sig" "$base/SHA256SUMS.sig" || die "download failed: $base/SHA256SUMS.sig (refusing an unsigned release)"
+  printf '%s\n' "-----BEGIN PUBLIC KEY-----" "$RELEASE_PUBKEY" "-----END PUBLIC KEY-----" > "$tmp/release-signing.pub"
+  "$ossl" pkeyutl -verify -rawin -pubin -inkey "$tmp/release-signing.pub" -in "$tmp/SHA256SUMS" -sigfile "$tmp/SHA256SUMS.sig" >/dev/null 2>&1 \
+    || die "SHA256SUMS does not match its signature (SHA256SUMS.sig): refusing this release"
+  ok "release signature verified"
+fi
 
 want="$(awk -v f="$asset" '$2 == f || $2 == "*"f { print $1 }' "$tmp/SHA256SUMS")"
 [ -n "$want" ] || die "$asset is not listed in SHA256SUMS"

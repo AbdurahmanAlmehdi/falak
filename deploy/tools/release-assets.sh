@@ -6,6 +6,9 @@
 #   falak-restore-{linux,darwin}-{amd64,arm64} (decrypts backups offline),
 #   falak-deploy.tar.gz (deploy/ + observability/, install.sh/falak-ctl pinned to <owner/repo>),
 #   install.sh (defaults to <tag>), install-cli.sh (the `falak` CLI installer, defaults to <tag>), falak-ctl, SHA256SUMS
+# install.sh, install-cli.sh and falak-ctl get the release signing key (agent/internal/cli/release-signing.pub) pinned
+# in. FALAK_IMAGE_DIGESTS=<file> ("falak-<image> sha256:<digest>" lines) goes into the bundle as deploy/image-digests.
+# release.yml signs SHA256SUMS (SHA256SUMS.sig) afterwards.
 set -euo pipefail
 tag="${1:?tag}"; repo="${2:?owner/repo}"; out="${3:?out dir}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -27,12 +30,16 @@ mkdir -p "$stage/observability"
 for d in gateway grafana loki mimir tempo; do cp -R "$root/observability/$d" "$stage/observability/$d"; done
 cp "$root/observability/compose.yml" "$root/observability/README.md" "$stage/observability/"
 find "$stage" -name .DS_Store -delete
+if [ -n "${FALAK_IMAGE_DIGESTS:-}" ]; then cp "$FALAK_IMAGE_DIGESTS" "$stage/deploy/image-digests"; fi
+# The key's base64 body, one line (empty while release-signing.pub is the placeholder).
+pubkey="$(awk '/^-----END PUBLIC KEY-----$/ { k = 0 } k; /^-----BEGIN PUBLIC KEY-----$/ { k = 1 }' "$root/agent/internal/cli/release-signing.pub" | tr -d '\n')"
 
 pin() { # pin FILE : default repo -> $repo; install.sh defaults to this release
   local tmp="$1.tmp"
   sed -e "s#^DEFAULT_REPO=\".*\"#DEFAULT_REPO=\"$repo\"#" \
       -e "s#^FALAK_REPO_DEFAULT=\".*\"#FALAK_REPO_DEFAULT=\"$repo\"#" \
-      -e "s#^VERSION=\"\${FALAK_VERSION:-}\"#VERSION=\"\${FALAK_VERSION:-$tag}\"#" "$1" > "$tmp"
+      -e "s#^VERSION=\"\${FALAK_VERSION:-}\"#VERSION=\"\${FALAK_VERSION:-$tag}\"#" \
+      -e "s#^RELEASE_PUBKEY=\"\"#RELEASE_PUBKEY=\"$pubkey\"#" "$1" > "$tmp"
   chmod --reference="$1" "$tmp" 2>/dev/null || chmod 755 "$tmp"
   mv "$tmp" "$1"
 }
