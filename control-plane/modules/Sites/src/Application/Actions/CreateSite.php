@@ -84,7 +84,7 @@ final class CreateSite
         // The new flow (several files / decisions) checks the repository before creating anything.
         if ($project !== null && array_key_exists('compose_files', $data) && isset($data['source_connection_id'], $data['repository'])) {
             $project['yaml'] = $this->composeSettings->verifyRepository((string) $data['source_connection_id'], (string) $data['repository'], (string) ($data['branch'] ?? 'main'),
-                $project['files'], $project['profiles'], array_values((array) ($data['public_services'] ?? [])), (array) ($data['variables'] ?? []), isset($data['root_directory']) ? (string) $data['root_directory'] : null);
+                $project, array_values((array) ($data['public_services'] ?? [])), (array) ($data['variables'] ?? []), isset($data['root_directory']) ? (string) $data['root_directory'] : null);
         }
 
         return [

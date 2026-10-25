@@ -221,6 +221,50 @@ it('extracts services through the extraction contract and drops them from the pu
         ->and($rendered['services']['app']['environment']['DATABASE_URL'])->toBe('${FALAK_SVC_APP_DATABASE_URL}');
 });
 
+it('requires only the variables of services that stay in the stack', function () {
+    $rewrites = new ComposeRewrites;
+    app()->instance(ComposeServiceExtraction::class, new class($rewrites) implements ComposeServiceExtraction
+    {
+        public function __construct(public ComposeRewrites $rewrites) {}
+
+        public function toDatabase(string $siteId, string $service, ?string $databaseId, string $engine, ?string $compose = null): DatabaseData
+        {
+            $site = Site::query()->findOrFail($siteId);
+            $site->forceFill(['compose_services' => [$service => ['mode' => 'database', 'database_id' => '01j9zq4n8v2m6r0t3w5y7b9d1f']]])->save();
+
+            return new DatabaseData('01j9zq4n8v2m6r0t3w5y7b9d1f', $site->organization_id, $site->targets()->first()->server_id, 'shop', 'postgresql', '17', 5432, 'active', $siteId);
+        }
+
+        public function toSite(string $siteId, string $service, array $site, ?string $compose = null): SiteData
+        {
+            throw new LogicException('not used');
+        }
+
+        public function rewrites(string $siteId): ComposeRewrites
+        {
+            return $this->rewrites;
+        }
+    });
+    $this->git->files['docker/compose.yml'] = "services:\n  app:\n    image: nginx\n    environment: {APP_KEY: \"\${APP_KEY:?set it}\"}\n  db:\n    image: postgres:17\n    environment: {POSTGRES_PASSWORD: \"\${DB_PASSWORD:?set it}\"}\n";
+    $input = compose_app_input($this, ['compose_files' => ['docker/compose.yml'], 'public_services' => [['service' => 'app', 'port' => 80]]]);
+
+    expect(fn () => app(SiteFactory::class)->create($this->organization->id, $this->user->id, $input))->toThrow(ValidationException::class, 'DB_PASSWORD');
+
+    $site = app(SiteFactory::class)->create($this->organization->id, $this->user->id, [...$input, 'compose_services' => ['db' => ['mode' => 'database', 'engine' => 'postgresql']]])->site;
+
+    expect($site->compose->extracted())->toBe(['db']);
+
+    // Settings → Compose: the app reads the password too, but its DATABASE_URL now points at the Falak database.
+    $this->git->files['docker/compose.yml'] = "services:\n  app:\n    image: nginx\n    environment: {APP_KEY: \"\${APP_KEY:?set it}\", DATABASE_URL: \"postgres://shop:\${DB_PASSWORD:?set it}@db/shop\"}\n  db:\n    image: postgres:17\n    environment: {POSTGRES_PASSWORD: \"\${DB_PASSWORD:?set it}\"}\n";
+    $save = ['compose_source' => 'repo', 'compose_files' => ['docker/compose.yml'], 'compose_profiles' => [], 'public_services' => [['service' => 'app', 'port' => 80]]];
+
+    $this->putJson("/sites/{$site->id}/compose", $save)->assertUnprocessable()->assertJsonValidationErrors(['variables' => 'DB_PASSWORD']);
+
+    $this->app->make(ComposeServiceExtraction::class)->rewrites = new ComposeRewrites(['app' => ['DATABASE_URL' => '${{ shop-db.DATABASE_URL }}']]);
+
+    $this->putJson("/sites/{$site->id}/compose", $save)->assertOk();
+});
+
 it('renders repository projects against the files shipped with the release', function () {
     $site = app(SiteFactory::class)->create($this->organization->id, $this->user->id, compose_app_input($this))->site;
     $project = <<<'YAML'

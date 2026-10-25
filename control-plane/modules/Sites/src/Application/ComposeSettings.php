@@ -266,19 +266,28 @@ final class ComposeSettings
     /**
      * Check a repository project before saving it: it loads, its public services exist and every required variable
      * has a value. Repositories Falak can't read (plain git, API errors) are checked at the first deploy instead.
+     * Like the preview, services moved to Falak (already or by this change) are left out: their variables aren't needed.
      *
-     * @param  list<string>  $files
-     * @param  list<string>  $profiles
+     * @param  array{files: list<string>, profiles: list<string>, services: array<string, array<string, mixed>>, adjustments: array<string, mixed>, extract: list<array{service: string, mode: string}>}  $project  {@see self::project()}
      * @param  list<array<string, mixed>>  $publicServices
      * @param  array<string, mixed>  $variables
+     * @param  ?string  $siteId  an existing site: its variables that pointed at extracted services are rewritten
      *
      * Returns the merged project (YAML), or null when Falak can't read the repository.
      *
      * @throws ValidationException
      */
-    public function verifyRepository(string $connectionId, string $repository, string $branch, array $files, array $profiles, array $publicServices, array $variables, ?string $root = null): ?string
+    public function verifyRepository(string $connectionId, string $repository, string $branch, array $project, array $publicServices, array $variables, ?string $root = null, ?string $siteId = null): ?string
     {
-        $result = $this->inspection->inspect($connectionId, $repository, $branch, $files, $profiles, root: $root);
+        $services = $project['services'];
+
+        foreach ($project['extract'] as $item) {
+            $services[$item['service']] = ['mode' => $item['mode']];
+        }
+
+        $config = new ComposeConfig(ComposeSource::Repo, $project['files'][0] ?? null, [], files: $project['files'], profiles: $project['profiles'], services: $services, adjustments: $project['adjustments']);
+        $rewrites = $siteId !== null ? app(ComposeServiceExtraction::class)->rewrites($siteId) : null;
+        $result = $this->inspection->inspect($connectionId, $repository, $branch, $config->files, $config->profiles, $config, rewrites: $rewrites, root: $root);
 
         if (($result['no_api'] ?? false) === true) {
             return null;

@@ -62,7 +62,7 @@ final class UpdateComposeSettings
 
         if ($project !== null && array_key_exists('compose_files', $data) && $site->source_connection_id !== null && $site->repository !== null) {
             $project['yaml'] = $this->settings->verifyRepository((string) $site->source_connection_id, (string) $site->repository, (string) ($site->branch ?: 'main'),
-                $project['files'], $project['profiles'], array_values(array_map(fn ($p) => (array) $p, $public)), (array) $site->latestEnvironment?->variables, $site->root_directory);
+                $project, array_values(array_map(fn ($p) => (array) $p, $public)), (array) $site->latestEnvironment?->variables, $site->root_directory, $site->id);
         }
 
         // A service that leaves the stack can't stay public.
