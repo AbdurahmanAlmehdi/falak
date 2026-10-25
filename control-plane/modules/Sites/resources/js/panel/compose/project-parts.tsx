@@ -302,7 +302,15 @@ export function VariablesList({
     onChange?: (values: Record<string, string>) => void;
     note?: ReactNode;
 }) {
-    if (variables.length === 0) return <p className="text-fg-muted text-sm">The stack reads no variables.</p>;
+    // The note (e.g. the create request's error) shows even when the preview lists no variables.
+    if (variables.length === 0) {
+        return (
+            <div className="grid gap-2">
+                {note}
+                <p className="text-fg-muted text-sm">The stack reads no variables.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="grid gap-2">
