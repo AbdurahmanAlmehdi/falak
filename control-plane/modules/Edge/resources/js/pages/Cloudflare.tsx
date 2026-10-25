@@ -7,7 +7,7 @@ import { Section } from '@/components/falak/section';
 import { Switch } from '@/components/falak/switch';
 import { Tag } from '@/components/falak/tag';
 import SettingsLayout from '@/layouts/settings/layout';
-import { router, useForm } from '@inertiajs/react';
+import { router, useForm, usePage } from '@inertiajs/react';
 import { Cloud, ExternalLink, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -94,6 +94,8 @@ export default function Cloudflare({ connections, zones, servers, can }: Props) 
     const [disconnecting, setDisconnecting] = useState<Connection | null>(null);
     const [untunneling, setUntunneling] = useState<TunnelServer | null>(null);
     const [tunnelConnection, setTunnelConnection] = useState<string>(connections[0]?.id ?? '');
+    // Tunnel actions fail as `server` (e.g. a token without Account → Cloudflare Tunnel → Edit).
+    const pageErrors = usePage().props.errors as Record<string, string | undefined>;
 
     return (
         <SettingsLayout
@@ -336,6 +338,7 @@ export default function Cloudflare({ connections, zones, servers, can }: Props) 
                     title="Servers"
                     description="Ingress per server. Through a Cloudflare Tunnel, cloudflared on the server connects out to Cloudflare, so the server needs no open inbound ports and works behind NAT; its names in your zones point at the tunnel."
                 >
+                    {pageErrors.server && <Callout tone="danger">{pageErrors.server}</Callout>}
                     <ul className="divide-border grid divide-y">
                         {servers.map((server) => (
                             <li key={server.id} className="grid gap-1 py-2.5">
