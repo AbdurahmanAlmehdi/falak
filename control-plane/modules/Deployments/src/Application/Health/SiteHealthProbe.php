@@ -20,7 +20,10 @@ use Throwable;
  * When no HTTP answer comes back through the primary domain (TLS handshake or connection error), the
  * site's other domains are tried, then plain HTTP: a server of a multi-server site may only hold a
  * certificate for the name that points at it (per-server DNS), and load-balancer backends serve plain
- * HTTP. The first HTTP answer decides; an application error (e.g. 500) is never skipped over.
+ * HTTP. When none of them answers on the server's public address, they are tried again on its private
+ * address: a provider firewall may keep the web ports closed to the internet (a server behind a Cloudflare
+ * Tunnel) while the control plane reaches the server over the private network. The first HTTP answer
+ * decides; an application error (e.g. 500) is never skipped over.
  */
 final class SiteHealthProbe
 {
@@ -44,9 +47,18 @@ final class SiteHealthProbe
         $timeout = max(1, (int) ($health['timeout_s'] ?? 10));
 
         $server = $this->servers->find($serverId);
-        $ip = $server?->ipv4 ?? $server?->privateIpv4;
+        // Address => how messages name it; the public address first.
+        $addresses = [];
 
-        if ($ip === null) {
+        if ($server?->ipv4 !== null) {
+            $addresses[$server->ipv4] = $server->ipv4;
+        }
+
+        if ($server?->privateIpv4 !== null) {
+            $addresses[$server->privateIpv4] ??= "{$server->privateIpv4} (private)";
+        }
+
+        if ($addresses === []) {
             return [false, self::NO_ADDRESS];
         }
 
@@ -99,7 +111,7 @@ final class SiteHealthProbe
         $messages = [];
 
         foreach ($checks as [$candidates, $checkPath, $accepts, $expectation, $service]) {
-            [$ok, $message] = $this->checkAny($ip, $candidates, $checkPath, $timeout, $accepts, $expectation);
+            [$ok, $message] = $this->checkAny($addresses, $candidates, $checkPath, $timeout, $accepts, $expectation);
             $healthy = $healthy && $ok;
             $messages[] = ($service !== null && count($checks) > 1 ? "[{$service}] " : '').$message;
         }
@@ -108,24 +120,27 @@ final class SiteHealthProbe
     }
 
     /**
-     * Tries the candidates in order until one gets an HTTP answer (see the class docblock).
+     * Tries the candidates in order on each address in turn until one gets an HTTP answer (see the class docblock).
      *
+     * @param  array<string, string>  $addresses  server address => how messages name it
      * @param  list<array{0: ?string, 1: TlsMode}>  $candidates  host (null = the server IP) and its TLS mode
      * @param  callable(int): bool  $accepts
      * @return array{0: bool, 1: string}
      */
-    private function checkAny(string $ip, array $candidates, string $path, int $timeout, callable $accepts, string $expectation): array
+    private function checkAny(array $addresses, array $candidates, string $path, int $timeout, callable $accepts, string $expectation): array
     {
         $failures = [];
 
-        foreach ($candidates as [$host, $tls]) {
-            [$ok, $message, $answered] = $this->check($ip, $host, $tls, $path, $timeout, $accepts, $expectation);
+        foreach ($addresses as $ip => $via) {
+            foreach ($candidates as [$host, $tls]) {
+                [$ok, $message, $answered] = $this->check((string) $ip, $via, $host, $tls, $path, $timeout, $accepts, $expectation);
 
-            if ($answered) {
-                return [$ok, $failures === [] ? $message : $message.' — after: '.implode('; ', $failures)];
+                if ($answered) {
+                    return [$ok, $failures === [] ? $message : $message.' — after: '.implode('; ', $failures)];
+                }
+
+                $failures[] = $message;
             }
-
-            $failures[] = $message;
         }
 
         return [false, implode('; ', $failures)];
@@ -135,7 +150,7 @@ final class SiteHealthProbe
      * @param  callable(int): bool  $accepts
      * @return array{0: bool, 1: string, 2: bool} healthy, message, whether an HTTP answer came back
      */
-    private function check(string $ip, ?string $host, TlsMode $tls, string $path, int $timeout, callable $accepts, string $expectation): array
+    private function check(string $ip, string $via, ?string $host, TlsMode $tls, string $path, int $timeout, callable $accepts, string $expectation): array
     {
         $https = $host !== null && $tls !== TlsMode::Off;
         $url = $host === null ? "http://{$ip}{$path}" : ($https ? 'https' : 'http')."://{$host}{$path}";
@@ -155,9 +170,9 @@ final class SiteHealthProbe
                 ->get($url);
             $status = $response->status();
 
-            return [$accepts($status), sprintf('GET %s via %s → %d in %d ms (%s)', $url, $ip, $status, (int) ((microtime(true) - $started) * 1000), $expectation), true];
+            return [$accepts($status), sprintf('GET %s via %s → %d in %d ms (%s)', $url, $via, $status, (int) ((microtime(true) - $started) * 1000), $expectation), true];
         } catch (Throwable $e) {
-            return [false, sprintf('GET %s via %s failed: %s', $url, $ip, $e->getMessage()), false];
+            return [false, sprintf('GET %s via %s failed: %s', $url, $via, $e->getMessage()), false];
         }
     }
 

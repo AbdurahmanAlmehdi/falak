@@ -1,6 +1,7 @@
 <?php
 
 use Falak\Deployments\Application\Actions\TriggerDeployment;
+use Falak\Deployments\Application\Health\SiteHealthProbe;
 use Falak\Deployments\Domain\Enums\Trigger;
 use Falak\Deployments\Domain\Models\Deployment;
 use Falak\Deployments\Domain\Models\SiteSettings;
@@ -126,4 +127,60 @@ it('fails with every attempt in the message when nothing answers', function () {
     $deployment = Deployment::query()->latest('id')->firstOrFail();
     expect($status)->toBe('failed')
         ->and($deployment->error)->toContain('https://shop.example.com/')->toContain('http://shop.example.com/');
+});
+
+it('tries the private address when nothing answers on the public one (web ports closed to the internet)', function () {
+    $world = deploy_world();
+    $world->servers[0]->forceFill(['private_ipv4' => '10.0.0.5'])->save();
+    $world->edge->domains[$world->site->id] = ['shop.example.com'];
+    $GLOBALS['deploy_http'] = ['via 203.0.113.1' => 0];
+
+    [$requests, $status] = health_requests($world);
+
+    expect(array_column($requests, 'url'))->toBe(['https://shop.example.com/up', 'http://shop.example.com/up', 'https://shop.example.com/up'])
+        ->and($requests[2]['options']['curl'][CURLOPT_RESOLVE])->toBe(['shop.example.com:443:10.0.0.5'])
+        ->and($status)->toBe('succeeded');
+
+    [$healthy, $message] = app(SiteHealthProbe::class)->probe($world->site->id, $world->servers[0]->id, ['path' => '/up']);
+
+    expect($healthy)->toBeTrue()
+        ->and($message)->toStartWith('GET https://shop.example.com/up via 10.0.0.5 (private) → 200')
+        ->and($message)->toContain('via 203.0.113.1 failed');
+});
+
+it('never tries the private address after an answer on the public one', function () {
+    $world = deploy_world();
+    $world->servers[0]->forceFill(['private_ipv4' => '10.0.0.5'])->save();
+    $world->edge->domains[$world->site->id] = ['shop.example.com'];
+    $GLOBALS['deploy_http'] = ['via 203.0.113.1' => 500];
+
+    [$healthy, $message] = app(SiteHealthProbe::class)->probe($world->site->id, $world->servers[0]->id, ['path' => '/up']);
+
+    expect($healthy)->toBeFalse()
+        ->and(array_column($GLOBALS['deploy_http_requests'], 'url'))->toBe(['https://shop.example.com/up'])
+        ->and($message)->not->toContain('10.0.0.5');
+});
+
+it('fails on an application error on the private address', function () {
+    $world = deploy_world();
+    $world->servers[0]->forceFill(['private_ipv4' => '10.0.0.5'])->save();
+    $world->edge->domains[$world->site->id] = ['shop.example.com'];
+    $GLOBALS['deploy_http'] = ['via 203.0.113.1' => 0, 'via 10.0.0.5' => 500];
+
+    [$healthy, $message] = app(SiteHealthProbe::class)->probe($world->site->id, $world->servers[0]->id, ['path' => '/up']);
+
+    expect($healthy)->toBeFalse()
+        ->and($message)->toStartWith('GET https://shop.example.com/up via 10.0.0.5 (private) → 500');
+});
+
+it('checks a server without a public address on its private one', function () {
+    $world = deploy_world();
+    $world->servers[0]->forceFill(['ipv4' => null, 'private_ipv4' => '10.0.0.5'])->save();
+    $world->edge->domains[$world->site->id] = ['shop.example.com'];
+
+    [$healthy, $message] = app(SiteHealthProbe::class)->probe($world->site->id, $world->servers[0]->id, ['path' => '/up']);
+
+    expect($healthy)->toBeTrue()
+        ->and($GLOBALS['deploy_http_requests'][0]['options']['curl'][CURLOPT_RESOLVE])->toBe(['shop.example.com:443:10.0.0.5'])
+        ->and($message)->toContain('via 10.0.0.5 (private)');
 });

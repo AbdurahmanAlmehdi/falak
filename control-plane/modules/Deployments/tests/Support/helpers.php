@@ -84,14 +84,17 @@ function deploy_world(int $servers = 1, array $site = [], Role $role = Role::Own
 
     $processes = FakeProcessControl::install();
 
-    // Health checks answer 200 unless a test maps a URL prefix to another status with deploy_http().
+    // Health checks answer 200 unless a test maps a URL prefix (or "via <address>": every request pinned to that
+    // address) to another status with deploy_http().
     $GLOBALS['deploy_http'] = [];
     $GLOBALS['deploy_http_requests'] = [];
     Http::fake(function ($request, array $options = []) {
         $GLOBALS['deploy_http_requests'][] = ['url' => $request->url(), 'options' => $options];
+        $resolve = $options['curl'][CURLOPT_RESOLVE][0] ?? null;
+        $via = 'via '.($resolve !== null ? substr($resolve, strrpos($resolve, ':') + 1) : parse_url($request->url(), PHP_URL_HOST));
 
         foreach ($GLOBALS['deploy_http'] as $prefix => $status) {
-            if (str_starts_with($request->url(), $prefix)) {
+            if ($prefix === $via || str_starts_with($request->url(), $prefix)) {
                 if ($status === 0) { // no HTTP answer (TLS handshake / connection failure)
                     throw new ConnectionException('cURL error 35: TLS connect error');
                 }
@@ -239,7 +242,8 @@ function deploy_types(FakeAgentGateway $agents, ?string $serverId = null): array
 }
 
 /**
- * Health check answers by URL prefix, e.g. ['http://203.0.113.2' => 500].
+ * Health check answers by URL prefix, e.g. ['http://203.0.113.2' => 500], or by the address a request is pinned to,
+ * e.g. ['via 203.0.113.1' => 0].
  *
  * @param  array<string, int>  $statuses
  */
