@@ -184,3 +184,16 @@ it('checks a server without a public address on its private one', function () {
         ->and($GLOBALS['deploy_http_requests'][0]['options']['curl'][CURLOPT_RESOLVE])->toBe(['shop.example.com:443:10.0.0.5'])
         ->and($message)->toContain('via 10.0.0.5 (private)');
 });
+
+it('never falls back to the private address in managed mode (a custom server reports it)', function () {
+    config(['controlplane.managed' => true]);
+    $world = deploy_world();
+    $world->servers[0]->forceFill(['private_ipv4' => '10.0.0.5'])->save();
+    $world->edge->domains[$world->site->id] = ['shop.example.com'];
+    $GLOBALS['deploy_http'] = ['via 203.0.113.1' => 0];
+
+    [$healthy, $message] = app(SiteHealthProbe::class)->probe($world->site->id, $world->servers[0]->id, ['path' => '/up']);
+
+    expect($healthy)->toBeFalse()
+        ->and($message)->not->toContain('10.0.0.5');
+});

@@ -22,8 +22,8 @@ use Throwable;
  * certificate for the name that points at it (per-server DNS), and load-balancer backends serve plain
  * HTTP. When none of them answers on the server's public address, they are tried again on its private
  * address: a provider firewall may keep the web ports closed to the internet (a server behind a Cloudflare
- * Tunnel) while the control plane reaches the server over the private network. The first HTTP answer
- * decides; an application error (e.g. 500) is never skipped over.
+ * Tunnel) while the control plane reaches the server over the private network (not in managed mode). The
+ * first HTTP answer decides; an application error (e.g. 500) is never skipped over.
  */
 final class SiteHealthProbe
 {
@@ -54,7 +54,9 @@ final class SiteHealthProbe
             $addresses[$server->ipv4] = $server->ipv4;
         }
 
-        if ($server?->privateIpv4 !== null) {
+        // Managed (multi-tenant): a custom server's private address is what its agent reports, so it is no fallback
+        // there; the control plane would probe an address a tenant picked (its own network) and report what answered.
+        if ($server?->privateIpv4 !== null && ($addresses === [] || ! config('controlplane.managed'))) {
             $addresses[$server->privateIpv4] ??= "{$server->privateIpv4} (private)";
         }
 
